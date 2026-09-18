@@ -4162,6 +4162,7 @@ mod app_builder {
                                 deployments.entry(domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
+                                        scheme: api_deployment.scheme,
                                         webhooks_prefix: HttpApiDeploymentCreation::normalize_webhooks_prefix(
                                             api_deployment
                                                 .webhook_url

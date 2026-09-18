@@ -19,6 +19,12 @@ environment_auth_details_cache_eviction_period = "1m"
 environment_auth_details_cache_max_capacity = 1024
 environment_auth_details_cache_ttl = "10m"
 
+[blob_storage]
+type = "LocalFileSystem"
+
+[blob_storage.config]
+root = "../data/blob_storage"
+
 [component_service]
 component_cache_max_capacity = 1024
 
@@ -61,6 +67,18 @@ type = "Disabled"
 
 [grpc.tls.config]
 
+[http_session]
+cleanup_timeout = "2s"
+command_queue_frames = 16
+event_queue_frames = 2
+exchange_timeout = "5m"
+max_event_bytes = 17825792
+max_resume_attempts = 4
+retained_input_bytes = 4194304
+retained_input_frames = 32
+retry_deadline = "10s"
+retry_delay = "100ms"
+
 [invocation_session_tokens]
 issuer = "local-worker-service"
 verify_only_keys = []
@@ -98,6 +116,7 @@ type = "Disabled"
 router_cache_eviction_period = "1m"
 router_cache_max_capacity = 1024
 router_cache_ttl = "10m"
+trusted_ingress_addresses = []
 
 [routing_table]
 invalidation_min_delay = "500ms"

@@ -1,0 +1,5 @@
+error: invalid agent kind `router`. Valid values are: regular, http-router
+ --> tests/ui/fail/agent_definition_invalid_kind.rs:3:27
+  |
+3 | #[agent_definition(kind = "router")]
+  |                           ^^^^^^^^

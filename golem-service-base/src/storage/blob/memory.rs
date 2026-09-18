@@ -14,8 +14,9 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_file_name_to_string,
-    blob_parent_to_string, blob_path_is_root, blob_path_to_string, validate_relative_blob_path,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace,
+    ExistsResult, blob_file_name_to_string, blob_parent_to_string, blob_path_is_root,
+    blob_path_to_string, validate_range, validate_relative_blob_path,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -38,13 +39,8 @@ struct Key {
 
 #[derive(Debug, Clone)]
 enum Entry {
-    Directory {
-        files: HashSet<String>,
-    },
-    File {
-        data: Vec<u8>,
-        metadata: BlobMetadata,
-    },
+    Directory { files: HashSet<String> },
+    File { data: Bytes, metadata: BlobMetadata },
 }
 
 #[derive(Debug)]
@@ -88,7 +84,7 @@ impl BlobStorage for InMemoryBlobStorage {
         Ok(self
             .data
             .read_async(&key, |_, entry| match entry {
-                Entry::File { data, .. } => Some(data.clone()),
+                Entry::File { data, .. } => Some(data.to_vec()),
                 _ => None,
             })
             .await
@@ -116,7 +112,7 @@ impl BlobStorage for InMemoryBlobStorage {
             .data
             .read_async(&key, |_, entry| match entry {
                 Entry::File { data, .. } => {
-                    let stream = tokio_stream::once(Ok(Bytes::from(data.clone())));
+                    let stream = tokio_stream::once(Ok(data.clone()));
                     let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send>> =
                         Box::pin(stream);
                     Some(boxed)
@@ -125,6 +121,46 @@ impl BlobStorage for InMemoryBlobStorage {
             })
             .await
             .flatten())
+    }
+
+    async fn get_range_stream(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        validate_relative_blob_path(path)?;
+        let key = Key {
+            namespace,
+            dir: blob_parent_to_string(path)?,
+            file: Some(blob_file_name_to_string(path)?),
+        };
+        let data = self
+            .data
+            .read_async(&key, |_, entry| match entry {
+                Entry::File { data, .. } => Some(data.clone()),
+                _ => None,
+            })
+            .await
+            .flatten();
+        let Some(data) = data else { return Ok(None) };
+        let total_size = data.len() as u64;
+        validate_range(offset, length, total_size)?;
+        let selected = data.slice(offset as usize..(offset + length) as usize);
+        let stream = futures::stream::unfold(selected, |mut data| async {
+            if data.is_empty() {
+                return None;
+            }
+            let chunk = data.split_to(data.len().min(BLOB_STREAM_CHUNK_SIZE));
+            Some((Ok(chunk), data))
+        });
+        Ok(Some(BlobRangeStream {
+            total_size,
+            stream: Box::pin(stream),
+        }))
     }
 
     async fn get_metadata(
@@ -180,7 +216,7 @@ impl BlobStorage for InMemoryBlobStorage {
 
         let size = data.len() as u64;
         let entry = Entry::File {
-            data: data.to_vec(),
+            data: Bytes::copy_from_slice(data),
             metadata: BlobMetadata {
                 size,
                 last_modified_at: Timestamp::now_utc(),
@@ -221,7 +257,7 @@ impl BlobStorage for InMemoryBlobStorage {
         let data = stream.try_collect::<Vec<_>>().await?.concat();
         let size = data.len() as u64;
         let entry = Entry::File {
-            data,
+            data: Bytes::from(data),
             metadata: BlobMetadata {
                 size,
                 last_modified_at: Timestamp::now_utc(),

@@ -28,6 +28,7 @@ struct LiveBodies {
 impl LiveBodies {
     fn guard(&self) -> BodyGuard {
         self.count.fetch_add(1, Ordering::SeqCst);
+        self.changed.notify_waiters();
         BodyGuard(self.clone())
     }
 
@@ -59,6 +60,23 @@ impl Drop for BodyGuard {
         self.0.count.fetch_sub(1, Ordering::SeqCst);
         self.0.changed.notify_waiters();
     }
+}
+
+#[test]
+async fn live_body_waiters_observe_acquisition_and_release() {
+    let bodies = LiveBodies::default();
+    let acquired = bodies.wait_for(1);
+    tokio::pin!(acquired);
+    assert!(futures::poll!(acquired.as_mut()).is_pending());
+
+    let guard = bodies.guard();
+    assert!(futures::poll!(acquired.as_mut()).is_ready());
+
+    let released = bodies.wait_for(0);
+    tokio::pin!(released);
+    assert!(futures::poll!(released.as_mut()).is_pending());
+    drop(guard);
+    assert!(futures::poll!(released.as_mut()).is_ready());
 }
 
 fn idle_body(guard: BodyGuard) -> Body {

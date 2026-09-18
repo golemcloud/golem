@@ -133,5 +133,6 @@ fn render_http_method(method: &HttpMethod) -> &'static str {
         HttpMethod::Trace(_) => "TRACE",
         HttpMethod::Patch(_) => "PATCH",
         HttpMethod::Custom(_) => "<custom>",
+        HttpMethod::Any(_) => "<any>",
     }
 }

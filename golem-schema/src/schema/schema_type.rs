@@ -524,6 +524,22 @@ impl SchemaType {
             metadata: MetadataEnvelope::default(),
         }
     }
+    /// Convenience: build a record whose fields have no metadata.
+    pub fn record_from_fields<N>(fields: impl IntoIterator<Item = (N, SchemaType)>) -> Self
+    where
+        N: Into<String>,
+    {
+        Self::record(
+            fields
+                .into_iter()
+                .map(|(name, body)| NamedFieldType {
+                    name: name.into(),
+                    body,
+                    metadata: MetadataEnvelope::default(),
+                })
+                .collect(),
+        )
+    }
     pub fn variant(cases: Vec<VariantCaseType>) -> Self {
         Self::Variant {
             cases,
@@ -658,6 +674,24 @@ pub struct NamedFieldType {
     pub body: SchemaType,
     #[serde(default, skip_serializing_if = "MetadataEnvelope::is_empty")]
     pub metadata: MetadataEnvelope,
+}
+
+#[cfg(test)]
+mod record_constructor_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn record_from_fields_builds_fields_without_metadata() {
+        assert_eq!(
+            SchemaType::record_from_fields([("name", SchemaType::string())]),
+            SchemaType::record(vec![NamedFieldType {
+                name: "name".into(),
+                body: SchemaType::string(),
+                metadata: MetadataEnvelope::default(),
+            }])
+        );
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, IntoSchema, FromSchema)]

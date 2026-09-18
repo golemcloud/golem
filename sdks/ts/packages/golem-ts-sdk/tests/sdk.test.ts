@@ -445,6 +445,7 @@ describe('defineAgent', () => {
     const agentType = AgentTypeRegistry.get(new AgentClassName('counter'));
     expect(agentType).toBeDefined();
     expect(agentType!.typeName).toBe('counter');
+    expect(agentType!.kind).toBe('regular');
     expect(agentType!.sourceLanguage).toBe('typescript');
 
     // Constructor: single identity parameter `name`.

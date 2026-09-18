@@ -13,7 +13,8 @@ and guide disagree, the code wins and the guide needs a fix. The scoped `AGENTS.
 Deeper material lives in `reference/`: `timelines.md` (worked oplog timelines), `crash-matrix.md`
 (what recovery does for each crash window), `testing-patterns.md` (tests that fail under a wrong
 model), `streams.md` (durable streams and streaming invocations), `tools.md` (tool invocations
-and entity bodies) and `retries.md` (in-function versus trap-based retries).
+and entity bodies), `retries.md` (in-function versus trap-based retries), and
+`filesystem-inspection.md` (exact-path live reads, admission and generation-pinned lifetime).
 
 ## Three axioms
 
@@ -545,6 +546,13 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
   Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
   later guest terminals. Terminal outputs reconstruct from committed records without reattachment.
+
+The primary remains `ExecutionStatus::Running` after the guest returns while owned output
+streams drain and invocation/session completion runs. `materialize_streaming_result`
+(`worker/invocation.rs`) publishes the early result and preserves typed traps during production
+and settlement. Suspension belongs to the outer live invocation or replay boundary, not the
+guest-result boundary; interruption must still reach a producer that no longer writes to its
+stream. Snapshot calls retain their own settled suspension boundary.
 
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.

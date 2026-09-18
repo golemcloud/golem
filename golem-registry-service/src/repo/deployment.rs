@@ -1221,7 +1221,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.deployment_revision_id,
                         r.domain,
                         r.route_id,
-                        FALSE as security_scheme_missing,
+                        (r.security_scheme IS NOT NULL AND s.security_scheme_id IS NULL) AS security_scheme_missing,
                         s.security_scheme_id,
                         s.name AS security_scheme_name,
                         sr.provider_type AS security_scheme_provider_type,
@@ -1238,7 +1238,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     -- active deployment
                     JOIN current_deployments cd
                       ON cd.environment_id = r.environment_id
-                      AND cd.current_revision_id = r.deployment_revision_id
+                    JOIN current_deployment_revisions cdr
+                      ON cdr.environment_id = cd.environment_id
+                      AND cdr.revision_id = cd.current_revision_id
+                      AND cdr.deployment_revision_id = r.deployment_revision_id
 
                     -- parent objects not deleted
                     JOIN environments e
@@ -1267,7 +1270,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                       ON sr.security_scheme_id = s.security_scheme_id
                       AND sr.revision_id = s.current_revision_id
 
-                    WHERE r.domain = $1 AND (r.security_scheme IS NULL OR s.security_scheme_id IS NOT NULL)
+                    WHERE r.domain = $1
 
                     ORDER BY r.route_id
                 "#})

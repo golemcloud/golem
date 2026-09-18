@@ -27,9 +27,8 @@ use golem_common::model::{AgentId, IdempotencyKey};
 use golem_service_base::custom_api::CallAgentBehaviour;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
-use http::{Method, StatusCode};
+use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use load::{DurableStreamLoadLimiter, LoadRejection};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
@@ -102,7 +101,14 @@ impl DurableStreamsHandler {
                 stable_phantom(session)
             }
         });
-        let agent_id = self.call_agent.build_agent_id(route, behaviour, phantom)?;
+        let agent_id = CallAgentHandler::build_agent_id(
+            route,
+            behaviour.component_id,
+            &behaviour.agent_type,
+            &behaviour.constructor_input,
+            &behaviour.constructor_parameters,
+            phantom,
+        )?;
         match (request.underlying.method(), suffix.session, suffix.slot) {
             (&Method::POST, Some(session), Some(slot)) => {
                 self.append(request, route, behaviour, &agent_id, &session, &slot)
@@ -214,7 +220,9 @@ pub(super) fn error_response(
     };
     let mut result = response(status);
     if status == StatusCode::SERVICE_UNAVAILABLE {
-        result.headers.insert(http::header::RETRY_AFTER, "1".into());
+        result
+            .headers
+            .insert(http::header::RETRY_AFTER, HeaderValue::from_static("1"));
     }
     Ok(result)
 }
@@ -261,7 +269,7 @@ fn stable_phantom(session: &str) -> Uuid {
 fn response(status: StatusCode) -> RouteExecutionResult {
     RouteExecutionResult {
         status,
-        headers: HashMap::new(),
+        headers: HeaderMap::new(),
         body: ResponseBody::NoBody,
     }
 }
@@ -269,7 +277,7 @@ fn response(status: StatusCode) -> RouteExecutionResult {
 fn body_response(status: StatusCode, body: Vec<u8>, ct: &'static str) -> RouteExecutionResult {
     RouteExecutionResult {
         status,
-        headers: HashMap::new(),
+        headers: HeaderMap::new(),
         body: ResponseBody::PoemBody {
             body: poem::Body::from_bytes(body.into()),
             content_type: Some(ct),
@@ -280,7 +288,9 @@ fn body_response(status: StatusCode, body: Vec<u8>, ct: &'static str) -> RouteEx
 fn rejection_response(rejection: LoadRejection) -> RouteExecutionResult {
     let mut result = response(rejection.status_code());
     if result.status == StatusCode::SERVICE_UNAVAILABLE {
-        result.headers.insert(http::header::RETRY_AFTER, "1".into());
+        result
+            .headers
+            .insert(http::header::RETRY_AFTER, HeaderValue::from_static("1"));
     }
     result
 }

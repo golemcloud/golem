@@ -11662,6 +11662,11 @@ components:
           default: []
           items:
             type: string
+    AgentTypeKind:
+      type: string
+      enum:
+      - regular
+      - http-router
     AgentTypeProvisionConfig:
       type: object
       title: AgentTypeProvisionConfig
@@ -11764,6 +11769,7 @@ components:
       type: object
       required:
       - type_name
+      - kind
       - description
       - constructor
       - methods
@@ -11773,6 +11779,8 @@ components:
       properties:
         type_name:
           type: string
+        kind:
+          $ref: '#/components/schemas/AgentTypeKind'
         description:
           type: string
         source_language:
@@ -14395,6 +14403,19 @@ components:
           type: array
           items:
             type: string
+    ExactFileMapping:
+      type: object
+      title: ExactFileMapping
+      required:
+      - publicPath
+      - filePath
+      properties:
+        publicPath:
+          type: array
+          items:
+            type: string
+        filePath:
+          type: string
     Example:
       type: object
       required:
@@ -14917,6 +14938,40 @@ components:
             - auto-injected
           value:
             $ref: '#/components/schemas/AutoInjectedKind'
+    FileMapping:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/FileMapping_ExactFileMapping'
+      - $ref: '#/components/schemas/FileMapping_SubtreeFileMapping'
+      discriminator:
+        propertyName: type
+        mapping:
+          Exact: '#/components/schemas/FileMapping_ExactFileMapping'
+          Subtree: '#/components/schemas/FileMapping_SubtreeFileMapping'
+    FileMapping_ExactFileMapping:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Exact
+            example: Exact
+      - $ref: '#/components/schemas/ExactFileMapping'
+    FileMapping_SubtreeFileMapping:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Subtree
+            example: Subtree
+      - $ref: '#/components/schemas/SubtreeFileMapping'
     FlagShape:
       type: object
       oneOf:
@@ -15028,6 +15083,7 @@ components:
       - revision
       - environmentId
       - domain
+      - scheme
       - hash
       - agents
       - webhooksPrefix
@@ -15045,6 +15101,8 @@ components:
           format: uuid
         domain:
           type: string
+        scheme:
+          $ref: '#/components/schemas/HttpApiDeploymentScheme'
         hash:
           type: string
           format: hash
@@ -15117,6 +15175,13 @@ components:
       properties:
         domain:
           type: string
+        scheme:
+          description: Public scheme advertised in OpenAPI. Does not configure the HTTP listener.
+          default: https
+          allOf:
+          - $ref: '#/components/schemas/HttpApiDeploymentScheme'
+          - description: Public scheme advertised in OpenAPI. Does not configure the HTTP listener.
+            default: https
         webhooksPrefix:
           type: string
         openapiEndpointPrefix:
@@ -15125,6 +15190,11 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/HttpApiDeploymentAgentOptions'
+    HttpApiDeploymentScheme:
+      type: string
+      enum:
+      - http
+      - https
     HttpApiDeploymentUpdate:
       type: object
       title: HttpApiDeploymentUpdate
@@ -15134,6 +15204,8 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        scheme:
+          $ref: '#/components/schemas/HttpApiDeploymentScheme'
         webhookPrefix:
           type: string
         openapiEndpointPrefix:
@@ -15223,6 +15295,7 @@ components:
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
       discriminator:
         propertyName: type
         mapping:
@@ -15236,6 +15309,7 @@ components:
           Trace: '#/components/schemas/HttpMethod_Empty'
           Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
+          Any: '#/components/schemas/HttpMethod_Empty'
     HttpMethod_CustomHttpMethod:
       allOf:
       - type: object
@@ -15257,8 +15331,8 @@ components:
           type:
             type: string
             enum:
-            - Patch
-            example: Patch
+            - Any
+            example: Any
       - $ref: '#/components/schemas/Empty'
     HttpMountDetails:
       type: object
@@ -15268,6 +15342,8 @@ components:
       - phantomAgent
       - corsOptions
       - webhookSuffix
+      - staticBindings
+      - filesystemBindings
       properties:
         pathPrefix:
           type: array
@@ -15283,6 +15359,17 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PathSegment'
+        staticBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        filesystemBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        openapiProviderMethod:
+          type: string
+          description: The name of a parameterless router method that returns the OpenAPI document as a string.
     ImpliesC:
       type: object
       required:
@@ -18877,6 +18964,19 @@ components:
             type: string
         required:
           type: boolean
+    SubtreeFileMapping:
+      type: object
+      title: SubtreeFileMapping
+      required:
+      - publicPrefix
+      - filesystemRoot
+      properties:
+        publicPrefix:
+          type: array
+          items:
+            type: string
+        filesystemRoot:
+          type: string
     SystemToolAvailability:
       type: string
       enum:

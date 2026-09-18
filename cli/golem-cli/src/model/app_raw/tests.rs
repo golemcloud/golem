@@ -863,9 +863,15 @@ fn arb_http_api_deployment_model() -> BoxedStrategy<HttpApiDeployment> {
             0..=3,
         )
         .prop_map(IndexMap::from_iter),
+        prop::bool::ANY,
     )
         .prop_map(
-            |(domain, webhook_url, openapi_endpoint, agents)| HttpApiDeployment {
+            |(domain, webhook_url, openapi_endpoint, agents, use_http)| HttpApiDeployment {
+                scheme: if use_http {
+                    golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http
+                } else {
+                    golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https
+                },
                 domain: Some(Domain(format!("{domain}.example.com")).into()),
                 subdomain: None,
                 webhook_url,
@@ -1325,6 +1331,39 @@ fn schema_is_loadable_and_validates_empty_app() {
     };
 
     assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+}
+
+#[test]
+fn http_api_scheme_schema_and_serde_agree() {
+    use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
+    let mut json = serde_json::json!({"app": "test", "httpApi": {"deployments": {
+        "local": [{"domain": "localhost:9006", "agents": {}}]
+    }}});
+    for (value, expected) in [
+        (None, HttpApiDeploymentScheme::Https),
+        (Some("http"), HttpApiDeploymentScheme::Http),
+        (Some("https"), HttpApiDeploymentScheme::Https),
+    ] {
+        if let Some(value) = value {
+            json["httpApi"]["deployments"]["local"][0]["scheme"] = value.into();
+        }
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&json));
+        let app: Application = serde_json::from_value(json.clone()).unwrap();
+        let deployment = app
+            .http_api
+            .unwrap()
+            .deployments
+            .into_values()
+            .next()
+            .unwrap()
+            .remove(0);
+        assert_eq!(deployment.scheme, expected);
+    }
+    for value in ["ftp", "HTTP", "https://example.com"] {
+        json["httpApi"]["deployments"]["local"][0]["scheme"] = value.into();
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json));
+        assert!(serde_json::from_value::<Application>(json.clone()).is_err());
+    }
 }
 
 #[test]

@@ -784,6 +784,7 @@ export const registerAgent = <
 
     const agentType: AgentCommon.AgentType = {
       typeName: metadata.name,
+      kind: "regular",
       description: metadata.description ?? "",
       sourceLanguage: "typescript",
       schema: encoder.finish(),

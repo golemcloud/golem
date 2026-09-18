@@ -32,7 +32,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::model::durable_stream::StreamOffset;
 use golem_common::model::{AgentId, OplogIndex};
 use golem_service_base::model::auth::AuthCtx;
-use http::{HeaderName, Method, StatusCode};
+use http::{HeaderName, HeaderValue, Method, StatusCode};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -141,19 +141,20 @@ impl DurableStreamsHandler {
             r.status = StatusCode::NO_CONTENT;
             r.headers.insert(
                 HeaderName::from_static("stream-cursor"),
-                live_cursor(cursor)?.to_string(),
+                HeaderValue::from(live_cursor(cursor)?),
             );
             return Ok(r);
         }
         if live == Some(Live::Sse) {
             let mut result = metadata_response(&read, false)?;
-            result
-                .headers
-                .insert(http::header::CONTENT_TYPE, "text/event-stream".into());
+            result.headers.insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/event-stream"),
+            );
             if content_type(&read) == "application/octet-stream" {
                 result.headers.insert(
                     HeaderName::from_static("stream-sse-data-encoding"),
-                    "base64".into(),
+                    HeaderValue::from_static("base64"),
                 );
             }
             let read_request = ReadStreamSlotRequest {
@@ -183,14 +184,18 @@ impl DurableStreamsHandler {
         }
         let mut result = data_response(&read)?;
         let etag = etag(&read, &start_offset, &read.next_offset)?;
-        result.headers.insert(http::header::ETAG, etag.clone());
+        result.headers.insert(
+            http::header::ETAG,
+            etag.parse().map_err(anyhow::Error::from)?,
+        );
         if live.is_some() {
-            result
-                .headers
-                .insert(http::header::CACHE_CONTROL, "no-store".into());
+            result.headers.insert(
+                http::header::CACHE_CONTROL,
+                HeaderValue::from_static("no-store"),
+            );
             result.headers.insert(
                 HeaderName::from_static("stream-cursor"),
-                live_cursor(cursor)?.to_string(),
+                HeaderValue::from(live_cursor(cursor)?),
             );
         } else if read.closed && if_none_match_hits(request, &etag) {
             result.status = StatusCode::NOT_MODIFIED;

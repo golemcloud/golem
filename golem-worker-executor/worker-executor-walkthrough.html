@@ -578,6 +578,24 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
   </div>
 </div>
 
+<details class="disclosure" id="filesystem-inspection">
+  <summary>Live filesystem inspection: metadata first, one pinned generation</summary>
+  <div class="body">
+  <p><code>get_file_contents</code> serves the existing CLI and REST file-read operation with a metadata-first stream instead of a full-file buffer. Live HTTP filesystem bindings reuse this operation; static initial files come directly from blob storage. Its Rust API receives one <code>CanonicalFilePath</code>, and gRPC carries that canonical absolute path as the string <code>file_path</code>. The HTTP layer owns exposure-root selection, root/suffix composition, decoded-segment checks and trailing-directory intent. The executor validates the raw absolute path without URI decoding; it does no route interpretation, Range parsing or validator generation. Inspection itself invokes no guest method and is not a durable stream.</p>
+  <ol class="steps">
+    <li><strong>Reserve before activation.</strong> <code>FileReadAdmission</code> bounds outstanding requests, including absent agents. Defaults: one active read and 16 queued per agent, 128 outstanding per executor. <code>file_read</code> config changes queue and total capacity; a full queue rejects immediately. There is no executor read deadline: a connected request waits for completion or an error.</li>
+    <li><strong>Initialize or reconstruct normally.</strong> Concurrent first reads share agent creation. Inspection invokes no exported method, but initialization and replay may execute guest code. Cancelling a caller releases its reservation without cancelling shared initialization or undoing its effects.</li>
+    <li><strong>Wait for ordered work, then open.</strong> The inspection queue records an earlier-invocation cutoff and waits for pending updates. The invocation loop acquires the exclusive <code>OwnerLane</code>, walks descriptors without following any symlink, opens only a regular file, and captures metadata from that descriptor. Absent and forbidden targets remain distinct; there is no listing or implicit index file.</li>
+    <li><strong>Stream under the same guard.</strong> A metadata head reports total u64 size, selected offset/length or unsatisfiable selection, and optional modification time. Full, bounded, open-ended, suffix and metadata-only selections share one implementation. Chunks are at most 64 KiB through a capacity-one channel; whole-file length never sizes an allocation.</li>
+    <li><strong>Release on consumer termination.</strong> Enqueueing the last bytes is not completion. The descriptor, generation, lane and admission remain held until consumer EOF, drop or failure. Metadata-only and zero-byte responses release after metadata. The worker service owns the transport stream directly and never retries after the head.</li>
+  </ol>
+  <div class="callout">
+    <strong>Exposure policy is not lifecycle revision.</strong> A read uses the agent's normal current revision at the exact canonical path supplied by its caller. Updates, revert and unload cannot splice another generation into an active response. Later reads reconstruct normally and inspect that same path in the new generation; a missing file never selects another path. A queued read survives ordinary Suspend and waits for normal resume; it does not force a fuel, quota or scheduled-wait bypass.
+  </div>
+  <p class="src">Owners: <code>services/file_read_admission.rs</code>, <code>worker/inspection_queue.rs</code>, <code>worker/invocation_loop.rs</code>, <code>services/agent_filesystem/lifecycle/{inspection,inspection_stream}/mod.rs</code>. Real runtime coverage: <code>tests/filesystem_inspection.rs</code>.</p>
+  </div>
+</details>
+
 <details class="disclosure">
   <summary>Host interfaces the guest can call (what <code>create_linker</code> wires up)</summary>
   <div class="body">
@@ -1527,6 +1545,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <li><strong>Invocation finished, session cleanup pending</strong> — <code>agent_invocation_finished</code> runs <code>complete_durable_streaming_session</code> after the success hook, appending protocol terminals and <code>StreamSession { Finished }</code> as hints <em>after</em> <code>AgentInvocationFinished</code>.</li>
 </ol>
 <p><strong>Keep polling during cleanup.</strong> Output materialization settles positional tail work before invocation completion. Session completion then runs inside the Store event loop, both live and after replay reaches live. An unfinished host stream operation can retain a producer or session lock across a pending poll; awaiting cleanup outside that event loop can deadlock and leave the next invocation queued even though the oplog reports <code>Idle</code>.</p>
+<p><strong>A returned result does not suspend execution.</strong> The primary stays <code>ExecutionStatus::Running</code> while owned output streams drain and invocation/session completion runs. <code>materialize_streaming_result</code> publishes the early result and classifies producer and settlement traps just like guest-export traps. An interrupt can therefore stop a producer that keeps computing without another stream write; it remains an interruption, not a runtime error or retry. The outer live invocation or replay boundary marks execution <code>Suspended</code> only after that work ends. Snapshot calls retain their own settled suspension boundary.</p>
 
 <div class="widget" id="tl-stream">
   <h4>Crash-window walkthrough: producer restarts mid-stream <span class="pill js-only">interactive</span></h4>

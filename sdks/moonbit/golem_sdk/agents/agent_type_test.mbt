@@ -41,6 +41,7 @@ fn s32_graph() -> @model.SchemaGraph {
 fn sample_agent_type() -> @common.AgentType raise {
   let def : AgentTypeDef = {
     type_name: "Sample",
+    kind: REGULAR,
     description: "sample agent",
     source_language: "moonbit",
     constructor_: {
@@ -159,6 +160,7 @@ test "method output and config encode into the shared pool" {
 test "unit method output encodes as OutputSchema::Unit" {
   let def : AgentTypeDef = {
     type_name: "Unit",
+    kind: REGULAR,
     description: "",
     source_language: "moonbit",
     constructor_: { name: None, description: "", prompt_hint: None, input: [], },
@@ -184,6 +186,71 @@ test "unit method output encodes as OutputSchema::Unit" {
 }
 
 ///|
+test "router metadata is preserved exactly" {
+  let mount : @common.HttpMountDetails = {
+    path_prefix: [Literal("router")],
+    auth_details: None,
+    phantom_agent: true,
+    cors_options: { allowed_patterns: ["first", "second"], },
+    webhook_suffix: [Literal("events")],
+    static_bindings: [
+      Exact({ public_path: ["a", "b"], file_path: "/static/a.txt", }),
+      Subtree({ public_prefix: ["assets"], filesystem_root: "/srv/assets", }),
+    ],
+    filesystem_bindings: [
+      Subtree({ public_prefix: ["files"], filesystem_root: "/data", }),
+      Exact({ public_path: ["health"], file_path: "/data/health", }),
+    ],
+    openapi_provider_method: Some("provider text"),
+  }
+  let def : AgentTypeDef = {
+    type_name: "Router",
+    kind: HTTP_ROUTER,
+    description: "",
+    source_language: "moonbit",
+    constructor_: { name: None, description: "", prompt_hint: None, input: [], },
+    methods: [
+      {
+        name: "route",
+        description: "",
+        http_endpoint: [
+          {
+            http_method: Any,
+            path_suffix: [],
+            header_vars: [],
+            query_vars: [],
+            auth_details: None,
+            cors_options: { allowed_patterns: [], },
+          },
+          {
+            http_method: Custom("ANY"),
+            path_suffix: [],
+            header_vars: [],
+            query_vars: [],
+            auth_details: None,
+            cors_options: { allowed_patterns: [], },
+          },
+        ],
+        prompt_hint: None,
+        input: [],
+        output: None,
+        read_only: None,
+      },
+    ],
+    dependencies: [],
+    mode: DURABLE,
+    http_mount: Some(mount),
+    snapshotting: Disabled,
+    config: [],
+  }
+  let agent_type = def.to_agent_type()
+  assert_eq(agent_type.kind, HTTP_ROUTER)
+  assert_eq(agent_type.http_mount, Some(mount))
+  assert_eq(agent_type.methods[0].http_endpoint[0].http_method, Any)
+  assert_eq(agent_type.methods[0].http_endpoint[1].http_method, Custom("ANY"))
+}
+
+///|
 test "conflicting same-id definitions are rejected" {
   // Two graphs share id `test.Foo` but with structurally different bodies.
   let other : @model.SchemaGraph = {
@@ -202,6 +269,7 @@ test "conflicting same-id definitions are rejected" {
   }
   let def : AgentTypeDef = {
     type_name: "Conflict",
+    kind: REGULAR,
     description: "",
     source_language: "moonbit",
     constructor_: {

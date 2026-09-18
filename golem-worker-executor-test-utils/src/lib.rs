@@ -97,9 +97,7 @@ use golem_worker_executor::durable_host::{
     DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
     SnapshotBoundaryBlocker,
 };
-use golem_worker_executor::model::{
-    AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType,
-};
+use golem_worker_executor::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
 use golem_worker_executor::native_tool::{
     NativeToolAdapter, NativeToolCatalog, NativeToolRegistration,
 };
@@ -2639,13 +2637,6 @@ impl FileSystemReading for TestWorkerCtx {
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         self.durable_ctx.get_file_system_node(path).await
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        self.durable_ctx.read_file(path).await
     }
 }
 

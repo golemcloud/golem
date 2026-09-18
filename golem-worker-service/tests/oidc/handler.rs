@@ -33,7 +33,6 @@ use golem_worker_service::custom_api::{
     RichCompiledRoute, RichRequest, RichRouteBehaviour, RichRouteSecurity,
     RichSecuritySchemeRouteSecurity,
 };
-use http::Method;
 use openidconnect::core::CoreIdTokenClaims;
 use openidconnect::{
     Audience, AuthorizationCode, EmptyAdditionalClaims, IssuerUrl, StandardClaims,
@@ -143,8 +142,10 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
         account_id: Default::default(),
         account_email: golem_common::model::account::AccountEmail::new("test@golem"),
         environment_id: Default::default(),
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
         route_id: 1,
-        method: Method::GET,
+        route_match: golem_common::model::agent::HttpMethod::Get(golem_common::model::Empty {})
+            .into(),
         path: vec![PathSegment::Literal {
             value: "redirect".to_string(),
         }],
@@ -162,9 +163,15 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
 
     ResolvedRouteEntry {
         domain: Domain("example.com".to_string()),
+        public_scheme: "http".to_string(),
+        public_authority: "example.com".to_string(),
         route: Arc::new(compiled_route),
         captured_path_parameters: vec![],
-        openapi_spec: None,
+        request_target: golem_common::model::agent::http_files::HttpRequestTarget::parse(
+            "/redirect",
+        )
+        .unwrap(),
+        openapi_inputs: None,
     }
 }
 
@@ -172,7 +179,12 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
 async fn oidc_flow_redirect_and_callback(handler: &Arc<OidcHandler>) -> anyhow::Result<()> {
     let scheme = sample_security_scheme();
 
-    let mut request = request_new("/protected");
+    let mut request = RichRequest::new(
+        poem::Request::builder()
+            .uri_str("https://internal.example/protected?x=1&x=%2f+")
+            .version(http::Version::HTTP_2)
+            .finish(),
+    );
     let result = handler
         .apply_oidc_incoming_middleware(
             &mut request,
@@ -182,10 +194,10 @@ async fn oidc_flow_redirect_and_callback(handler: &Arc<OidcHandler>) -> anyhow::
         .unwrap();
 
     assert_eq!(result.status, http::StatusCode::FOUND);
-    let redirect_url = result.headers[&http::header::LOCATION].to_string();
+    let redirect_url = result.headers[&http::header::LOCATION].to_str()?;
     assert!(redirect_url.contains("https://fake-idp/auth"));
 
-    let parsed_url = Url::parse(&redirect_url)?;
+    let parsed_url = Url::parse(redirect_url)?;
     let state = parsed_url
         .query_pairs()
         .find(|(k, _)| k == "state")
@@ -207,6 +219,10 @@ async fn oidc_flow_redirect_and_callback(handler: &Arc<OidcHandler>) -> anyhow::
         callback_result
             .headers
             .contains_key(&http::header::LOCATION)
+    );
+    assert_eq!(
+        callback_result.headers[&http::header::LOCATION].to_str()?,
+        "http://example.com/protected?x=1&x=%2f+"
     );
 
     Ok(())

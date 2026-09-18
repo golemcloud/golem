@@ -38,7 +38,9 @@ use golem_service_base::model::component::Component as ComponentMetadata;
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(feature = "test-utils")]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use tracing::warn;
 use wasmtime::component::{Component, Instance};

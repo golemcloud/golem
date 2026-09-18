@@ -1,0 +1,5 @@
+error: ANY endpoints require kind = "http-router"
+ --> tests/ui/fail/endpoint_any_regular_agent.rs:8:8
+  |
+8 |     fn route(&self, request: String) -> String;
+  |        ^^^^^

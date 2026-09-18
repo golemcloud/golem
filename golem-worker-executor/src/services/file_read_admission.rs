@@ -1,0 +1,323 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::services::golem_config::FileReadConfig;
+use golem_common::model::OwnedAgentId;
+use golem_common::model::filesystem::FileReadError;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+/// Executor-local admission, shared by all requests, including requests for absent agents.
+#[derive(Debug)]
+pub struct FileReadAdmission {
+    state: Mutex<State>,
+    /// Queued requests beyond the single active turn.
+    max_queued_per_agent: usize,
+    max_outstanding: usize,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    agents: HashMap<OwnedAgentId, AgentReads>,
+    outstanding: usize,
+}
+
+#[derive(Debug)]
+struct AgentReads {
+    outstanding: usize,
+    active: Arc<Semaphore>,
+}
+
+/// A bounded reservation made before any activation or initialization work is polled.
+#[derive(Debug)]
+pub struct FileReadReservation {
+    admission: Arc<FileReadAdmission>,
+    agent: OwnedAgentId,
+    active: Arc<Semaphore>,
+}
+
+/// Keeps both the per-agent turn and global reservation until the read's terminal observation.
+pub(crate) struct FileReadPermit {
+    _active: OwnedSemaphorePermit,
+    _reservation: FileReadReservation,
+}
+
+impl Default for FileReadAdmission {
+    fn default() -> Self {
+        Self::from(&FileReadConfig::default())
+    }
+}
+
+impl From<&FileReadConfig> for FileReadAdmission {
+    fn from(config: &FileReadConfig) -> Self {
+        Self::new(config.max_queued_per_agent, config.max_outstanding)
+    }
+}
+
+impl FileReadAdmission {
+    pub(crate) fn new(max_queued_per_agent: usize, max_outstanding: usize) -> Self {
+        Self {
+            state: Mutex::new(State::default()),
+            max_queued_per_agent,
+            max_outstanding,
+        }
+    }
+
+    /// Rejects immediately when full; never creates a task to wait for capacity.
+    pub fn reserve(
+        self: &Arc<Self>,
+        agent: OwnedAgentId,
+    ) -> Result<FileReadReservation, FileReadError> {
+        let mut state = self.state.lock().unwrap();
+        if state.outstanding >= self.max_outstanding {
+            return Err(FileReadError::ResourceExhausted);
+        }
+        let reads = state
+            .agents
+            .entry(agent.clone())
+            .or_insert_with(|| AgentReads {
+                outstanding: 0,
+                active: Arc::new(Semaphore::new(1)),
+            });
+        if reads.outstanding > self.max_queued_per_agent {
+            return Err(FileReadError::ResourceExhausted);
+        }
+        reads.outstanding += 1;
+        let active = reads.active.clone();
+        state.outstanding += 1;
+        Ok(FileReadReservation {
+            admission: self.clone(),
+            agent,
+            active,
+        })
+    }
+}
+
+impl FileReadReservation {
+    /// Waits for the agent's single turn.
+    /// Dropping this future releases its queued reservation synchronously.
+    pub(crate) async fn acquire(self) -> Result<FileReadPermit, FileReadError> {
+        let active = self
+            .active
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("file read turn semaphore is never closed");
+        Ok(FileReadPermit {
+            _active: active,
+            _reservation: self,
+        })
+    }
+}
+
+impl Drop for FileReadReservation {
+    fn drop(&mut self) {
+        let mut state = self.admission.state.lock().unwrap();
+        let reads = state.agents.get_mut(&self.agent).expect("registered read");
+        reads.outstanding -= 1;
+        if reads.outstanding == 0 {
+            state.agents.remove(&self.agent);
+        }
+        state.outstanding -= 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::poll;
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use test_r::{test, timeout};
+
+    fn agent() -> OwnedAgentId {
+        OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId::from_agent_name_string(ComponentId::new(), "read").unwrap(),
+        )
+    }
+
+    fn assert_empty(admission: &FileReadAdmission) {
+        let state = admission.state.lock().unwrap();
+        assert_eq!(state.outstanding, 0);
+        assert!(state.agents.is_empty());
+    }
+
+    #[test]
+    fn configured_limits_override_defaults() {
+        let admission = Arc::new(FileReadAdmission::from(&FileReadConfig {
+            max_queued_per_agent: 0,
+            max_outstanding: 2,
+        }));
+        let first_agent = agent();
+        let first = admission.reserve(first_agent.clone()).unwrap();
+        assert!(matches!(
+            admission.reserve(first_agent),
+            Err(FileReadError::ResourceExhausted)
+        ));
+        let second = admission.reserve(agent()).unwrap();
+        assert!(matches!(
+            admission.reserve(agent()),
+            Err(FileReadError::ResourceExhausted)
+        ));
+        drop((first, second));
+        assert_empty(&admission);
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn queue_capacity_includes_unstarted_work() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        )))
+        .unwrap();
+        let id = "lifecycle-read-queue-bounded";
+        let case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .expect("lifecycle-read-queue-bounded");
+        let queued_count: usize = case["input"]["events"][1]
+            .as_str()
+            .unwrap()
+            .strip_prefix("queued-reads:")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(queued_count, 16, "{id}");
+        let admission = Arc::new(FileReadAdmission::default());
+        let agent = agent();
+        let reservation = admission.reserve(agent.clone()).unwrap();
+        let mut queued = Vec::new();
+        for _ in 0..queued_count {
+            queued.push(admission.reserve(agent.clone()).unwrap());
+        }
+        assert!(
+            matches!(
+                admission.reserve(agent.clone()),
+                Err(FileReadError::ResourceExhausted)
+            ),
+            "{id}"
+        );
+        let active = reservation.acquire().await.unwrap();
+        let mut waiting = Box::pin(queued.pop().unwrap().acquire());
+        assert!(poll!(&mut waiting).is_pending());
+        drop(waiting);
+        // A cancelled queued future frees a slot even while the first request is active.
+        drop(admission.reserve(agent).unwrap());
+        drop(queued);
+        drop(active);
+        assert_empty(&admission);
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn global_limit_bounds_distinct_agents_and_idle_registry_entries() {
+        let admission = Arc::new(FileReadAdmission::default());
+        let mut reservations = Vec::new();
+        for _ in 0..128 {
+            reservations.push(admission.reserve(agent()).unwrap());
+        }
+        assert!(matches!(
+            admission.reserve(agent()),
+            Err(FileReadError::ResourceExhausted)
+        ));
+        assert_eq!(admission.state.lock().unwrap().agents.len(), 128);
+        drop(reservations.pop());
+        drop(admission.reserve(agent()).unwrap());
+        drop(reservations);
+        assert_empty(&admission);
+        for _ in 0..256 {
+            drop(admission.reserve(agent()).unwrap());
+        }
+        assert_empty(&admission);
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn cancellation_at_grant_keeps_single_agent_serialized() {
+        let admission = Arc::new(FileReadAdmission::default());
+        let agent = agent();
+        let active = admission
+            .reserve(agent.clone())
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let mut second = Box::pin(admission.reserve(agent.clone()).unwrap().acquire());
+        let mut third = Box::pin(admission.reserve(agent.clone()).unwrap().acquire());
+        assert!(poll!(&mut second).is_pending());
+        assert!(poll!(&mut third).is_pending());
+        drop(active); // The semaphore grants to second, but its future has not observed the grant.
+        drop(second);
+        let third = third.await.unwrap();
+        let mut fourth = Box::pin(admission.reserve(agent).unwrap().acquire());
+        assert!(poll!(&mut fourth).is_pending());
+        drop(third);
+        drop(fourth.await.unwrap());
+        assert_empty(&admission);
+    }
+
+    #[test]
+    fn queued_read_waits_past_old_timeout_and_finishes_after_release() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+        )))
+        .unwrap();
+        let id = "lifecycle-read-waits-without-executor-deadline";
+        let case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap();
+        let elapsed: u64 = case["input"]["events"][3]
+            .as_str()
+            .unwrap()
+            .strip_prefix("time:")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(elapsed > 60_000, "{id}");
+        assert_eq!(case["expect"]["pending_before_release"], true, "{id}");
+        assert_eq!(case["expect"]["resources_released"], true, "{id}");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tokio::time::pause();
+                let admission = Arc::new(FileReadAdmission::new(1, 2));
+                let agent = agent();
+                let active = admission
+                    .reserve(agent.clone())
+                    .unwrap()
+                    .acquire()
+                    .await
+                    .unwrap();
+                let mut queued = Box::pin(admission.reserve(agent.clone()).unwrap().acquire());
+                assert!(poll!(&mut queued).is_pending());
+                tokio::time::advance(std::time::Duration::from_millis(elapsed)).await;
+                assert!(poll!(&mut queued).is_pending(), "{id}");
+                drop(active);
+                drop(queued.await.unwrap());
+                assert_empty(&admission);
+            });
+    }
+}

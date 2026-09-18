@@ -37,7 +37,7 @@ use golem_common::schema::{
 };
 use golem_service_base::custom_api::{CallAgentBehaviour, MethodParameter};
 use golem_service_base::model::auth::AuthCtx;
-use http::{HeaderName, Method, StatusCode};
+use http::{HeaderName, HeaderValue, Method, StatusCode};
 use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
@@ -140,7 +140,9 @@ impl DurableStreamsHandler {
             format!(
                 "{}/invocations/{session}",
                 request.underlying.uri().path().trim_end_matches('/')
-            ),
+            )
+            .parse()
+            .map_err(anyhow::Error::from)?,
         );
         Ok(result)
     }
@@ -293,15 +295,18 @@ impl DurableStreamsHandler {
         )
         .map_err(anyhow::Error::from)?;
         let mut result = body_response(StatusCode::OK, body, "application/json");
-        result
-            .headers
-            .insert(http::header::CACHE_CONTROL, "no-store".into());
-        result
-            .headers
-            .insert(http::header::CONTENT_TYPE, "application/json".into());
-        result
-            .headers
-            .insert(HeaderName::from_static("stream-closed"), closed.to_string());
+        result.headers.insert(
+            http::header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        );
+        result.headers.insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        result.headers.insert(
+            HeaderName::from_static("stream-closed"),
+            HeaderValue::from_static(if closed { "true" } else { "false" }),
+        );
         if request.underlying.method() == Method::HEAD {
             result.body = ResponseBody::NoBody;
         }

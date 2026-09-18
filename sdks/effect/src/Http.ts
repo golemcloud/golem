@@ -1336,6 +1336,9 @@ export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.Ht
   phantomAgent: mountDef.phantomAgent,
   corsOptions: { allowedPatterns: [...mountDef.cors] },
   webhookSuffix: mountDef.webhookSuffix.map(segmentToWit),
+  staticBindings: [],
+  filesystemBindings: [],
+  openapiProviderMethod: undefined,
 })
 
 /**

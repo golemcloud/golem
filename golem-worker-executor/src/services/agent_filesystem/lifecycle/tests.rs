@@ -102,6 +102,41 @@ fn agent_id() -> OwnedAgentId {
     )
 }
 
+pub(super) async fn native_resident(parent: &Path) -> (ResidentFilesystem, PathBuf) {
+    let id = agent_id();
+    let root = parent
+        .join(id.environment_id.to_string())
+        .join(id.agent_id.component_id.to_string())
+        .join(id.agent_id.agent_name_encoded());
+    let created = create_fresh(
+        sandbox_provisioning(&FilesystemStorageConfig {
+            deterministic_root_dir: Some(parent.to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        })
+        .unwrap(),
+        id,
+        ResolvedStorageLimits::Unlimited,
+    )
+    .await
+    .unwrap();
+    let (account, _) = account();
+    let reconstructing = bind_configured_resource_usage_metering(
+        created,
+        account,
+        ResourceUsageMeteringConfig {
+            compute: false,
+            memory: false,
+            filesystem: false,
+        },
+    )
+    .unwrap();
+    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
+        .await
+        .unwrap();
+    let reconstructing = finish_replay(reconstructing).await.unwrap();
+    (finish_reconstruction(reconstructing).await.unwrap(), root)
+}
+
 fn limits(bytes: u64, objects: u64) -> FilesystemLimits {
     FilesystemLimits {
         allocated_bytes: bytes,
@@ -116,11 +151,14 @@ fn allocation(bytes: u64, objects: u64) -> FilesystemAllocation {
     }
 }
 
-fn unsupported_allocation() -> FilesystemStorageError {
+pub(super) fn unsupported_allocation() -> FilesystemStorageError {
     FilesystemStorageError::allocation_unsupported(Path::new("<scripted>"))
 }
 
-fn sandbox_error(operation: &'static str, kind: std::io::ErrorKind) -> FilesystemStorageError {
+pub(super) fn sandbox_error(
+    operation: &'static str,
+    kind: std::io::ErrorKind,
+) -> FilesystemStorageError {
     FilesystemStorageError::io(
         operation,
         Path::new("<scripted>"),
@@ -170,7 +208,7 @@ async fn prepared_initial_file() -> (PreparedInitialFiles, Arc<FileLoader>) {
     (prepared, loader)
 }
 
-fn sandbox_attributes(kind: SandboxObjectKind) -> SandboxAttributes {
+pub(super) fn sandbox_attributes(kind: SandboxObjectKind) -> SandboxAttributes {
     SandboxAttributes {
         kind,
         link_count: 1,
@@ -315,7 +353,7 @@ async fn created_product_supports_observed_verified_cleanup() {
     assert!(has_call(&control, "delete_and_verify("));
 }
 
-async fn resident(
+pub(super) async fn resident(
     usage: Result<FilesystemAllocation, FilesystemStorageError>,
 ) -> (
     TestAgentFilesystem<Resident>,

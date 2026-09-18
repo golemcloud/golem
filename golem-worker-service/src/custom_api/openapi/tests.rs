@@ -21,7 +21,6 @@ use golem_common::base_model::agent::{BinaryType, TextType};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::metadata::{MetadataEnvelope, TypeId};
 use golem_common::schema::schema_type::{
@@ -271,8 +270,9 @@ fn call_agent_route(
         account_id: AccountId::new(),
         account_email: AccountEmail::new("test@golem.cloud"),
         environment_id: EnvironmentId::new(),
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
         route_id: 0,
-        method,
+        route_match: test_route_match(method),
         path,
         body,
         behavior: RichRouteBehaviour::CallAgent(CallAgentBehaviour {
@@ -307,9 +307,8 @@ fn call_agent_route(
 
 /// Build the OpenAPI document for a set of routes (panics on error).
 fn spec_for(routes: Vec<RichCompiledRoute>) -> Value {
-    HttpApiOpenApiSpec::from_routes(&routes, &Domain("example.com".to_string()))
+    HttpApiOpenApiSpec::from_routes(&routes.iter().collect::<Vec<_>>(), "https://example.com")
         .expect("spec generation succeeds")
-        .0
 }
 
 #[test]
@@ -415,10 +414,188 @@ fn document_is_openapi_3_1_with_servers() {
         spec["info"]["title"],
         json!("Managed api provided by Golem")
     );
-    assert_eq!(spec["servers"][0]["url"], json!("https://example.com"));
-    assert_eq!(spec["servers"][1]["url"], json!("http://example.com"));
+    assert_eq!(spec["servers"], json!([{"url":"https://example.com"}]));
     // No named types in these routes → components has no schemas.
     assert!(spec["components"].get("schemas").is_none());
+}
+
+#[test]
+fn multiple_rest_bindings_omit_generated_operation_ids_and_preserve_trailing_slashes() {
+    let route = || {
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "item".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        )
+    };
+    let plain = route();
+    let mut slash = route();
+    let golem_service_base::custom_api::RouteMatch::Method { trailing_slash, .. } =
+        &mut slash.route_match
+    else {
+        unreachable!()
+    };
+    *trailing_slash = true;
+    let spec = spec_for(vec![plain, slash]);
+    for path in ["/item", "/item/"] {
+        assert!(spec["paths"][path]["get"].is_object());
+        assert!(spec["paths"][path]["get"].get("operationId").is_none());
+        assert_eq!(spec["paths"][path]["get"]["security"], json!([]));
+    }
+}
+
+#[test]
+fn generated_security_never_treats_protected_routes_as_public() {
+    let route = || {
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "item".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        )
+    };
+    let mut protected = route();
+    protected.security = RichRouteSecurity::SessionFromHeader(
+        golem_service_base::custom_api::SessionFromHeaderRouteSecurity {
+            header_name: "X-Session".into(),
+        },
+    );
+    let mut other = route();
+    other.path = vec![PathSegment::Literal {
+        value: "other".into(),
+    }];
+    other.security = RichRouteSecurity::SessionFromHeader(
+        golem_service_base::custom_api::SessionFromHeaderRouteSecurity {
+            header_name: "x-session".into(),
+        },
+    );
+    let spec = spec_for(vec![protected, other]);
+    assert_eq!(
+        spec["paths"]["/item"]["get"]["security"],
+        json!([{"golem-session-header-eC1zZXNzaW9u":[]}])
+    );
+    assert_eq!(
+        spec["components"]["securitySchemes"]["golem-session-header-eC1zZXNzaW9u"],
+        json!({"type":"apiKey","in":"header","name":"x-session"})
+    );
+    let mut unavailable = route();
+    unavailable.security = RichRouteSecurity::Unavailable;
+    assert!(HttpApiOpenApiSpec::from_routes(&[&unavailable], "https://example.com").is_err());
+}
+
+#[test]
+fn generated_session_security_encodes_header_punctuation_in_component_keys() {
+    let mut route = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "item".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    route.security = RichRouteSecurity::SessionFromHeader(
+        golem_service_base::custom_api::SessionFromHeaderRouteSecurity {
+            header_name: "X-Session+Id".into(),
+        },
+    );
+
+    let spec = spec_for(vec![route]);
+    assert_eq!(
+        spec["paths"]["/item"]["get"]["security"],
+        json!([{"golem-session-header-eC1zZXNzaW9uK2lk":[]}])
+    );
+    assert_eq!(
+        spec["components"]["securitySchemes"]["golem-session-header-eC1zZXNzaW9uK2lk"]["name"],
+        "x-session+id"
+    );
+    assert!(super::provider_document::parse("generated", &spec.to_string()).is_ok());
+}
+
+#[test]
+fn generated_duplicate_operations_fail_before_overwriting() {
+    let route = || {
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "item".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        )
+    };
+    assert!(HttpApiOpenApiSpec::from_routes(&[&route(), &route()], "https://example.com").is_err());
+}
+
+#[test]
+fn generated_literal_paths_do_not_turn_encoded_braces_into_templates() {
+    let route = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "{literal}%".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let spec = spec_for(vec![route]);
+    assert!(spec["paths"].get("/%7Bliteral%7D%25").is_some());
+}
+
+#[test]
+fn generated_paths_preserve_safe_literal_punctuation() {
+    let route = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "@me:a,b+c!".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let spec = spec_for(vec![route]);
+    assert!(spec["paths"].get("/@me:a,b+c!").is_some());
+}
+
+#[test]
+fn distinct_single_binding_methods_with_colliding_ids_fail_instead_of_losing_ids() {
+    let route = |path: &str, agent_type: &str, method_name: &str| {
+        let mut route = call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal { value: path.into() }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        );
+        let RichRouteBehaviour::CallAgent(inner) = &mut route.behavior else {
+            unreachable!()
+        };
+        inner.agent_type = agent_type_name(agent_type);
+        inner.method_name = method_name.into();
+        route
+    };
+    assert!(
+        HttpApiOpenApiSpec::from_routes(
+            &[&route("one", "a-b", "c"), &route("two", "a", "b-c")],
+            "https://example.com"
+        )
+        .is_err()
+    );
 }
 
 // --------------------------------------------------------------------------
@@ -1002,8 +1179,9 @@ fn raw_route(
         account_id: AccountId::new(),
         account_email: AccountEmail::new("test@golem.cloud"),
         environment_id: EnvironmentId::new(),
+        deployment_revision: golem_common::model::deployment::DeploymentRevision::INITIAL,
         route_id: 0,
-        method,
+        route_match: test_route_match(method),
         path,
         body,
         behavior,
@@ -1011,6 +1189,24 @@ fn raw_route(
         cors: CorsOptions {
             allowed_patterns: vec![],
         },
+    }
+}
+
+fn test_route_match(method: Method) -> golem_service_base::custom_api::RouteMatch {
+    use golem_common::model::Empty;
+    use golem_common::model::agent::HttpMethod;
+    match method {
+        Method::GET => HttpMethod::Get(Empty {}).into(),
+        Method::POST => HttpMethod::Post(Empty {}).into(),
+        Method::PUT => HttpMethod::Put(Empty {}).into(),
+        Method::DELETE => HttpMethod::Delete(Empty {}).into(),
+        Method::PATCH => HttpMethod::Patch(Empty {}).into(),
+        Method::HEAD => HttpMethod::Head(Empty {}).into(),
+        Method::OPTIONS => HttpMethod::Options(Empty {}).into(),
+        other => HttpMethod::Custom(golem_common::model::agent::CustomHttpMethod {
+            value: other.to_string(),
+        })
+        .into(),
     }
 }
 
@@ -1059,6 +1255,7 @@ fn openapi_spec_route_returns_object_with_additional_properties() {
             RequestBodySchema::Unused,
             RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                 format: OpenApiSpecFormat::Json,
+                scheme: Default::default(),
             }),
         ),
         "/openapi.json",

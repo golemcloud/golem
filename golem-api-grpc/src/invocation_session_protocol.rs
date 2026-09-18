@@ -1288,9 +1288,13 @@ impl InvocationSessionState {
         let requested = {
             let state = self
                 .outputs
-                .get(&stream_id)
+                .get_mut(&stream_id)
                 .ok_or_else(|| format!("output stream {stream_id} is unknown"))?;
             ensure_open(state.terminal, stream_id)?;
+            if state.resume_first_frame {
+                state.next_offset = offset;
+                state.resume_first_frame = false;
+            }
             state.cancellation_requested
         };
         match requested {
@@ -3216,6 +3220,97 @@ mod tests {
         retried
             .validate_response(&input_ack(7, 0, durable_offset(2)))
             .unwrap();
+    }
+
+    #[test]
+    fn resumed_output_cancellation_can_be_the_first_replayed_frame() {
+        for consumer_requested in [false, true] {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_public_request(&resume_attach(vec![StreamCursor {
+                    stream_id: Some(uuid(109)),
+                    last_observed_offset: Some(durable_offset(6)),
+                }]))
+                .unwrap();
+            state
+                .validate_response(&resumed_acceptance(vec![mapping(
+                    9,
+                    StreamMappingRole::Output,
+                )]))
+                .unwrap();
+            state.validate_response(&result(stream(9))).unwrap();
+            if consumer_requested {
+                let mut request = cancel(9, StreamCancelRole::OutputConsumer, 0);
+                request.epoch = 2;
+                state
+                    .validate_public_request(&public_request(
+                        public_invocation_request::Request::StreamCancel(request),
+                    ))
+                    .unwrap();
+            }
+            let mut terminal = cancel(9, StreamCancelRole::OutputProducer, 7);
+            terminal.epoch = 2;
+            for invalid in ["offset", "epoch", "identity"] {
+                let mut invalid_terminal = terminal.clone();
+                match invalid {
+                    "offset" => invalid_terminal.durable_offset = durable_offset(6),
+                    "epoch" => invalid_terminal.epoch = 1,
+                    "identity" => invalid_terminal.durable_stream_id = Some(uuid(110)),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    state
+                        .validate_response(&response(invocation_response::Response::StreamCancel(
+                            invalid_terminal,
+                        )))
+                        .is_err(),
+                    "consumer_requested={consumer_requested}, invalid={invalid}"
+                );
+            }
+            let terminal = response(invocation_response::Response::StreamCancel(terminal));
+            state
+                .validate_response(&terminal)
+                .unwrap_or_else(|error| panic!("consumer_requested={consumer_requested}: {error}"));
+            assert!(state.validate_response(&terminal).is_err());
+            let mut post_terminal = output_item(9, 8, scalar(3), Vec::new());
+            post_terminal.epoch = 2;
+            assert!(
+                state
+                    .validate_response(&response(invocation_response::Response::OutputItem(
+                        post_terminal,
+                    )))
+                    .is_err()
+            );
+            state.validate_response(&success()).unwrap();
+        }
+    }
+
+    #[test]
+    fn resumed_output_cancellation_does_not_reopen_terminal_cursor() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&resume_attach(vec![StreamCursor {
+                stream_id: Some(uuid(109)),
+                last_observed_offset: Some(durable_offset(6)),
+            }]))
+            .unwrap();
+        state.mark_terminal_resume_cursor((0, 109)).unwrap();
+        state
+            .validate_response(&resumed_acceptance(vec![mapping(
+                9,
+                StreamMappingRole::Output,
+            )]))
+            .unwrap();
+        state.validate_response(&result(stream(9))).unwrap();
+        let mut terminal = cancel(9, StreamCancelRole::OutputProducer, 7);
+        terminal.epoch = 2;
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::StreamCancel(
+                    terminal,
+                )))
+                .is_err()
+        );
     }
 
     #[test]

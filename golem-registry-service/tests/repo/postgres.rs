@@ -492,6 +492,11 @@ async fn test_component_stage(#[dimension(postgres_variant)] deps: &Deps) {
 }
 
 #[test]
+async fn test_http_agent_metadata_blob_roundtrip(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_http_agent_metadata_blob_roundtrip(deps).await;
+}
+
+#[test]
 async fn test_initial_permission_card_ids_by_account_are_unique(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
@@ -618,6 +623,11 @@ async fn test_resolve_agent_type_no_deployment_returns_none(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
     crate::repo::common::test_resolve_agent_type_no_deployment_returns_none(deps).await;
+}
+
+#[test]
+async fn missing_security_retains_active_route_barrier(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::missing_security_retains_active_route_barrier(deps).await;
 }
 
 #[test]

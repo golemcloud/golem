@@ -15,7 +15,11 @@
 use crate::api::common::ApiEndpointError;
 use crate::custom_api::error::RequestHandlerError;
 use crate::custom_api::request_handler::RequestHandler;
-use futures::{FutureExt, TryFutureExt};
+use futures::FutureExt;
+use golem_common::SafeDisplay;
+use golem_common::base_model::api;
+use golem_common::metrics::api::ApiErrorDetails;
+use golem_common::model::error::ErrorBody;
 use golem_common::recorded_http_api_request;
 use poem::{Endpoint, IntoResponse, Request, Response};
 use std::future::Future;
@@ -32,6 +36,7 @@ impl CustomApiPoemEndpoint {
     }
 
     pub async fn execute(&self, request: Request) -> Response {
+        let is_head = request.method() == http::Method::HEAD;
         let record = recorded_http_api_request!("execute",
             method = %request.method(),
             uri = %request.uri()
@@ -40,14 +45,127 @@ impl CustomApiPoemEndpoint {
         let response = self
             .request_handler
             .handle_request(request)
-            .inspect_err(log_internal_errors)
             .instrument(record.span.clone())
-            .map_err(ApiEndpointError::from)
             .await;
 
-        record
-            .result(response)
-            .unwrap_or_else(IntoResponse::into_response)
+        match response {
+            Ok(response) => record.succeed(response),
+            Err(failure) => {
+                log_internal_errors(&failure.error);
+                let mut error = CustomApiEndpointError::from(failure.error);
+                record.fail((), &mut error);
+                let mut response = error_response(error, failure.cors_headers);
+                if is_head {
+                    response.set_body(());
+                }
+                response
+            }
+        }
+    }
+}
+
+fn error_response(error: CustomApiEndpointError, cors_headers: http::HeaderMap) -> Response {
+    let mut response = error.into_response();
+    response.headers_mut().extend(cors_headers);
+    response
+}
+
+#[derive(Debug)]
+enum CustomApiEndpointError {
+    Ordinary(ApiEndpointError),
+    Raw {
+        status: http::StatusCode,
+        body: ErrorBody,
+        kind: &'static str,
+        expected: bool,
+    },
+}
+
+impl From<RequestHandlerError> for CustomApiEndpointError {
+    fn from(error: RequestHandlerError) -> Self {
+        let raw = match &error {
+            RequestHandlerError::RawRequest(http::StatusCode::EXPECTATION_FAILED) => Some((
+                http::StatusCode::EXPECTATION_FAILED,
+                api::error_code::REQUEST_VALUE_PARSING_FAILED,
+                "ExpectationFailed",
+                true,
+            )),
+            RequestHandlerError::RawRequest(http::StatusCode::NOT_IMPLEMENTED) => Some((
+                http::StatusCode::NOT_IMPLEMENTED,
+                api::error_code::REQUEST_VALUE_PARSING_FAILED,
+                "NotImplemented",
+                true,
+            )),
+            RequestHandlerError::RawBadGateway => Some((
+                http::StatusCode::BAD_GATEWAY,
+                api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
+                "BadGateway",
+                false,
+            )),
+            RequestHandlerError::RawDeadline => Some((
+                http::StatusCode::GATEWAY_TIMEOUT,
+                api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
+                "GatewayTimeout",
+                false,
+            )),
+            RequestHandlerError::OpenApi(error) => Some((
+                error.status(),
+                api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
+                error.category(),
+                false,
+            )),
+            _ => None,
+        };
+
+        match raw {
+            Some((status, code, kind, expected)) => Self::Raw {
+                status,
+                body: ErrorBody {
+                    error: error.to_safe_string(),
+                    code: code.into(),
+                    cause: None,
+                },
+                kind,
+                expected,
+            },
+            None => Self::Ordinary(error.into()),
+        }
+    }
+}
+
+impl ApiErrorDetails for CustomApiEndpointError {
+    fn trace_error_kind(&self) -> &'static str {
+        match self {
+            Self::Ordinary(error) => error.trace_error_kind(),
+            Self::Raw { kind, .. } => kind,
+        }
+    }
+
+    fn is_expected(&self) -> bool {
+        match self {
+            Self::Ordinary(error) => error.is_expected(),
+            Self::Raw { expected, .. } => *expected,
+        }
+    }
+
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
+        match self {
+            Self::Ordinary(error) => error.take_cause(),
+            Self::Raw { body, .. } => body.cause.take(),
+        }
+    }
+}
+
+impl IntoResponse for CustomApiEndpointError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Ordinary(error) => error.into_response(),
+            Self::Raw { status, body, .. } => {
+                let mut response = poem::web::Json(body).into_response();
+                response.set_status(status);
+                response
+            }
+        }
     }
 }
 
@@ -74,5 +192,115 @@ fn log_internal_errors(error: &RequestHandlerError) {
             )
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+    use test_r::test;
+
+    async fn assert_raw_error(
+        error: RequestHandlerError,
+        status: http::StatusCode,
+        code: &str,
+        kind: &str,
+        expected: bool,
+    ) {
+        let error = CustomApiEndpointError::from(error);
+        assert_eq!(error.trace_error_kind(), kind);
+        assert_eq!(error.is_expected(), expected);
+
+        let mut cors_headers = http::HeaderMap::new();
+        cors_headers.insert(
+            http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            http::HeaderValue::from_static("https://example.com"),
+        );
+        let response = error_response(error, cors_headers);
+        assert_eq!(response.status(), status);
+        assert_eq!(
+            response
+                .headers()
+                .get(http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&http::HeaderValue::from_static("https://example.com"))
+        );
+        let body: Value =
+            serde_json::from_slice(&response.into_body().into_vec().await.unwrap()).unwrap();
+        assert_eq!(body["code"], code);
+        assert!(
+            body["error"]
+                .as_str()
+                .is_some_and(|error| !error.is_empty())
+        );
+        assert_eq!(body["cause"], Value::Null);
+    }
+
+    #[test]
+    async fn raw_handler_errors_preserve_response_and_metrics() {
+        assert_raw_error(
+            RequestHandlerError::RawRequest(http::StatusCode::EXPECTATION_FAILED),
+            http::StatusCode::EXPECTATION_FAILED,
+            api::error_code::REQUEST_VALUE_PARSING_FAILED,
+            "ExpectationFailed",
+            true,
+        )
+        .await;
+        assert_raw_error(
+            RequestHandlerError::RawRequest(http::StatusCode::NOT_IMPLEMENTED),
+            http::StatusCode::NOT_IMPLEMENTED,
+            api::error_code::REQUEST_VALUE_PARSING_FAILED,
+            "NotImplemented",
+            true,
+        )
+        .await;
+        assert_raw_error(
+            RequestHandlerError::RawBadGateway,
+            http::StatusCode::BAD_GATEWAY,
+            api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
+            "BadGateway",
+            false,
+        )
+        .await;
+        assert_raw_error(
+            RequestHandlerError::RawDeadline,
+            http::StatusCode::GATEWAY_TIMEOUT,
+            api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
+            "GatewayTimeout",
+            false,
+        )
+        .await;
+    }
+
+    #[test]
+    fn ordinary_errors_reuse_shared_conversion() {
+        let error = CustomApiEndpointError::from(RequestHandlerError::MissingValue {
+            expected: "query parameter",
+        });
+        assert_eq!(error.trace_error_kind(), "BadRequest");
+        assert!(error.is_expected());
+        assert_eq!(
+            error.into_response().status(),
+            http::StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    async fn openapi_failures_keep_safe_categories_and_http_statuses() {
+        for (category, status) in [
+            ("provider-json", http::StatusCode::BAD_GATEWAY),
+            ("provider-timeout", http::StatusCode::GATEWAY_TIMEOUT),
+            ("generation-timeout", http::StatusCode::GATEWAY_TIMEOUT),
+            ("admission", http::StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            assert_raw_error(
+                crate::custom_api::openapi::OpenApiError::new(category).into(),
+                status,
+                api::error_code::INTERNAL_AGENT_EXECUTION_FAILED,
+                category,
+                false,
+            )
+            .await;
+        }
     }
 }

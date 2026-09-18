@@ -1438,6 +1438,12 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
             _ => None,
         };
 
+        let route = value.compiled_route.into_value();
+        route
+            .route_match
+            .validate(&route.path, &route.behaviour)
+            .map_err(anyhow::Error::msg)?;
+
         Ok(Self {
             account_id: AccountId(value.account_id),
             account_email: AccountEmail::new(value.account_email),
@@ -1445,7 +1451,7 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
             deployment_revision: value.deployment_revision_id.try_into()?,
             security_scheme_missing: value.security_scheme_missing,
             security_scheme,
-            route: value.compiled_route.into_value(),
+            route,
         })
     }
 }

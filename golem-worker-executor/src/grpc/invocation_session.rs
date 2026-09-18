@@ -3328,6 +3328,7 @@ mod freshness_tests {
             None,
             None,
             vec![AgentTypeSchema {
+                kind: golem_common::schema::agent::AgentTypeKind::Regular,
                 type_name: AgentTypeName("test-agent".to_string()),
                 description: String::new(),
                 source_language: String::new(),

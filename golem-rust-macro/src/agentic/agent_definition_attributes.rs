@@ -19,6 +19,7 @@ use syn::punctuated::Punctuated;
 use syn::{Error, Expr, ExprArray, ExprLit, Lit, Token};
 
 pub struct AgentDefinitionAttributes {
+    pub agent_kind: syn::Ident,
     pub agent_mode: TokenStream,
     pub agent_is_durable: bool,
     pub http_mount: Option<TokenStream>,
@@ -29,6 +30,7 @@ pub struct AgentDefinitionAttributes {
 pub fn parse_agent_definition_attributes(
     attrs: proc_macro::TokenStream,
 ) -> Result<AgentDefinitionAttributes, Error> {
+    let mut kind = syn::parse_quote!(Regular);
     let mut mode = quote! {
         golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
     };
@@ -47,6 +49,7 @@ pub fn parse_agent_definition_attributes(
 
     if attrs.is_empty() {
         return Ok(AgentDefinitionAttributes {
+            agent_kind: kind,
             agent_mode: mode,
             agent_is_durable,
             http_mount: None,
@@ -105,6 +108,33 @@ pub fn parse_agent_definition_attributes(
                 }
             }
 
+            if left.path.is_ident("kind") {
+                if let Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) = &*assign.right
+                {
+                    kind = match lit.value().as_str() {
+                        "regular" => syn::parse_quote!(Regular),
+                        "http-router" => syn::parse_quote!(HttpRouter),
+                        other => {
+                            return Err(Error::new_spanned(
+                                lit,
+                                format!(
+                                    "invalid agent kind `{}`. Valid values are: regular, http-router",
+                                    other
+                                ),
+                            ));
+                        }
+                    };
+                    continue;
+                } else {
+                    return Err(Error::new_spanned(
+                        &assign.right,
+                        "kind must be a string literal",
+                    ));
+                }
+            }
+
             if left.path.is_ident("snapshotting") {
                 if let Expr::Lit(ExprLit {
                     lit: Lit::Str(lit), ..
@@ -148,6 +178,7 @@ pub fn parse_agent_definition_attributes(
     });
 
     Ok(AgentDefinitionAttributes {
+        agent_kind: kind,
         agent_mode: mode,
         agent_is_durable,
         http_mount: http_tokens,
@@ -255,7 +286,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
 
     Err(Error::new_spanned(
         expr,
-        "Unknown agent_definition parameter. Valid parameters are: mode, snapshotting, mount, auth, phantom-agent, cors, webhook-suffix",
+        "Unknown agent_definition parameter. Valid parameters are: kind, mode, snapshotting, mount, auth, phantom-agent, cors, webhook-suffix",
     ))
 }
 
