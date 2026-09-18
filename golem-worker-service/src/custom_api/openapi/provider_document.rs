@@ -30,6 +30,13 @@ pub(super) enum Category {
     Unsupported,
     Path,
     Reference,
+    OperationConflict,
+    PathItemConflict,
+    ComponentConflict,
+    TagConflict,
+    ExtensionConflict,
+    OperationIdConflict,
+    Security,
 }
 
 /// Contains locations and host-supplied identity only, never validation messages
@@ -43,7 +50,7 @@ pub(super) struct DocumentError {
 }
 
 impl DocumentError {
-    fn new(router: &str, category: Category, location: &str) -> Self {
+    pub(super) fn new(router: &str, category: Category, location: &str) -> Self {
         let section = match location.split('/').nth(1) {
             Some("paths") => "paths",
             Some("components") => "components",
@@ -62,6 +69,7 @@ pub(super) struct ProviderDocument {
     pub value: Value,
     /// Only semantic references are recorded, so rebasing never changes example data.
     pub references: Vec<LocalReference>,
+    pub link_operation_ids: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -111,7 +119,18 @@ pub(super) fn parse(router: &str, input: &str) -> Result<ProviderDocument, Docum
         }
     }
     validate_parameters(router, &value)?;
+    let mut link_operation_ids = Vec::new();
     for (location, kind) in walker.targets {
+        if kind == Kind::Link
+            && value.pointer(&location).unwrap().get("$ref").is_none()
+            && value
+                .pointer(&location)
+                .unwrap()
+                .get("operationId")
+                .is_some()
+        {
+            link_operation_ids.push(pointer(&location, "operationId"));
+        }
         if kind != Kind::Schema
             && let Some(object) = value.pointer_mut(&location).and_then(Value::as_object_mut)
             && object.contains_key("$ref")
@@ -122,6 +141,7 @@ pub(super) fn parse(router: &str, input: &str) -> Result<ProviderDocument, Docum
     Ok(ProviderDocument {
         value,
         references: walker.references.into_iter().map(|(r, _)| r).collect(),
+        link_operation_ids,
     })
 }
 

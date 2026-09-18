@@ -416,10 +416,193 @@ fn document_is_openapi_3_1_with_servers() {
         spec["info"]["title"],
         json!("Managed api provided by Golem")
     );
-    assert_eq!(spec["servers"][0]["url"], json!("https://example.com"));
-    assert_eq!(spec["servers"][1]["url"], json!("http://example.com"));
+    assert_eq!(spec["servers"], json!([{"url":"https://example.com"}]));
     // No named types in these routes → components has no schemas.
     assert!(spec["components"].get("schemas").is_none());
+}
+
+#[test]
+fn multiple_rest_bindings_omit_generated_operation_ids_and_preserve_trailing_slashes() {
+    let route = || {
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "item".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        )
+    };
+    let plain = route();
+    let mut slash = route();
+    let golem_service_base::custom_api::RouteMatch::Method { trailing_slash, .. } =
+        &mut slash.route_match
+    else {
+        unreachable!()
+    };
+    *trailing_slash = true;
+    let spec = spec_for(vec![plain, slash]);
+    for path in ["/item", "/item/"] {
+        assert!(spec["paths"][path]["get"].is_object());
+        assert!(spec["paths"][path]["get"].get("operationId").is_none());
+        assert_eq!(spec["paths"][path]["get"]["security"], json!([]));
+    }
+}
+
+#[test]
+fn generated_security_never_treats_protected_routes_as_public() {
+    let route = || {
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "item".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        )
+    };
+    let mut protected = route();
+    protected.security = RichRouteSecurity::SessionFromHeader(
+        golem_service_base::custom_api::SessionFromHeaderRouteSecurity {
+            header_name: "X-Session".into(),
+        },
+    );
+    let mut other = route();
+    other.path = vec![PathSegment::Literal {
+        value: "other".into(),
+    }];
+    other.security = RichRouteSecurity::SessionFromHeader(
+        golem_service_base::custom_api::SessionFromHeaderRouteSecurity {
+            header_name: "x-session".into(),
+        },
+    );
+    let spec = spec_for(vec![protected, other]);
+    assert_eq!(
+        spec["paths"]["/item"]["get"]["security"],
+        json!([{"golem-session-header-eC1zZXNzaW9u":[]}])
+    );
+    assert_eq!(
+        spec["components"]["securitySchemes"]["golem-session-header-eC1zZXNzaW9u"],
+        json!({"type":"apiKey","in":"header","name":"x-session"})
+    );
+    let mut unavailable = route();
+    unavailable.security = RichRouteSecurity::Unavailable;
+    assert!(
+        HttpApiOpenApiSpec::from_routes(&[unavailable], &Domain("example.com".into())).is_err()
+    );
+}
+
+#[test]
+fn generated_session_security_encodes_header_punctuation_in_component_keys() {
+    let mut route = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "item".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    route.security = RichRouteSecurity::SessionFromHeader(
+        golem_service_base::custom_api::SessionFromHeaderRouteSecurity {
+            header_name: "X-Session+Id".into(),
+        },
+    );
+
+    let spec = spec_for(vec![route]);
+    assert_eq!(
+        spec["paths"]["/item"]["get"]["security"],
+        json!([{"golem-session-header-eC1zZXNzaW9uK2lk":[]}])
+    );
+    assert_eq!(
+        spec["components"]["securitySchemes"]["golem-session-header-eC1zZXNzaW9uK2lk"]["name"],
+        "x-session+id"
+    );
+    assert!(super::provider_document::parse("generated", &spec.to_string()).is_ok());
+}
+
+#[test]
+fn generated_duplicate_operations_fail_before_overwriting() {
+    let route = || {
+        call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal {
+                value: "item".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        )
+    };
+    assert!(
+        HttpApiOpenApiSpec::from_routes(&[route(), route()], &Domain("example.com".into()))
+            .is_err()
+    );
+}
+
+#[test]
+fn generated_literal_paths_do_not_turn_encoded_braces_into_templates() {
+    let route = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "{literal}%".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let spec = spec_for(vec![route]);
+    assert!(spec["paths"].get("/%7Bliteral%7D%25").is_some());
+}
+
+#[test]
+fn generated_paths_preserve_safe_literal_punctuation() {
+    let route = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "@me:a,b+c!".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let spec = spec_for(vec![route]);
+    assert!(spec["paths"].get("/@me:a,b+c!").is_some());
+}
+
+#[test]
+fn distinct_single_binding_methods_with_colliding_ids_fail_instead_of_losing_ids() {
+    let route = |path: &str, agent_type: &str, method_name: &str| {
+        let mut route = call_agent_route(
+            Method::GET,
+            vec![PathSegment::Literal { value: path.into() }],
+            RequestBodySchema::Unused,
+            vec![],
+            unit_response(),
+            None,
+        );
+        let RichRouteBehaviour::CallAgent(inner) = &mut route.behavior else {
+            unreachable!()
+        };
+        inner.agent_type = agent_type_name(agent_type);
+        inner.method_name = method_name.into();
+        route
+    };
+    assert!(
+        HttpApiOpenApiSpec::from_routes(
+            &[route("one", "a-b", "c"), route("two", "a", "b-c")],
+            &Domain("example.com".into())
+        )
+        .is_err()
+    );
 }
 
 // --------------------------------------------------------------------------

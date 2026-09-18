@@ -12,6 +12,7 @@
 
 mod call_agent;
 mod http_openapi_spec;
+mod merge;
 mod provider_document;
 mod response_schema;
 mod route_schema;
