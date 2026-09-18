@@ -191,6 +191,19 @@ pub fn set_log_output(output: Output) {
     LOG_STATE.write().unwrap().set_output(output);
 }
 
+/// Renders an error for structured (JSON / YAML / TOON) output: the full context chain, with
+/// any terminal styling removed. Error messages meant for the terminal (e.g. `ServiceError`)
+/// are colorized whenever the CLI output is colorized, which must not leak into output that is
+/// consumed as data.
+pub fn error_message_for_output(error: &anyhow::Error) -> String {
+    message_for_output(format_args!("{error:#}"))
+}
+
+/// Renders a message for structured output, see `error_message_for_output`.
+pub fn message_for_output(message: impl std::fmt::Display) -> String {
+    strip_ansi_escapes::strip_str(message.to_string())
+}
+
 pub fn log_anyhow_error(error: &anyhow::Error) {
     if error.is::<NonSuccessfulExit>() || error.is::<PipedExitCode>() {
         // NOP
@@ -452,5 +465,29 @@ impl LogColorize for PathBuf {
 impl LogColorize for Utf8PathBuf {
     fn as_str(&self) -> impl Colorize {
         ColoredString::from(self.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{error_message_for_output, message_for_output};
+    use anyhow::anyhow;
+    use test_r::test;
+
+    #[test]
+    fn messages_for_output_have_no_terminal_styling() {
+        // Styling as `colored` emits it when colors are enabled
+        let styled = "\u{1b}[1;33mNot found\u{1b}[0m: agent \u{1b}[4mCounter(\"a\")\u{1b}[0m";
+
+        assert_eq!(
+            message_for_output(styled),
+            "Not found: agent Counter(\"a\")"
+        );
+        assert_eq!(
+            error_message_for_output(
+                &anyhow!("{styled}").context("\u{1b}[31mfailed to delete the agent\u{1b}[0m")
+            ),
+            "failed to delete the agent: Not found: agent Counter(\"a\")"
+        );
     }
 }

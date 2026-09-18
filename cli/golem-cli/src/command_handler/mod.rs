@@ -177,9 +177,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         if let Some(ctx) = lazy_context.initialized_context()
                             && let Some(hint_error) = error.downcast_ref::<HintError>()
                         {
-                            ctx.error_handler()
-                                .handle_hint_errors(hint_error)
-                                .map(|()| ExitCode::FAILURE)
+                            ctx.error_handler().handle_hint_errors(hint_error)
                         } else {
                             Err(error)
                         }

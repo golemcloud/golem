@@ -49,6 +49,67 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use tokio::time::Instant;
 
+#[derive(Debug, Clone)]
+pub(crate) enum AdmissionSignal {
+    Waiting,
+    Immediate,
+    Queued,
+    Failure(golem_service_base::error::worker_executor::WorkerExecutorError),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum PendingReadOnlyCacheEntry {
+    Immediate,
+    Invocation(PendingReadOnlyInvocation),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingReadOnlyInvocation {
+    inner: std::sync::Arc<PendingReadOnlyInvocationInner>,
+}
+
+#[derive(Debug)]
+struct PendingReadOnlyInvocationInner {
+    admission: tokio::sync::watch::Sender<AdmissionSignal>,
+}
+
+impl PendingReadOnlyInvocation {
+    pub fn new() -> Self {
+        let (admission, _) = tokio::sync::watch::channel(AdmissionSignal::Waiting);
+        Self {
+            inner: std::sync::Arc::new(PendingReadOnlyInvocationInner { admission }),
+        }
+    }
+
+    pub fn publish(&self, signal: AdmissionSignal) {
+        self.inner.admission.send_if_modified(|current| {
+            if matches!(current, AdmissionSignal::Waiting) {
+                *current = signal;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    pub async fn admission(&self) -> AdmissionSignal {
+        let mut receiver = self.inner.admission.subscribe();
+        loop {
+            let signal = receiver.borrow_and_update().clone();
+            if !matches!(signal, AdmissionSignal::Waiting) {
+                return signal;
+            }
+            if receiver.changed().await.is_err() {
+                return AdmissionSignal::Failure(
+                    golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+                        "read-only admission owner disappeared",
+                    ),
+                );
+            }
+        }
+    }
+}
+
 /// Identifies an entry in the per-worker read-only result cache.
 ///
 /// `epoch` and `component_revision` are part of the key so mutations and
@@ -195,6 +256,16 @@ pub fn build_read_only_cache_key(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    async fn pending_admission_preserves_queued_signal() {
+        let pending = PendingReadOnlyInvocation::new();
+        pending.publish(AdmissionSignal::Queued);
+        pending.publish(AdmissionSignal::Failure(
+            golem_service_base::error::worker_executor::WorkerExecutorError::runtime("later"),
+        ));
+        assert!(matches!(pending.admission().await, AdmissionSignal::Queued));
+    }
+
     use super::*;
     use golem_common::base_model::Empty;
     use golem_common::base_model::component_metadata::KnownExports;

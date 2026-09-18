@@ -16,7 +16,7 @@ use super::{
     SerializableToolError, SerializableToolResultValue, SerializableToolRpcError,
     SerializableToolStructuredResult, ToolInvokeResponse, encode_tool_operation_terminal,
 };
-use crate::durable_host::durable_session::{DurableSessionStreams, strip_typed_streams};
+use crate::durable_host::durable_session::{StreamSession, strip_typed_streams};
 use crate::durable_host::schema_value_stream::contains_stream;
 use crate::durable_host::tail_work::TailActivity;
 use crate::services::HasOplog;
@@ -24,7 +24,7 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::durable_stream::{SessionStreamRoleV1, StreamSessionKeyV1};
+use golem_common::model::durable_stream::{SessionStreamRole, StreamSessionKey};
 use golem_common::model::entity::EntityInvocationScope;
 use golem_common::model::oplog::payload::HostResponseEntityInvocation;
 use golem_common::schema::TypedSchemaValue;
@@ -34,7 +34,7 @@ use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, AccessorTask};
 
 pub(super) struct MaterializeResponse {
-    pub streams: DurableSessionStreams,
+    pub streams: StreamSession,
     pub revision: ComponentRevision,
     pub ready: Option<oneshot::Sender<ToolInvokeResponse>>,
     pub response: ToolInvokeResponse,
@@ -73,9 +73,9 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx> for MaterializeResponse {
 pub(super) async fn session<Ctx: WorkerCtx>(
     worker: &Arc<Worker<Ctx>>,
     scope: &EntityInvocationScope,
-) -> Result<DurableSessionStreams, WorkerExecutorError> {
+) -> Result<StreamSession, WorkerExecutorError> {
     let owner = worker.get_initial_worker_metadata();
-    let key = StreamSessionKeyV1 {
+    let key = StreamSessionKey {
         callee_environment_id: owner.environment_id,
         callee: owner.agent_id,
         callee_fingerprint: owner.fingerprint,
@@ -84,7 +84,7 @@ pub(super) async fn session<Ctx: WorkerCtx>(
     let mut consumer = key.clone();
     consumer.idempotency_key =
         IdempotencyKey::derived_from_bytes(&key.idempotency_key, b"golem:tool-result-consumer:v1");
-    Ok(DurableSessionStreams::new(
+    Ok(StreamSession::new(
         worker.durable_stream_producer().await?,
         worker.oplog(),
         key,
@@ -96,23 +96,24 @@ pub(super) async fn session<Ctx: WorkerCtx>(
 }
 
 pub(super) async fn materialize_input(
-    streams: &DurableSessionStreams,
+    streams: &StreamSession,
     revision: ComponentRevision,
     input: &TypedSchemaValue,
 ) -> Result<TypedSchemaValue, WorkerExecutorError> {
     if !contains_stream(input.value()) {
         return Ok(input.clone());
     }
-    let (value, mappings) = streams
+    let materialized = streams
         .materialize_agent_input(input.value(), input.graph(), &input.graph().root, revision)
         .await
         .map_err(WorkerExecutorError::runtime)?;
-    let handles = mappings
+    let handles = materialized
+        .mappings
         .into_iter()
         .map(|mapping| mapping.handle)
         .collect::<Vec<_>>();
     let value = streams
-        .decode_initial(value, &handles, SessionStreamRoleV1::Input)
+        .decode_initial(materialized.value, &handles, SessionStreamRole::Input)
         .await
         .map_err(WorkerExecutorError::runtime)?;
     Ok(TypedSchemaValue::new(input.graph().clone(), value))
@@ -137,7 +138,7 @@ pub(super) fn strip_response(mut response: ToolInvokeResponse) -> ToolInvokeResp
 }
 
 pub(super) async fn restore_response(
-    streams: &DurableSessionStreams,
+    streams: &StreamSession,
     mut response: ToolInvokeResponse,
 ) -> Result<ToolInvokeResponse, WorkerExecutorError> {
     if let Some(value) = payload(&mut response)
@@ -152,7 +153,7 @@ pub(super) async fn restore_response(
 }
 
 pub(super) async fn materialize_response(
-    streams: &DurableSessionStreams,
+    streams: &StreamSession,
     revision: ComponentRevision,
     ready: Option<oneshot::Sender<ToolInvokeResponse>>,
     mut response: ToolInvokeResponse,

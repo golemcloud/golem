@@ -14,9 +14,9 @@
 
 use super::{WorkerExecutorImpl, extract_owned_agent_id};
 use crate::durable_host::durable_session::{
-    DurableSessionStreams, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
+    StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
 };
-use crate::durable_host::durable_stream::ProducerRegistrationRequestV1;
+use crate::durable_host::durable_stream::ProducerRegistrationRequest;
 use crate::durable_host::stream_session::{
     decode_recursive_stream_value, decode_recursive_stream_value_with_schema,
     encode_recursive_stream_value_with_schema,
@@ -27,7 +27,7 @@ use crate::worker::invocation::validate_agent_method_invocation;
 use crate::worker::{DurableStreamingInvocationRequest, Worker};
 use crate::workerctx::WorkerCtx;
 use chrono::{DateTime, Utc};
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError;
@@ -39,9 +39,9 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_session_result,
 };
 use golem_common::base_model::durable_stream::{
-    MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE, ResumeAttemptDescriptorV1,
-    StreamCancelReasonV1, StreamCancelRoleV1, StreamItemsPayloadV1, StreamResumeCursorV1,
-    StreamResumeOperationV1,
+    MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE, ResumeAttemptDescriptor,
+    StreamCancelReason, StreamCancelRole, StreamItemsPayload, StreamResumeCursor,
+    StreamResumeOperation,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -50,10 +50,9 @@ use golem_common::model::agent::{
 use golem_common::model::card::ScopeCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::{
-    AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, PersistedStreamInvocationDescriptorV1,
-    SessionStreamRoleV1, StartAttemptDescriptorV1, StreamInvocationIdV1,
-    StreamRegistrationCoordinateV1, StreamRootKindV1, StreamSessionMappingV1, StreamSourceKindV1,
-    StreamValuePathStepV1,
+    AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, PersistedStreamInvocationDescriptor,
+    SessionStreamRole, StartAttemptDescriptor, StreamInvocationId, StreamRegistrationCoordinate,
+    StreamRootKind, StreamSessionMapping, StreamSourceKind, StreamValuePathStep,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
@@ -72,12 +71,13 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
 pub(super) type InvocationSessionStream =
     Pin<Box<dyn Stream<Item = Result<InvocationResponse, Status>> + Send + 'static>>;
+
+type ResponseLease = Arc<std::sync::Mutex<Option<Arc<crate::worker::EphemeralResponseLease>>>>;
 
 pub(super) async fn invoke_agent_session<
     Ctx: WorkerCtx,
@@ -88,6 +88,8 @@ pub(super) async fn invoke_agent_session<
 ) -> Result<Response<InvocationSessionStream>, Status> {
     let inbound = request.into_inner();
     let (responses, receiver) = mpsc::channel(32);
+    let response_lease = ResponseLease::default();
+    let handler_lease = response_lease.clone();
     let executor = (*executor).clone();
     let span = tracing::info_span!(
         "invoke_agent_session",
@@ -96,13 +98,37 @@ pub(super) async fn invoke_agent_session<
     );
     tokio::spawn(
         async move {
-            executor.run_agent_session(inbound, responses).await;
+            let scope = crate::worker::tasks::TaskScope::default();
+            scope
+                .run(Box::pin(executor.run_agent_session(
+                    inbound,
+                    responses,
+                    handler_lease,
+                    &scope,
+                )))
+                .await;
         }
         .instrument(span),
     );
-    Ok(Response::new(Box::pin(
-        ReceiverStream::new(receiver).map(Ok),
+    Ok(Response::new(retained_response_stream(
+        receiver,
+        response_lease,
     )))
+}
+
+fn retained_response_stream(
+    receiver: mpsc::Receiver<InvocationResponse>,
+    response_lease: ResponseLease,
+) -> InvocationSessionStream {
+    Box::pin(futures::stream::unfold(
+        (receiver, response_lease),
+        |(mut receiver, lease)| async move {
+            receiver
+                .recv()
+                .await
+                .map(|response| (Ok(response), (receiver, lease)))
+        },
+    ))
 }
 
 fn decode_invocation_freshness_disposition(value: i32) -> InvocationFreshnessDisposition {
@@ -129,10 +155,49 @@ fn publish_acceptance(
         .map_err(|_| WorkerExecutorError::runtime("invocation session ended before acceptance"))
 }
 
+async fn await_scalar_invocation<T>(
+    invocation: impl std::future::Future<Output = Result<T, WorkerExecutorError>>,
+    mut admission: tokio::sync::oneshot::Receiver<crate::worker::read_only_cache::AdmissionSignal>,
+    on_admitted: impl FnOnce() -> Result<(), WorkerExecutorError>,
+) -> Result<T, WorkerExecutorError> {
+    use crate::worker::read_only_cache::AdmissionSignal;
+
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => {
+            // Polling the invocation can both publish admission and complete. Preserve
+            // that admission even if its completed result is an execution failure.
+            let admitted = matches!(
+                admission.try_recv(),
+                Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate)
+            );
+            if admitted || result.is_ok() {
+                on_admitted()?;
+            }
+            result
+        }
+        signal = &mut admission => match signal {
+            Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate) => {
+                on_admitted()?;
+                invocation.await
+            }
+            Ok(AdmissionSignal::Failure(error)) => Err(error),
+            Ok(AdmissionSignal::Waiting) => unreachable!("waiting admission is never published"),
+            Err(_) => {
+                let result = invocation.await;
+                if result.is_ok() {
+                    on_admitted()?;
+                }
+                result
+            }
+        }
+    }
+}
+
 struct AcceptedInvocation {
     component_revision: Option<ComponentRevision>,
-    durable_streams: Option<DurableSessionStreams>,
-    prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecordV1>,
+    durable_streams: Option<StreamSession>,
+    prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecord>,
     durable_replayed: bool,
 }
 
@@ -148,11 +213,23 @@ pub(crate) fn decode_invocation_input(
     })
 }
 
-async fn detach_durable_attachment(streams: Option<DurableSessionStreams>) {
+async fn detach_durable_attachment(streams: Option<StreamSession>) {
     if let Some(streams) = streams
         && let Err(error) = streams.detach_current().await
     {
         tracing::warn!(%error, "failed to persist durable invocation transport detach");
+    }
+}
+
+async fn until_response_closed<T>(
+    outward: &mpsc::Sender<InvocationResponse>,
+    forwarder_stopped: &tokio_util::sync::CancellationToken,
+    operation: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        result = operation => Some(result),
+        _ = outward.closed() => None,
+        _ = forwarder_stopped.cancelled() => None,
     }
 }
 
@@ -298,6 +375,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         input_encoded_len: Option<usize>,
         acceptance_committed: tokio::sync::oneshot::Sender<()>,
         accepted: tokio::sync::oneshot::Sender<AcceptedInvocation>,
+        scope: &crate::worker::tasks::TaskScope,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         Self::validate_auth_ctx(&request.auth_ctx)?;
 
@@ -349,14 +427,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ));
             }
             let inv_status = match self.get_or_create_pending_for_lookup(request).await? {
-                Some(worker) => match worker.lookup_invocation_result(&ik).await {
-                    crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
-                    crate::model::LookupResult::Complete(Err(err)) => return Err(err),
-                    crate::model::LookupResult::Pending => InvocationStatus::Pending,
-                    crate::model::LookupResult::New | crate::model::LookupResult::Interrupted => {
-                        InvocationStatus::Unknown
+                Some((worker, _response_lease)) => {
+                    scope
+                        .bind(&worker.tasks)
+                        .map_err(WorkerExecutorError::runtime)?;
+                    match worker.lookup_invocation_result(&ik).await {
+                        crate::model::LookupResult::Complete(Ok(_)) => InvocationStatus::Complete,
+                        crate::model::LookupResult::Complete(Err(err)) => return Err(err),
+                        crate::model::LookupResult::Pending => InvocationStatus::Pending,
+                        crate::model::LookupResult::New
+                        | crate::model::LookupResult::Interrupted => InvocationStatus::Unknown,
                     }
-                },
+                }
                 None => InvocationStatus::Unknown,
             };
             publish_acceptance(acceptance_committed, accepted, None)?;
@@ -424,9 +506,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         match mode {
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
-                let worker = self
+                let (worker, _response_lease) = self
                     .get_or_create_pending_with_freshness(request, freshness_disposition)
                     .await?;
+                scope
+                    .bind(&worker.tasks)
+                    .map_err(WorkerExecutorError::runtime)?;
                 let status = worker.get_last_known_status().await;
                 let queued_manual_update_revision = status
                     .pending_invocations
@@ -530,8 +615,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .map_err(WorkerExecutorError::runtime)?;
                     worker.await_enqueued_invocation(ik.clone()).await?
                 } else {
-                    publish_acceptance(acceptance_committed, accepted, accepted_revision)?;
-                    worker.invoke_and_await(invocation).await?
+                    let (admission_tx, admission_rx) = tokio::sync::oneshot::channel();
+                    let invocation =
+                        worker.invoke_and_await_with_notifier(invocation, Some(admission_tx));
+                    await_scalar_invocation(invocation, admission_rx, || {
+                        publish_acceptance(acceptance_committed, accepted, accepted_revision)
+                    })
+                    .await?
                 };
                 invocation_output.agent_id = Some(final_agent_id);
                 invocation_output.idempotency_key = Some(ik);
@@ -609,12 +699,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 creation_principal: Box::new(worker_creation_principal),
                             }
                         } else {
-                            let worker = self
+                            let (worker, _response_lease) = self
                                 .get_or_create_pending_with_freshness(
                                     request,
                                     freshness_disposition,
                                 )
                                 .await?;
+                            scope
+                                .bind(&worker.tasks)
+                                .map_err(WorkerExecutorError::runtime)?;
                             let target_worker_fingerprint =
                                 worker.get_initial_worker_metadata().fingerprint;
                             ScheduledAction::Invoke {
@@ -644,10 +737,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         })
                     }
                     None => {
-                        let worker = self
+                        let (worker, _response_lease) = self
                             .get_or_create_pending_with_freshness(request, freshness_disposition)
                             .await?;
-                        let result = worker.clone().invoke(invocation).await?;
+                        scope
+                            .bind(&worker.tasks)
+                            .map_err(WorkerExecutorError::runtime)?;
+                        let result = worker.invoke_and_start(invocation).await?;
                         if let crate::worker::ResultOrSubscription::Finished(Err(err)) = &result {
                             return Err(err.clone());
                         }
@@ -663,9 +759,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 );
                             }
                             crate::worker::ResultOrSubscription::Finished(Ok(_)) => {}
-                            crate::worker::ResultOrSubscription::Pending(_) => {
-                                Worker::start_if_needed(worker).await?;
-                            }
+                            crate::worker::ResultOrSubscription::Pending(_) => {}
                         }
                         Ok(AgentInvocationOutput {
                             result: AgentInvocationResult::AgentInitialization,
@@ -690,6 +784,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         mut inbound: tonic::Streaming<InvocationRequest>,
         outward: mpsc::Sender<InvocationResponse>,
+        response_lease: ResponseLease,
+        scope: &crate::worker::tasks::TaskScope,
     ) {
         let mut state = InvocationSessionState::default();
         let first = match inbound.message().await {
@@ -701,6 +797,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "invocation request transport closed before start".to_string(),
                     None,
                     None,
+                    None,
                 )
                 .await;
                 return;
@@ -710,6 +807,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &outward,
                     InvocationRejectionReason::Protocol,
                     error.to_string(),
+                    None,
                     None,
                     None,
                 )
@@ -724,6 +822,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 error,
                 request_idempotency_key(&first),
                 request_agent_id(&first),
+                None,
             )
             .await;
             return;
@@ -741,8 +840,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let mut start = match first {
             invocation_request::Request::Start(start) => start,
             invocation_request::Request::ResumeAttach(resume) => {
-                self.run_resumed_agent_session(resume, inbound, outward, state)
-                    .await;
+                self.run_resumed_agent_session(
+                    resume,
+                    inbound,
+                    outward,
+                    state,
+                    response_lease,
+                    scope,
+                )
+                .await;
                 return;
             }
             _ => unreachable!("the session validator requires start or resume-attach first"),
@@ -754,7 +860,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let response_state_changed = Arc::new(tokio::sync::Notify::new());
         let forwarder_state_changed = response_state_changed.clone();
         let outward_forwarder = outward.clone();
+        let forwarder_stopped = tokio_util::sync::CancellationToken::new();
+        let forwarder_guard = forwarder_stopped.clone().drop_guard();
         let forwarder = tokio::spawn(async move {
+            let _guard = forwarder_guard;
             while let Some(response) = response_rx.recv().await {
                 if let Err(error) = response_state.lock().await.validate_response(&response) {
                     tracing::error!(error, ?response, "Invalid invocation session response");
@@ -796,36 +905,49 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (acceptance_committed_tx, mut acceptance_committed_rx) =
             tokio::sync::oneshot::channel();
         let (accepted_tx, mut accepted_rx) = tokio::sync::oneshot::channel();
-        let invocation = self.invoke_agent_internal(
+        // Keep dispatch state off the transport's stack across its nested select loops.
+        let mut invocation = Box::pin(self.invoke_agent_internal(
             &start,
             input,
             input_encoded_len,
             acceptance_committed_tx,
             accepted_tx,
-        );
-        tokio::pin!(invocation);
-        let (accepted, early_output, mut early_inbound) = match race_invocation_acceptance(
+            scope,
+        ));
+        let acceptance = race_invocation_acceptance(
             &mut accepted_rx,
             &mut acceptance_committed_rx,
             invocation.as_mut(),
-            inbound.message(),
+            async {
+                tokio::select! {
+                    request = inbound.message() => request,
+                    _ = outward.closed() => Ok(None),
+                    _ = forwarder_stopped.cancelled() => Ok(None),
+                }
+            },
         )
-        .await
-        {
+        .await;
+        let (accepted, early_output, mut early_inbound) = match acceptance {
             AcceptanceRace::Accepted {
                 acceptance,
                 early_output,
                 early_inbound,
             } => (acceptance, early_output, early_inbound),
             AcceptanceRace::InvocationFinished(result) => {
-                let (reason, error) = match result {
+                let (reason, error, worker_error) = match result {
                     Ok(_) => (
                         InvocationRejectionReason::Internal,
                         "invocation completed before acceptance".to_string(),
+                        None,
                     ),
-                    Err(error) => (pre_acceptance_rejection_reason(&error), error.to_string()),
+                    Err(error) => (
+                        pre_acceptance_rejection_reason(&error),
+                        error.to_string(),
+                        Some(error.into()),
+                    ),
                 };
-                send_rejection(&responses, reason, error, &start).await;
+                send_rejection_with_worker_error(&responses, reason, error, worker_error, &start)
+                    .await;
                 return;
             }
             AcceptanceRace::InboundBeforeAcceptance(request) => {
@@ -854,7 +976,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
 
         let durable_attachment = accepted.durable_streams.clone();
-        async {
+        *response_lease.lock().unwrap() = durable_attachment
+            .as_ref()
+            .and_then(StreamSession::response_lease);
+        until_response_closed(&outward, &forwarder_stopped, async {
         let high_waters = if let Some(durable_streams) = &accepted.durable_streams {
             match durable_streams.input_high_waters().await {
                 Ok(high_waters) => high_waters,
@@ -1074,12 +1199,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .await;
                 return;
             };
+            let new_stream_mappings = persisted_result.proto_mappings();
             if responses
                 .send(InvocationResponse {
                     response: Some(invocation_response::Response::Result(
                         InvocationSessionResult {
                             result: Some(invocation_session_result::Result::MethodResult(
-                                persisted_result.0,
+                                persisted_result.value,
                             )),
                             component_revision: accepted
                                 .component_revision
@@ -1090,7 +1216,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             status: None,
                             oplog_index: None,
                             agent_fingerprint: start.expected_callee_fingerprint,
-                            new_stream_mappings: persisted_result.1,
+                            new_stream_mappings,
                         },
                     )),
                 })
@@ -1100,7 +1226,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
 
-            let mut output_pump = tokio::task::JoinSet::new();
+            let mut output_pump = durable_streams.producer.tasks().children();
             let output_streams = durable_streams.clone();
             let output_responses = responses.clone();
             output_pump
@@ -1373,7 +1499,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 )),
             })
             .await;
-        }
+        })
         .await;
         detach_durable_attachment(durable_attachment).await;
     }
@@ -1388,6 +1514,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         mut inbound: tonic::Streaming<InvocationRequest>,
         outward: mpsc::Sender<InvocationResponse>,
         mut protocol_state: InvocationSessionState,
+        response_lease: ResponseLease,
+        scope: &crate::worker::tasks::TaskScope,
     ) {
         let rejection_identity = (resume.idempotency_key.clone(), resume.agent_id.clone());
         let result = async {
@@ -1409,14 +1537,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32,
                 ..Default::default()
             };
-            let worker = self
+            let (worker, _response_lease) = self
                 .get_or_create_pending_for_lookup(&lookup)
                 .await?
                 .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request(
-                        "NotFound: durable Stream Session worker was not found",
-                    )
-                })?;
+                WorkerExecutorError::invalid_request(
+                    "NotFound: durable Stream Session worker was not found",
+                )
+            })?;
+            scope
+                .bind(&worker.tasks)
+                .map_err(WorkerExecutorError::runtime)?;
             worker.resume_durable_streaming_invocation(attempt).await
         }
         .await;
@@ -1431,6 +1562,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             idempotency_key: rejection_identity.0,
                             agent_id: rejection_identity.1,
                             component_revision: None,
+                            worker_error: Some(error.into()),
                         },
                     )),
                 };
@@ -1441,7 +1573,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         };
         let durable_attachment = acceptance.streams.clone();
-        async {
+        *response_lease.lock().unwrap() = durable_attachment.response_lease();
+        let forwarder_stopped = tokio_util::sync::CancellationToken::new();
+        until_response_closed(&outward, &forwarder_stopped, async {
             let result = async {
                 let component_revision = acceptance
                     .prepared
@@ -1474,7 +1608,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .as_ref()
                             .and_then(|offset| offset.as_slice().try_into().ok())
                             .and_then(|offset| {
-                                golem_common::model::durable_stream::StreamOffsetV1::from_bytes(
+                                golem_common::model::durable_stream::StreamOffset::from_bytes(
                                     offset,
                                 )
                                 .ok()
@@ -1506,6 +1640,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             idempotency_key: rejection_identity.0,
                             agent_id: rejection_identity.1,
                             component_revision: None,
+                            worker_error: Some(error.into()),
                         },
                     )),
                 };
@@ -1520,7 +1655,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (responses, mut response_rx) = mpsc::channel(32);
         let response_state = state.clone();
         let outward_forwarder = outward.clone();
+        let forwarder_guard = forwarder_stopped.clone().drop_guard();
         let forwarder = tokio::spawn(async move {
+            let _guard = forwarder_guard;
             while let Some(response) = response_rx.recv().await {
                 if let Err(error) = response_state.lock().await.validate_response(&response) {
                     tracing::error!(
@@ -1539,7 +1676,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let known_output_mapping_ids = acceptance
             .mappings
             .iter()
-            .filter(|mapping| mapping.role == SessionStreamRoleV1::Output)
+            .filter(|mapping| mapping.role == SessionStreamRole::Output)
             .map(|mapping| mapping.transport_stream_id)
             .collect::<Vec<_>>();
         let high_waters = match streams.input_high_waters().await {
@@ -1670,12 +1807,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 },
             }
         };
-        if let Some((result, new_stream_mappings)) = persisted_result
+        if let Some(result) = persisted_result
             && responses
                 .send(InvocationResponse {
                     response: Some(invocation_response::Response::Result(
                         InvocationSessionResult {
-                            result: Some(invocation_session_result::Result::MethodResult(result)),
+                            new_stream_mappings: result.proto_mappings(),
+                            result: Some(invocation_session_result::Result::MethodResult(result.value)),
                             component_revision: Some(
                                 acceptance
                                     .prepared
@@ -1690,7 +1828,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             status: None,
                             oplog_index: None,
                             agent_fingerprint: resume.expected_callee_fingerprint,
-                            new_stream_mappings,
                         },
                     )),
                 })
@@ -1708,7 +1845,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         };
         {
-            let mut output_pump = tokio::task::JoinSet::new();
+            let mut output_pump = streams.producer.tasks().children();
             let output_streams = streams.clone();
             let output_responses = responses.clone();
             output_pump.spawn(async move {
@@ -1809,7 +1946,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
         drop(responses);
         let _ = forwarder.await;
-        }
+        })
         .await;
         detach_durable_attachment(Some(durable_attachment)).await;
     }
@@ -1920,7 +2057,7 @@ pub(crate) fn build_durable_streaming_request(
             ));
         }
     };
-    let session_key = StreamInvocationIdV1 {
+    let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
         callee: callee.clone(),
         callee_fingerprint,
@@ -1928,10 +2065,10 @@ pub(crate) fn build_durable_streaming_request(
     };
     let attachment_id = AttachmentId::primary(environment_id, &callee, &idempotency_key)
         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-    let session_mapping = StreamSessionMappingV1 {
+    let session_mapping = StreamSessionMapping {
         session_key: session_key.clone(),
         attachment_id,
-        role: SessionStreamRoleV1::Input,
+        role: SessionStreamRole::Input,
     };
     if input_encoded_len > MAX_DURABLE_STREAM_ITEM_SIZE {
         return Err(WorkerExecutorError::invalid_request(
@@ -1948,7 +2085,7 @@ pub(crate) fn build_durable_streaming_request(
         .map_err(WorkerExecutorError::invalid_request)?;
     if foreign_mappings
         .iter()
-        .any(|mapping| mapping.role != SessionStreamRoleV1::Input)
+        .any(|mapping| mapping.role != SessionStreamRole::Input)
     {
         return Err(WorkerExecutorError::invalid_request(
             "durable invocation input mapping has a non-input role",
@@ -1983,14 +2120,14 @@ pub(crate) fn build_durable_streaming_request(
             if foreign_mappings.is_empty() {
                 registrations.push((
                     transport_stream_id,
-                    ProducerRegistrationRequestV1 {
+                    ProducerRegistrationRequest {
                         entity_parent_start_index: None,
-                        coordinate: StreamRegistrationCoordinateV1::Root {
+                        coordinate: StreamRegistrationCoordinate::Root {
                             invocation_id: session_key.clone(),
-                            root_kind: StreamRootKindV1::MethodInput,
+                            root_kind: StreamRootKind::MethodInput,
                             recursive_value_path: path.to_vec(),
                         },
-                        source_kind: StreamSourceKindV1::ExternalInlineInput,
+                        source_kind: StreamSourceKind::ExternalInlineInput,
                         source_invocation: session_key.clone(),
                         component_revision,
                         element_schema_fingerprint,
@@ -2081,13 +2218,13 @@ pub(crate) fn build_durable_streaming_request(
         golem_common::serialization::serialize(&(execution.encode_to_vec(), environment))
             .map_err(WorkerExecutorError::runtime)?;
     let effective_identity = effective_session_identity(&request.auth_ctx, &request.principal)?;
-    let attempt = StartAttemptDescriptorV1 {
+    let attempt = StartAttemptDescriptor {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         session_key: session_key.clone(),
         attachment_id,
         expected_callee_fingerprint: callee_fingerprint,
         attempt_id,
-        invocation: PersistedStreamInvocationDescriptorV1 {
+        invocation: PersistedStreamInvocationDescriptor {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key,
             target_component_revision: component_revision,
@@ -2114,7 +2251,7 @@ pub(crate) fn build_durable_streaming_request(
 }
 
 fn resumed_input_schema(
-    prepared: &golem_common::model::durable_stream::StreamSessionPreparedRecordV1,
+    prepared: &golem_common::model::durable_stream::StreamSessionPreparedRecord,
     component_metadata: &golem_common::model::component_metadata::ComponentMetadata,
 ) -> Result<(SchemaGraph, Vec<(u64, SchemaType)>), WorkerExecutorError> {
     let parsed_agent_id = ParsedAgentId::parse(
@@ -2154,7 +2291,7 @@ fn resumed_input_schema(
     let input_mappings = prepared
         .stream_mappings
         .iter()
-        .filter(|mapping| mapping.role == SessionStreamRoleV1::Input)
+        .filter(|mapping| mapping.role == SessionStreamRole::Input)
         .collect::<Vec<_>>();
     let mut input_element_types = Vec::with_capacity(input_mappings.len());
     decode_recursive_stream_value_with_schema(
@@ -2189,7 +2326,7 @@ fn resumed_input_schema(
 fn build_resume_attempt(
     request: &ResumeAttach,
     live_join_buffer_events: usize,
-) -> Result<ResumeAttemptDescriptorV1, WorkerExecutorError> {
+) -> Result<ResumeAttemptDescriptor, WorkerExecutorError> {
     let callee: AgentId = request
         .agent_id
         .clone()
@@ -2216,7 +2353,7 @@ fn build_resume_attempt(
             })?
             .into(),
     );
-    let session_key = StreamInvocationIdV1 {
+    let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
         callee,
         callee_fingerprint: expected_callee_fingerprint,
@@ -2244,8 +2381,8 @@ fn build_resume_attempt(
         ));
     }
     let operation = match request.operation() {
-        ResumeOperation::Resume => StreamResumeOperationV1::Resume,
-        ResumeOperation::Takeover => StreamResumeOperationV1::Takeover,
+        ResumeOperation::Resume => StreamResumeOperation::Resume,
+        ResumeOperation::Takeover => StreamResumeOperation::Takeover,
         ResumeOperation::Unspecified => {
             return Err(WorkerExecutorError::invalid_request(
                 "resume operation is unspecified",
@@ -2273,11 +2410,11 @@ fn build_resume_attempt(
                             "resume cursor offset must contain 24 bytes",
                         )
                     })?;
-                    golem_common::model::durable_stream::StreamOffsetV1::from_bytes(offset)
+                    golem_common::model::durable_stream::StreamOffset::from_bytes(offset)
                         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))
                 })
                 .transpose()?;
-            Ok(StreamResumeCursorV1 {
+            Ok(StreamResumeCursor {
                 stream_id,
                 last_observed_offset,
             })
@@ -2292,7 +2429,7 @@ fn build_resume_attempt(
             "resume contains duplicate stream cursors",
         ));
     }
-    Ok(ResumeAttemptDescriptorV1 {
+    Ok(ResumeAttemptDescriptor {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
         operation,
         session_key,
@@ -2364,7 +2501,7 @@ fn require_expected_callee_fingerprint(
 fn stream_element_schema<'a>(
     graph: &'a SchemaGraph,
     root: &'a SchemaType,
-    path: &[StreamValuePathStepV1],
+    path: &[StreamValuePathStep],
 ) -> Result<Option<&'a SchemaType>, String> {
     let mut current = root;
     for step in path {
@@ -2372,52 +2509,51 @@ fn stream_element_schema<'a>(
             .resolve_ref(current)
             .map_err(|error| error.to_string())?;
         current = match (step, current) {
-            (StreamValuePathStepV1::RecordField(index), SchemaType::Record { fields, .. }) => {
+            (StreamValuePathStep::RecordField(index), SchemaType::Record { fields, .. }) => {
                 &fields
                     .get(*index as usize)
                     .ok_or_else(|| "stream record path is out of range".to_string())?
                     .body
             }
-            (
-                StreamValuePathStepV1::VariantCasePayload(index),
-                SchemaType::Variant { cases, .. },
-            ) => cases
-                .get(*index as usize)
-                .and_then(|case| case.payload.as_ref())
-                .ok_or_else(|| "stream variant path has no payload".to_string())?,
-            (StreamValuePathStepV1::TupleElement(index), SchemaType::Tuple { elements, .. }) => {
+            (StreamValuePathStep::VariantCasePayload(index), SchemaType::Variant { cases, .. }) => {
+                cases
+                    .get(*index as usize)
+                    .and_then(|case| case.payload.as_ref())
+                    .ok_or_else(|| "stream variant path has no payload".to_string())?
+            }
+            (StreamValuePathStep::TupleElement(index), SchemaType::Tuple { elements, .. }) => {
                 elements
                     .get(*index as usize)
                     .ok_or_else(|| "stream tuple path is out of range".to_string())?
             }
-            (StreamValuePathStepV1::ListElement(_), SchemaType::List { element, .. })
-            | (StreamValuePathStepV1::FixedListElement(_), SchemaType::FixedList { element, .. }) => {
+            (StreamValuePathStep::ListElement(_), SchemaType::List { element, .. })
+            | (StreamValuePathStep::FixedListElement(_), SchemaType::FixedList { element, .. }) => {
                 element
             }
             (
-                StreamValuePathStepV1::MapEntry {
-                    side: golem_common::model::durable_stream::StreamMapSideV1::Key,
+                StreamValuePathStep::MapEntry {
+                    side: golem_common::model::durable_stream::StreamMapSide::Key,
                     ..
                 },
                 SchemaType::Map { key, .. },
             ) => key,
             (
-                StreamValuePathStepV1::MapEntry {
-                    side: golem_common::model::durable_stream::StreamMapSideV1::Value,
+                StreamValuePathStep::MapEntry {
+                    side: golem_common::model::durable_stream::StreamMapSide::Value,
                     ..
                 },
                 SchemaType::Map { value, .. },
             ) => value,
-            (StreamValuePathStepV1::OptionSome, SchemaType::Option { inner, .. }) => inner,
-            (StreamValuePathStepV1::ResultOk, SchemaType::Result { spec, .. }) => spec
+            (StreamValuePathStep::OptionSome, SchemaType::Option { inner, .. }) => inner,
+            (StreamValuePathStep::ResultOk, SchemaType::Result { spec, .. }) => spec
                 .ok
                 .as_deref()
                 .ok_or_else(|| "stream result ok path has no payload".to_string())?,
-            (StreamValuePathStepV1::ResultErr, SchemaType::Result { spec, .. }) => spec
+            (StreamValuePathStep::ResultErr, SchemaType::Result { spec, .. }) => spec
                 .err
                 .as_deref()
                 .ok_or_else(|| "stream result error path has no payload".to_string())?,
-            (StreamValuePathStepV1::UnionBranch(index), SchemaType::Union { spec, .. }) => {
+            (StreamValuePathStep::UnionBranch(index), SchemaType::Union { spec, .. }) => {
                 &spec
                     .branches
                     .get(*index as usize)
@@ -2565,6 +2701,7 @@ async fn send_unvalidated_rejection(
     error: String,
     idempotency_key: Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
     agent_id: Option<golem_api_grpc::proto::golem::worker::AgentId>,
+    worker_error: Option<WorkerExecutionError>,
 ) {
     let _ = responses
         .send(InvocationResponse {
@@ -2575,6 +2712,7 @@ async fn send_unvalidated_rejection(
                     idempotency_key,
                     agent_id,
                     component_revision: None,
+                    worker_error,
                 },
             )),
         })
@@ -2587,12 +2725,23 @@ async fn send_rejection(
     error: String,
     start: &InvocationStart,
 ) {
+    send_rejection_with_worker_error(responses, reason, error, None, start).await;
+}
+
+async fn send_rejection_with_worker_error(
+    responses: &mpsc::Sender<InvocationResponse>,
+    reason: InvocationRejectionReason,
+    error: String,
+    worker_error: Option<WorkerExecutionError>,
+    start: &InvocationStart,
+) {
     send_unvalidated_rejection(
         responses,
         reason,
         error,
         start.idempotency_key.clone(),
         start.agent_id.clone(),
+        worker_error,
     )
     .await;
 }
@@ -2656,7 +2805,7 @@ async fn send_worker_failure(
 }
 
 async fn route_durable_request(
-    streams: &DurableSessionStreams,
+    streams: &StreamSession,
     responses: &mpsc::Sender<InvocationResponse>,
     state: &Arc<tokio::sync::Mutex<InvocationSessionState>>,
     request: InvocationRequest,
@@ -2675,22 +2824,22 @@ async fn route_durable_request(
                     item.transport_stream_id,
                     item.durable_stream_id,
                     item.epoch,
-                    SessionStreamRoleV1::Input,
+                    SessionStreamRole::Input,
                 )
                 .await?;
             let payload = match item.payload {
                 Some(golem_api_grpc::proto::golem::worker::input_stream_item::Payload::Value(
                     value,
-                )) => StreamItemsPayloadV1::Values(vec![value.encode_to_vec()]),
+                )) => StreamItemsPayload::Values(vec![value.encode_to_vec()]),
                 Some(
                     golem_api_grpc::proto::golem::worker::input_stream_item::Payload::PackedU8(
                         bytes,
                     ),
-                ) => StreamItemsPayloadV1::PackedU8(bytes),
+                ) => StreamItemsPayload::PackedU8(bytes),
                 None => return Err("durable input item has no payload".to_string()),
             };
             streams
-                .write_input(item.transport_stream_id, item.sequence, payload)
+                .write_input(None, item.transport_stream_id, item.sequence, payload)
                 .await
                 .map(|outcome| {
                     outcome.map(
@@ -2720,7 +2869,7 @@ async fn route_durable_request(
                     end.transport_stream_id,
                     end.durable_stream_id,
                     end.epoch,
-                    SessionStreamRoleV1::Input,
+                    SessionStreamRole::Input,
                 )
                 .await?;
             let resulting_offset = streams
@@ -2738,22 +2887,18 @@ async fn route_durable_request(
         }
         invocation_request::Request::StreamCancel(cancel) => {
             let (role, stream_role) = match cancel.role() {
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::InputProducer => (
-                    StreamCancelRoleV1::InputProducer,
-                    SessionStreamRoleV1::Input,
-                ),
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::InputConsumer => (
-                    StreamCancelRoleV1::InputConsumer,
-                    SessionStreamRoleV1::Input,
-                ),
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputProducer => (
-                    StreamCancelRoleV1::OutputProducer,
-                    SessionStreamRoleV1::Output,
-                ),
-                golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputConsumer => (
-                    StreamCancelRoleV1::OutputConsumer,
-                    SessionStreamRoleV1::Output,
-                ),
+                golem_api_grpc::proto::golem::worker::StreamCancelRole::InputProducer => {
+                    (StreamCancelRole::InputProducer, SessionStreamRole::Input)
+                }
+                golem_api_grpc::proto::golem::worker::StreamCancelRole::InputConsumer => {
+                    (StreamCancelRole::InputConsumer, SessionStreamRole::Input)
+                }
+                golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputProducer => {
+                    (StreamCancelRole::OutputProducer, SessionStreamRole::Output)
+                }
+                golem_api_grpc::proto::golem::worker::StreamCancelRole::OutputConsumer => {
+                    (StreamCancelRole::OutputConsumer, SessionStreamRole::Output)
+                }
                 golem_api_grpc::proto::golem::worker::StreamCancelRole::System => {
                     return Err(
                         "system-authored durable stream cancellation is internal".to_string()
@@ -2773,13 +2918,13 @@ async fn route_durable_request(
                 .await?;
             let reason = match cancel.reason() {
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::Cancelled => {
-                    StreamCancelReasonV1::Cancelled
+                    StreamCancelReason::Cancelled
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::Protocol => {
-                    StreamCancelReasonV1::Protocol
+                    StreamCancelReason::Protocol
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::ConsumerDrop => {
-                    StreamCancelReasonV1::GuestDrop
+                    StreamCancelReason::GuestDrop
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::Transport => {
                     return Err(
@@ -2788,9 +2933,9 @@ async fn route_durable_request(
                     );
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::SourceUnavailable
-                    if role == StreamCancelRoleV1::InputProducer =>
+                    if role == StreamCancelRole::InputProducer =>
                 {
-                    StreamCancelReasonV1::SourceUnavailable
+                    StreamCancelReason::SourceUnavailable
                 }
                 golem_api_grpc::proto::golem::worker::StreamCancelReason::SourceUnavailable
                 | golem_api_grpc::proto::golem::worker::StreamCancelReason::ProducerDeleting
@@ -2858,9 +3003,9 @@ mod freshness_tests {
     use golem_common::base_model::component::{ComponentId, ComponentRevision};
     use golem_common::base_model::component_metadata::{ComponentMetadata, KnownExports};
     use golem_common::base_model::durable_stream::{
-        DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandleV1, MAX_DURABLE_STREAM_ITEM_SIZE,
-        SessionStreamRoleV1, StreamId, StreamInvocationIdV1, StreamMapSideV1,
-        StreamSessionMappingRecordV1, StreamValuePathStepV1,
+        DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle, MAX_DURABLE_STREAM_ITEM_SIZE,
+        SessionStreamRole, StreamId, StreamInvocationId, StreamMapSide, StreamSessionMappingRecord,
+        StreamValuePathStep,
     };
     use golem_common::base_model::environment::EnvironmentId;
     use golem_common::model::agent::{
@@ -2884,6 +3029,54 @@ mod freshness_tests {
     use std::collections::BTreeMap;
     use std::task::Poll;
     use test_r::test;
+
+    #[test]
+    async fn response_retention_survives_queued_frames_until_drain_or_drop() {
+        use futures::StreamExt;
+        for drain in [true, false] {
+            let (sender, receiver) = tokio::sync::mpsc::channel(1);
+            let retention = super::ResponseLease::default();
+            let weak = std::sync::Arc::downgrade(&retention);
+            let mut response = super::retained_response_stream(receiver, retention);
+            sender.send(Default::default()).await.unwrap();
+            drop(sender);
+            assert!(weak.upgrade().is_some());
+            if drain {
+                assert!(response.next().await.is_some());
+                assert!(weak.upgrade().is_some());
+                assert!(response.next().await.is_none());
+                assert!(weak.upgrade().is_none());
+            }
+            drop(response);
+            assert!(weak.upgrade().is_none());
+        }
+    }
+
+    #[test]
+    async fn closed_response_cancels_parked_work_before_detach() {
+        for close_transport in [true, false] {
+            let (outward, receiver) = tokio::sync::mpsc::channel(1);
+            let stopped = tokio_util::sync::CancellationToken::new();
+            let work_dropped = tokio_util::sync::CancellationToken::new();
+            let guard = work_dropped.clone().drop_guard();
+            let mut operation = Box::pin(super::until_response_closed(
+                &outward,
+                &stopped,
+                async move {
+                    let _guard = guard;
+                    future::pending::<()>().await;
+                },
+            ));
+            assert!(futures::poll!(operation.as_mut()).is_pending());
+            if close_transport {
+                drop(receiver);
+            } else {
+                stopped.cancel();
+            }
+            assert!(operation.await.is_none());
+            assert!(work_dropped.is_cancelled());
+        }
+    }
 
     #[test]
     fn invocation_input_decode_moves_binary_payload() {
@@ -3066,44 +3259,44 @@ mod freshness_tests {
                 (
                     101,
                     vec![
-                        StreamValuePathStepV1::RecordField(0),
-                        StreamValuePathStepV1::MapEntry {
+                        StreamValuePathStep::RecordField(0),
+                        StreamValuePathStep::MapEntry {
                             index: 0,
-                            side: StreamMapSideV1::Key,
+                            side: StreamMapSide::Key,
                         },
                     ],
                 ),
                 (
                     7,
                     vec![
-                        StreamValuePathStepV1::RecordField(0),
-                        StreamValuePathStepV1::MapEntry {
+                        StreamValuePathStep::RecordField(0),
+                        StreamValuePathStep::MapEntry {
                             index: 0,
-                            side: StreamMapSideV1::Value,
+                            side: StreamMapSide::Value,
                         },
                     ],
                 ),
                 (
                     55,
                     vec![
-                        StreamValuePathStepV1::RecordField(1),
-                        StreamValuePathStepV1::VariantCasePayload(1),
-                        StreamValuePathStepV1::OptionSome,
+                        StreamValuePathStep::RecordField(1),
+                        StreamValuePathStep::VariantCasePayload(1),
+                        StreamValuePathStep::OptionSome,
                     ],
                 ),
                 (
                     300,
                     vec![
-                        StreamValuePathStepV1::RecordField(2),
-                        StreamValuePathStepV1::ResultErr,
+                        StreamValuePathStep::RecordField(2),
+                        StreamValuePathStep::ResultErr,
                     ],
                 ),
                 (
                     2,
                     vec![
-                        StreamValuePathStepV1::RecordField(3),
-                        StreamValuePathStepV1::UnionBranch(1),
-                        StreamValuePathStepV1::RecordField(1),
+                        StreamValuePathStep::RecordField(3),
+                        StreamValuePathStep::UnionBranch(1),
+                        StreamValuePathStep::RecordField(1),
                     ],
                 ),
             ]
@@ -3202,15 +3395,15 @@ mod freshness_tests {
         transport_stream_id: u64,
         element_schema_fingerprint: SchemaFingerprintV1,
         request: &InvocationStart,
-    ) -> StreamSessionMappingRecordV1 {
+    ) -> StreamSessionMappingRecord {
         let environment_id: EnvironmentId = request.environment_id.unwrap().try_into().unwrap();
         let callee: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
         let callee_fingerprint =
             AgentFingerprint(request.expected_callee_fingerprint.unwrap().into());
         let idempotency_key = request.idempotency_key.clone().unwrap().into();
-        StreamSessionMappingRecordV1 {
+        StreamSessionMappingRecord {
             transport_stream_id,
-            handle: DurableStreamHandleV1 {
+            handle: DurableStreamHandle {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 stream_id: StreamId(uuid::Uuid::from_u128(
                     1_000 + u128::from(transport_stream_id),
@@ -3218,7 +3411,7 @@ mod freshness_tests {
                 producer_environment_id: environment_id,
                 producer: callee.clone(),
                 expected_producer_fingerprint: callee_fingerprint,
-                source_invocation: StreamInvocationIdV1 {
+                source_invocation: StreamInvocationId {
                     callee_environment_id: environment_id,
                     callee,
                     callee_fingerprint,
@@ -3227,7 +3420,7 @@ mod freshness_tests {
                 component_revision: ComponentRevision::INITIAL,
                 element_schema_fingerprint,
             },
-            role: SessionStreamRoleV1::Input,
+            role: SessionStreamRole::Input,
         }
     }
 
@@ -3329,20 +3522,20 @@ mod freshness_tests {
         .unwrap();
         let expected_paths = [
             vec![
-                StreamValuePathStepV1::RecordField(0),
-                StreamValuePathStepV1::MapEntry {
+                StreamValuePathStep::RecordField(0),
+                StreamValuePathStep::MapEntry {
                     index: 0,
-                    side: StreamMapSideV1::Key,
+                    side: StreamMapSide::Key,
                 },
             ],
             vec![
-                StreamValuePathStepV1::RecordField(0),
-                StreamValuePathStepV1::MapEntry {
+                StreamValuePathStep::RecordField(0),
+                StreamValuePathStep::MapEntry {
                     index: 0,
-                    side: StreamMapSideV1::Value,
+                    side: StreamMapSide::Value,
                 },
             ],
-            vec![StreamValuePathStepV1::RecordField(1)],
+            vec![StreamValuePathStep::RecordField(1)],
         ];
         assert_eq!(
             built
@@ -3350,7 +3543,7 @@ mod freshness_tests {
                 .iter()
                 .map(|(transport_stream_id, registration)| {
                     let path = match &registration.coordinate {
-                        super::StreamRegistrationCoordinateV1::Root {
+                        super::StreamRegistrationCoordinate::Root {
                             recursive_value_path,
                             ..
                         } => recursive_value_path.clone(),

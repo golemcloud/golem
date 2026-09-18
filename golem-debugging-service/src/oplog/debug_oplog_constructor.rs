@@ -20,7 +20,9 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentMetadata, AgentStatusRecord, OwnedAgentId};
 use golem_common::read_only_lock;
 use golem_worker_executor::model::ExecutionStatus;
-use golem_worker_executor::services::oplog::{Oplog, OplogConstructor, OplogService};
+use golem_worker_executor::services::oplog::{
+    Oplog, OplogConstructor, OplogLifecycleGuard, OplogService,
+};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -64,10 +66,15 @@ impl CreateDebugOplogConstructor {
 
 #[async_trait]
 impl OplogConstructor for CreateDebugOplogConstructor {
-    async fn create_oplog(self, _close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
+    async fn create_oplog(
+        self,
+        lifecycle: &mut OplogLifecycleGuard,
+        close: Box<dyn FnOnce() + Send + Sync>,
+    ) -> Arc<dyn Oplog> {
         let inner = if let Some(initial_entry) = self.initial_entry {
             self.inner
                 .create(
+                    lifecycle,
                     &self.owned_agent_id,
                     self.agent_mode,
                     initial_entry,
@@ -79,6 +86,7 @@ impl OplogConstructor for CreateDebugOplogConstructor {
         } else {
             self.inner
                 .open(
+                    lifecycle,
                     &self.owned_agent_id,
                     self.agent_mode,
                     self.last_oplog_index,
@@ -91,6 +99,11 @@ impl OplogConstructor for CreateDebugOplogConstructor {
 
         let debug_session_id = DebugSessionId::new(self.owned_agent_id.clone());
 
-        Arc::new(DebugOplog::new(inner, debug_session_id, self.debug_session))
+        Arc::new(DebugOplog::new(
+            inner,
+            debug_session_id,
+            self.debug_session,
+            close,
+        ))
     }
 }

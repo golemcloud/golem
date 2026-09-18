@@ -2063,7 +2063,7 @@ struct ToolSidecarInvocation {
     stdout: Option<ToolStdoutWriterEntry>,
     principal: Principal,
     output_contract: ToolOutputContract,
-    result_streams: crate::durable_host::durable_session::DurableSessionStreams,
+    result_streams: crate::durable_host::durable_session::StreamSession,
     result_ready: Option<oneshot::Sender<ToolInvokeResponse>>,
 }
 
@@ -2119,7 +2119,7 @@ async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
         golem_common::schema::tool::wit::wire::ToolError,
     >,
     output_contract: &ToolOutputContract,
-    result_streams: &crate::durable_host::durable_session::DurableSessionStreams,
+    result_streams: &crate::durable_host::durable_session::StreamSession,
     result_ready: Option<oneshot::Sender<ToolInvokeResponse>>,
 ) -> wasmtime::Result<HostResponseEntityInvocation> {
     let response = accessor
