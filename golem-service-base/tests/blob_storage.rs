@@ -2299,3 +2299,223 @@ async fn create_dir_at_a_root_path_leaves_nothing_behind(
 
     assert_eq!(entries, vec![Path::new("only-blob").to_path_buf()]);
 }
+
+#[test]
+#[tracing::instrument]
+async fn exists_at_a_root_path_gives_a_directory(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+
+    // Every one of these paths is at the root of the namespace, because none of them has a name
+    // in it.
+    let root_paths = ["", ".", "./", "././"];
+
+    for root_path in root_paths {
+        let before = storage
+            .exists(
+                "exists_at_a_root_path_gives_a_directory",
+                "exists-before",
+                namespace.clone(),
+                Path::new(root_path),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            before,
+            ExistsResult::Directory,
+            "exists({root_path:?}) before a write"
+        );
+    }
+
+    storage
+        .put_raw(
+            "exists_at_a_root_path_gives_a_directory",
+            "put-blob",
+            namespace.clone(),
+            Path::new("blob"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    for root_path in root_paths {
+        let after = storage
+            .exists(
+                "exists_at_a_root_path_gives_a_directory",
+                "exists-after",
+                namespace.clone(),
+                Path::new(root_path),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            after,
+            ExistsResult::Directory,
+            "exists({root_path:?}) after a write"
+        );
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn exists_on_a_directory_that_only_holds_blobs(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+
+    // No create_dir: these directories exist because blobs are below them.
+    for blob in [Path::new("only/blob"), Path::new("deep/nested/dirs/blob")] {
+        storage
+            .put_raw(
+                "exists_on_a_directory_that_only_holds_blobs",
+                "put-blob",
+                namespace.clone(),
+                blob,
+                &Bytes::from("payload"),
+            )
+            .await
+            .unwrap();
+    }
+
+    for directory in [
+        Path::new("only"),
+        Path::new("deep"),
+        Path::new("deep/nested"),
+        Path::new("deep/nested/dirs"),
+    ] {
+        let result = storage
+            .exists(
+                "exists_on_a_directory_that_only_holds_blobs",
+                "exists-dir",
+                namespace.clone(),
+                directory,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, ExistsResult::Directory, "exists({directory:?})");
+    }
+
+    for blob in [Path::new("only/blob"), Path::new("deep/nested/dirs/blob")] {
+        let result = storage
+            .exists(
+                "exists_on_a_directory_that_only_holds_blobs",
+                "exists-blob",
+                namespace.clone(),
+                blob,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, ExistsResult::File, "exists({blob:?})");
+    }
+
+    let missing = storage
+        .exists(
+            "exists_on_a_directory_that_only_holds_blobs",
+            "exists-missing",
+            namespace.clone(),
+            Path::new("deep/nested/other"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(missing, ExistsResult::DoesNotExist);
+}
+
+#[test]
+#[tracing::instrument]
+async fn exists_on_a_blob_gives_a_file(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let blob = Path::new("not-a-dir");
+
+    storage
+        .put_raw(
+            "exists_on_a_blob_gives_a_file",
+            "put-blob",
+            namespace.clone(),
+            blob,
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    let result = storage
+        .exists(
+            "exists_on_a_blob_gives_a_file",
+            "exists-blob",
+            namespace.clone(),
+            blob,
+        )
+        .await
+        .unwrap();
+
+    let missing = storage
+        .exists(
+            "exists_on_a_blob_gives_a_file",
+            "exists-missing",
+            namespace.clone(),
+            Path::new("not-a-dir-either"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result, ExistsResult::File);
+    assert_eq!(missing, ExistsResult::DoesNotExist);
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_dir_of_a_path_with_nothing_gives_an_empty_list(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let empty: Vec<PathBuf> = Vec::new();
+
+    // Nothing is written yet, so the root of the namespace holds nothing.
+    for root_path in ["", ".", "./", "././"] {
+        let entries = storage
+            .list_dir(
+                "list_dir_of_a_path_with_nothing_gives_an_empty_list",
+                "list-root",
+                namespace.clone(),
+                Path::new(root_path),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(entries, empty, "list_dir({root_path:?}) before a write");
+    }
+
+    storage
+        .put_raw(
+            "list_dir_of_a_path_with_nothing_gives_an_empty_list",
+            "put-blob",
+            namespace.clone(),
+            Path::new("blob"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    let entries = storage
+        .list_dir(
+            "list_dir_of_a_path_with_nothing_gives_an_empty_list",
+            "list-missing-dir",
+            namespace.clone(),
+            Path::new("no-such-dir"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(entries, empty, "list_dir(\"no-such-dir\")");
+}

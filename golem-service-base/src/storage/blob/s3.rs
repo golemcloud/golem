@@ -1102,6 +1102,13 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<ExistsResult, Error> {
         let path = &*normalized_blob_path(path)?;
+
+        // The root of a namespace is a directory, also when the bucket holds no object under
+        // its prefix.
+        if blob_path_is_root(path) {
+            return Ok(ExistsResult::Directory);
+        }
+
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
