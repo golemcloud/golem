@@ -31,8 +31,8 @@ use super::{
 use crate::base_model::OplogIndex;
 use crate::base_model::agent::AgentMode;
 use crate::base_model::durable_stream::{
-    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
-    StreamSessionRecordV1,
+    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
+    StreamSessionRecord,
 };
 use crate::base_model::oplog::{
     CardInstallFailure, PublicQueuedCardEvent, PublicQueuedCardEventTransfer,
@@ -3562,7 +3562,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 Ok(OplogEntry::StreamRegistered {
                     timestamp: p.timestamp,
                     entity_parent_start_index: None,
-                    record: OplogPayload::Inline(Box::new(StreamRegisteredRecordV1::from_value(
+                    record: OplogPayload::Inline(Box::new(StreamRegisteredRecord::from_value(
                         p.record.value(),
                     ).map_err(|error| error.to_string())?)),
                 })
@@ -3572,7 +3572,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 Ok(OplogEntry::StreamItems {
                     timestamp: p.timestamp,
                     entity_parent_start_index: None,
-                    record: OplogPayload::Inline(Box::new(StreamItemsRecordV1::from_value(
+                    record: OplogPayload::Inline(Box::new(StreamItemsRecord::from_value(
                         p.record.value(),
                     ).map_err(|error| error.to_string())?)),
                 })
@@ -3582,7 +3582,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 Ok(OplogEntry::StreamEnd {
                     timestamp: p.timestamp,
                     entity_parent_start_index: None,
-                    record: OplogPayload::Inline(Box::new(StreamEndRecordV1::from_value(
+                    record: OplogPayload::Inline(Box::new(StreamEndRecord::from_value(
                         p.record.value(),
                     ).map_err(|error| error.to_string())?)),
                 })
@@ -3592,7 +3592,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 Ok(OplogEntry::StreamCancel {
                     timestamp: p.timestamp,
                     entity_parent_start_index: None,
-                    record: OplogPayload::Inline(Box::new(StreamCancelRecordV1::from_value(
+                    record: OplogPayload::Inline(Box::new(StreamCancelRecord::from_value(
                         p.record.value(),
                     ).map_err(|error| error.to_string())?)),
                 })
@@ -3602,7 +3602,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
                 Ok(OplogEntry::StreamSession {
                     timestamp: p.timestamp,
                     entity_parent_start_index: None,
-                    record: OplogPayload::Inline(Box::new(StreamSessionRecordV1::from_value(
+                    record: OplogPayload::Inline(Box::new(StreamSessionRecord::from_value(
                         p.record.value(),
                     ).map_err(|error| error.to_string())?)),
                 })

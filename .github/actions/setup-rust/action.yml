@@ -25,6 +25,9 @@ inputs:
   install-cargo-binstall:
     description: 'Whether to install cargo-binstall'
     default: 'false'
+  install-protoc:
+    description: 'Install protoc when building etcd-client (via golem-shard-manager or golem)'
+    default: 'false'
 runs:
   using: 'composite'
   steps:
@@ -40,6 +43,7 @@ runs:
           rustup target add "$target"
         done
     - name: Install protoc
+      if: inputs.install-protoc == 'true'
       # `etcd-client`'s build script compiles its protos with tonic-prost-build, which shells out
       # to `protoc`. The workspace's own protos are compiled with protox (pure Rust) and need no
       # binary, so this is the only thing that requires it.
