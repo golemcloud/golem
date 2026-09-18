@@ -2653,7 +2653,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
             vec![
                 DurableStreamOplogRecord::Registered(
                     None,
-                    StreamRegisteredRecord {
+                    Box::new(StreamRegisteredRecord {
                         format_version: 1,
                         coordinate: StreamRegistrationCoordinate::Root {
                             invocation_id: invocation_id.clone(),
@@ -2673,7 +2673,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                         },
                         source_kind: StreamSourceKind::InvocationOutput,
                         session_mapping: None,
-                    },
+                    }),
                 ),
                 DurableStreamOplogRecord::Items(
                     None,

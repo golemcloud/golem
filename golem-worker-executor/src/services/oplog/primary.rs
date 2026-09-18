@@ -981,7 +981,7 @@ enum OplogJob {
         session_key: golem_common::model::durable_stream::StreamSessionKey,
         expected_watermark: OplogIndex,
         expected_committed: OplogIndex,
-        status: Result<Option<DurableStreamSessionStatus>, String>,
+        status: Box<Result<Option<DurableStreamSessionStatus>, String>>,
         done: tokio::sync::oneshot::Sender<Option<super::RawDurableStreamSessionStatus>>,
     },
     LastAddedNonHintEntry {
@@ -1258,14 +1258,14 @@ impl PrimaryOplog {
                         let result = if state.last_oplog_idx == expected_watermark
                             && state.last_committed_idx == expected_committed
                         {
-                            if let Ok(value) = &status {
+                            if let Ok(value) = status.as_ref() {
                                 state
                                     .durable_stream_sessions
                                     .insert(session_key, value.clone());
                             }
                             Some(super::RawDurableStreamSessionStatus {
                                 watermark: expected_watermark,
-                                status,
+                                status: *status,
                             })
                         } else {
                             None
@@ -1877,7 +1877,7 @@ impl Oplog for PrimaryOplog {
                     session_key: session_key.clone(),
                     expected_watermark: snapshot.watermark,
                     expected_committed: snapshot.committed,
-                    status,
+                    status: Box::new(status),
                     done,
                 })
                 .await

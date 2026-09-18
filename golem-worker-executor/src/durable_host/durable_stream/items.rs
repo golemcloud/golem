@@ -964,7 +964,7 @@ impl DurableStreamStore {
                     );
                     records.push(DurableStreamOplogRecord::Registered(
                         entity_parent_start_index,
-                        registration,
+                        Box::new(registration),
                     ));
                 }
                 let nested_stream_ids = nested_for_entry

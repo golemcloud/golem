@@ -1691,7 +1691,7 @@ async fn permission_events_are_recovered_from_skipped_regions() {
             source_card_id,
             installed_card_id: card.card_id(),
             target_holder,
-            card: card,
+            card,
             target_wallet_generation: 1,
         }]
     );
