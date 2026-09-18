@@ -168,5 +168,3 @@ This is exposed in each SDK's host bindings. The function returns immediately â€
 6. If `load-snapshot` returns `Err`, the update fails and the agent reverts to the old version.
 
 To implement manual updates, the component must export the `save-snapshot` and `load-snapshot` WIT interfaces. Each SDK provides helpers for this â€” see the language-specific `golem-custom-snapshot-*` skills for implementation details.
-
-
