@@ -311,12 +311,14 @@ pub impl @rpc.AgentConfigOverrides for DatabaseConfigOverride
 
 type MoonBitReflectionTest
 pub fn MoonBitReflectionTest::echo(String) -> String
+pub fn MoonBitReflectionTest::optional(String?) -> String
 
 type MoonBitStreaming
 pub async fn MoonBitStreaming::stream(String, @async-core.Stream[Byte], @tool.ProviderStdout) -> UInt64
 
 type MoonBitToolReflectionCaller
 pub async fn MoonBitToolReflectionCaller::agent_round_trip(Self) -> String
+pub async fn MoonBitToolReflectionCaller::optional_round_trip(Self) -> String
 pub async fn MoonBitToolReflectionCaller::round_trip(Self) -> String
 
 pub(all) struct MoonBitToolReflectionCallerClient {
@@ -328,16 +330,20 @@ pub fn MoonBitToolReflectionCallerClient::get(String) -> Self raise @common.Agen
 pub fn MoonBitToolReflectionCallerClient::get_agent_id(Self) -> String raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::get_phantom(String, @types.Uuid) -> Self raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::new_phantom(String) -> Self raise @common.AgentError
+pub async fn MoonBitToolReflectionCallerClient::optional_round_trip(Self) -> String
 pub fn MoonBitToolReflectionCallerClient::phantom_id(Self) -> @types.Uuid?
 pub async fn MoonBitToolReflectionCallerClient::round_trip(Self) -> String
 pub fn MoonBitToolReflectionCallerClient::schedule_agent_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_agent_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_optional_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_cancelable_round_trip(Self, @system-clock.Instant) -> @host.CancellationToken raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::schedule_optional_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::schedule_round_trip(Self, @system-clock.Instant) -> Unit raise @common.AgentError
 pub async fn[T] MoonBitToolReflectionCallerClient::scoped(String, async (Self) -> T) -> T
 pub async fn[T] MoonBitToolReflectionCallerClient::scoped_get_phantom(String, @types.Uuid, async (Self) -> T) -> T
 pub async fn[T] MoonBitToolReflectionCallerClient::scoped_new_phantom(String, async (Self) -> T) -> T
 pub fn MoonBitToolReflectionCallerClient::trigger_agent_round_trip(Self) -> Unit raise @common.AgentError
+pub fn MoonBitToolReflectionCallerClient::trigger_optional_round_trip(Self) -> Unit raise @common.AgentError
 pub fn MoonBitToolReflectionCallerClient::trigger_round_trip(Self) -> Unit raise @common.AgentError
 
 type MoonBitToolStreamingCaller
@@ -366,6 +372,7 @@ pub(all) struct MoonbitReflectionTestClient {
 pub fn MoonbitReflectionTestClient::drop(Self) -> Unit
 pub async fn MoonbitReflectionTestClient::echo(Self, String) -> Result[String, @tool.ToolError[@tool-core.NoToolError]]
 pub fn MoonbitReflectionTestClient::new() -> Self
+pub async fn MoonbitReflectionTestClient::optional(Self, String?) -> Result[String, @tool.ToolError[@tool-core.NoToolError]]
 
 pub(all) struct MoonbitStreamingClient {
   client : @tool.ToolClient

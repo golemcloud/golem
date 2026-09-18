@@ -4436,7 +4436,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
           aliases: [],
           doc: { summary: "", description: "", examples: [] },
           globals: { options: [], flags: [] },
-          subcommands: [1],
+          subcommands: [1, 2],
           body: None,
         },
         {
@@ -4464,6 +4464,63 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
                 tail: None,
               },
               options: [],
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: Some(
+                {
+                  type_: @schema.into_schema_graph(
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ),
+                  doc: { summary: "", description: "", examples: [] },
+                  formatters: [
+                    {
+                      name: "default",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "default",
+                },
+              ),
+              errors: [],
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
+            },
+          ),
+        },
+        {
+          name: "optional",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: { options: [], flags: [] },
+          subcommands: [],
+          body: Some(
+            {
+              positionals: { fixed: [], tail: None },
+              options: [
+                {
+                  long: "maybe",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                  ),
+                  default: None,
+                  required: false,
+                  env_var: None,
+                },
+              ],
               flags: [],
               constraints: [],
               stdin: None,
@@ -4629,6 +4686,53 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
         }
       }
       let __golem_value = MoonBitReflectionTest::echo(label)
+      Ok(
+        try {
+          @tool.invocation_result_value(__golem_value)
+        } catch{
+          @asyncCore.Cancelled::Cancelled as error => raise  error
+          @toolCommon.ToolError::InvalidResult(message) => {
+            return Err(@toolCommon.ToolError::InvalidResult(message))
+          }
+          error => raise  error
+        },
+      )
+    }
+    2 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @toolCommon.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
+          ),
+        )
+      }
+      let maybe :String? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "maybe",
+          "tool moonbit-reflection-test command optional",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let __golem_value = MoonBitReflectionTest::optional(maybe)
       Ok(
         try {
           @tool.invocation_result_value(__golem_value)

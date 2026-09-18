@@ -189,7 +189,11 @@ pub fn ToolDef::canonical_input_fields(
         name: positional.name,
         aliases: [],
         short: None,
-        type_: positional.type_,
+        type_: if !positional.required && positional.default is None {
+          option_graph(positional.type_)
+        } else {
+          positional.type_
+        },
       })
     }
     if body.positionals.tail is Some(tail) {
@@ -237,7 +241,12 @@ fn identity_collides(
 ///|
 fn OptionSpecDef::canonical_field(self : OptionSpecDef) -> CanonicalInputField {
   let type_ = match self.shape {
-    Scalar(graph) | OptionalScalar(graph) => graph
+    Scalar(graph) | OptionalScalar(graph) =>
+      if !self.required && self.default is None {
+        option_graph(graph)
+      } else {
+        graph
+      }
     RepeatableList(shape) => list_graph(shape.item_type)
     RepeatableMap(shape) => shape.map_type
   }
@@ -267,6 +276,14 @@ fn list_graph(item : @model.SchemaGraph) -> @model.SchemaGraph {
   {
     defs: item.defs,
     root: @model.schema_type(@model.SchemaTypeBody::List(item.root)),
+  }
+}
+
+///|
+fn option_graph(item : @model.SchemaGraph) -> @model.SchemaGraph {
+  {
+    defs: item.defs,
+    root: @model.schema_type(@model.SchemaTypeBody::Option(item.root)),
   }
 }
 
