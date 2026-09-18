@@ -4030,6 +4030,7 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
             next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-custom-effect").await?;
         original_body.release();
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
+        executor.commit_oplog(&worker_id).await?;
         let entity_start = wait_for_completed_entity_terminal(&executor, &worker_id).await?;
         let original_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         let custom_start = original_oplog
