@@ -30,12 +30,13 @@ use golem_common::model::oplog::public_oplog_entry::{
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PluginInstallationDescription, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RemoveRetryPolicyParams,
-    RestartParams, RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams,
-    SetSpanAttributeParams, SnapshotConfirmedParams, SnapshotParams, StartParams, StartSpanParams,
-    StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
-    StreamSessionParams, StringAttributeValue, SuccessfulUpdateParams, SuspendParams,
-    WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
+    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RecoverySucceededParams,
+    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
+    SnapshotConfirmedParams, SnapshotParams, StartParams, StartSpanParams, StreamCancelParams,
+    StreamEndParams, StreamItemsParams, StreamRegisteredParams, StreamSessionParams,
+    StringAttributeValue, SuccessfulUpdateParams, SuspendParams, WriteRemoteBatchedParameters,
+    WriteRemoteTransactionParameters,
 };
 use golem_common::model::oplog::{
     AgentInvocationOutputParameters, AgentTerminatedByQuotaError, EphemeralCannotSuspendError,
@@ -225,7 +226,8 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
 impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
     type Error = String;
 
-    fn try_from(value: PublicOplogEntry) -> Result<Self, String> {
+    fn try_from(mut value: PublicOplogEntry) -> Result<Self, String> {
+        value.redact_host_managed_values_for_external();
         Ok(match value {
             PublicOplogEntry::Create(CreateParams {
                 timestamp,
@@ -349,12 +351,14 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
             }
             PublicOplogEntry::Error(ErrorParams {
                 timestamp,
+                kind,
                 error,
                 retry_from,
                 inside_atomic_region,
                 retry_policy_state,
             }) => Self::Error(oplog::ErrorParameters {
                 timestamp: timestamp.into(),
+                kind: kind.into(),
                 error: error.to_string(),
                 retry_from: retry_from.into(),
                 inside_atomic_region,
@@ -363,6 +367,9 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                     internal.into()
                 }),
             }),
+            PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp }) => {
+                Self::RecoverySucceeded(timestamp.into())
+            }
             PublicOplogEntry::NoOp(NoOpParams { timestamp }) => Self::NoOp(timestamp.into()),
             PublicOplogEntry::Jump(JumpParams { timestamp, jump }) => {
                 Self::Jump(oplog::JumpParameters {
@@ -464,6 +471,9 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
             }),
             PublicOplogEntry::Restart(RestartParams { timestamp }) => {
                 Self::Restart(timestamp.into())
+            }
+            PublicOplogEntry::Resumed(ResumedParams { timestamp }) => {
+                Self::Resumed(timestamp.into())
             }
             PublicOplogEntry::ActivatePlugin(ActivatePluginParams { timestamp, plugin }) => {
                 Self::ActivatePlugin(oplog::ActivatePluginParameters {
@@ -733,6 +743,24 @@ impl From<golem_common::model::oplog::HostStreamKind> for oplog::HostStreamKind 
             golem_common::model::oplog::HostStreamKind::P3HttpRequestBody => {
                 Self::P3HttpRequestBody
             }
+        }
+    }
+}
+
+impl From<golem_common::model::oplog::OplogErrorKind> for oplog::OplogErrorKind {
+    fn from(value: golem_common::model::oplog::OplogErrorKind) -> Self {
+        match value {
+            golem_common::model::oplog::OplogErrorKind::Invocation => Self::Invocation,
+            golem_common::model::oplog::OplogErrorKind::Recovery => Self::Recovery,
+        }
+    }
+}
+
+impl From<oplog::OplogErrorKind> for golem_common::model::oplog::OplogErrorKind {
+    fn from(value: oplog::OplogErrorKind) -> Self {
+        match value {
+            oplog::OplogErrorKind::Invocation => Self::Invocation,
+            oplog::OplogErrorKind::Recovery => Self::Recovery,
         }
     }
 }
@@ -1252,6 +1280,8 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::Error(params) => Ok(Self::Error {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
+                kind: params.kind.into(),
                 error: params.error.into(),
                 retry_from: golem_common::model::OplogIndex::from_u64(params.retry_from),
                 inside_atomic_region: params.inside_atomic_region,
@@ -1260,11 +1290,16 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     internal
                 }),
             }),
+            oplog::OplogEntry::RecoverySucceeded(ts) => Ok(Self::RecoverySucceeded {
+                timestamp: timestamp_from_datetime(ts.timestamp),
+            }),
             oplog::OplogEntry::NoOp(ts) => Ok(Self::NoOp {
                 timestamp: timestamp_from_datetime(ts.timestamp),
+                entity_parent_start_index: None,
             }),
             oplog::OplogEntry::Jump(params) => Ok(Self::Jump {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 jump: golem_common::model::regions::OplogRegion {
                     start: golem_common::model::OplogIndex::from_u64(params.jump.start),
                     end: golem_common::model::OplogIndex::from_u64(params.jump.end),
@@ -1278,9 +1313,11 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::BeginAtomicRegion(ts) => Ok(Self::BeginAtomicRegion {
                 timestamp: timestamp_from_datetime(ts.timestamp),
+                entity_parent_start_index: None,
             }),
             oplog::OplogEntry::EndAtomicRegion(params) => Ok(Self::EndAtomicRegion {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 begin_index: golem_common::model::OplogIndex::from_u64(params.begin_index),
             }),
             oplog::OplogEntry::PendingAgentInvocation(params) => {
@@ -1335,6 +1372,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::CreateResource(params) => Ok(Self::CreateResource {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 id: golem_common::model::oplog::AgentResourceId(params.id),
                 resource_type_id: golem_common::resource_runtime::ResourceTypeId {
                     name: params.resource_type_id.name,
@@ -1343,6 +1381,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::DropResource(params) => Ok(Self::DropResource {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 id: golem_common::model::oplog::AgentResourceId(params.id),
                 resource_type_id: golem_common::resource_runtime::ResourceTypeId {
                     name: params.resource_type_id.name,
@@ -1357,6 +1396,9 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                 message: params.message,
             }),
             oplog::OplogEntry::Restart(ts) => Ok(Self::Restart {
+                timestamp: timestamp_from_datetime(ts.timestamp),
+            }),
+            oplog::OplogEntry::Resumed(ts) => Ok(Self::Resumed {
                 timestamp: timestamp_from_datetime(ts.timestamp),
             }),
             oplog::OplogEntry::ActivatePlugin(params) => Ok(Self::ActivatePlugin {
@@ -1504,15 +1546,18 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     params.policy.into();
                 Ok(Self::SetRetryPolicy {
                     timestamp: timestamp_from_datetime(params.timestamp),
+                    entity_parent_start_index: None,
                     policy: named,
                 })
             }
             oplog::OplogEntry::RemoveRetryPolicy(params) => Ok(Self::RemoveRetryPolicy {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 name: params.name,
             }),
             oplog::OplogEntry::CardRevoked(params) => Ok(Self::CardRevoked {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 queued_event_index: golem_common::model::OplogIndex::from_u64(
                     params.queued_event_index,
                 ),
@@ -1521,15 +1566,18 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::CardExpired(params) => Ok(Self::CardExpired {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 card_id: card_id_from_wit(params.card_id),
                 wallet_generation: None,
             }),
             oplog::OplogEntry::CardEventQueued(params) => Ok(Self::CardEventQueued {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 event: raw_queued_card_event_from_wit(params.event)?,
             }),
             oplog::OplogEntry::CardInstalled(params) => Ok(Self::CardInstalled {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 queued_event_index: params
                     .queued_event_index
                     .map(golem_common::model::OplogIndex::from_u64),
@@ -1538,6 +1586,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::CardInstallFailed(params) => Ok(Self::CardInstallFailed {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 queued_event_index: golem_common::model::OplogIndex::from_u64(
                     params.queued_event_index,
                 ),
@@ -1554,22 +1603,27 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }),
             oplog::OplogEntry::StreamRegistered(params) => Ok(Self::StreamRegistered {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 record: oplog_payload_from_wit(params.record),
             }),
             oplog::OplogEntry::StreamItems(params) => Ok(Self::StreamItems {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 record: oplog_payload_from_wit(params.record),
             }),
             oplog::OplogEntry::StreamEnd(params) => Ok(Self::StreamEnd {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 record: oplog_payload_from_wit(params.record),
             }),
             oplog::OplogEntry::StreamCancel(params) => Ok(Self::StreamCancel {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 record: oplog_payload_from_wit(params.record),
             }),
             oplog::OplogEntry::StreamSession(params) => Ok(Self::StreamSession {
                 timestamp: timestamp_from_datetime(params.timestamp),
+                entity_parent_start_index: None,
                 record: oplog_payload_from_wit(params.record),
             }),
         }
@@ -2026,19 +2080,25 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
             M::Suspend { timestamp } => Ok(Self::Suspend(timestamp.into())),
             M::Error {
                 timestamp,
+                kind,
                 error,
                 retry_from,
                 inside_atomic_region,
                 retry_policy_state,
+                ..
             } => Ok(Self::Error(oplog::RawErrorParameters {
                 timestamp: timestamp.into(),
+                kind: kind.into(),
                 error: error.into(),
                 retry_from: retry_from.into(),
                 inside_atomic_region,
                 retry_policy_state: retry_policy_state.map(|s| s.into()),
             })),
-            M::NoOp { timestamp } => Ok(Self::NoOp(timestamp.into())),
-            M::Jump { timestamp, jump } => Ok(Self::Jump(oplog::JumpParameters {
+            M::RecoverySucceeded { timestamp } => Ok(Self::RecoverySucceeded(timestamp.into())),
+            M::NoOp { timestamp, .. } => Ok(Self::NoOp(timestamp.into())),
+            M::Jump {
+                timestamp, jump, ..
+            } => Ok(Self::Jump(oplog::JumpParameters {
                 timestamp: timestamp.into(),
                 jump: oplog::OplogRegion {
                     start: jump.start.into(),
@@ -2047,10 +2107,11 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
             })),
             M::Interrupted { timestamp } => Ok(Self::Interrupted(timestamp.into())),
             M::Exited { timestamp } => Ok(Self::Exited(timestamp.into())),
-            M::BeginAtomicRegion { timestamp } => Ok(Self::BeginAtomicRegion(timestamp.into())),
+            M::BeginAtomicRegion { timestamp, .. } => Ok(Self::BeginAtomicRegion(timestamp.into())),
             M::EndAtomicRegion {
                 timestamp,
                 begin_index,
+                ..
             } => Ok(Self::EndAtomicRegion(oplog::EndAtomicRegionParameters {
                 timestamp: timestamp.into(),
                 begin_index: begin_index.into(),
@@ -2112,16 +2173,14 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 timestamp,
                 queued_event_index,
                 card_id,
-                wallet_generation: _,
+                ..
             } => Ok(Self::CardRevoked(oplog::CardRevokedParameters {
                 timestamp: timestamp.into(),
                 queued_event_index: queued_event_index.into(),
                 card_id: card_id_to_wit(card_id),
             })),
             M::CardExpired {
-                timestamp,
-                card_id,
-                wallet_generation: _,
+                timestamp, card_id, ..
             } => Ok(Self::CardExpired(oplog::CardExpiredParameters {
                 timestamp: timestamp.into(),
                 card_id: card_id_to_wit(card_id),
@@ -2137,47 +2196,53 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 kind: kind.into(),
                 payload: oplog_payload_to_wit(payload)?,
             })),
-            M::StreamRegistered { timestamp, record } => Ok(Self::StreamRegistered(
+            M::StreamRegistered {
+                timestamp, record, ..
+            } => Ok(Self::StreamRegistered(
                 oplog::RawDurableStreamRecordParameters {
                     timestamp: timestamp.into(),
                     record: oplog_payload_to_wit(record)?,
                 },
             )),
-            M::StreamItems { timestamp, record } => {
-                Ok(Self::StreamItems(oplog::RawDurableStreamRecordParameters {
-                    timestamp: timestamp.into(),
-                    record: oplog_payload_to_wit(record)?,
-                }))
-            }
-            M::StreamEnd { timestamp, record } => {
-                Ok(Self::StreamEnd(oplog::RawDurableStreamRecordParameters {
-                    timestamp: timestamp.into(),
-                    record: oplog_payload_to_wit(record)?,
-                }))
-            }
-            M::StreamCancel { timestamp, record } => Ok(Self::StreamCancel(
+            M::StreamItems {
+                timestamp, record, ..
+            } => Ok(Self::StreamItems(oplog::RawDurableStreamRecordParameters {
+                timestamp: timestamp.into(),
+                record: oplog_payload_to_wit(record)?,
+            })),
+            M::StreamEnd {
+                timestamp, record, ..
+            } => Ok(Self::StreamEnd(oplog::RawDurableStreamRecordParameters {
+                timestamp: timestamp.into(),
+                record: oplog_payload_to_wit(record)?,
+            })),
+            M::StreamCancel {
+                timestamp, record, ..
+            } => Ok(Self::StreamCancel(
                 oplog::RawDurableStreamRecordParameters {
                     timestamp: timestamp.into(),
                     record: oplog_payload_to_wit(record)?,
                 },
             )),
-            M::StreamSession { timestamp, record } => Ok(Self::StreamSession(
+            M::StreamSession {
+                timestamp, record, ..
+            } => Ok(Self::StreamSession(
                 oplog::RawDurableStreamRecordParameters {
                     timestamp: timestamp.into(),
                     record: oplog_payload_to_wit(record)?,
                 },
             )),
-            M::CardEventQueued { timestamp, event } => {
-                Ok(Self::CardEventQueued(oplog::CardEventQueuedParameters {
-                    timestamp: timestamp.into(),
-                    event: raw_queued_card_event_to_wit(event)?,
-                }))
-            }
+            M::CardEventQueued {
+                timestamp, event, ..
+            } => Ok(Self::CardEventQueued(oplog::CardEventQueuedParameters {
+                timestamp: timestamp.into(),
+                event: raw_queued_card_event_to_wit(event)?,
+            })),
             M::CardInstalled {
                 timestamp,
                 queued_event_index,
                 card,
-                wallet_generation: _,
+                ..
             } => Ok(Self::CardInstalled(oplog::RawCardInstalledParameters {
                 timestamp: timestamp.into(),
                 queued_event_index: queued_event_index.map(Into::into),
@@ -2188,6 +2253,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 queued_event_index,
                 card_id,
                 reason,
+                ..
             } => Ok(Self::CardInstallFailed(
                 oplog::CardInstallFailedParameters {
                     timestamp: timestamp.into(),
@@ -2208,6 +2274,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 timestamp,
                 id,
                 resource_type_id,
+                ..
             } => Ok(Self::CreateResource(oplog::RawCreateResourceParameters {
                 timestamp: timestamp.into(),
                 id: id.0,
@@ -2220,6 +2287,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 timestamp,
                 id,
                 resource_type_id,
+                ..
             } => Ok(Self::DropResource(oplog::RawDropResourceParameters {
                 timestamp: timestamp.into(),
                 id: id.0,
@@ -2241,6 +2309,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 message,
             })),
             M::Restart { timestamp } => Ok(Self::Restart(timestamp.into())),
+            M::Resumed { timestamp } => Ok(Self::Resumed(timestamp.into())),
             M::ActivatePlugin {
                 timestamp,
                 plugin_grant_id,
@@ -2400,13 +2469,15 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                     last_batch_start: last_batch_start.into(),
                 },
             )),
-            M::SetRetryPolicy { timestamp, policy } => {
-                Ok(Self::SetRetryPolicy(oplog::SetRetryPolicyParameters {
-                    timestamp: timestamp.into(),
-                    policy: policy.into(),
-                }))
-            }
-            M::RemoveRetryPolicy { timestamp, name } => Ok(Self::RemoveRetryPolicy(
+            M::SetRetryPolicy {
+                timestamp, policy, ..
+            } => Ok(Self::SetRetryPolicy(oplog::SetRetryPolicyParameters {
+                timestamp: timestamp.into(),
+                policy: policy.into(),
+            })),
+            M::RemoveRetryPolicy {
+                timestamp, name, ..
+            } => Ok(Self::RemoveRetryPolicy(
                 oplog::RemoveRetryPolicyParameters {
                     timestamp: timestamp.into(),
                     name,
@@ -2461,12 +2532,14 @@ mod tests {
             (
                 OplogEntry::CardInstalled {
                     timestamp,
+                    entity_parent_start_index: None,
                     queued_event_index: None,
                     card: card.clone().into(),
                     wallet_generation: Some(1),
                 },
                 OplogEntry::CardInstalled {
                     timestamp,
+                    entity_parent_start_index: None,
                     queued_event_index: None,
                     card: card.clone().into(),
                     wallet_generation: None,
@@ -2475,12 +2548,14 @@ mod tests {
             (
                 OplogEntry::CardRevoked {
                     timestamp,
+                    entity_parent_start_index: None,
                     queued_event_index: golem_common::model::OplogIndex::NONE,
                     card_id,
                     wallet_generation: Some(3),
                 },
                 OplogEntry::CardRevoked {
                     timestamp,
+                    entity_parent_start_index: None,
                     queued_event_index: golem_common::model::OplogIndex::NONE,
                     card_id,
                     wallet_generation: None,
@@ -2489,11 +2564,13 @@ mod tests {
             (
                 OplogEntry::CardExpired {
                     timestamp,
+                    entity_parent_start_index: None,
                     card_id,
                     wallet_generation: Some(4),
                 },
                 OplogEntry::CardExpired {
                     timestamp,
+                    entity_parent_start_index: None,
                     card_id,
                     wallet_generation: None,
                 },
@@ -2508,6 +2585,7 @@ mod tests {
         assert!(
             oplog::OplogEntry::try_from(OplogEntry::CardDerived {
                 timestamp,
+                entity_parent_start_index: None,
                 card: card.into(),
                 wallet_generation: Some(2),
             })
@@ -2569,6 +2647,7 @@ mod tests {
         let payload_card_id = CardId::new();
         let entry = OplogEntry::CardTransferred {
             timestamp: Timestamp::now_utc().rounded(),
+            entity_parent_start_index: None,
             transfer_id: Uuid::new_v4(),
             source_card_id: Some(payload_card_id),
             installed_card_id: CardId::new(),
@@ -2602,6 +2681,7 @@ mod tests {
             let payload_card_id = CardId::new();
             let entry = OplogEntry::CardEventQueued {
                 timestamp: Timestamp::now_utc().rounded(),
+                entity_parent_start_index: None,
                 event: QueuedCardEvent::TransferStarted(QueuedCardEventTransfer {
                     transfer_id: Uuid::new_v4(),
                     card_id: CardId::new(),
@@ -2627,6 +2707,7 @@ mod tests {
         let source_card_id = CardId::new();
         let entry = OplogEntry::CardEventQueued {
             timestamp: Timestamp::now_utc().rounded(),
+            entity_parent_start_index: None,
             event: QueuedCardEvent::TransferReceived(QueuedCardEventTransferReceived {
                 transfer_id: Uuid::new_v4(),
                 source_card_id: Some(source_card_id),

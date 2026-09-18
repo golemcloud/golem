@@ -29,6 +29,8 @@ import golem.schema.{
 
 import scala.collection.immutable.ListMap
 
+final case class NamedToolError(name: String, payload: TypedSchemaValue)
+
 /**
  * Runtime helpers referenced by the macro-derived [[ToolErrorSchema]]
  * instances: payload encode/decode plus the canonical unit payload used by
@@ -54,10 +56,19 @@ object ToolErrorSupport {
   def decodePayload[A](value: TypedSchemaValue, from: FromSchema[A]): Either[String, A] =
     from.fromValue(value.value).left.map(_.message)
 
+  def decodePayload[A](
+    value: TypedSchemaValue,
+    from: FromSchema[A],
+    expected: SchemaGraph
+  ): Either[String, A] =
+    if (!ToolGraphs.schemaShapesMatch(value.graph, expected))
+      Left("remote tool error payload schema does not match its declared error case")
+    else decodePayload(value, from)
+
   /** Whether a payload value decodes as the unit (no-payload) carrier. */
   def isUnitPayload(value: TypedSchemaValue): Boolean =
     value.value == SchemaValue.TupleValue(Nil)
 
   val unmatchedPayload: String =
-    "remote tool error payload did not match any declared error case"
+    "remote tool error name did not match any declared error case"
 }

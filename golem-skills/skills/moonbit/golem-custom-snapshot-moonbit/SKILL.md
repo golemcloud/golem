@@ -40,7 +40,7 @@ pub fn Counter::get_value(self : Self) -> UInt64 {
 }
 ```
 
-The code generation tool detects `ToJson` and `@json.FromJson` derives and generates a `Snapshottable` implementation that serializes the agent as JSON.
+The code generation tool detects both `ToJson` and `@json.FromJson` derives and generates JSON saving plus a restoration factory. Automatic loading is generated only when the complete agent type is JSON-deserializable.
 
 ### Snapshotting Modes
 
@@ -53,13 +53,17 @@ The `snapshotting` attribute accepts these values:
 
 ## Custom Snapshotting
 
-For custom binary serialization or cross-version migration, implement the `Snapshottable` trait manually:
+For custom binary serialization or cross-version migration, implement the saving-only `Snapshottable` trait and define a separate static restoration factory:
 
 ```moonbit
 pub(open) trait Snapshottable {
   save_snapshot(Self) -> Bytes
-  load_snapshot(Self, Bytes) -> Result[Unit, String]
 }
+
+pub fn Agent::load_snapshot(
+  bytes : Bytes,
+  context : @agents.SnapshotRestoreContext,
+) -> Result[Agent, String]
 ```
 
 ### Example
@@ -86,25 +90,29 @@ pub fn Counter::get_value(self : Self) -> UInt64 {
 ///|
 pub impl @agents.Snapshottable for Counter with save_snapshot(self) {
   // Serialize value as 8 big-endian bytes
-  let bytes = Bytes::new(8)
-  let v = self.value
-  for i in 0..<8 {
-    bytes[i] = ((v >> ((7 - i).to_uint64() * 8)).to_int() & 0xff).to_byte()
+  let arr : Array[Byte] = []
+  for i = 7; i >= 0; i = i - 1 {
+    arr.push(((self.value >> (i * 8)).to_int() & 0xff).to_byte())
   }
-  bytes
+  Bytes::from_array(arr)
 }
 
 ///|
-pub impl @agents.Snapshottable for Counter with load_snapshot(self, bytes) {
+pub fn Counter::load_snapshot(
+  bytes : Bytes,
+  context : @agents.SnapshotRestoreContext,
+) -> Result[Counter, String] {
   if bytes.length() != 8 {
     return Err("Expected an 8-byte long snapshot")
   }
   let mut v : UInt64 = 0
-  for i in 0..<8 {
-    v = v | (bytes[i].to_uint64() << ((7 - i).to_uint64() * 8))
+  for i = 0; i < 8; i = i + 1 {
+    v = v | (bytes[i].to_uint64() << ((7 - i) * 8))
   }
-  self.value = v
-  Ok(())
+  let name : String = context.identity(0) catch {
+    error => return Err(error.to_string())
+  }
+  Ok({ name, value: v })
 }
 ```
 
@@ -114,25 +122,36 @@ pub impl @agents.Snapshottable for Counter with load_snapshot(self, bytes) {
 // Save: serialize the agent's current state to bytes
 save_snapshot(Self) -> Bytes
 
-// Load: restore the agent's state from previously saved bytes
-// Return Err to signal the update should fail and the agent should revert
-load_snapshot(Self, Bytes) -> Result[Unit, String]
+// Load: static factory returning a complete agent from bytes and restore context
+// Return Err to reject the snapshot
+Agent::load_snapshot(Bytes, SnapshotRestoreContext) -> Result[Agent, String]
 ```
+
+The restoration factory does not receive `self` and does not call `Agent::new`. Its context provides identity fields, the full agent ID, restored principal, and phantom ID. Fresh agent configuration remains available through the SDK's config API.
+
+## Restoration Is Read-Only
+
+`load_snapshot` is a specially supported SDK lifecycle operation, not an agent method. It must return the complete fresh agent value; the SDK installs that value only after the factory succeeds.
+
+Snapshot loading runs in read-only mode and writes nothing to the oplog. Decoding, local computation, config reads, and other permitted reads can be used to construct the value. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect.
+
+If the factory returns `Err`, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component and replays without the failed automatic snapshot; it does not try an older automatic snapshot.
 
 ## How the SDK Wires Snapshots
 
 The code generation tool (`golem_sdk_tools agents`) produces a `ConstructedAgent` struct for each agent. When snapshotting is enabled:
 
-1. If the agent has `ToJson` + `@json.FromJson` derives, the generated code automatically provides a `Snapshottable` implementation using JSON serialization.
-2. If the agent has a manual `impl Snapshottable`, the custom implementation is used instead.
-3. The `ConstructedAgent` records the `snapshottable` interface reference and `snapshot_format` (Json or Binary).
-4. The SDK's `save-snapshot` and `load-snapshot` WIT exports delegate to these implementations.
+1. If the agent has `ToJson` + `@json.FromJson` derives, generated code provides JSON saving and a restoration factory.
+2. If the agent has a manual `impl Snapshottable`, the static `Agent::load_snapshot` factory is required and the custom binary implementation is used instead.
+3. The `ConstructedAgent` records the `snapshottable` interface reference and `snapshot_format` (`Json` or `Binary`).
+4. Registration keeps normal construction and snapshot restoration as distinct factories.
+5. The SDK's `save-snapshot` and `load-snapshot` WIT exports delegate to these operations.
 
 ## Best Practices
 
 1. **Prefer automatic (JSON) snapshotting** — derive `ToJson` and `@json.FromJson` on the agent struct for zero-effort persistence.
 2. **Keep snapshots small** — large snapshots impact recovery and update time.
 3. **Version your snapshot format** — include a version byte so `load_snapshot` can handle snapshots from older versions.
-4. **Test round-trips** — verify that `save_snapshot` → `load_snapshot` produces equivalent state.
+4. **Test round-trips** — verify that `save_snapshot` → `load_snapshot` produces equivalent state without calling `new`.
 5. **Handle migration** — when the state schema changes between versions, `load_snapshot` in the new version should be able to parse snapshots from the old version.
 6. **Return `Err` to reject incompatible snapshots** — `load_snapshot` returning `Err` causes the update to fail gracefully, reverting the agent to the old version.

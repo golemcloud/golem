@@ -16,7 +16,7 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
-    blob_path_to_string, validate_relative_blob_path,
+    blob_path_is_root, blob_path_to_string, validate_relative_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -782,20 +782,21 @@ impl BlobStorage for S3BlobStorage {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
+        let bytes = Bytes::copy_from_slice(data);
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str, data),
+            &(self.client.clone(), bucket, key_str, bytes),
             |(client, bucket, key, bytes)| {
                 Box::pin(async move {
                     client
                         .put_object()
                         .bucket(*bucket)
                         .key(key.clone())
-                        .body(ByteStream::from(bytes.to_vec()))
+                        .body(ByteStream::from(bytes.clone()))
                         .send()
                         .await
                 })
@@ -1064,6 +1065,11 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<bool, Error> {
         validate_relative_blob_path(path)?;
+
+        if blob_path_is_root(path) {
+            return Ok(false);
+        }
+
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 

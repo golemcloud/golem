@@ -33,8 +33,14 @@ object ToolErrorSchemaSpec extends ZIOSpecDefault {
     @error(kind = "runtime", exitCode = 1)
     case NothingStaged
 
+    @error(kind = "runtime", exitCode = 2)
+    case RepositoryClean
+
     @error(kind = "usage", exitCode = 129)
     case BadAuthorFormat(author: String)
+
+    @error(kind = "usage", exitCode = 128)
+    case InvalidRevision(revision: String)
 
     @error(kind = "usage-error", exitCode = 130)
     case TooManyParents(count: Int)
@@ -47,36 +53,47 @@ object ToolErrorSchemaSpec extends ZIOSpecDefault {
       test("error cases carry kind, exit code, doc and payload schema") {
         val cases = schema.errorCases.toOption.get
         assertTrue(
-          cases.map(_.name) == List("nothing-staged", "bad-author-format", "too-many-parents"),
+          cases.map(_.name) ==
+            List("nothing-staged", "repository-clean", "bad-author-format", "invalid-revision", "too-many-parents"),
           cases.head.kind == ErrorKind.RuntimeError,
           cases.head.exitCode == 1,
           cases.head.doc.summary == "Nothing is staged.",
           cases.head.payload.isEmpty,
-          cases(1).kind == ErrorKind.UsageError,
-          cases(1).exitCode == 129,
-          cases(1).payload == Some(IntoSchema[String].graph),
-          cases(2).payload == Some(IntoSchema[Int].graph)
+          cases(2).kind == ErrorKind.UsageError,
+          cases(2).exitCode == 129,
+          cases(2).payload == Some(IntoSchema[String].graph),
+          cases(3).payload == Some(IntoSchema[String].graph),
+          cases(4).payload == Some(IntoSchema[Int].graph)
         )
       },
       test("payload encoding") {
         assertTrue(
-          schema.toErrorPayloadValue(CommitError.NothingStaged) == Right(ToolErrorSupport.unitPayload),
-          schema.toErrorPayloadValue(CommitError.BadAuthorFormat("x")) ==
-            Right(IntoSchema[String].toTyped("x")),
-          schema.toErrorPayloadValue(CommitError.TooManyParents(3)) ==
-            Right(IntoSchema[Int].toTyped(3))
+          schema.toErrorValue(CommitError.NothingStaged) ==
+            Right(NamedToolError("nothing-staged", ToolErrorSupport.unitPayload)),
+          schema.toErrorValue(CommitError.RepositoryClean) ==
+            Right(NamedToolError("repository-clean", ToolErrorSupport.unitPayload)),
+          schema.toErrorValue(CommitError.BadAuthorFormat("x")) ==
+            Right(NamedToolError("bad-author-format", IntoSchema[String].toTyped("x"))),
+          schema.toErrorValue(CommitError.InvalidRevision("abc")) ==
+            Right(NamedToolError("invalid-revision", IntoSchema[String].toTyped("abc"))),
+          schema.toErrorValue(CommitError.TooManyParents(3)) ==
+            Right(NamedToolError("too-many-parents", IntoSchema[Int].toTyped(3)))
         )
       },
-      test("decode by payload compatibility, in declaration order") {
+      test("decode by case name and validate its payload") {
         assertTrue(
-          schema.fromErrorPayloadValue(ToolErrorSupport.unitPayload) ==
+          schema.fromErrorValue(NamedToolError("nothing-staged", ToolErrorSupport.unitPayload)) ==
             Right(CommitError.NothingStaged),
-          schema.fromErrorPayloadValue(IntoSchema[String].toTyped("bob")) ==
+          schema.fromErrorValue(NamedToolError("repository-clean", ToolErrorSupport.unitPayload)) ==
+            Right(CommitError.RepositoryClean),
+          schema.fromErrorValue(NamedToolError("bad-author-format", IntoSchema[String].toTyped("bob"))) ==
             Right(CommitError.BadAuthorFormat("bob")),
-          schema.fromErrorPayloadValue(IntoSchema[Int].toTyped(4)) ==
+          schema.fromErrorValue(NamedToolError("invalid-revision", IntoSchema[String].toTyped("abc"))) ==
+            Right(CommitError.InvalidRevision("abc")),
+          schema.fromErrorValue(NamedToolError("too-many-parents", IntoSchema[Int].toTyped(4))) ==
             Right(CommitError.TooManyParents(4)),
-          schema.fromErrorPayloadValue(
-            golem.schema.TypedSchemaValue(IntoSchema[Boolean].graph, SchemaValue.BoolValue(true))
+          schema.fromErrorValue(
+            NamedToolError("bad-author-format", IntoSchema[Boolean].toTyped(true))
           ) == Left(ToolErrorSupport.unmatchedPayload)
         )
       }

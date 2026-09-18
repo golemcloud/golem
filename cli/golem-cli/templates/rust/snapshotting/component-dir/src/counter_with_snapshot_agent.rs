@@ -1,4 +1,5 @@
-use golem_rust::{agent_definition, agent_implementation, endpoint};
+use golem_rust::agentic::SnapshotRestoreContext;
+use golem_rust::{SchemaValue, agent_definition, agent_implementation, endpoint};
 
 #[agent_definition(mount = "/snapshot-counters/{name}")]
 pub trait CounterWithSnapshotAgent {
@@ -30,12 +31,24 @@ impl CounterWithSnapshotAgent for CounterImpl {
         self.count
     }
 
-    async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        context: SnapshotRestoreContext,
+    ) -> Result<Self, String> {
         let arr: [u8; 4] = bytes
             .try_into()
             .map_err(|_| "Expected a 4-byte long snapshot")?;
-        self.count = u32::from_be_bytes(arr);
-        Ok(())
+        let name = match context.parameters {
+            SchemaValue::Record { fields } => match fields.as_slice() {
+                [SchemaValue::String(name)] => name.clone(),
+                _ => return Err("Expected a string agent name".to_string()),
+            },
+            _ => return Err("Expected agent parameters to be a record".to_string()),
+        };
+        Ok(Self {
+            _name: name,
+            count: u32::from_be_bytes(arr),
+        })
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {

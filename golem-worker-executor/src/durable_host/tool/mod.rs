@@ -48,6 +48,7 @@ use crate::durable_host::tool::attachment::{
 use crate::durable_host::{
     DurabilityHost, DurableWorkerCtx, InternalRetryResult, LiveAuthorizationPermit,
 };
+use crate::native_tool::{NativeToolInvocation, NativeToolKey, NativeToolStdin, NativeToolStdout};
 use crate::preview2::golem::tool::host::{
     ByteStreamCloseCause, ByteStreamFailure, Host, HostFutureInvokeResult,
     HostFutureInvokeResultWithStore, HostToolRpc, HostToolRpcWithStore, HostToolStdin,
@@ -60,13 +61,15 @@ use crate::preview2::tool_guest::exports::golem::tool::guest as tool_guest_expor
 use crate::services::environment_state::{
     ToolActivationOutcome, ToolDiscoveryError, ToolDispatchTarget,
 };
-use crate::services::{HasActiveAgents, HasWorker};
+use crate::services::{HasActiveAgents, HasNativeToolCatalog, HasWorker};
+use crate::worker::entity_invocation::{RetainedEntityStore, RetainedNativeContext};
 use crate::worker::instance::EntityInvocationBody;
 use crate::worker::invocation::{
     GuestCallSettlementError, InvokeResult, finish_invocation_and_get_fuel_consumption,
     prepare_guest_call, run_guest_call_settled,
 };
 use crate::workerctx::WorkerCtx;
+use crate::workerctx::WorkerCtxExecutable;
 use anyhow::{Context, anyhow};
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountEmail;
@@ -76,16 +79,16 @@ use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::component::ComponentName;
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationDescriptorIdentity,
-    EntityInvocationRequestIdentity, InvocationExecutionMode, ToolInputDecodeFailure,
-    ToolInvocationClaimIdentity, ToolInvocationDescriptor, ToolInvocationDescriptorIdentity,
-    ToolInvocationRejectedIdentity,
+    EntityInvocationRequestIdentity, InvocationExecutionMode, NamedToolErrorSchema,
+    ToolInputDecodeFailure, ToolInvocationClaimIdentity, ToolInvocationDescriptor,
+    ToolInvocationDescriptorIdentity, ToolInvocationRejectedIdentity, ToolOutputContract,
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::host_functions::{GolemToolGetAllTools, GolemToolGetTool};
 use golem_common::model::oplog::payload::types::{
-    SerializableEntityBodyExecution, SerializableToolError, SerializableToolInvocationResult,
-    SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
-    SerializableToolStructuredResult,
+    SerializableCustomToolError, SerializableEntityBodyExecution, SerializableToolError,
+    SerializableToolInvocationResult, SerializableToolOperationTerminal,
+    SerializableToolResultValue, SerializableToolRpcError, SerializableToolStructuredResult,
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemToolGetTool, HostRequestGolemToolInvocationRejected,
@@ -170,6 +173,12 @@ impl ToolStdinEntry {
 
     pub(crate) fn into_stream_producer(self) -> AttachmentStreamProducer {
         self.consumer.into_stream_producer()
+    }
+
+    fn into_native(self) -> NativeToolStdin {
+        NativeToolStdin {
+            consumer: self.consumer,
+        }
     }
 }
 
@@ -430,6 +439,12 @@ impl ToolStdoutWriterEntry {
     fn completion_only(&self) -> bool {
         self.completion_only
     }
+
+    fn native_writer(&self) -> NativeToolStdout {
+        NativeToolStdout {
+            writer: self.producer.writer(),
+        }
+    }
 }
 
 type ToolInvokeResponse = Result<SerializableToolInvocationResult, SerializableToolRpcError>;
@@ -447,7 +462,7 @@ where
         let value = match &response {
             Ok(result) => result.result.as_ref(),
             Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
-                SerializableToolError::CustomError(value) => Some(value.as_ref()),
+                SerializableToolError::CustomError(value) => Some(&value.payload),
                 _ => None,
             },
             _ => None,
@@ -774,6 +789,7 @@ fn flag_args(
 }
 
 struct ResolvedToolCommand {
+    command_index: usize,
     args: Vec<String>,
     stdin_required: Option<bool>,
     stdout_required: Option<bool>,
@@ -1108,6 +1124,7 @@ fn resolve_tool_command(
     }
 
     Ok(ResolvedToolCommand {
+        command_index,
         args,
         stdin_required: body.stdin.as_ref().map(|stream| stream.required),
         stdout_required: body.stdout.as_ref().map(|stream| stream.required),
@@ -1155,10 +1172,17 @@ fn project_tool_error<Ctx: WorkerCtx>(
         SerializableToolError::InvalidResult(value) => {
             crate::preview2::golem::tool::host::ToolError::InvalidResult(value)
         }
-        SerializableToolError::CustomError(value) => match encode_typed_tool_value(&value, ctx) {
-            Ok(value) => crate::preview2::golem::tool::host::ToolError::CustomError(value),
-            Err(error) => return RpcError::ProtocolError(error),
-        },
+        SerializableToolError::CustomError(value) => {
+            match encode_typed_tool_value(&value.payload, ctx) {
+                Ok(payload) => crate::preview2::golem::tool::host::ToolError::CustomError(
+                    crate::preview2::golem::tool::common::CustomToolError {
+                        name: value.name,
+                        payload,
+                    },
+                ),
+                Err(error) => return RpcError::ProtocolError(error),
+            }
+        }
     };
     RpcError::RemoteToolError(error)
 }
@@ -1183,17 +1207,16 @@ fn project_tool_rpc_error<Ctx: WorkerCtx>(
 fn project_tool_response_value<Ctx: WorkerCtx>(
     response: ToolInvokeResponse,
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> Result<(Option<TypedSchemaValue>, Option<Vec<u8>>), RpcError> {
+) -> Result<Option<TypedSchemaValue>, RpcError> {
     response
         .map_err(|error| project_tool_rpc_error(error, ctx))
         .and_then(|response| {
-            let result = response
+            response
                 .result
                 .as_ref()
                 .map(|value| encode_typed_tool_value(value, ctx))
                 .transpose()
-                .map_err(RpcError::ProtocolError)?;
-            Ok((result, response.stdout))
+                .map_err(RpcError::ProtocolError)
         })
 }
 
@@ -1206,12 +1229,11 @@ where
     Ctx: WorkerCtx,
 {
     accessor.with(|mut access| {
-        let (result, stdout) = project_tool_response_value(response, access.get())?;
-        let stdout = stdout
-            .map(|bytes| StreamReader::new(&mut access, bytes))
-            .transpose()
-            .map_err(|error| RpcError::RemoteInternalError(error.to_string()))?;
-        Ok(InvocationResult { result, stdout })
+        let result = project_tool_response_value(response, access.get())?;
+        Ok(InvocationResult {
+            result,
+            stdout: None,
+        })
     })
 }
 
@@ -1511,9 +1533,9 @@ where
             }));
         }
     };
-    let registered_tool = activation_snapshot.registered_tool().clone();
+    let effective_definition = activation_snapshot.effective_definition().clone();
 
-    let command = match resolve_tool_command(&registered_tool.definition, &command_path, &input) {
+    let command = match resolve_tool_command(&effective_definition, &command_path, &input) {
         Ok(command) => command,
         Err(error) => {
             return Ok(rejected_tool_call(
@@ -1551,26 +1573,74 @@ where
         ));
     }
     let declares_stdout = command.stdout_required.is_some();
+    let body = effective_definition.commands.nodes[command.command_index]
+        .body
+        .as_ref()
+        .expect("a resolved command has a body");
+    let output_contract = ToolOutputContract {
+        result: body
+            .result
+            .as_ref()
+            .map(|result| golem_common::schema::SchemaGraph {
+                defs: effective_definition.schema.defs.clone(),
+                root: result.type_.clone(),
+            }),
+        errors: body
+            .errors
+            .iter()
+            .map(|error| NamedToolErrorSchema {
+                name: error.name.clone(),
+                payload: golem_common::schema::SchemaGraph {
+                    defs: effective_definition.schema.defs.clone(),
+                    root: error
+                        .payload
+                        .clone()
+                        .unwrap_or_else(|| SchemaType::tuple(Vec::new())),
+                },
+            })
+            .collect(),
+    };
     let args = command.args;
+
+    if activation_snapshot
+        .middleware_chain()
+        .is_some_and(|chain| !chain.occurrences.is_empty())
+    {
+        return Ok(rejected_tool_call(
+            &rpc,
+            attempt_ordinal,
+            &command_path,
+            Some(input),
+            None,
+            has_stdin,
+            stdout_requested,
+            call_mode,
+            SerializableToolRpcError::RemoteInternalError(
+                "tool middleware invocation is not implemented by the executor".to_string(),
+            ),
+            stdin,
+        ));
+    }
 
     let activation = match activation_snapshot.into_dispatch_target() {
         Ok(ToolDispatchTarget::Component(activation)) => Arc::new(activation),
-        Ok(ToolDispatchTarget::Host { .. }) => {
-            return Ok(rejected_tool_call(
-                &rpc,
-                attempt_ordinal,
-                &command_path,
-                Some(input),
-                None,
-                has_stdin,
-                stdout_requested,
-                call_mode,
-                SerializableToolRpcError::RemoteInternalError(
-                    "host tool dispatch is not implemented by the executor".to_string(),
-                ),
-                stdin,
-            ));
-        }
+        Ok(ToolDispatchTarget::Host {
+            host_tool_id,
+            implementation_version,
+            deployment_revision,
+            provision,
+            binding,
+            filesystem,
+        }) => Arc::new(
+            golem_common::model::entity::EntityActivation::new_host(
+                host_tool_id,
+                implementation_version,
+                deployment_revision,
+                golem_common::model::entity::EntityActivationPolicy::Tool { provision, binding },
+                filesystem,
+            )
+            .map_err(|error| anyhow!("invalid host tool activation: {error}"))?,
+        ),
         Err(error) => {
             let kind = classify_tool_discovery_error(&error);
             return Err(anyhow::Error::new(ClassifiedHostError {
@@ -1641,6 +1711,7 @@ where
         has_stdin,
         has_stdout: stdout_requested,
         declares_stdout,
+        output_contract,
     });
     let calling_principal = Principal::Agent(AgentPrincipal {
         agent_id: rpc.owner.owner_id.agent_id.clone(),
@@ -1694,10 +1765,7 @@ fn decode_tool_terminal(
                         "invalid durable tool result payload: {error}"
                     ))
                 })?;
-            Ok(Ok(SerializableToolInvocationResult {
-                result,
-                stdout: None,
-            }))
+            Ok(Ok(SerializableToolInvocationResult { result }))
         }
         Err(error) => Ok(Err(error)),
     }
@@ -1724,8 +1792,13 @@ fn decode_guest_tool_error<Ctx: WorkerCtx>(
             SerializableToolError::InvalidResult(value)
         }
         crate::preview2::golem::tool::host::ToolError::CustomError(value) => {
-            match decode_typed_tool_value(value, ctx) {
-                Ok(value) => SerializableToolError::CustomError(Box::new(value)),
+            match decode_typed_tool_value(value.payload, ctx) {
+                Ok(payload) => {
+                    SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                        name: value.name,
+                        payload,
+                    }))
+                }
                 Err(_) => {
                     return SerializableToolRpcError::ProtocolError(
                         "tool guest returned an invalid custom-error payload".to_string(),
@@ -1735,6 +1808,95 @@ fn decode_guest_tool_error<Ctx: WorkerCtx>(
         }
     };
     SerializableToolRpcError::RemoteToolError(Box::new(error))
+}
+
+fn validate_declared_tool_error(
+    error: SerializableToolRpcError,
+    contract: &ToolOutputContract,
+) -> SerializableToolRpcError {
+    let SerializableToolRpcError::RemoteToolError(tool_error) = error else {
+        return error;
+    };
+    let SerializableToolError::CustomError(custom) = tool_error.as_ref() else {
+        return SerializableToolRpcError::RemoteToolError(tool_error);
+    };
+    let Some(declared) = contract.errors.iter().find(|case| case.name == custom.name) else {
+        return SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::InvalidResult(format!(
+                "tool returned undeclared custom error '{}'",
+                custom.name
+            )),
+        ));
+    };
+    if !is_equivalent_cross_graph(
+        custom.payload.graph(),
+        &custom.payload.graph().root,
+        &declared.payload,
+        &declared.payload.root,
+    ) || validate_value(
+        custom.payload.graph(),
+        &custom.payload.graph().root,
+        custom.payload.value(),
+    )
+    .is_err()
+    {
+        return SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::InvalidResult(format!(
+                "payload for custom error '{}' does not match its declared schema",
+                custom.name
+            )),
+        ));
+    }
+    SerializableToolRpcError::RemoteToolError(tool_error)
+}
+
+fn validate_declared_tool_result(
+    result: Option<ModelTypedSchemaValue>,
+    contract: &ToolOutputContract,
+) -> Result<Option<ModelTypedSchemaValue>, SerializableToolRpcError> {
+    match (result.as_ref(), contract.result.as_ref()) {
+        (None, None) => Ok(result),
+        (Some(value), Some(declared))
+            if is_equivalent_cross_graph(
+                value.graph(),
+                &value.graph().root,
+                declared,
+                &declared.root,
+            ) && validate_value(value.graph(), &value.graph().root, value.value()).is_ok() =>
+        {
+            Ok(result)
+        }
+        _ => Err(SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::InvalidResult(
+                "tool result does not match the selected command's declared result".to_string(),
+            ),
+        ))),
+    }
+}
+
+fn validate_native_tool_output(
+    result: Result<SerializableToolStructuredResult, SerializableToolRpcError>,
+    contract: &ToolOutputContract,
+) -> Result<SerializableToolStructuredResult, SerializableToolRpcError> {
+    match result {
+        Ok(result) => {
+            let typed = result
+                .result
+                .clone()
+                .map(SerializableToolResultValue::into_typed)
+                .transpose()
+                .map_err(|_| {
+                    SerializableToolRpcError::RemoteToolError(Box::new(
+                        SerializableToolError::InvalidResult(
+                            "native tool returned an invalid result payload".to_string(),
+                        ),
+                    ))
+                })?;
+            validate_declared_tool_result(typed, contract)?;
+            Ok(result)
+        }
+        Err(error) => Err(validate_declared_tool_error(error, contract)),
+    }
 }
 
 async fn encode_tool_operation_terminal(
@@ -1765,6 +1927,7 @@ struct ToolSidecarInvocation {
     stdin: Option<ToolStdinEntry>,
     stdout: Option<ToolStdoutWriterEntry>,
     principal: Principal,
+    output_contract: ToolOutputContract,
 }
 
 struct ToolSidecarBody {
@@ -1818,6 +1981,7 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         stdin,
         stdout,
         principal,
+        output_contract,
     } = invocation;
     let mut store = store.as_context_mut();
     store
@@ -1929,7 +2093,12 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                             WorkerExecutorError::runtime(
                                 "tool guest returned an invalid result payload",
                             )
-                        })?
+                        })?;
+                    let result = match validate_declared_tool_result(result, &output_contract) {
+                        Ok(result) => result,
+                        Err(error) => return encode_tool_operation_terminal(Err(error)).await,
+                    };
+                    let result = result
                         .map(|value| SerializableToolResultValue::from_typed(&value))
                         .transpose()
                         .map_err(|error| {
@@ -1941,9 +2110,10 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         .await
                 }
                 Err(error) => {
-                    encode_tool_operation_terminal(Err(decode_guest_tool_error(
+                    let error = decode_guest_tool_error(error, store.data_mut().durable_ctx_mut());
+                    encode_tool_operation_terminal(Err(validate_declared_tool_error(
                         error,
-                        store.data_mut().durable_ctx_mut(),
+                        &output_contract,
                     )))
                     .await
                 }
@@ -1978,6 +2148,186 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                 .unwrap_or_else(|| WorkerExecutorError::runtime("tool sidecar was interrupted")))
         }
         Err(GuestCallSettlementError::Infrastructure(error)) => Err(error),
+    }
+}
+
+async fn invoke_native_tool<Ctx: WorkerCtx>(
+    worker: Arc<crate::worker::Worker<Ctx>>,
+    owner_component_metadata: Arc<golem_service_base::model::component::Component>,
+    scope: golem_common::model::entity::EntityInvocationScope,
+    registration: &crate::worker::entity_slot::EntitySlotRegistration,
+    invocation: ToolSidecarInvocation,
+    operation: operation::OwnerToolOperation,
+    cancellation: Option<tokio_util::sync::CancellationToken>,
+    runner_abort: tokio_util::sync::CancellationToken,
+) -> (
+    Result<HostResponseEntityInvocation, WorkerExecutorError>,
+    Option<Box<dyn RetainedEntityStore>>,
+) {
+    let source = scope.activation().source();
+    let output_contract = invocation.output_contract.clone();
+    let golem_common::model::entity::EntityActivationSource::Host {
+        host_tool_id,
+        implementation_version,
+    } = source
+    else {
+        return (
+            Err(WorkerExecutorError::runtime(
+                "native runner requires a host activation",
+            )),
+            None,
+        );
+    };
+    let key = NativeToolKey {
+        host_tool_id: host_tool_id.clone(),
+        implementation_version: implementation_version.clone(),
+    };
+    let native_tool_catalog = worker.native_tool_catalog();
+    let Some(native_registration) = native_tool_catalog.get(&key) else {
+        return (
+            Err(WorkerExecutorError::runtime(format!(
+                "native tool implementation '{:?}@{}' is not installed",
+                key.host_tool_id, key.implementation_version
+            ))),
+            None,
+        );
+    };
+    let golem_common::model::entity::EntityActivationPolicy::Tool { binding, .. } =
+        scope.activation().policy()
+    else {
+        return (
+            Err(WorkerExecutorError::runtime(
+                "native tool activation does not contain a tool binding",
+            )),
+            None,
+        );
+    };
+    if let Err(error) = native_registration.validate_dispatch(binding) {
+        return (Err(WorkerExecutorError::runtime(error)), None);
+    }
+    let handler = native_registration.handler;
+    let executable = WorkerCtxExecutable::Native {
+        host_tool_id: host_tool_id.clone(),
+        implementation_version: implementation_version.clone(),
+    };
+    let mut ctx = match await_native_entity_body(
+        &runner_abort,
+        worker.create_entity_context(
+            golem_common::model::entity::OwnerRuntime::Entity(scope.activation().entity()),
+            scope.mode(),
+            scope.activation().filesystem(),
+            executable,
+            scope.activation().clone(),
+            owner_component_metadata,
+        ),
+    )
+    .await
+    {
+        Ok(ctx) => ctx,
+        Err(error) => return (Err(error), None),
+    };
+    if let Err(error) = registration
+        .attach_linear_memory(ctx.durable_ctx().linear_memory_tracker())
+        .and_then(|_| ctx.set_entity_invocation_scope(Some(scope.clone())))
+        .and_then(|_| {
+            ctx.durable_ctx_mut()
+                .set_entity_tool_operation(operation.clone())
+        })
+    {
+        return (Err(error), None);
+    }
+    if let Some(cancellation) = cancellation.clone()
+        && let Err(error) = ctx
+            .durable_ctx_mut()
+            .set_entity_cancellation(cancellation.clone())
+    {
+        return (Err(error), None);
+    }
+    ctx.durable_ctx_mut()
+        .set_invocation_principal(Some(invocation.principal.clone()));
+    let mut retained = RetainedNativeContext::new(
+        ctx,
+        worker.owner_execution(),
+        crate::worker::owner_lane::OwnerInvocationId::Entity(scope.invocation_id().clone()),
+    );
+    let stdout_controller = invocation
+        .stdout
+        .as_ref()
+        .map(ToolStdoutWriterEntry::controller);
+    let stdout_observer = stdout_controller
+        .as_ref()
+        .map(AttachmentController::observer);
+    let native_invocation = NativeToolInvocation {
+        command_path: invocation.command_path,
+        input: invocation.input,
+        principal: invocation.principal,
+        cancellation,
+        stdin: invocation.stdin.map(ToolStdinEntry::into_native),
+        stdout: invocation
+            .stdout
+            .as_ref()
+            .map(ToolStdoutWriterEntry::native_writer),
+    };
+    let result = await_native_entity_body(
+        &runner_abort,
+        handler.invoke(retained.context_mut(), native_invocation),
+    )
+    .await;
+    retained
+        .context_mut()
+        .durable_ctx_mut()
+        .set_invocation_principal(None);
+    let parent_end = retained.prepare_parent_end().await;
+    let result = select_native_body_result(
+        result,
+        parent_end,
+        operation.has_pending_live_admission_rejection().await,
+    );
+    let result = match result {
+        Ok(result) => {
+            if let Some(error) = stdout_limit_error(
+                stdout_observer
+                    .as_ref()
+                    .and_then(AttachmentObserver::terminal_snapshot)
+                    .is_some_and(|terminal| terminal.host_resource_exhausted),
+            ) {
+                encode_tool_operation_terminal(Err(error)).await
+            } else {
+                encode_tool_operation_terminal(validate_native_tool_output(
+                    result,
+                    &output_contract,
+                ))
+                .await
+            }
+        }
+        Err(error) => Err(error),
+    };
+    let retained = Box::new(retained) as Box<dyn RetainedEntityStore>;
+    (result, Some(retained))
+}
+
+fn select_native_body_result<T>(
+    body: Result<T, WorkerExecutorError>,
+    parent_end: Result<(), WorkerExecutorError>,
+    live_admission_rejected: bool,
+) -> Result<T, WorkerExecutorError> {
+    if live_admission_rejected {
+        return Err(crate::durable_host::tool_attachment_live_admission_rejected_error());
+    }
+    match body {
+        Ok(result) => parent_end.map(|()| result),
+        Err(error) => Err(error),
+    }
+}
+
+async fn await_native_entity_body<T>(
+    runner_abort: &tokio_util::sync::CancellationToken,
+    body: impl Future<Output = Result<T, WorkerExecutorError>>,
+) -> Result<T, WorkerExecutorError> {
+    tokio::select! {
+        biased;
+        _ = runner_abort.cancelled() => Err(WorkerExecutorError::runtime("native entity body was aborted")),
+        result = body => result,
     }
 }
 
@@ -3064,6 +3414,7 @@ where
         stdin,
         stdout,
         principal: context.principal.clone(),
+        output_contract: descriptor.output_contract.clone(),
     };
     let scope = durability.scope().clone();
     let replaying_completed =
@@ -3074,13 +3425,9 @@ where
     let operation_for_finalize = operation.clone();
     let terminal_for_completed_failure = terminal.clone();
     let operation_for_completed_failure = operation.clone();
-    let invoke = ToolSidecarBody {
-        invocation: sidecar,
-        operation: operation_for_body,
-        cancellation: execution
-            .filter(|execution| execution.cancellable)
-            .map(|execution| execution.cancel.clone()),
-    };
+    let cancellation = execution
+        .filter(|execution| execution.cancellable)
+        .map(|execution| execution.cancel.clone());
     let finalize = move |result: Result<HostResponseEntityInvocation, WorkerExecutorError>| {
         let operation = operation_for_finalize;
         async move {
@@ -3143,24 +3490,57 @@ where
             result
         }
     };
-    let body = match filesystem {
-        golem_common::model::entity::FilesystemCapability::Incapable => active_agent
-            .start_entity_invocation(
-                parent,
+    let body = match scope.activation().source() {
+        golem_common::model::entity::EntityActivationSource::Component { .. } => {
+            let invoke = ToolSidecarBody {
+                invocation: sidecar,
+                operation: operation_for_body,
+                cancellation,
+            };
+            match filesystem {
+                golem_common::model::entity::FilesystemCapability::Incapable => active_agent
+                    .start_entity_invocation(
+                        parent,
+                        scope,
+                        owner_component_metadata,
+                        call_mode,
+                        move |instance, store| invoke.invoke(instance, store),
+                        finalize,
+                    ),
+                golem_common::model::entity::FilesystemCapability::Capable => active_agent
+                    .start_pre_acquired_entity_invocation(
+                        scope,
+                        owner_component_metadata,
+                        call_mode,
+                        invoke,
+                        finalize,
+                    ),
+            }
+        }
+        golem_common::model::entity::EntityActivationSource::Host { .. } => {
+            let worker = active_agent.primary();
+            let parent_for_lane = (filesystem
+                == golem_common::model::entity::FilesystemCapability::Incapable)
+                .then_some(parent);
+            active_agent.start_native_entity_invocation(
+                parent_for_lane,
                 scope,
-                owner_component_metadata,
                 call_mode,
-                move |instance, store| invoke.invoke(instance, store),
+                move |scope, registration, runner_abort| {
+                    Box::pin(invoke_native_tool(
+                        worker,
+                        owner_component_metadata,
+                        scope,
+                        registration,
+                        sidecar,
+                        operation_for_body,
+                        cancellation,
+                        runner_abort,
+                    ))
+                },
                 finalize,
-            ),
-        golem_common::model::entity::FilesystemCapability::Capable => active_agent
-            .start_pre_acquired_entity_invocation(
-                scope,
-                owner_component_metadata,
-                call_mode,
-                invoke,
-                finalize,
-            ),
+            )
+        }
     };
     let body = match body {
         Ok(body) => body,
@@ -3433,10 +3813,61 @@ where
             ctx.owner_execution.lane(),
         )
     });
-    deferred
-        .wait_and_register_cohort(parent, cohort, starts, &operations, &lane)
+    release_capable_tool_cohort_owned(&deferred, &operations, &lane, parent, cohort, starts)
         .await
         .map_err(Into::into)
+}
+
+pub(crate) async fn release_capable_tool_cohort_owned(
+    deferred: &operation::DeferredAdmissionTable,
+    operations: &operation::OwnerToolOperations,
+    lane: &crate::worker::owner_lane::OwnerLane,
+    parent: &crate::worker::owner_lane::OwnerInvocationId,
+    cohort: operation::DeferredAdmissionCohort,
+    starts: &[golem_common::model::oplog::OplogIndex],
+) -> Result<Option<crate::worker::owner_lane::OwnerLaneWait>, WorkerExecutorError> {
+    if starts.is_empty() {
+        return Ok(None);
+    }
+    deferred
+        .wait_and_register_cohort(parent, cohort, starts, operations, lane)
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+}
+
+pub(crate) async fn prepare_tool_parent_end_owned(
+    execution: &crate::worker::instance::OwnerExecution,
+    parent: crate::worker::owner_lane::OwnerInvocationId,
+) -> Result<(), WorkerExecutorError> {
+    let deferred = execution.deferred_tool_admission();
+    let Some(starts) = deferred.close_parent_and_snapshot(&parent) else {
+        return Ok(());
+    };
+    release_capable_tool_cohort_owned(
+        &deferred,
+        &execution.tool_operations(),
+        &execution.lane(),
+        &parent,
+        operation::DeferredAdmissionCohort::ParentEnd,
+        &starts,
+    )
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn settle_tool_children_owned(
+    execution: &crate::worker::instance::OwnerExecution,
+    parent: crate::worker::owner_lane::OwnerInvocationId,
+) -> Result<(), WorkerExecutorError> {
+    let operations = execution.tool_operations();
+    let deferred = execution.deferred_tool_admission();
+    operations.wait_parent_settled(&parent).await;
+    if !deferred.clear_closed_parent(&parent) {
+        return Err(WorkerExecutorError::runtime(
+            "tool parent settled with deferred admissions remaining",
+        ));
+    }
+    Ok(())
 }
 
 async fn get_tool_invoke_results<U, Ctx>(
@@ -3538,27 +3969,11 @@ pub(crate) async fn prepare_tool_parent_end<Ctx: WorkerCtx>(
     store
         .as_context_mut()
         .run_concurrent(async move |accessor| -> wasmtime::Result<()> {
-            let starts = accessor.with(|mut access| {
-                access
-                    .data_mut()
-                    .durable_ctx()
-                    .owner_execution
-                    .deferred_tool_admission()
-                    .close_parent_and_snapshot(&parent)
-            });
-            let Some(starts) = starts else {
-                return Ok(());
-            };
-            release_capable_tool_cohort(
-                accessor,
-                |ctx: &mut Ctx| ctx.durable_ctx_mut(),
-                &parent,
-                operation::DeferredAdmissionCohort::ParentEnd,
-                &starts,
-            )
-            .await
-            .map(|_| ())
-            .map_err(|error| wasmtime::Error::msg(error.to_string()))
+            let execution =
+                accessor.with(|mut access| access.data_mut().durable_ctx().owner_execution.clone());
+            prepare_tool_parent_end_owned(&execution, parent)
+                .await
+                .map_err(|error| wasmtime::Error::msg(error.to_string()))
         })
         .await
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
@@ -3569,23 +3984,13 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
     parent: crate::worker::owner_lane::OwnerInvocationId,
 ) -> Result<(), WorkerExecutorError> {
-    let (operations, deferred) = {
-        let owner_execution = &store.data().durable_ctx().owner_execution;
-        (
-            owner_execution.tool_operations(),
-            owner_execution.deferred_tool_admission(),
-        )
-    };
+    let execution = store.data().durable_ctx().owner_execution.clone();
     store
         .as_context_mut()
         .run_concurrent(async move |_accessor| -> wasmtime::Result<()> {
-            operations.wait_parent_settled(&parent).await;
-            if !deferred.clear_closed_parent(&parent) {
-                return Err(wasmtime::Error::msg(
-                    "tool parent settled with deferred admissions remaining",
-                ));
-            }
-            Ok(())
+            settle_tool_children_owned(&execution, parent)
+                .await
+                .map_err(|error| wasmtime::Error::msg(error.to_string()))
         })
         .await
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
@@ -3861,6 +4266,7 @@ impl TryFrom<&DiscoveredTool> for WitRegisteredTool {
         })?;
 
         Ok(Self {
+            lookup_name: value.lookup_name.clone(),
             definition,
             implemented_by: value.implemented_by.into(),
         })
@@ -3887,7 +4293,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
         let environment_id = self.state.owned_agent_id.environment_id;
         let component_id = self.state.owned_agent_id.agent_id.component_id;
-        let component_revision = self.state.component_metadata.revision;
+        let component_revision = self.owner_component_metadata().revision;
 
         let mut handle = DurableCallSession::<GolemToolGetAllTools, NotCancellable>::start(
             self,
@@ -3957,7 +4363,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let valid_tool_name = ToolName::try_from(tool_name.as_str()).ok();
         let environment_id = self.state.owned_agent_id.environment_id;
         let component_id = self.state.owned_agent_id.agent_id.component_id;
-        let component_revision = self.state.component_metadata.revision;
+        let component_revision = self.owner_component_metadata().revision;
 
         let mut handle = DurableCallSession::<GolemToolGetTool, NotCancellable>::start(
             self,
@@ -4500,9 +4906,11 @@ mod tests {
     use super::{
         ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolStdinEntry,
         ToolStdinStreamConsumer, ToolStdoutWriterEntry, UnderlyingToolStdinStreamConsumer,
-        WitRegisteredTool, caller_tool_owner, classify_tool_discovery_error,
-        cleanup_tool_endpoints, recorded_tool_body_is_skipped, resolve_tool_command,
-        stdout_limit_error, terminal_tool_discovery_error, validate_stream_attachments,
+        WitRegisteredTool, await_native_entity_body, caller_tool_owner,
+        classify_tool_discovery_error, cleanup_tool_endpoints, recorded_tool_body_is_skipped,
+        resolve_tool_command, select_native_body_result, stdout_limit_error,
+        terminal_tool_discovery_error, validate_declared_tool_error, validate_declared_tool_result,
+        validate_native_tool_output, validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -4516,12 +4924,13 @@ mod tests {
     use golem_common::model::card::owner::ToolOwnerPattern;
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::deployment::DeploymentRevision;
-    use golem_common::model::entity::EntityCallMode;
+    use golem_common::model::entity::{EntityCallMode, NamedToolErrorSchema, ToolOutputContract};
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::oplog::HostResponseEntityInvocation;
     use golem_common::model::oplog::payload::types::{
-        SerializableEntityBodyExecution, SerializableToolError, SerializableToolOperationTerminal,
-        SerializableToolRpcError,
+        SerializableCustomToolError, SerializableEntityBodyExecution, SerializableToolError,
+        SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
+        SerializableToolStructuredResult,
     };
     use golem_common::model::tool::{RegisteredTool, ToolName, ToolProvisionConfig, ToolSource};
     use golem_common::schema::tool::{
@@ -4534,8 +4943,11 @@ mod tests {
     };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Poll};
     use test_r::test;
+    use test_r::timeout;
     use tokio::sync::mpsc;
     use wasmtime::component::{
         Component, Destination, Linker, StreamProducer, StreamReader, StreamResult,
@@ -4544,6 +4956,84 @@ mod tests {
 
     struct OneBufferProducer {
         buffer: Option<bytes::Bytes>,
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn pending_native_entity_setup_is_cancelled_by_runner_abort() {
+        let runner_abort = tokio_util::sync::CancellationToken::new();
+        let setup_polled = Arc::new(tokio::sync::Notify::new());
+        let setup_polled_by_future = setup_polled.clone();
+        let abort = runner_abort.clone();
+        let cancel = tokio::spawn(async move {
+            setup_polled.notified().await;
+            abort.cancel();
+        });
+        let setup = std::future::poll_fn(move |_| {
+            setup_polled_by_future.notify_one();
+            Poll::<Result<(), WorkerExecutorError>>::Pending
+        });
+
+        let error = await_native_entity_body(&runner_abort, setup)
+            .await
+            .unwrap_err();
+        cancel.await.unwrap();
+
+        assert!(format!("{error}").contains("native entity body was aborted"));
+    }
+
+    #[test]
+    async fn pre_cancelled_runner_abort_does_not_poll_native_handler() {
+        let runner_abort = tokio_util::sync::CancellationToken::new();
+        runner_abort.cancel();
+        let handler_polls = Arc::new(AtomicUsize::new(0));
+        let handler_polls_by_future = handler_polls.clone();
+        let handler = std::future::poll_fn(move |_| {
+            handler_polls_by_future.fetch_add(1, Ordering::SeqCst);
+            Poll::Ready(Ok::<_, WorkerExecutorError>(()))
+        });
+
+        let error = await_native_entity_body(&runner_abort, handler)
+            .await
+            .unwrap_err();
+
+        assert!(format!("{error}").contains("native entity body was aborted"));
+        assert_eq!(handler_polls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn native_post_body_admission_rejection_overrides_a_caught_handler_error() {
+        let result =
+            select_native_body_result(Ok("handler returned success"), Ok(()), true).unwrap_err();
+
+        assert!(crate::durable_host::is_tool_attachment_live_admission_rejection(&result));
+    }
+
+    #[test]
+    fn native_body_failure_precedes_parent_cleanup_failure() {
+        let result = select_native_body_result::<()>(
+            Err(WorkerExecutorError::runtime("body failed")),
+            Err(WorkerExecutorError::runtime("cleanup failed")),
+            false,
+        )
+        .unwrap_err();
+
+        assert!(format!("{result}").contains("body failed"));
+    }
+
+    #[test]
+    fn native_parent_cleanup_failure_replaces_a_successful_declared_result() {
+        let declared_error = SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::InvalidResult("declared failure".to_string()),
+        ));
+        let result = select_native_body_result(
+            Ok(Err::<SerializableToolStructuredResult, _>(declared_error)),
+            Err(WorkerExecutorError::runtime("cleanup failed")),
+            false,
+        )
+        .unwrap_err();
+
+        assert!(format!("{result}").contains("cleanup failed"));
     }
 
     impl<D> StreamProducer<D> for OneBufferProducer {
@@ -5240,6 +5730,7 @@ mod tests {
         let expected_definition = registered.definition.clone();
 
         let discovered = DiscoveredTool::from(registered);
+        assert_eq!(discovered.lookup_name, "search");
         assert_eq!(discovered.definition, expected_definition);
         assert_eq!(discovered.implemented_by, component_id);
 
@@ -5249,6 +5740,7 @@ mod tests {
             expected_definition
         );
         assert_eq!(ComponentId::from(wit.implemented_by), component_id);
+        assert_eq!(wit.lookup_name, "search");
     }
 
     #[test]
@@ -5330,8 +5822,135 @@ mod tests {
     }
 
     #[test]
+    fn declared_tool_error_validation_uses_name_before_payload() {
+        let string = SchemaGraph::anonymous(SchemaType::string());
+        let contract = ToolOutputContract {
+            result: None,
+            errors: vec![
+                NamedToolErrorSchema {
+                    name: "first".to_string(),
+                    payload: string.clone(),
+                },
+                NamedToolErrorSchema {
+                    name: "second".to_string(),
+                    payload: string.clone(),
+                },
+            ],
+        };
+        let error = SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                name: "second".to_string(),
+                payload: TypedSchemaValue::new(string, SchemaValue::String("details".to_string())),
+            })),
+        ));
+
+        assert_eq!(
+            validate_declared_tool_error(error.clone(), &contract),
+            error
+        );
+    }
+
+    #[test]
+    fn declared_payloadless_tool_error_requires_unit_payload() {
+        let unit = SchemaGraph::anonymous(SchemaType::tuple(Vec::new()));
+        let contract = ToolOutputContract {
+            result: None,
+            errors: vec![NamedToolErrorSchema {
+                name: "not-found".to_string(),
+                payload: unit.clone(),
+            }],
+        };
+        let error = SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                name: "not-found".to_string(),
+                payload: TypedSchemaValue::new(
+                    unit,
+                    SchemaValue::Tuple {
+                        elements: Vec::new(),
+                    },
+                ),
+            })),
+        ));
+
+        assert_eq!(
+            validate_declared_tool_error(error.clone(), &contract),
+            error
+        );
+    }
+
+    #[test]
+    fn ordinary_payloadless_tool_result_remains_valid() {
+        let contract = ToolOutputContract {
+            result: None,
+            errors: Vec::new(),
+        };
+
+        assert_eq!(validate_declared_tool_result(None, &contract), Ok(None));
+    }
+
+    #[test]
+    fn native_output_validation_accepts_a_typed_declared_result() {
+        let schema = SchemaGraph::anonymous(SchemaType::u64());
+        let value = TypedSchemaValue::new(schema.clone(), SchemaValue::U64(42));
+        let result = SerializableToolStructuredResult {
+            result: Some(SerializableToolResultValue::from_typed(&value).unwrap()),
+        };
+        let contract = ToolOutputContract {
+            result: Some(schema),
+            errors: Vec::new(),
+        };
+
+        assert_eq!(
+            validate_native_tool_output(Ok(result.clone()), &contract),
+            Ok(result)
+        );
+    }
+
+    #[test]
+    fn native_output_validation_rejects_undeclared_error_name_and_wrong_result_schema() {
+        let string = SchemaGraph::anonymous(SchemaType::string());
+        let contract = ToolOutputContract {
+            result: Some(string.clone()),
+            errors: vec![NamedToolErrorSchema {
+                name: "declared".to_string(),
+                payload: string,
+            }],
+        };
+        let undeclared = SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                name: "other".to_string(),
+                payload: TypedSchemaValue::new(
+                    SchemaGraph::anonymous(SchemaType::string()),
+                    SchemaValue::String("details".to_string()),
+                ),
+            })),
+        ));
+        let wrong_result = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::bool()),
+            SchemaValue::Bool(true),
+        );
+
+        for result in [
+            validate_native_tool_output(Err(undeclared), &contract),
+            validate_native_tool_output(
+                Ok(SerializableToolStructuredResult {
+                    result: Some(SerializableToolResultValue::from_typed(&wrong_result).unwrap()),
+                }),
+                &contract,
+            ),
+        ] {
+            assert!(matches!(
+                result,
+                Err(SerializableToolRpcError::RemoteToolError(error))
+                    if matches!(*error, SerializableToolError::InvalidResult(_))
+            ));
+        }
+    }
+
+    #[test]
     fn stream_attachment_validation_uses_actual_attachments_and_call_mode() {
         let command = ResolvedToolCommand {
+            command_index: 0,
             args: Vec::new(),
             stdin_required: None,
             stdout_required: None,

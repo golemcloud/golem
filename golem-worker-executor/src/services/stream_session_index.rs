@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::durable_session::SessionControlMetadata;
+use crate::durable_host::durable_stream::SessionControlMetadata;
 use crate::durable_host::durable_stream::metadata::{
     ProducerMetadataKey, ProducerMetadataRow, project_producer_metadata,
 };
+use crate::services::activity::spawn_with_activity;
 use crate::services::oplog::{OplogService, OplogServiceOps};
 use crate::services::worker::DurableStreamRecoveryMetadata;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
-use golem_common::base_model::durable_stream::{
-    StreamId, StreamSessionKeyV1, StreamSessionRecordV1,
-};
+use golem_common::base_model::durable_stream::{StreamId, StreamSessionKey, StreamSessionRecord};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{
@@ -44,7 +43,7 @@ fn recovery_catalogue_field(page: u64) -> String {
 }
 
 fn stream_resume_index_field(
-    key: &StreamSessionKeyV1,
+    key: &StreamSessionKey,
     attempt: golem_common::model::durable_stream::AttemptId,
 ) -> Result<String, String> {
     Ok(format!(
@@ -53,12 +52,12 @@ fn stream_resume_index_field(
     ))
 }
 
-fn stream_control_index_field(key: &StreamSessionKeyV1) -> Result<String, String> {
+fn stream_control_index_field(key: &StreamSessionKey) -> Result<String, String> {
     Ok(format!("control:{}", hex::encode(serialize(key)?)))
 }
 
 fn consumer_journal_index_field(
-    key: &StreamSessionKeyV1,
+    key: &StreamSessionKey,
     stream: StreamId,
     page: u64,
 ) -> Result<String, String> {
@@ -156,7 +155,7 @@ impl StreamSessionIndexService {
     ) -> Result<(OplogIndex, Vec<Option<ProducerMetadataRow>>), String> {
         let this = self.clone();
         let id = id.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
             let horizon = oplog.get_last_index(&id, mode).await;
             this.catch_up_inner(&id, mode, horizon).await?;
@@ -167,7 +166,7 @@ impl StreamSessionIndexService {
             let values = this
                 .kv
                 .with_entity("stream_session_index", "lookup_producer", "metadata")
-                .get_many_raw(Self::namespace(&id), fields)
+                .get_many_raw(Self::namespace(&id), fields.into())
                 .await?;
             let covered = values
                 .first()
@@ -193,13 +192,13 @@ impl StreamSessionIndexService {
         &self,
         id: &OwnedAgentId,
         mode: AgentMode,
-        key: &StreamSessionKeyV1,
+        key: &StreamSessionKey,
         attempt: golem_common::model::durable_stream::AttemptId,
     ) -> Result<Option<OplogIndex>, String> {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
             let horizon = oplog.get_last_index(&id, mode).await;
             this.catch_up_inner(&id, mode, horizon).await?;
@@ -224,7 +223,7 @@ impl StreamSessionIndexService {
     ) -> Result<DurableStreamRecoveryMetadata, String> {
         let this = self.clone();
         let id = id.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
             let horizon = oplog.get_last_index(&id, mode).await;
             this.catch_up_inner(&id, mode, horizon).await?;
@@ -236,7 +235,7 @@ impl StreamSessionIndexService {
                 let fields = this
                     .kv
                     .with_entity("stream_session_index", "read_recovery", "page")
-                    .get_many_raw(namespace.clone(), names)
+                    .get_many_raw(namespace.clone(), names.into())
                     .await?;
                 let metadata: Metadata = fields[0]
                     .as_ref()
@@ -255,7 +254,7 @@ impl StreamSessionIndexService {
                 }
                 let mut keys = Vec::new();
                 for page in 0..needed_pages {
-                    let entries: Vec<StreamSessionKeyV1> = deserialize(
+                    let entries: Vec<StreamSessionKey> = deserialize(
                         fields[page as usize + 2]
                             .as_ref()
                             .ok_or("recovery catalogue page is missing")?,
@@ -285,7 +284,7 @@ impl StreamSessionIndexService {
                 let values = this
                     .kv
                     .with_entity("stream_session_index", "read_recovery", "session")
-                    .get_many_raw(namespace.clone(), fields)
+                    .get_many_raw(namespace.clone(), fields.into())
                     .await?;
                 let coverage: Metadata = deserialize(
                     values[0]
@@ -298,7 +297,7 @@ impl StreamSessionIndexService {
                             .as_ref()
                             .ok_or("recovery catalogue session is missing")?,
                     )?;
-                    control.covered_through = coverage.covered_through;
+                    control.advance_coverage(coverage.covered_through);
                     sessions.push((key.clone(), control));
                 }
             }
@@ -315,9 +314,9 @@ impl StreamSessionIndexService {
     async fn recovery_page<'a>(
         &self,
         namespace: &KeyValueStorageNamespace,
-        pages: &'a mut HashMap<u64, Vec<StreamSessionKeyV1>>,
+        pages: &'a mut HashMap<u64, Vec<StreamSessionKey>>,
         page: u64,
-    ) -> Result<&'a mut Vec<StreamSessionKeyV1>, String> {
+    ) -> Result<&'a mut Vec<StreamSessionKey>, String> {
         if let std::collections::hash_map::Entry::Vacant(e) = pages.entry(page) {
             let keys = self
                 .kv
@@ -334,17 +333,14 @@ impl StreamSessionIndexService {
         &self,
         id: &OwnedAgentId,
         namespace: &KeyValueStorageNamespace,
-        controls: &mut HashMap<StreamSessionKeyV1, SessionControlMetadata>,
+        controls: &mut HashMap<StreamSessionKey, SessionControlMetadata>,
         metadata: &mut Metadata,
-    ) -> Result<HashMap<u64, Vec<StreamSessionKeyV1>>, String> {
+    ) -> Result<HashMap<u64, Vec<StreamSessionKey>>, String> {
         let mut pages = HashMap::new();
         let keys: Vec<_> = controls.keys().cloned().collect();
         for key in keys {
             let control = controls.get(&key).unwrap();
-            match (
-                control.recovery_slot,
-                control.needs_topology_recovery(id, &key),
-            ) {
+            match (control.recovery_slot(), control.needs_recovery(id, &key)) {
                 (None, true) => {
                     let slot = metadata.recovery_session_count;
                     let page = self
@@ -354,7 +350,10 @@ impl StreamSessionIndexService {
                         return Err("recovery catalogue page does not match its coverage".into());
                     }
                     page.push(key.clone());
-                    controls.get_mut(&key).unwrap().recovery_slot = Some(slot);
+                    controls
+                        .get_mut(&key)
+                        .unwrap()
+                        .assign_recovery_slot(Some(slot));
                     metadata.recovery_session_count =
                         slot.checked_add(1).ok_or("recovery catalogue overflow")?;
                 }
@@ -394,11 +393,14 @@ impl StreamSessionIndexService {
                                 .ok_or("recovery catalogue refers to a missing session")?;
                             controls.insert(moved.clone(), control);
                         }
-                        controls.get_mut(&moved).unwrap().recovery_slot = Some(slot);
+                        controls
+                            .get_mut(&moved)
+                            .unwrap()
+                            .assign_recovery_slot(Some(slot));
                     } else if moved != key {
                         return Err("recovery catalogue tail identifies another session".into());
                     }
-                    controls.get_mut(&key).unwrap().recovery_slot = None;
+                    controls.get_mut(&key).unwrap().assign_recovery_slot(None);
                     metadata.recovery_session_count = last;
                 }
                 _ => {}
@@ -410,7 +412,7 @@ impl StreamSessionIndexService {
     pub async fn read_consumer_page(
         &self,
         id: &OwnedAgentId,
-        key: &StreamSessionKeyV1,
+        key: &StreamSessionKey,
         stream: StreamId,
         page: u64,
     ) -> Result<Vec<OplogIndex>, String> {
@@ -428,12 +430,12 @@ impl StreamSessionIndexService {
         &self,
         id: &OwnedAgentId,
         mode: AgentMode,
-        key: &StreamSessionKeyV1,
+        key: &StreamSessionKey,
     ) -> Result<SessionControlMetadata, String> {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             let oplog = this
                 .oplog
                 .upgrade()
@@ -451,7 +453,8 @@ impl StreamSessionIndexService {
                         METADATA_FIELD.into(),
                         stream_control_index_field(&key)?,
                         "consumer-deleting".into(),
-                    ],
+                    ]
+                    .into(),
                 )
                 .await?;
             let coverage = fields
@@ -469,12 +472,12 @@ impl StreamSessionIndexService {
                 .map(|bytes| deserialize::<SessionControlMetadata>(bytes))
                 .transpose()?
                 .unwrap_or_default();
-            snapshot.covered_through = coverage;
-            snapshot.consumer_deleting = fields
+            let consumer_deleting = fields
                 .get(2)
                 .and_then(Option::as_ref)
                 .map(|bytes| deserialize(bytes))
                 .transpose()?;
+            snapshot.restore_index_state(coverage, consumer_deleting);
             Ok(snapshot)
         })
         .await
@@ -497,7 +500,7 @@ impl StreamSessionIndexService {
     ) -> Result<(), String> {
         let this = self.clone();
         let id = id.clone();
-        tokio::spawn(async move { this.catch_up_inner(&id, mode, horizon).await })
+        spawn_with_activity(async move { this.catch_up_inner(&id, mode, horizon).await })
             .await
             .map_err(|err| format!("stream session index task failed: {err}"))?
     }
@@ -512,7 +515,7 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             this.lookup_inner(&id, mode, &key, SessionLookup::Exact(horizon))
                 .await
         })
@@ -532,7 +535,7 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             this.lookup_inner(&id, mode, &key, SessionLookup::Offsets(horizon))
                 .await
         })
@@ -549,7 +552,7 @@ impl StreamSessionIndexService {
         let this = self.clone();
         let id = id.clone();
         let key = key.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             this.lookup_inner(&id, mode, &key, SessionLookup::Latest)
                 .await
         })
@@ -560,7 +563,7 @@ impl StreamSessionIndexService {
     pub async fn clear(&self, id: &OwnedAgentId) -> Result<(), String> {
         let this = self.clone();
         let id = id.clone();
-        tokio::spawn(async move {
+        spawn_with_activity(async move {
             let lock = this.index_lock(&id);
             let _guard = lock.inner.lock().await;
             this.clear_inner(&id).await
@@ -603,7 +606,7 @@ impl StreamSessionIndexService {
         if !keys.is_empty() {
             self.kv
                 .with("stream_session_index", "clear")
-                .del_many(namespace, keys)
+                .del_many(namespace, keys.into())
                 .await?;
         }
         Ok(())
@@ -655,7 +658,7 @@ impl StreamSessionIndexService {
                 let record = oplog.download_payload(id, mode, record.clone()).await?;
                 if !matches!(
                     record.coordinate,
-                    golem_common::model::durable_stream::StreamRegistrationCoordinateV1::Nested { .. }
+                    golem_common::model::durable_stream::StreamRegistrationCoordinate::Nested { .. }
                 ) || *last >= horizon
                 {
                     break;
@@ -690,7 +693,7 @@ impl StreamSessionIndexService {
                     Vec::new()
                 };
                 let mut updates = HashMap::<IdempotencyKey, DurableStreamSessionStatus>::new();
-                let mut controls = HashMap::<StreamSessionKeyV1, SessionControlMetadata>::new();
+                let mut controls = HashMap::<StreamSessionKey, SessionControlMetadata>::new();
                 let mut journal_pages = HashMap::<String, Vec<OplogIndex>>::new();
                 let mut resume_offsets = HashMap::<String, OplogIndex>::new();
                 let mut consumer_deleting = None;
@@ -743,10 +746,10 @@ impl StreamSessionIndexService {
                             &decoded
                         }
                     };
-                    if let StreamSessionRecordV1::ConsumerDeleting(record) = record {
+                    if let StreamSessionRecord::ConsumerDeleting(record) = record {
                         consumer_deleting = Some(record.clone());
                     }
-                    if let StreamSessionRecordV1::ResumeAttempt(record) = record {
+                    if let StreamSessionRecord::ResumeAttempt(record) = record {
                         let field = stream_resume_index_field(
                             &record.attempt.session_key,
                             record.attempt.attempt_id,
@@ -773,23 +776,19 @@ impl StreamSessionIndexService {
                         }
                         let control = controls.get_mut(key).unwrap();
                         let stream = match record {
-                            StreamSessionRecordV1::ConsumerItemValue(record) => {
+                            StreamSessionRecord::ConsumerItemValue(record) => {
                                 Some(record.stream_id)
                             }
-                            StreamSessionRecordV1::ConsumerTerminal(record) => {
+                            StreamSessionRecord::ConsumerTerminal(record) => {
                                 Some(record.stream_id)
                             }
-                            StreamSessionRecordV1::SourceUnavailable(record) => {
+                            StreamSessionRecord::SourceUnavailable(record) => {
                                 Some(record.key.stream_id)
                             }
                             _ => None,
                         };
                         if let Some(stream) = stream {
-                            let count = control
-                                .consumer_record_counts
-                                .get(&stream)
-                                .copied()
-                                .unwrap_or_default();
+                            let count = control.consumer_record_count(stream);
                             let field = consumer_journal_index_field(
                                 key,
                                 stream,
@@ -830,7 +829,7 @@ impl StreamSessionIndexService {
                         updates.insert(key.clone(), old.transpose()?.unwrap_or_default());
                     }
                     let status = updates.get_mut(&key).unwrap();
-                    if let StreamSessionRecordV1::Attached(attached) = record
+                    if let StreamSessionRecord::Attached(attached) = record
                         && status.lifecycle_error.is_none()
                         && status.validated_initial_pending_invocation.is_none()
                     {
@@ -869,7 +868,7 @@ impl StreamSessionIndexService {
                         }
                     }
                     if status.first_prepared.is_some()
-                        || matches!(record, StreamSessionRecordV1::Prepared(_))
+                        || matches!(record, StreamSessionRecord::Prepared(_))
                     {
                         status.apply_record(*idx, record);
                     }
@@ -961,7 +960,7 @@ impl StreamSessionIndexService {
             .with_entity("stream_session_index", "lookup", "session")
             .get_many_raw(
                 Self::namespace(id),
-                vec![METADATA_FIELD.into(), Self::field(key)],
+                vec![METADATA_FIELD.into(), Self::field(key)].into(),
             )
             .await?;
         let Some(metadata) = values.first().and_then(Option::as_ref) else {
@@ -1007,16 +1006,21 @@ impl StreamSessionIndexService {
     }
 }
 
-fn record_key(record: &StreamSessionRecordV1) -> Option<&IdempotencyKey> {
+fn record_key(record: &StreamSessionRecord) -> Option<&IdempotencyKey> {
     match record {
-        StreamSessionRecordV1::Prepared(value) => Some(&value.attempt.session_key.idempotency_key),
-        StreamSessionRecordV1::Attached(value) => Some(&value.session_key.idempotency_key),
-        StreamSessionRecordV1::ResumeAttempt(value) => {
+        StreamSessionRecord::Prepared(value) => Some(&value.attempt.session_key.idempotency_key),
+        StreamSessionRecord::Attached(value) => Some(&value.session_key.idempotency_key),
+        StreamSessionRecord::ResumeAttempt(value) => {
             Some(&value.attempt.session_key.idempotency_key)
         }
-        StreamSessionRecordV1::Detached(value) => Some(&value.session_key.idempotency_key),
-        StreamSessionRecordV1::InvocationResult(value) => Some(&value.session_key.idempotency_key),
-        StreamSessionRecordV1::Finished(value) => Some(&value.session_key.idempotency_key),
+        StreamSessionRecord::Detached(value) => Some(&value.session_key.idempotency_key),
+        StreamSessionRecord::InvocationResult(value) => Some(&value.session_key.idempotency_key),
+        StreamSessionRecord::Finished(value) => Some(&value.session_key.idempotency_key),
+        StreamSessionRecord::ConsumerCancelApplied(value) => {
+            Some(&value.intent.session_key.idempotency_key)
+        }
+        StreamSessionRecord::Tombstoned(value) => Some(&value.session_key.idempotency_key),
+        StreamSessionRecord::CancelRequested(value) => Some(&value.session_key.idempotency_key),
         _ => None,
     }
 }

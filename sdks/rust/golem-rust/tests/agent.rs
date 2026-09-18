@@ -36,6 +36,7 @@ mod tests {
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent};
     use golem_rust_macro::{description, endpoint, prompt, read_only};
     use std::fmt::Debug;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
 
     fn schema_value<T: IntoSchema>(value: T) -> SchemaValue {
@@ -314,8 +315,18 @@ mod tests {
             input
         }
 
-        async fn load_snapshot(&mut self, _bytes: Vec<u8>) -> Result<(), String> {
-            Ok(())
+        async fn load_snapshot(
+            _bytes: Vec<u8>,
+            _context: golem_rust::agentic::SnapshotRestoreContext,
+        ) -> Result<Self, String> {
+            Ok(Self {
+                _id: UserId {
+                    id: "restored".to_string(),
+                },
+                _llm_config: Config {
+                    model: "restored".to_string(),
+                },
+            })
         }
 
         async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
@@ -1365,6 +1376,7 @@ mod tests {
         fn echo(&self, message: String) -> String;
     }
 
+    #[derive(serde::Serialize, serde::Deserialize)]
     struct AgentSnapshottingEnabledImpl {
         _id: String,
     }
@@ -1385,6 +1397,7 @@ mod tests {
         fn echo(&self, message: String) -> String;
     }
 
+    #[derive(serde::Serialize, serde::Deserialize)]
     struct AgentSnapshottingPeriodicImpl {
         _id: String,
     }
@@ -1405,6 +1418,7 @@ mod tests {
         fn echo(&self, message: String) -> String;
     }
 
+    #[derive(serde::Serialize, serde::Deserialize)]
     struct AgentSnapshottingEveryNImpl {
         _id: String,
     }
@@ -1476,9 +1490,13 @@ mod tests {
 
     // -- Snapshot auto-serialization tests --
 
+    static SERIALIZABLE_AGENT_CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
+    static CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
+    static CUSTOM_SNAPSHOT_AGENT_RESTORATIONS: AtomicUsize = AtomicUsize::new(0);
+
     // Agent with serde derives but no custom snapshot methods:
     // should auto-serialize/deserialize via JSON
-    #[agent_definition]
+    #[agent_definition(snapshotting = "enabled")]
     trait SerializableAgent {
         fn new(name: String) -> Self;
         fn get_name(&self) -> String;
@@ -1492,6 +1510,7 @@ mod tests {
     #[agent_implementation]
     impl SerializableAgent for SerializableAgentImpl {
         fn new(name: String) -> Self {
+            SERIALIZABLE_AGENT_CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
             Self { name }
         }
         fn get_name(&self) -> String {
@@ -1507,6 +1526,7 @@ mod tests {
         fn get_value(&self) -> u32;
     }
 
+    #[derive(Debug)]
     struct NonSerializableAgentImpl {
         value: u32,
     }
@@ -1536,15 +1556,21 @@ mod tests {
     #[agent_implementation]
     impl CustomSnapshotAgent for CustomSnapshotAgentImpl {
         fn new(data: String) -> Self {
+            CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
             Self { data }
         }
         fn get_data(&self) -> String {
             self.data.clone()
         }
 
-        async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-            self.data = String::from_utf8(bytes).map_err(|e| e.to_string())?;
-            Ok(())
+        async fn load_snapshot(
+            bytes: Vec<u8>,
+            _context: golem_rust::agentic::SnapshotRestoreContext,
+        ) -> Result<Self, String> {
+            CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.fetch_add(1, Ordering::SeqCst);
+            Ok(Self {
+                data: String::from_utf8(bytes).map_err(|e| e.to_string())?,
+            })
         }
 
         async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
@@ -1554,7 +1580,6 @@ mod tests {
 
     #[test]
     fn test_serializable_agent_auto_json_snapshot() {
-        use golem_rust::agentic::snapshot_auto::LoadHelper;
         use golem_rust::agentic::snapshot_auto::SaveHelper;
 
         let agent = SerializableAgentImpl {
@@ -1570,22 +1595,71 @@ mod tests {
         let json_value: serde_json::Value = serde_json::from_slice(&snapshot.data).unwrap();
         assert_eq!(json_value["name"], "test-agent");
 
-        // Load: should deserialize from JSON
-        let mut agent2 = SerializableAgentImpl {
-            name: "old".to_string(),
-        };
-        let mut load_helper = LoadHelper(&mut agent2);
-        let load_result = load_helper.snapshot_load(&snapshot.data);
-        assert!(
-            load_result.is_ok(),
-            "Load should succeed for serializable agent"
-        );
+        let agent2 = <SerializableAgentImpl as SerializableAgent>::__golem_auto_load_snapshot(
+            &snapshot.data,
+        )
+        .unwrap();
         assert_eq!(agent2.name, "test-agent");
     }
 
     #[test]
+    #[allow(clippy::await_holding_refcell_ref)]
+    async fn test_auto_restore_factory_does_not_call_constructor_and_can_save() {
+        use golem_rust::agentic::{SnapshotRestoreContext, with_agent_initiator};
+
+        SerializableAgentImpl::__register_agent_type();
+        let agent_type = AgentTypeName("SerializableAgent".to_string());
+        SERIALIZABLE_AGENT_CONSTRUCTIONS.store(0, Ordering::SeqCst);
+
+        let initialized = with_agent_initiator(
+            |initiator| async move {
+                initiator
+                    .initiate(
+                        SchemaValue::Record {
+                            fields: vec![SchemaValue::String("created".to_string())],
+                        },
+                        Principal::Anonymous,
+                    )
+                    .await
+            },
+            &agent_type,
+        )
+        .await
+        .unwrap();
+        assert_eq!(SERIALIZABLE_AGENT_CONSTRUCTIONS.load(Ordering::SeqCst), 1);
+        drop(initialized);
+
+        SERIALIZABLE_AGENT_CONSTRUCTIONS.store(0, Ordering::SeqCst);
+        let context = SnapshotRestoreContext {
+            principal: Principal::Anonymous,
+            agent_type: agent_type.0.clone(),
+            parameters: SchemaValue::Record {
+                fields: vec![SchemaValue::String("created".to_string())],
+            },
+            phantom_id: None,
+        };
+        let restored = with_agent_initiator(
+            |initiator| async move {
+                initiator
+                    .restore(br#"{"name":"restored"}"#.to_vec(), context)
+                    .await
+            },
+            &agent_type,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(SERIALIZABLE_AGENT_CONSTRUCTIONS.load(Ordering::SeqCst), 0);
+        let saved = restored.agent.borrow().save_snapshot_base().await.unwrap();
+        assert_eq!(saved.mime_type, "application/json");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&saved.data).unwrap()["name"],
+            "restored"
+        );
+    }
+
+    #[test]
     fn test_non_serializable_agent_snapshot_returns_error() {
-        use golem_rust::agentic::snapshot_auto::{LoadHelper, SnapshotLoadFallback};
         use golem_rust::agentic::snapshot_auto::{SaveHelper, SnapshotSaveFallback};
 
         let agent = NonSerializableAgentImpl { value: 42 };
@@ -1599,22 +1673,20 @@ mod tests {
         );
         assert!(result.unwrap_err().contains("not implemented"));
 
-        // Load: should return error
-        let mut agent2 = NonSerializableAgentImpl { value: 0 };
-        let mut load_helper = LoadHelper(&mut agent2);
-        let load_result = load_helper.snapshot_load(b"{}");
-        assert!(
-            load_result.is_err(),
-            "Load should fail for non-serializable agent"
-        );
-        assert!(load_result.unwrap_err().contains("not implemented"));
+        let load_result =
+            <NonSerializableAgentImpl as NonSerializableAgent>::__golem_auto_load_snapshot(b"{}");
+        assert_eq!(load_result.unwrap_err(), "snapshotting is disabled");
     }
 
     #[test]
+    #[allow(clippy::await_holding_refcell_ref)]
     async fn test_custom_snapshot_agent_uses_custom_methods() {
-        use golem_rust::agentic::BaseAgent;
+        use golem_rust::agentic::{
+            BaseAgent, SnapshotRestoreContext, get_principal, get_resolved_agent,
+            with_agent_initiator,
+        };
 
-        let mut agent = CustomSnapshotAgentImpl {
+        let agent = CustomSnapshotAgentImpl {
             data: "hello-world".to_string(),
         };
 
@@ -1625,10 +1697,47 @@ mod tests {
         assert_eq!(snapshot.mime_type, "application/octet-stream");
         assert_eq!(snapshot.data, b"hello-world");
 
-        // load_snapshot_base should use the custom method
-        let load_result = agent.load_snapshot_base(b"new-data".to_vec()).await;
-        assert!(load_result.is_ok());
-        assert_eq!(agent.data, "new-data");
+        CustomSnapshotAgentImpl::__register_agent_type();
+        CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.store(0, Ordering::SeqCst);
+        CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.store(0, Ordering::SeqCst);
+        let agent_type = AgentTypeName("CustomSnapshotAgent".to_string());
+        let context = SnapshotRestoreContext {
+            principal: Principal::Anonymous,
+            agent_type: agent_type.0.clone(),
+            parameters: SchemaValue::Record {
+                fields: vec![SchemaValue::String("original".to_string())],
+            },
+            phantom_id: None,
+        };
+
+        let failed_context = context.clone();
+        let failed = with_agent_initiator(
+            |initiator| async move { initiator.restore(vec![0xff], failed_context).await },
+            &agent_type,
+        )
+        .await;
+        assert!(failed.is_err());
+        assert!(get_principal().is_none());
+        assert!(get_resolved_agent().is_none());
+        assert_eq!(
+            CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.load(Ordering::SeqCst),
+            0
+        );
+
+        let restored = with_agent_initiator(
+            |initiator| async move { initiator.restore(b"new-data".to_vec(), context).await },
+            &agent_type,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.load(Ordering::SeqCst),
+            0
+        );
+        assert_eq!(CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.load(Ordering::SeqCst), 2);
+        let saved = restored.agent.borrow().save_snapshot_base().await.unwrap();
+        assert_eq!(saved.mime_type, "application/octet-stream");
+        assert_eq!(saved.data, b"new-data");
     }
 
     #[test]

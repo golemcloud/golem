@@ -1,6 +1,7 @@
 # Login API
 The login endpoints are implementing an OAuth2 flow.
 ## Acquire token with OAuth2 authorization
+
 Path|Method|Protected
 ---|---|---
 `/v1/login/oauth2`|POST|No
@@ -20,8 +21,6 @@ Name|Type|Required|Description
 provider|#/components/schemas/OAuth2Provider|Yes|Currently only `github` is supported.
 access-token|string|Yes|OAuth2 access token
 
-
-
 **Example Response JSON**
 
 ```json copy
@@ -35,6 +34,7 @@ access-token|string|Yes|OAuth2 access token
 ```
 
 ## Initiate OAuth2 Web Flow
+
 Path|Method|Protected
 ---|---|---
 `/v1/login/oauth2/web/authorize`|POST|No
@@ -48,8 +48,6 @@ browser-based frontends.
 - `cli`: The callback stores the token in the session. The client polls the
 poll endpoint with the returned state id to retrieve the token once available.
 Intended for CLI tools and headless environments.
-
-
 
 **Example Request JSON**
 ```json copy
@@ -70,6 +68,7 @@ Intended for CLI tools and headless environments.
 ```
 
 ## OAuth2 Web Flow callback
+
 Path|Method|Protected
 ---|---|---
 `/v1/login/oauth2/web/callback`|GET|No
@@ -84,11 +83,8 @@ Name|Type|Required|Description
 code|string|Yes|The authorization code returned by GitHub
 state|string|Yes|The state parameter for CSRF protection
 
-
-
-
-
 ## Poll for OAuth2 Web Flow token
+
 Path|Method|Protected
 ---|---|---
 `/v1/login/oauth2/web/poll`|GET|No
@@ -101,8 +97,6 @@ A given state might only be exchanged for a token once. Any further attempts to 
 Name|Type|Required|Description
 ---|---|---|---
 state|string|Yes|The state parameter for identifying the session
-
-
 
 **Example Response JSON**
 

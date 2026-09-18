@@ -16,22 +16,41 @@ trait ScalaStreamingTool {
       stdin: ToolInputStream,
       stdout: ToolOutputStream
   ): Future[Long]
+
+  def output(mode: String, stdout: ToolOutputStream): Future[String]
+  def outputUnit(stdout: ToolOutputStream): Future[Unit]
+  def plain(): String
 }
 
 @toolImplementation()
 final class ScalaStreamingToolImpl extends ScalaStreamingTool {
   private implicit val ec: ExecutionContext = ExecutionContext.global
 
+  private def requireWrite(result: Either[?, Unit]): Future[Unit] = result match {
+    case Right(_)    => Future.successful(())
+    case Left(error) => Future.failed(new IllegalStateException(s"stream write failed: $error"))
+  }
+
+  override def outputUnit(stdout: ToolOutputStream): Future[Unit] =
+    stdout.write(Array[Byte](0, 127, -128, -1)).flatMap(requireWrite)
+
+  override def output(mode: String, stdout: ToolOutputStream): Future[String] =
+    outputUnit(stdout).flatMap { _ =>
+      val terminal = mode match {
+        case "finish" => stdout.finish()
+        case "fail"   => stdout.fail(ByteStreamFailure.Failed("partial-output"))
+        case other    => throw new IllegalArgumentException(s"unknown output mode: $other")
+      }
+      terminal.flatMap(requireWrite).map(_ => "done")
+    }
+
+  override def plain(): String = "plain"
+
   override def stream(
       mode: String,
       stdin: ToolInputStream,
       stdout: ToolOutputStream
   ): Future[Long] = {
-    def requireWrite(result: Either[?, Unit]): Future[Unit] = result match {
-      case Right(_)    => Future.successful(())
-      case Left(error) => Future.failed(new IllegalStateException(s"stream write failed: $error"))
-    }
-
     def read(bytesRead: Long): Future[Long] =
       stdin.read().flatMap {
         case Right(Some(bytes)) =>
@@ -57,16 +76,54 @@ object ScalaCleanupEvidence {
   implicit val schema: Schema[ScalaCleanupEvidence] = Schema.derived
 }
 
+final case class ScalaOutputEvidence(bytes: List[Int], terminal: String, result: String)
+object ScalaOutputEvidence {
+  implicit val schema: Schema[ScalaOutputEvidence] = Schema.derived
+}
+
 @agentDefinition()
 trait ScalaToolStreamingCaller extends BaseAgent {
   class Id(val name: String)
   def markerBeforeEof(payload: String): Future[ScalaStreamEvidence]
   def invalidCommandPathCleanup(): Future[ScalaCleanupEvidence]
+  def outputEvidence(mode: String): Future[ScalaOutputEvidence]
 }
 
 @agentImplementation()
 final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamingCaller {
   private implicit val ec: ExecutionContext = ExecutionContext.global
+
+  override def outputEvidence(mode: String): Future[ScalaOutputEvidence] = {
+    val client = ScalaStreamingToolClient()
+    if (mode == "plain") {
+      client.plain().map {
+        case Right(result) => ScalaOutputEvidence(Nil, "none", result)
+        case Left(error) => throw new IllegalStateException(s"plain tool failed: $error")
+      }
+    } else {
+      val started =
+        if (mode == "unit") client.outputUnit().map(invocation =>
+          (invocation.stdout, invocation.result.map(_.map(_ => "unit"))))
+        else client.output(mode).map(invocation => (invocation.stdout, invocation.result))
+
+      def drain(stream: ToolInputStream, bytes: List[Int]): Future[(List[Int], String)] =
+        stream.read().flatMap {
+          case Right(Some(chunk)) => drain(stream, bytes ++ chunk.map(_ & 0xff).toList)
+          case Right(None) => Future.successful((bytes, "finished"))
+          case Left(ByteStreamFailure.Failed(message)) => Future.successful((bytes, s"failed:$message"))
+          case Left(error) => Future.failed(new IllegalStateException(s"unexpected stdout failure: $error"))
+        }
+
+      started match {
+        case Left(error) => Future.failed(new IllegalStateException(s"failed to start output tool: $error"))
+        case Right((stdout, result)) =>
+          result.zip(drain(stdout, Nil)).map {
+            case (Right(value), (bytes, terminal)) => ScalaOutputEvidence(bytes, terminal, value)
+            case (Left(error), _) => throw new IllegalStateException(s"output tool failed: $error")
+          }
+      }
+    }
+  }
 
   override def markerBeforeEof(payload: String): Future[ScalaStreamEvidence] = {
     val release = Promise[Unit]()

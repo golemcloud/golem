@@ -122,6 +122,10 @@ pub struct RouteExecutionResult {
 #[allow(clippy::large_enum_variant)]
 pub enum ResponseBody {
     NoBody,
+    PoemBody {
+        body: poem::Body,
+        content_type: Option<&'static str>,
+    },
     ComponentModelJsonBody {
         body: golem_common::schema::TypedSchemaValue,
     },
@@ -141,6 +145,7 @@ impl fmt::Debug for ResponseBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ResponseBody::NoBody => f.debug_struct("NoBody").finish(),
+            ResponseBody::PoemBody { .. } => f.write_str("PoemBody"),
             ResponseBody::ComponentModelJsonBody { body } => f
                 .debug_struct("ComponentModelJsonBody")
                 .field("body", body)

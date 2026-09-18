@@ -286,7 +286,6 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                 // Invalidate each environment individually using the provided UUIDs
                 // rather than flushing all caches.
                 for env_id in environment_ids {
-                    self.active_agents.unload_environment(*env_id).await;
                     self.component_service
                         .invalidate_all_metadata_for_environment(*env_id)
                         .await;
@@ -296,6 +295,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     self.agent_types_service
                         .invalidate_environment(*env_id)
                         .await;
+                    self.active_agents.unload_environment(*env_id).await;
                 }
             }
             RegistryInvalidationEvent::EnvironmentDeleted {
@@ -310,7 +310,6 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                     env_name,
                     "Received environment deleted event, invalidating environment caches"
                 );
-                self.active_agents.unload_environment(*environment_id).await;
                 self.component_service
                     .invalidate_all_metadata_for_environment(*environment_id)
                     .await;
@@ -320,6 +319,7 @@ impl<Ctx: WorkerCtx> RegistryInvalidationHandler
                 self.agent_types_service
                     .invalidate_environment(*environment_id)
                     .await;
+                self.active_agents.unload_environment(*environment_id).await;
             }
         }
     }

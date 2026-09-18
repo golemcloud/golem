@@ -194,6 +194,42 @@ impl DomainRegistrationService {
         Ok(domain_registration)
     }
 
+    pub async fn get_in_environment_by_domain(
+        &self,
+        environment_id: EnvironmentId,
+        domain: &Domain,
+        auth: &AuthCtx,
+    ) -> Result<DomainRegistration, DomainRegistrationError> {
+        let owner = self
+            .environment_service
+            .get_owner_unchecked(environment_id)
+            .await
+            .map_err(|err| match err {
+                EnvironmentError::EnvironmentNotFound(_) => {
+                    DomainRegistrationError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
+        authorize_domain_registration_permission_for_owner(
+            auth,
+            owner,
+            Some(domain),
+            EnvironmentDomainRegistrationVerb::View,
+        )
+        .map_err(|_| DomainRegistrationError::DomainRegistrationByDomainNotFound(domain.clone()))?;
+
+        let domain_registration: DomainRegistration = self
+            .domain_registration_repo
+            .get_in_environment(environment_id.0, &domain.0)
+            .await?
+            .ok_or(DomainRegistrationError::DomainRegistrationByDomainNotFound(
+                domain.clone(),
+            ))?
+            .into();
+
+        Ok(domain_registration)
+    }
+
     pub async fn list_in_environment(
         &self,
         environment_id: EnvironmentId,

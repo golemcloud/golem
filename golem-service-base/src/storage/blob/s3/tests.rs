@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::S3BlobStorage;
-use crate::config::S3BlobStorageConfig;
+use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::storage::blob::{BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob};
 use aws_sdk_s3::config::http::{HttpRequest, HttpResponse};
 use aws_sdk_s3::config::retry::RetryConfig;
@@ -25,13 +25,19 @@ use aws_smithy_runtime_api::client::http::{
     HttpConnector, HttpConnectorFuture, SharedHttpConnector, http_client_fn,
 };
 use aws_smithy_runtime_api::http::StatusCode;
+use axum::Router;
+use axum::body::Body;
+use axum::extract::State;
+use axum::http::{Response, StatusCode as ServerStatus};
+use axum::routing::put;
+use bytes::Bytes;
 use golem_common::model::environment::EnvironmentId;
 use pretty_assertions::assert_eq;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use test_r::test;
+use test_r::{test, timeout};
 use uuid::Uuid;
 
 /// A request that the scripted transport received.
@@ -592,5 +598,154 @@ async fn list_blobs_below_fails_when_a_key_has_no_size() {
     assert_eq!(
         error.to_string(),
         format!("S3 gave no size for the key {key}")
+    );
+}
+
+/// The bodies a fake S3 received, and the status it answers each `PUT` with.
+#[derive(Clone)]
+struct PutServerState {
+    bodies: Arc<Mutex<Vec<Bytes>>>,
+    statuses: Arc<Mutex<Vec<ServerStatus>>>,
+}
+
+async fn handle_put(State(state): State<PutServerState>, body: Bytes) -> Response<Body> {
+    state.bodies.lock().unwrap().push(body);
+    let status = state.statuses.lock().unwrap().remove(0);
+    let body = if status.is_success() {
+        Body::empty()
+    } else {
+        Body::from(
+            "<Error><Code>ForcedFailure</Code><Message>forced test failure</Message></Error>",
+        )
+    };
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/xml")
+        .body(body)
+        .unwrap()
+}
+
+/// Makes a blob storage that talks to a server answering each `PUT` with the next status.
+///
+/// The SDK's own retries are off, so each request the server sees is one Golem retry.
+async fn put_server_storage(
+    statuses: Vec<ServerStatus>,
+) -> (
+    S3BlobStorage,
+    Arc<Mutex<Vec<Bytes>>>,
+    tokio::task::JoinHandle<()>,
+) {
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let state = PutServerState {
+        bodies: bodies.clone(),
+        statuses: Arc::new(Mutex::new(statuses)),
+    };
+    let app = Router::new().fallback(put(handle_put)).with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let mut config = S3BlobStorageConfig {
+        aws_endpoint_url: Some(endpoint.clone()),
+        aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
+            "test-access-key",
+            "test-secret-key",
+            "test",
+        )),
+        aws_path_style: Some(true),
+        ..Default::default()
+    };
+    config.retries.max_attempts = 3;
+    config.retries.min_delay = Duration::ZERO;
+    config.retries.max_delay = Duration::ZERO;
+    config.retries.multiplier = 1.0;
+    config.retries.max_jitter_factor = None;
+
+    let sdk_config = aws_sdk_s3::Config::builder()
+        .behavior_version(BehaviorVersion::latest())
+        .region(Region::new(config.region.clone()))
+        .credentials_provider(Credentials::new(
+            "test-access-key",
+            "test-secret-key",
+            None,
+            None,
+            "test",
+        ))
+        .endpoint_url(endpoint)
+        .force_path_style(true)
+        .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
+        .retry_config(RetryConfig::standard().with_max_attempts(1))
+        .build();
+
+    (
+        S3BlobStorage::with_sdk_config(config, sdk_config),
+        bodies,
+        server,
+    )
+}
+
+#[test]
+#[timeout("10s")]
+async fn put_raw_golem_retries_preserve_nonempty_payload() {
+    let (storage, bodies, server) = put_server_storage(vec![
+        ServerStatus::INTERNAL_SERVER_ERROR,
+        ServerStatus::INTERNAL_SERVER_ERROR,
+        ServerStatus::OK,
+    ])
+    .await;
+    let data = b"payload that must survive every Golem retry";
+
+    let result = storage
+        .put_raw(
+            "test",
+            "put_raw",
+            BlobStorageNamespace::CustomStorage {
+                environment_id: EnvironmentId::new(),
+            },
+            Path::new("object"),
+            data,
+        )
+        .await;
+    server.abort();
+
+    result.unwrap();
+    assert_eq!(
+        bodies.lock().unwrap().as_slice(),
+        [
+            Bytes::from_static(data),
+            Bytes::from_static(data),
+            Bytes::from_static(data),
+        ]
+    );
+}
+
+#[test]
+#[timeout("10s")]
+async fn put_raw_golem_retries_preserve_empty_payload_and_final_error() {
+    let (storage, bodies, server) = put_server_storage(vec![
+        ServerStatus::INTERNAL_SERVER_ERROR,
+        ServerStatus::INTERNAL_SERVER_ERROR,
+        ServerStatus::INTERNAL_SERVER_ERROR,
+    ])
+    .await;
+
+    let error = storage
+        .put_raw(
+            "test",
+            "put_raw",
+            BlobStorageNamespace::CustomStorage {
+                environment_id: EnvironmentId::new(),
+            },
+            Path::new("object"),
+            &[],
+        )
+        .await
+        .unwrap_err();
+    server.abort();
+
+    assert!(format!("{error:#}").contains("forced test failure"));
+    assert_eq!(
+        bodies.lock().unwrap().as_slice(),
+        [Bytes::new(), Bytes::new(), Bytes::new()]
     );
 }

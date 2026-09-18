@@ -13,13 +13,12 @@
 // limitations under the License.
 
 use crate::storage::keyvalue::sqlite::SqliteKeyValueStorage;
-use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
+use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageError, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::AgentId;
-use golem_common::model::RetryConfig;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -30,12 +29,14 @@ use tokio::sync::Mutex;
 /// KeyValueStorage implementation that uses multiple separate SQLite databases depending
 /// on the namespace.
 pub struct MultiSqliteKeyValueStorage {
-    cache: Cache<String, (), SqliteKeyValueStorage, String>,
+    // The cache's error type is the storage error itself, so a transient failure to open or
+    // migrate a database is classified like any other - and retried by the decorator above -
+    // instead of collapsing into `KeyValueStorageError::Other`.
+    cache: Cache<String, (), SqliteKeyValueStorage, KeyValueStorageError>,
     hash_cache: Arc<Mutex<HashCache>>,
     root_dir: PathBuf,
     max_connections: u32,
     foreign_keys: bool,
-    retry_config: RetryConfig,
 }
 
 struct HashCache {
@@ -44,12 +45,7 @@ struct HashCache {
 }
 
 impl MultiSqliteKeyValueStorage {
-    pub fn new(
-        root_dir: &Path,
-        max_connections: u32,
-        foreign_keys: bool,
-        retry_config: RetryConfig,
-    ) -> Self {
+    pub fn new(root_dir: &Path, max_connections: u32, foreign_keys: bool) -> Self {
         if !root_dir.exists() {
             std::fs::create_dir_all(root_dir)
                 .expect("Failed to create root directory for sqlite storage");
@@ -71,7 +67,6 @@ impl MultiSqliteKeyValueStorage {
             root_dir: root_dir.to_path_buf(),
             max_connections,
             foreign_keys,
-            retry_config,
         }
     }
 
@@ -79,28 +74,26 @@ impl MultiSqliteKeyValueStorage {
         max_connections: u32,
         foreign_keys: bool,
         database: String,
-        retry_config: RetryConfig,
-    ) -> Result<SqliteKeyValueStorage, String> {
+    ) -> Result<SqliteKeyValueStorage, KeyValueStorageError> {
         let config = DbSqliteConfig {
             database,
             max_connections,
             foreign_keys,
         };
-        SqliteKeyValueStorage::configured(&config, retry_config).await
+        SqliteKeyValueStorage::configured(&config).await
     }
 
     async fn storage_by_namespace(
         &self,
         namespace: &KeyValueStorageNamespace,
-    ) -> Result<SqliteKeyValueStorage, String> {
+    ) -> Result<SqliteKeyValueStorage, KeyValueStorageError> {
         let db = self.namespace_to_db(namespace).await;
         let max_connections = self.max_connections;
         let foreign_keys = self.foreign_keys;
-        let retry_config = self.retry_config.clone();
         let db_path = self.root_dir.join(db.clone()).to_string_lossy().to_string();
         self.cache
             .get_or_insert_simple(&db, async move || {
-                Self::init_storage(max_connections, foreign_keys, db_path, retry_config).await
+                Self::init_storage(max_connections, foreign_keys, db_path).await
             })
             .await
     }
@@ -121,6 +114,9 @@ impl MultiSqliteKeyValueStorage {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
             KeyValueStorageNamespace::AgentDurableStreamSessionIndex { agent_id } => {
+                format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
+            }
+            KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots { agent_id } => {
                 format!("kv-worker-{}.db", self.agent_id_hash(agent_id).await)
             }
             KeyValueStorageNamespace::Promise { agent_id } => {
@@ -165,7 +161,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .set(svc_name, api_name, entity_name, namespace, key, value)
@@ -179,7 +175,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         pairs: &[(&str, &[u8])],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .set_many(svc_name, api_name, entity_name, namespace, pairs)
@@ -195,7 +191,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         key: &str,
         expected: Option<&[u8]>,
         pairs: &[(&str, &[u8])],
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .compare_and_set_many(
@@ -218,7 +214,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .set_if_not_exists(svc_name, api_name, entity_name, namespace, key, value)
@@ -232,7 +228,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Option<Bytes>, String> {
+    ) -> Result<Option<Bytes>, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .get(svc_name, api_name, entity_name, namespace, key)
@@ -245,8 +241,8 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         api_name: &'static str,
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
-    ) -> Result<Vec<Option<Bytes>>, String> {
+        keys: Arc<[String]>,
+    ) -> Result<Vec<Option<Bytes>>, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .get_many(svc_name, api_name, entity_name, namespace, keys)
@@ -259,7 +255,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         api_name: &'static str,
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<(String, Bytes)>, String> {
+    ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .get_all(svc_name, api_name, entity_name, namespace)
@@ -272,7 +268,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .del(svc_name, api_name, namespace, key)
@@ -284,8 +280,8 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-        keys: Vec<String>,
-    ) -> Result<(), String> {
+        keys: Arc<[String]>,
+    ) -> Result<(), KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .del_many(svc_name, api_name, namespace, keys)
@@ -298,7 +294,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .exists(svc_name, api_name, namespace, key)
@@ -310,7 +306,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         svc_name: &'static str,
         api_name: &'static str,
         namespace: KeyValueStorageNamespace,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .keys(svc_name, api_name, namespace)
@@ -325,7 +321,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .add_to_set(svc_name, api_name, entity_name, namespace, key, value)
@@ -340,7 +336,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .remove_from_set(svc_name, api_name, entity_name, namespace, key, value)
@@ -354,7 +350,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<Bytes>, String> {
+    ) -> Result<Vec<Bytes>, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .members_of_set(svc_name, api_name, entity_name, namespace, key)
@@ -370,7 +366,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         key: &str,
         score: f64,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .add_to_sorted_set(
@@ -393,7 +389,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         value: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .remove_from_sorted_set(svc_name, api_name, entity_name, namespace, key, value)
@@ -407,7 +403,7 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .get_sorted_set(svc_name, api_name, entity_name, namespace, key)
@@ -423,10 +419,45 @@ impl KeyValueStorage for MultiSqliteKeyValueStorage {
         key: &str,
         min: f64,
         max: f64,
-    ) -> Result<Vec<(f64, Bytes)>, String> {
+    ) -> Result<Vec<(f64, Bytes)>, KeyValueStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
             .query_sorted_set(svc_name, api_name, entity_name, namespace, key, min, max)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    test_r::enable!();
+
+    /// The database is opened on the path of the first operation that needs it, so the failure to
+    /// open it must reach the caller classified - not flattened into an unretryable `Other` by a
+    /// trip through `String`. A path that cannot be opened at all stays `Other`, which is what a
+    /// caller should see immediately rather than after the whole retry budget.
+    #[test]
+    async fn lazy_initialization_failure_keeps_its_classification() {
+        let tempdir = tempfile::tempdir().unwrap();
+        // A directory where the database file belongs: SQLite cannot open it, and no retry would
+        // change that.
+        std::fs::create_dir(tempdir.path().join("kv-schedule.db")).unwrap();
+        let storage = MultiSqliteKeyValueStorage::new(tempdir.path(), 1, false);
+
+        let error = storage
+            .get(
+                "test",
+                "get",
+                "key-value",
+                KeyValueStorageNamespace::Schedule,
+                "key",
+            )
+            .await
+            .expect_err("a database that cannot be opened must fail the operation");
+
+        assert!(matches!(error, KeyValueStorageError::Other(_)), "{error:?}");
+        assert!(!error.is_retryable(true));
     }
 }

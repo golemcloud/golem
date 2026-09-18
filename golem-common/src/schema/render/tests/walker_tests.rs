@@ -14,9 +14,9 @@
 
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
 use crate::schema::metadata::TypeId;
-use crate::schema::render::walker::{SchemaWalker, WalkerError, walk};
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
+use golem_schema::schema::render::walker::{SchemaWalker, WalkerError, walk};
 use test_r::test;
 
 struct CountingWalker {

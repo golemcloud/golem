@@ -18,6 +18,7 @@ package golem.runtime
 
 import golem.{Principal, Uuid}
 import golem.host.js.PrincipalConverter
+import golem.runtime.guest.Guest
 import zio.blocks.schema.json.Json
 import zio.test._
 
@@ -42,24 +43,9 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
   }
 
   private def parseJsonEnvelope(bytes: Array[Byte]): (Principal, String) =
-    Json.parse(bytes) match {
-      case Right(envelope) =>
-        val p = envelope
-          .get("principal")
-          .one
-          .toOption
-          .flatMap(pJson => PrincipalConverter.fromJson(pJson.printBytes).toOption)
-          .getOrElse(Principal.Anonymous)
-        val stateStr = envelope
-          .get("state")
-          .one
-          .toOption
-          .map(_.print)
-          .getOrElse("{}")
-        (p, stateStr)
-      case Left(err) =>
-        throw new RuntimeException(s"Failed to parse envelope: $err")
-    }
+    Guest
+      .decodeSnapshotPayload(bytes, "application/json")
+      .fold(error => throw new RuntimeException(error), result => (result._1, new String(result._2, "UTF-8")))
 
   private def buildBinaryEnvelopeV2(principal: Principal, stateBytes: Array[Byte]): Array[Byte] = {
     val principalBytes = PrincipalConverter.toJson(principal)
@@ -75,21 +61,10 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
     fullSnapshot
   }
 
-  private def parseBinaryEnvelopeV2(bytes: Array[Byte]): (Principal, Array[Byte]) = {
-    val version = bytes(0) & 0xff
-    if (version != 2) throw new RuntimeException(s"Expected version 2, got $version")
-    val principalLen =
-      ((bytes(1) & 0xff) << 24) | ((bytes(2) & 0xff) << 16) |
-        ((bytes(3) & 0xff) << 8) | (bytes(4) & 0xff)
-    val principalEnd  = 5 + principalLen
-    val principalData = java.util.Arrays.copyOfRange(bytes, 5, principalEnd)
-    val p             = PrincipalConverter.fromJson(principalData) match {
-      case Right(v)  => v
-      case Left(err) => throw new RuntimeException(s"Failed to parse principal: $err")
-    }
-    val stateBytes = bytes.drop(principalEnd)
-    (p, stateBytes)
-  }
+  private def parseBinaryEnvelopeV2(bytes: Array[Byte]): (Principal, Array[Byte]) =
+    Guest
+      .decodeSnapshotPayload(bytes, "application/octet-stream")
+      .fold(error => throw new RuntimeException(error), identity)
 
   def spec = suite("SnapshotEnvelopeSpec")(
     suite("JSON envelope")(
@@ -128,6 +103,34 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
         val parsed   = Json.parse(envelope)
         val version  = parsed.flatMap(_.get("version").one)
         assertTrue(version.isRight)
+      },
+      test("loader rejects missing version, principal, and state") {
+        val noVersion = Guest.decodeSnapshotPayload(
+          """{"principal":{"tag":"anonymous"},"state":{}}""".getBytes("UTF-8"),
+          "application/json"
+        )
+        val noPrincipal =
+          Guest.decodeSnapshotPayload("""{"version":1,"state":{}}""".getBytes("UTF-8"), "application/json")
+        val noState = Guest.decodeSnapshotPayload(
+          """{"version":1,"principal":{"tag":"anonymous"}}""".getBytes("UTF-8"),
+          "application/json"
+        )
+        assertTrue(
+          noVersion.left.exists(_.contains("version")),
+          noPrincipal.left.exists(_.contains("principal")),
+          noState.left.exists(_.contains("state"))
+        )
+      },
+      test("loader rejects invalid principal and unsupported JSON version") {
+        val invalidPrincipal = Guest.decodeSnapshotPayload(
+          """{"version":1,"principal":{"tag":"unknown"},"state":{}}""".getBytes("UTF-8"),
+          "application/json"
+        )
+        val wrongVersion = Guest.decodeSnapshotPayload(
+          """{"version":2,"principal":{"tag":"anonymous"},"state":{}}""".getBytes("UTF-8"),
+          "application/json"
+        )
+        assertTrue(invalidPrincipal.isLeft, wrongVersion.left.exists(_.contains("version")))
       },
       test("Agent principal JSON matches Rust format") {
         val componentId = Uuid.fromStandardString("550e8400-e29b-41d4-a716-446655440000").toOption.get
@@ -208,6 +211,33 @@ object SnapshotEnvelopeSpec extends ZIOSpecDefault {
         assertTrue(
           principal == p,
           state.toSeq == stateBytes.toSeq
+        )
+      }
+    ),
+    suite("Binary envelope validation")(
+      test("legacy v1 remains principal-less and restores as anonymous") {
+        val decoded = Guest.decodeSnapshotPayload(Array[Byte](1, 10, 20), "application/octet-stream")
+        assertTrue(
+          decoded.exists { case (principal, state) =>
+            principal == Principal.Anonymous && state.toSeq == Seq[Byte](10, 20)
+          }
+        )
+      },
+      test("rejects empty, truncated, oversized, invalid-principal, and unknown envelopes") {
+        val empty            = Guest.decodeSnapshotPayload(Array.emptyByteArray, "application/octet-stream")
+        val truncated        = Guest.decodeSnapshotPayload(Array[Byte](2, 0), "application/octet-stream")
+        val oversized        = Guest.decodeSnapshotPayload(Array[Byte](2, 0, 0, 0, 2, 1), "application/octet-stream")
+        val invalidPrincipal = Guest.decodeSnapshotPayload(
+          Array[Byte](2, 0, 0, 0, 1, 0),
+          "application/octet-stream"
+        )
+        val unknown = Guest.decodeSnapshotPayload(Array[Byte](3), "application/octet-stream")
+        assertTrue(
+          empty.isLeft,
+          truncated.isLeft,
+          oversized.isLeft,
+          invalidPrincipal.isLeft,
+          unknown.isLeft
         )
       }
     )
