@@ -467,6 +467,9 @@ mod json;
 #[cfg(feature = "json")]
 pub use json::*;
 
+#[cfg(feature = "json")]
+pub mod durable_streams;
+
 mod checkpoint;
 pub mod quota;
 pub mod secrets;

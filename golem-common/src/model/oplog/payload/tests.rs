@@ -1092,6 +1092,86 @@ fn prepared_revert_payload_pair_roundtrips() {
     );
 }
 
+#[test]
+fn external_durable_stream_payloads_preserve_checkpoints_and_producer_identity() {
+    use super::external_durable_stream::*;
+    use super::{
+        HostRequestDurableStreamAppend, HostRequestDurableStreamRead,
+        HostResponseDurableStreamAppend, HostResponseDurableStreamRead,
+    };
+    use crate::schema::schema_value::SecretValuePayload;
+
+    let auth = Some(SecretValuePayload {
+        secret_id: uuid::Uuid::from_u128(37),
+        config_key: Some(vec!["external".to_string(), "credential".to_string()]),
+        version: 9,
+        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        category: None,
+    });
+    let read = HostRequestDurableStreamRead {
+        request: DurableStreamReadRequest {
+            url: "https://streams.example/data".to_string(),
+            checkpoint: DurableStreamCheckpoint {
+                offset: "opaque-17".to_string(),
+                cursor: Some("cursor-23".to_string()),
+            },
+            mode: DurableStreamMode::Bytes,
+            transport: DurableStreamTransport::LongPoll,
+            content_type: Some("application/octet-stream".to_string()),
+            timeout_ms: 7123,
+        },
+        auth: auth.clone(),
+    };
+    let response = HostResponseDurableStreamRead {
+        result: Ok(DurableStreamBatch {
+            payload: vec![0, 255, 19, 7],
+            content_type: "application/octet-stream".to_string(),
+            next: DurableStreamCheckpoint {
+                offset: "opaque-19".to_string(),
+                cursor: Some("cursor-31".to_string()),
+            },
+            up_to_date: true,
+            closed: false,
+        }),
+    };
+    let bytes = desert_rust::serialize_to_byte_vec(&HostRequest::from(read.clone())).unwrap();
+    let decoded: HostRequest = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, HostRequest::from(read.clone()));
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemAgentReadDurableStreamBatch>(
+        read, response,
+    );
+
+    let append = HostRequestDurableStreamAppend {
+        request: DurableStreamAppendRequest {
+            url: "https://streams.example/data".to_string(),
+            content_type: "application/json".to_string(),
+            payload: DurableStreamAppendPayload::Json(vec![
+                "[7,3]".to_string(),
+                "9007199254740993".to_string(),
+            ]),
+            producer: DurableStreamProducer {
+                id: "writer-1".to_string(),
+                epoch: 13,
+                sequence: 17,
+            },
+            close: true,
+            timeout_ms: 8111,
+        },
+        auth,
+    };
+    let mut error = DurableStreamError::new(DurableStreamErrorKind::Fenced, "Producer fenced");
+    error.producer_epoch = Some(19);
+    error.expected_sequence = Some(23);
+    error.retry_after_ms = Some(9123);
+    let response = HostResponseDurableStreamAppend { result: Err(error) };
+    let bytes = desert_rust::serialize_to_byte_vec(&HostRequest::from(append.clone())).unwrap();
+    let decoded: HostRequest = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, HostRequest::from(append.clone()));
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemAgentAppendDurableStreamBatch>(
+        append, response,
+    );
+}
+
 fn assert_host_payload_pair_schema_roundtrip<Pair>(request: Pair::Req, response: Pair::Resp)
 where
     Pair: HostPayloadPair,

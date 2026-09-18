@@ -277,6 +277,50 @@ writing share one lifecycle admission, with the remote call outside the local wr
 holding the session lock. A peer result observed after local retirement is discarded; recovery
 retries from the committed intent.
 
+### Consuming and appending to external Durable Streams
+
+`durable_host/external_durable_stream/mod.rs` implements two finite async imports in
+`golem:agent/host`: `read-durable-stream-batch` (`ReadRemote`) and
+`append-durable-stream-batch` (`WriteRemote`). Each uses one cancellable `DurableCallSession`
+with exact request-payload identity. There is no external cursor resource, new session journal,
+background ingestion task, or top-level oplog entry. External reads are positional host inputs;
+forwarding their values into native agent streams uses the ordinary stream machinery above.
+
+Read `End` records the complete payload together with the peer's opaque offset and transport
+cursor. HTTP reads consume a complete bounded body; SSE closes after its first complete
+data/control pair or control-only checkpoint. Partial bodies and SSE data without control do not
+advance the checkpoint. The SDK retains the pending batch and item/byte index and fetches again
+only after draining it. `now` is resolved once by catch-up. Up-to-date and empty results are not
+EOF; only the closed flag ends a stream, after delivering the final payload. HTTP 410 is an error.
+
+Append `Start` records the exact producer ID, epoch, sequence, payload and close flag. JSON values
+are individually encoded and framed by the host, preserving nested arrays and integer lexemes.
+The SDK assigns an immutable pending request before awaiting, advances the sequence only after
+acknowledgment, and retains uncertain requests across cancellation. Completed replay performs no
+HTTP. Incomplete writes repair with the same tuple under the existing idempotence policy;
+disabling idempotence retains fail-closed recovery. The host never changes that global mode.
+An acknowledgment ahead of the submitted sequence is a producer-diverged error for these
+non-pipelined writers, not permission to renumber data.
+
+Both operations resolve replay before current authorization, secret lookup or network I/O. Auth
+requests record only the borrowed secret's pinned identity/metadata. The live path requires
+network permission, secret Reveal permission and any entity `secret_keys_revealable` restriction;
+it fetches one pinned string secret and sends it as Bearer without exposing it to the SDK. HTTP
+is restricted to loopback/localhost; otherwise HTTPS is required. Redirects and automatic HTTP
+retries are disabled. Remote errors are typed durable results. SDK retry budgets/backoff use
+durable clocks and waits, outside custom durability wrappers.
+
+`durable_stream.external_batch_max_bytes` bounds payloads. Codec buffer reservation uses existing
+memory admission and is held through durable completion; this is not a bound on imported DTOs or
+the HTTP/TLS implementation's buffers. Existing HTTP quotas apply. A long-poll remains resident
+until its bounded attempt finishes; durable SDK sleeps between attempts can unload normally.
+
+Fork/revert uses ordinary retained-prefix replay: a cut before read `End` repeats the read, an
+`End` without delivery waits for replay tail, and a delivered batch rebuilds its remaining guest
+buffer. Golem forks retain external URLs, checkpoints and producer tuples. They never create a
+DS-level fork or allocate a new producer identity/epoch. Deduplication depends on peer retention;
+divergent forks sharing a tuple are not independent external writers.
+
 ### Tests
 
 `tests/rpc.rs::{durable_streaming_output_recovers_after_executor_restart,

@@ -520,6 +520,8 @@ impl SafeDisplay for Limits {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DurableStreamConfig {
+    /// Maximum encoded payload size of one external Durable Streams read or append.
+    pub external_batch_max_bytes: usize,
     #[serde(with = "humantime_serde")]
     pub lease_ttl: Duration,
     #[serde(with = "humantime_serde")]
@@ -533,6 +535,10 @@ pub struct DurableStreamConfig {
 
 impl DurableStreamConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.external_batch_max_bytes > 0,
+            "external durable stream batch limit must be non-zero"
+        );
         anyhow::ensure!(
             self.lease_ttl
                 == Duration::from_millis(
@@ -575,6 +581,7 @@ impl DurableStreamConfig {
 impl Default for DurableStreamConfig {
     fn default() -> Self {
         Self {
+            external_batch_max_bytes: 8 * 1024 * 1024,
             lease_ttl: Duration::from_millis(
                 golem_common::base_model::durable_stream::STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
             ),
@@ -596,6 +603,11 @@ impl Default for DurableStreamConfig {
 impl SafeDisplay for DurableStreamConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "external batch maximum bytes: {}",
+            self.external_batch_max_bytes
+        );
         let _ = writeln!(&mut result, "lease TTL: {:?}", self.lease_ttl);
         let _ = writeln!(&mut result, "renewal interval: {:?}", self.renewal_interval);
         let _ = writeln!(

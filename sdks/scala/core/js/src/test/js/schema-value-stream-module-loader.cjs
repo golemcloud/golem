@@ -66,10 +66,21 @@ Module._load = function (request) {
     return {
       getConfigValue: missingHostImport("getConfigValue"),
       parseAgentId: missingHostImport("parseAgentId"),
+      readDurableStreamBatch: missingHostImport("readDurableStreamBatch"),
+      appendDurableStreamBatch: missingHostImport("appendDurableStreamBatch"),
     };
   }
   if (request === "golem:api/host@1.5.0") {
-    return { getSelfMetadata: missingHostImport("getSelfMetadata") };
+    return {
+      getSelfMetadata: missingHostImport("getSelfMetadata"),
+      generateIdempotencyKey: missingHostImport("generateIdempotencyKey"),
+    };
+  }
+  if (request === "wasi:clocks/monotonic-clock@0.3.0") {
+    return {
+      now: missingHostImport("now"),
+      waitFor: missingHostImport("waitFor"),
+    };
   }
   if (request === "golem:secrets/reveal@0.1.0") {
     return { reveal: missingHostImport("reveal") };

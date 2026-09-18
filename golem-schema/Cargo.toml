@@ -66,7 +66,7 @@ uuid = { workspace = true }
 wasip2 = { workspace = true, optional = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
-wit-bindgen = { workspace = true, optional = true }
+wit-bindgen = { workspace = true, optional = true, features = ["async-spawn"] }
 
 [dev-dependencies]
 criterion = { workspace = true }

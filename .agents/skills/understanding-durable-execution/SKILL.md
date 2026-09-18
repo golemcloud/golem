@@ -503,6 +503,15 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.
 
+External Durable Streams use two finite async host operations in
+`durable_host/external_durable_stream/`, not a new native stream source or session journal.
+Reads record a complete payload/checkpoint as `ReadRemote`; appends record an immutable producer
+tuple/body as `WriteRemote`. SDKs own pending buffers, producer progress and durable retry timers.
+Both use exact request claims and the existing cancellable completion-delivery boundary.
+Completed replay performs no HTTP or secret fetch. Golem forks retain external URLs and producer
+identities; they do not issue DS-level forks. See `reference/streams.md` for protocol, auth and
+memory boundaries.
+
 ## Tool invocations and entity bodies
 
 `durable_host/tool/mod.rs` implements `golem:tool/host@0.1.0`. Tool bodies (sidecars, middleware)

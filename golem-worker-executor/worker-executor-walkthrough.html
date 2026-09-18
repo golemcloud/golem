@@ -1538,6 +1538,24 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 
 <p id="stream-finalization-storage">Finalization uses the ordinary atomic vector batch: terminals precede <code>Finished</code>, and commit precedes publication. Durable oplogs externalize records only above the configured payload threshold; ephemeral oplogs keep them inline in archive entries. The batch temporarily retains error copies proportional to the number of open output streams, plus serialized copies. Lifecycle admission reserves for the maximum stream count, capped at the existing lane capacity; this serializes oversized finalizations without imposing a hard allocation bound.</p>
 
+<section id="external-stream-client">
+<h3>Agents read and append to external Durable Streams</h3>
+<p>The external client uses two finite async imports in <code>golem:agent/host</code>: <code>read-durable-stream-batch</code> (<code>ReadRemote</code>) and <code>append-durable-stream-batch</code> (<code>WriteRemote</code>). Each uses one cancellable <code>DurableCallSession</code> with exact request identity and ordinary completion-delivery markers. There is no new cursor resource, producer service, session journal, or top-level oplog entry.</p>
+<p>A read records the complete payload with the server's opaque offset and transport cursor. SSE closes after one complete data/control pair, never after data alone. The SDK drains its pending batch before fetching again and resolves <code>now</code> once through catch-up. Empty or up-to-date is not EOF; a final nonempty closed batch is delivered before EOF. HTTP 410 is an error. Forwarding these values into an <code>AgentStream</code> uses the existing native stream machinery.</p>
+<p>An append records the exact producer ID, epoch, sequence, body, and close flag. The SDK retains that immutable request through uncertain outcomes, advances once after acknowledgment, and refuses different data while an append remains unresolved. Completed replay makes no POST; incomplete repair repeats the same tuple under the existing idempotence policy. Turning idempotence off keeps fail-closed recovery. JSON framing preserves nested arrays and number lexemes; bytes remain unframed.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th scope="col">Retained boundary</th><th scope="col">Recovery</th></tr></thead>
+  <tbody>
+    <tr><td><code>Start</code>, no <code>End</code></td><td>Repeat the read at the same checkpoint, or repair the append with the same producer tuple if idempotence permits it.</td></tr>
+    <tr><td><code>End</code>, no delivery marker</td><td>Deliver the recorded result at replay tail; do not contact the peer.</td></tr>
+    <tr><td>Delivered batch, partially drained</td><td>Re-execution rebuilds the pending batch and item/byte index from the recorded result.</td></tr>
+    <tr><td>Golem fork</td><td>Use the same external URL, checkpoint, and producer identity. No automatic DS-level fork or new epoch.</td></tr>
+  </tbody>
+</table></div>
+<p>Authentication records only a pinned secret identity. The live wire path requires network and secret Reveal permission, including entity reveal restrictions, and fetches one string secret for Bearer authentication without exposing it to the SDK. HTTPS is required except for local development; redirects and automatic retries are disabled. Typed remote errors let SDKs retry with durable clocks, budgets and timers. Long-polls remain resident until their bounded attempt ends; waits between attempts can unload normally.</p>
+<p><code>durable_stream.external_batch_max_bytes</code> limits payloads. Codec buffers reserve existing memory admission through durable completion, and existing HTTP quotas apply. This reservation is not a bound on imported DTOs or HTTP/TLS internals. External exactly-once effects still depend on the peer retaining producer deduplication state; divergent Golem forks sharing a tuple are not independent writers.</p>
+</section>
+
 <section id="stream-append">
 <h3>HTTP input appends share the durable producer</h3>
 <p><code>POST /invocations/{session}/streams/{slot}</code> validates a JSON batch or packed bytes against the invocation's pinned input schema, then uses <code>AppendToStreamSlot</code>. The owned producer checks epoch and sequence and commits items, <code>ExternalProducerState</code>, and an optional terminal in one oplog batch before acknowledgment or live-bus publication. WebSocket input uses the same history.</p>

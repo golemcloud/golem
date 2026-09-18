@@ -4373,6 +4373,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "axum",
+ "base64 0.22.1",
  "bigdecimal",
  "bit-vec 0.6.3",
  "blake3",
@@ -4420,6 +4421,7 @@ dependencies = [
  "md5",
  "metrohash",
  "mimalloc",
+ "mime",
  "nonempty-collections",
  "nonzero_ext",
  "pgvector",
@@ -4431,6 +4433,7 @@ dependencies = [
  "rand 0.9.5",
  "redis",
  "regex",
+ "reqwest 0.13.4",
  "ringbuf",
  "rustix 1.1.4",
  "rustls 0.23.43",
@@ -12605,6 +12608,7 @@ version = "0.59.0"
 source = "git+https://github.com/golemcloud/wit-bindgen?branch=golem-outline-lift-v0.58.0#4407232ead86d9bcbd06cbebd790a52120a4087a"
 dependencies = [
  "bitflags 2.13.1",
+ "futures",
  "wit-bindgen-rust-macro",
 ]
 

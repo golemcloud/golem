@@ -1,0 +1,7 @@
+{
+  "warn-list": "-44-unused_value-declaration_unimplemented",
+  "import": [
+    { "path" : "golemcloud/golem_sdk/async-core", "alias" : "async-core" }
+  ],
+  "supported-targets": "+wasm"
+}

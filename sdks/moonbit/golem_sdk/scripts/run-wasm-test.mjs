@@ -24,6 +24,7 @@ let instance
 let componentContext = 0
 let nextWaitableSet = 1
 let schemaValueStreamHostMode = 0
+let durableStreamHostMode = 0
 const resourceDrops = {
   secret: 0,
   "quota-token": 0,
@@ -125,10 +126,79 @@ const importObject = {
     "set-schema-value-stream-host-mode"(mode) {
       schemaValueStreamHostMode = mode
     },
+    "set-durable-stream-host-mode"(mode) {
+      durableStreamHostMode = mode
+    },
   },
 }
 
 for (const imported of WebAssembly.Module.imports(module)) {
+  if (
+    imported.kind === "function" &&
+    ((imported.module === "golem:agent/host@2.0.0" &&
+      ["[async-lower]read-durable-stream-batch", "[async-lower]append-durable-stream-batch"].includes(imported.name)) ||
+      (imported.module === "wasi:clocks/monotonic-clock@0.3.0" &&
+        imported.name === "[async-lower]wait-for") ||
+      (imported.module === "golem:core/types@2.0.0" &&
+        imported.name === "uuid-to-string") ||
+      (imported.module === "golem:api/host@1.5.0" &&
+        imported.name === "generate-idempotency-key"))
+  ) {
+    importObject[imported.module] ??= {}
+    importObject[imported.module][imported.name] = (request, result) => {
+      const receiptFixture =
+        imported.name === "[async-lower]append-durable-stream-batch" &&
+        (durableStreamHostMode === 2 || durableStreamHostMode === 3)
+      if (durableStreamHostMode !== 1 && !receiptFixture) {
+        throw new Error(`unexpected live import in SDK state test: ${imported.name}`)
+      }
+      if (imported.name === "[async-lower]wait-for") {
+        if (request !== 1000000n) throw new Error("incorrect timer duration lowering")
+        return 2
+      }
+      if (imported.name === "generate-idempotency-key" || imported.name === "uuid-to-string") {
+        throw new Error("binding fixture requires an explicit producer ID")
+      }
+      const memory = new DataView(instance.exports.memory.buffer)
+      const append = imported.name === "[async-lower]append-durable-stream-batch"
+      const authOffset = append ? 72 : 56
+      if (memory.getUint8(request + authOffset) !== 1 ||
+          memory.getInt32(request + authOffset + 4, true) !== 77) {
+        throw new Error("secret capability was not borrowed unchanged")
+      }
+      const timeoutOffset = append ? 64 : 48
+      if (memory.getBigUint64(request + timeoutOffset, true) !== 12345n) {
+        throw new Error("incorrect DS timeout lowering")
+      }
+      new Uint8Array(instance.exports.memory.buffer, result, 72).fill(0)
+      if (receiptFixture) {
+        if (durableStreamHostMode === 3) {
+          memory.setUint8(result + 8, 1)
+          // Transfer the URL allocation as an opaque offset, just as for errors.
+          memory.setInt32(result + 12, memory.getInt32(request, true), true)
+          memory.setInt32(result + 16, memory.getInt32(request + 4, true), true)
+        }
+        memory.setBigUint64(result + 24, memory.getBigUint64(request + 40, true), true)
+        memory.setBigUint64(result + 32, memory.getBigUint64(request + 48, true), true)
+        memory.setUint8(result + 40, memory.getUint8(request + 56))
+        return 2
+      }
+      // Typed error fixture, including every optional integer field.
+      memory.setUint8(result, 1)
+      memory.setUint8(result + 8, 13) // unavailable
+      // Transfer the lowered URL string allocation back as the fixture message.
+      memory.setInt32(result + 12, memory.getInt32(request, true), true)
+      memory.setInt32(result + 16, memory.getInt32(request + 4, true), true)
+      memory.setUint8(result + 24, 1)
+      memory.setBigUint64(result + 32, 987n, true)
+      memory.setUint8(result + 40, 1)
+      memory.setBigUint64(result + 48, 9007199254740991n, true)
+      memory.setUint8(result + 56, 1)
+      memory.setBigUint64(result + 64, 9007199254740990n, true)
+      return 2
+    }
+    continue
+  }
   if (
     imported.kind === "function" &&
     imported.module === "golem:tool/host@0.1.0"
