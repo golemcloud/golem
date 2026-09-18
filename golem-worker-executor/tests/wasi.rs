@@ -3699,8 +3699,8 @@ async fn interrupt_while_parked_in_p3_sleep(
 /// but the peer never sends any bytes) must deliver the interrupt promptly: the parked durable
 /// receive task races the worker's interrupt signal, abandons its open chunk child and parent
 /// durable calls (both `Start`s stay incomplete for replay) and unwinds the event loop
-/// cooperatively, closing the socket. After resume, the retained invocation replays: the guest
-/// reconnects live and completes against the now-responding server.
+/// cooperatively, closing the socket. After resume, the retained invocation reconstructs and
+/// reaches one durable terminal before a fresh invocation proves the socket path remains live.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -3711,6 +3711,8 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+    use std::collections::HashSet;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let context = TestContext::new(last_unique_id);
@@ -3720,11 +3722,14 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     let port = listener.local_addr()?.port();
     let (connected_tx, mut connected_rx) = tokio::sync::mpsc::unbounded_channel();
     let (closed_tx, mut closed_rx) = tokio::sync::mpsc::unbounded_channel();
+    let accepted_connections = Arc::new(AtomicUsize::new(0));
+    let server_accepted_connections = accepted_connections.clone();
 
     let tcp_server = spawn(
         async move {
             let mut first = true;
             while let Ok((mut stream, _)) = listener.accept().await {
+                server_accepted_connections.fetch_add(1, Ordering::SeqCst);
                 let is_first = first;
                 first = false;
                 let connected_tx = connected_tx.clone();
@@ -3754,6 +3759,12 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    let before_invocation = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .map(|entry| entry.oplog_index)
+        .unwrap_or(OplogIndex::INITIAL);
 
     let executor_clone = executor.clone();
     let component_clone = component.clone();
@@ -3772,12 +3783,75 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
         .in_current_span(),
     );
 
-    // Wait until the guest has connected, then give it a moment to enter the parked receive
-    // wait before interrupting.
+    // The accepted connection alone does not prove that the guest reached the receive wait.
+    // Wait for the receive parent and chunk Starts, and require both to remain open while the
+    // retained invocation has no Finished entry.
     tokio::time::timeout(Duration::from_secs(30), connected_rx.recv())
         .await?
         .ok_or_else(|| anyhow!("tcp server stopped before the guest connected"))?;
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    let (receive_start, chunk_start) = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            executor.commit_oplog(&worker_id).await?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let terminal_starts = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::End(end) => Some(end.start_index),
+                    PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+            let receive_starts = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start)
+                        if entry.oplog_index > before_invocation
+                            && start.function_name == "sockets::types::tcp-socket::receive" =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let chunk_starts = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start)
+                        if entry.oplog_index > before_invocation
+                            && start.function_name
+                                == "sockets::types::tcp-socket::receive-chunk" =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let admitted = oplog
+                .iter()
+                .filter(|entry| entry.oplog_index > before_invocation)
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+                .count();
+            let finished = oplog
+                .iter()
+                .filter(|entry| entry.oplog_index > before_invocation)
+                .filter(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+                })
+                .count();
+            if receive_starts.len() == 1
+                && chunk_starts.len() == 1
+                && !terminal_starts.contains(&receive_starts[0])
+                && !terminal_starts.contains(&chunk_starts[0])
+                && admitted == 1
+                && finished == 0
+            {
+                break Ok::<_, anyhow::Error>((receive_starts[0], chunk_starts[0]));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 
     executor.interrupt(&worker_id).await?;
 
@@ -3803,19 +3877,150 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
             .unwrap_or(false),
         "interrupting the worker must close the in-flight TCP connection"
     );
+    let before_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    for (function_name, interrupted_start) in [
+        ("sockets::types::tcp-socket::receive", receive_start),
+        ("sockets::types::tcp-socket::receive-chunk", chunk_start),
+    ] {
+        assert!(
+            before_resume.iter().all(|entry| !matches!(
+                &entry.entry,
+                PublicOplogEntry::End(end) if end.start_index == interrupted_start
+            )),
+            "the captured {function_name} Start must have no End before resume"
+        );
+        assert!(
+            before_resume.iter().all(|entry| !matches!(
+                &entry.entry,
+                PublicOplogEntry::Cancelled(cancelled)
+                    if cancelled.start_index == interrupted_start
+            )),
+            "the captured {function_name} Start must have no Cancelled terminal before resume"
+        );
+    }
+    assert_eq!(
+        before_resume
+            .iter()
+            .filter(|entry| entry.oplog_index > before_invocation)
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+            })
+            .count(),
+        0,
+        "the interrupted retained invocation must remain unfinished before resume"
+    );
 
-    // Resuming replays the worker; the retained invocation reconnects live and completes
-    // against the now-responding server.
+    // Resume must reconstruct and finish the retained invocation before any fresh invocation is
+    // submitted. The completed connect is replayed from the oplog, so reconstruction need not
+    // open a second external connection.
     executor.resume(&worker_id, false).await?;
     executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
         .await?;
+    let after_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let admitted = after_resume
+        .iter()
+        .filter(|entry| entry.oplog_index > before_invocation)
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .count();
+    let finished = after_resume
+        .iter()
+        .filter(|entry| entry.oplog_index > before_invocation)
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .count();
+    assert_eq!(
+        (admitted, finished),
+        (1, 1),
+        "resume must finish the retained invocation exactly once before the fresh call"
+    );
+    let ended_starts = after_resume
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) => Some(end.start_index),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let cancelled_starts = after_resume
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let jump_regions = after_resume
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Jump(jump) => Some(jump.jump.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for (function_name, interrupted_start) in [
+        ("sockets::types::tcp-socket::receive", receive_start),
+        ("sockets::types::tcp-socket::receive-chunk", chunk_start),
+    ] {
+        let starts = after_resume
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if entry.oplog_index > before_invocation
+                        && start.function_name == function_name =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            starts.len(),
+            2,
+            "{function_name} must retain the interrupted Start and record one settled replay Start"
+        );
+        assert!(!ended_starts.contains(&interrupted_start));
+        assert!(!cancelled_starts.contains(&interrupted_start));
+        assert!(
+            jump_regions
+                .iter()
+                .any(|region| region.contains(interrupted_start)),
+            "the interrupted {function_name} Start at {interrupted_start} must be covered by a recovery Jump"
+        );
+        let replay_starts = starts
+            .into_iter()
+            .filter(|start| *start != interrupted_start)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            replay_starts.len(),
+            1,
+            "{function_name} must have exactly one distinct replay Start"
+        );
+        let replay_start = replay_starts[0];
+        assert!(
+            ended_starts.contains(&replay_start),
+            "the distinct replay {function_name} Start must carry the End"
+        );
+        assert!(!cancelled_starts.contains(&replay_start));
+        assert!(
+            jump_regions
+                .iter()
+                .all(|region| !region.contains(replay_start)),
+            "the settled replay {function_name} Start must lie outside every recovery Jump"
+        );
+    }
+    assert_eq!(
+        accepted_connections.load(Ordering::SeqCst),
+        1,
+        "replay of the completed connect must not open another external connection"
+    );
 
     let result2 = executor
         .invoke_and_await_agent(&component, &agent_id, "tcp_collect_p3", data_value!(port))
         .await?
         .into_typed::<Result<String, String>>()?;
     assert_eq!(result2, Ok("hello".to_string()));
+    assert_eq!(
+        accepted_connections.load(Ordering::SeqCst),
+        2,
+        "only the fresh liveness invocation may open the second connection"
+    );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
