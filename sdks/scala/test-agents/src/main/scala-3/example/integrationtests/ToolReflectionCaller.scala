@@ -21,23 +21,48 @@ import scala.concurrent.{ExecutionContext, Future}
 @toolDefinition(name = "scala-reflection-test")
 trait ScalaReflectionTestTool {
   def echo(label: String): String
+  @arg("maybe", scope = "option")
+  def optional(maybe: Option[String]): String
 }
 
 @toolImplementation()
 final class ScalaReflectionTestToolImpl extends ScalaReflectionTestTool {
-  override def echo(label: String): String = s"scala-tool:$label"
+  override def echo(label: String): String             = s"scala-tool:$label"
+  override def optional(maybe: Option[String]): String = maybe.getOrElse("omitted")
 }
 
 @agentDefinition()
 trait ScalaToolReflectionCaller extends BaseAgent {
   class Id(val name: String)
   def roundTrip(): Future[String]
+  def optionalRoundTrip(): Future[String]
   def agentRoundTrip(): Future[String]
 }
 
 @agentImplementation()
 final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflectionCaller {
   private implicit val ec: ExecutionContext = ExecutionContext.global
+
+  override def optionalRoundTrip(): Future[String] = {
+    val prepared = for {
+      tool    <- Reflection.getToolType("scala-reflection-test").left.map(_.toString)
+      command <- tool.command(List("optional")).left.map(_.toString)
+    } yield command
+
+    prepared match {
+      case Left(error)    => Future.successful(s"error:$error")
+      case Right(command) =>
+        for {
+          omittedJson    <- command.invokeJson(Json.Object("maybe" -> Json.Null))
+          suppliedJson   <- command.invokeJson(Json.Object("maybe" -> Json.String("supplied")))
+          omittedNative  <- command.invokeValue(SchemaValue.RecordValue(List(SchemaValue.OptionValue(None))))
+          suppliedNative <-
+            command.invokeValue(
+              SchemaValue.RecordValue(List(SchemaValue.OptionValue(Some(SchemaValue.StringValue("supplied")))))
+            )
+        } yield s"$omittedJson|$suppliedJson|$omittedNative|$suppliedNative"
+    }
+  }
 
   override def roundTrip(): Future[String] = {
     val prepared = for {
