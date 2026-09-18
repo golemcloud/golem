@@ -17,6 +17,7 @@ use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRequest,
     InvocationStart, ResumeAttach, ResumeOperation, StreamCancel, StreamCancelReason,
     StreamCancelRole, StreamCursor, StreamMappingRole, invocation_request, invocation_response,
+    invocation_session_result,
 };
 use golem_common::model::{AgentId, IdempotencyKey as ModelIdempotencyKey};
 use golem_service_base::model::auth::AuthCtx;
@@ -102,6 +103,95 @@ enum Command {
     InputEof(InputCredits),
     DisposeInput,
     DisposeOutput { stream_id: u64 },
+}
+
+struct PreparedCommand {
+    request: InvocationRequest,
+    credits: Option<InputCredits>,
+}
+
+impl Command {
+    fn prepare(
+        self,
+        input: &mut InputProgress,
+        output: &mut OutputProgress,
+        epoch: u64,
+    ) -> Result<Option<PreparedCommand>, HttpSessionError> {
+        let (request, credits) = match self {
+            Self::Input(bytes, credits) => {
+                if input.terminal || input.disposal_pending {
+                    return Ok(None);
+                }
+                let sequence = input.next_sequence;
+                input.next_sequence += 1;
+                let item = InputStreamItem {
+                    transport_stream_id: INPUT_STREAM_ID,
+                    sequence,
+                    payload: Some(input_stream_item::Payload::Value(SchemaValue {
+                        value: Some(schema_value::Value::ListValue(ListValue {
+                            elements: bytes
+                                .into_iter()
+                                .map(|byte| SchemaValue {
+                                    value: Some(schema_value::Value::U8Value(byte as u32)),
+                                })
+                                .collect(),
+                        })),
+                    })),
+                    durable_stream_id: None,
+                    epoch: 0,
+                };
+                (
+                    InvocationRequest {
+                        request: Some(invocation_request::Request::InputItem(item)),
+                    },
+                    Some(credits),
+                )
+            }
+            Self::InputEof(credits) => {
+                if input.terminal || input.disposal_pending {
+                    return Ok(None);
+                }
+                input.terminal = true;
+                (
+                    InvocationRequest {
+                        request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+                            transport_stream_id: INPUT_STREAM_ID,
+                            sequence: input.next_sequence,
+                            durable_stream_id: None,
+                            epoch: 0,
+                        })),
+                    },
+                    Some(credits),
+                )
+            }
+            Self::DisposeInput => {
+                if !input.terminal {
+                    input.disposal_pending = true;
+                }
+                return Ok(None);
+            }
+            Self::DisposeOutput { stream_id } => {
+                let durable_id = *output.controls.get(&stream_id).ok_or_else(|| {
+                    HttpSessionError::Protocol(format!("output stream {stream_id} is unknown"))
+                })?;
+                if output.terminals.contains(&durable_id)
+                    || !output.pending_disposals.insert(stream_id)
+                {
+                    return Ok(None);
+                }
+                (
+                    output_cancel_request(
+                        stream_id,
+                        durable_id,
+                        epoch,
+                        StreamCancelReason::ConsumerDrop,
+                    ),
+                    None,
+                )
+            }
+        };
+        Ok(Some(PreparedCommand { request, credits }))
+    }
 }
 
 #[derive(Clone)]
@@ -480,6 +570,133 @@ struct AcceptedIdentity {
     input_mapping: DurableStreamMapping,
 }
 
+#[derive(Default)]
+struct InputProgress {
+    retained: VecDeque<RetainedInput>,
+    retained_bytes: usize,
+    next_sequence: u64,
+    terminal: bool,
+    disposal_pending: bool,
+}
+
+impl InputProgress {
+    fn can_read(&self, limits: &HttpSessionLimits) -> bool {
+        self.retained.len() < limits.retained_input_frames
+            && self.retained_bytes < limits.retained_input_bytes
+    }
+
+    fn acknowledge(&mut self, sequence: u64) {
+        while self
+            .retained
+            .front()
+            .is_some_and(|frame| frame.end_sequence <= sequence)
+        {
+            self.retained_bytes -= self.retained.pop_front().unwrap().encoded_bytes;
+        }
+    }
+
+    fn clear(&mut self) {
+        self.retained.clear();
+        self.retained_bytes = 0;
+    }
+
+    fn apply_high_water(&mut self, mapping: &DurableStreamMapping) {
+        if self.disposal_pending {
+            self.terminal = mapping
+                .high_water
+                .as_ref()
+                .is_some_and(|water| water.terminal);
+        }
+        if let Some(high_water) = mapping.high_water.as_ref() {
+            if high_water.terminal {
+                self.terminal = true;
+                self.clear();
+            }
+            self.acknowledge(high_water.highest_contiguous_sequence);
+        }
+    }
+
+    fn retain(
+        &mut self,
+        request: InvocationRequest,
+        permit: Option<InputCredits>,
+        limits: &HttpSessionLimits,
+    ) -> Result<(), HttpSessionError> {
+        if permit.is_some() && self.retained.len() >= limits.retained_input_frames {
+            return Err(HttpSessionError::RetainedInputLimit);
+        }
+        let retain = permit.is_some()
+            || matches!(
+                request.request,
+                Some(invocation_request::Request::InputEnd(_))
+            );
+        if retain {
+            let encoded_bytes = request.encoded_len();
+            self.retained.push_back(RetainedInput {
+                end_sequence: request_end_sequence(&request),
+                request,
+                encoded_bytes,
+                _permit: permit,
+            });
+            self.retained_bytes += encoded_bytes;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct OutputProgress {
+    cursors: HashMap<(u64, u64), Vec<u8>>,
+    controls: HashMap<u64, (u64, u64)>,
+    terminals: HashSet<(u64, u64)>,
+    pending_disposals: HashSet<u64>,
+    result_value: Option<Option<invocation_session_result::Result>>,
+}
+
+impl OutputProgress {
+    fn observe(&mut self, stream_id: u64, durable_id: (u64, u64), offset: Vec<u8>) {
+        self.cursors.insert(durable_id, offset);
+        self.controls.insert(stream_id, durable_id);
+    }
+
+    fn terminal(&mut self, stream_id: u64, durable_id: (u64, u64), offset: Vec<u8>) {
+        self.observe(stream_id, durable_id, offset);
+        self.terminals.insert(durable_id);
+        self.pending_disposals.remove(&stream_id);
+    }
+
+    fn discover_result_streams(
+        &mut self,
+        mappings: &[DurableStreamMapping],
+    ) -> Vec<(u64, (u64, u64))> {
+        let mut discovered = Vec::new();
+        for mapping in mappings {
+            if mapping.role() == StreamMappingRole::Output
+                && let Some(id) = mapping
+                    .handle
+                    .as_ref()
+                    .and_then(|handle| handle.stream_id.as_ref())
+            {
+                let id = uuid_pair(id);
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    self.controls.entry(mapping.transport_stream_id)
+                {
+                    entry.insert(id);
+                    discovered.push((mapping.transport_stream_id, id));
+                }
+            }
+        }
+        discovered
+    }
+}
+
+#[derive(Default)]
+struct RecoveryProgress {
+    deadline: Option<Instant>,
+    started: Option<Instant>,
+    attempts: usize,
+}
+
 async fn run_session(
     start: InvocationStart,
     transport: Arc<dyn SessionTransport>,
@@ -490,23 +707,13 @@ async fn run_session(
     completed: Arc<AtomicBool>,
     cancelled: CancellationToken,
 ) {
-    let mut retained = VecDeque::<RetainedInput>::new();
-    let mut retained_bytes = 0usize;
-    let mut next_input_sequence = 0u64;
-    let mut input_terminal = false;
-    let mut pending_input_disposal = false;
+    let mut input = InputProgress::default();
     let mut accepted: Option<AcceptedIdentity> = None;
-    let mut output_cursors = HashMap::<(u64, u64), Vec<u8>>::new();
-    let mut output_controls = HashMap::<u64, (u64, u64)>::new();
-    let mut terminal_outputs = HashSet::<(u64, u64)>::new();
-    let mut recovery_deadline = None;
-    let mut resumes = 0usize;
+    let mut output = OutputProgress::default();
+    let mut recovery = RecoveryProgress::default();
     let mut first = true;
     let mut commands_open = true;
     let mut controls_open = true;
-    let mut result_value = None;
-    let mut pending_output_disposals = HashSet::new();
-    let mut recovery_started = None;
 
     'attempts: loop {
         if cancelled.is_cancelled() {
@@ -528,10 +735,11 @@ async fn run_session(
                 send_error(&events, HttpSessionError::TransportUnavailable).await;
                 return;
             };
-            let deadline =
-                *recovery_deadline.get_or_insert_with(|| Instant::now() + limits.retry_deadline);
-            let started = *recovery_started.get_or_insert_with(Instant::now);
-            if resumes >= limits.max_resume_attempts || Instant::now() >= deadline {
+            let deadline = *recovery
+                .deadline
+                .get_or_insert_with(|| Instant::now() + limits.retry_deadline);
+            let started = *recovery.started.get_or_insert_with(Instant::now);
+            if recovery.attempts >= limits.max_resume_attempts || Instant::now() >= deadline {
                 crate::metrics::record_http_session_reattach_outcome(
                     "exhausted",
                     started.elapsed(),
@@ -539,10 +747,10 @@ async fn run_session(
                 send_error(&events, HttpSessionError::ResumeExhausted).await;
                 return;
             }
-            resumes += 1;
+            recovery.attempts += 1;
             crate::metrics::record_http_session_reattach_attempt();
-            debug!(attempt = resumes, "HTTP session reattach attempt");
-            let resume = make_resume(identity, &output_cursors, start.principal.clone());
+            debug!(attempt = recovery.attempts, "HTTP session reattach attempt");
+            let resume = make_resume(identity, &output.cursors, start.principal.clone());
             first_request = InvocationRequest {
                 request: Some(invocation_request::Request::ResumeAttach(resume.clone())),
             };
@@ -576,17 +784,17 @@ async fn run_session(
             send_error(&events, HttpSessionError::Protocol(error)).await;
             return;
         }
-        for durable_id in &terminal_outputs {
+        for durable_id in &output.terminals {
             if let Err(error) = protocol.mark_terminal_resume_cursor(*durable_id) {
                 send_error(&events, HttpSessionError::Protocol(error)).await;
                 return;
             }
         }
-        let decision = if let Some(deadline) = recovery_deadline {
+        let decision = if let Some(deadline) = recovery.deadline {
             match tokio::time::timeout_at(deadline, responses.next()).await {
                 Ok(decision) => decision,
                 Err(_) => {
-                    if let Some(started) = recovery_started {
+                    if let Some(started) = recovery.started {
                         crate::metrics::record_http_session_reattach_outcome(
                             "expired",
                             started.elapsed(),
@@ -671,16 +879,17 @@ async fn run_session(
                 cancelled.cancel();
             }
         }
-        if recovery_deadline.take().is_some() {
+        if recovery.deadline.take().is_some() {
             crate::metrics::record_http_session_reattach_outcome(
                 "accepted",
-                recovery_started
+                recovery
+                    .started
                     .take()
                     .unwrap_or_else(Instant::now)
                     .elapsed(),
             );
             debug!(
-                attempts = resumes,
+                attempts = recovery.attempts,
                 outcome = "accepted",
                 "HTTP session reattach finished"
             );
@@ -716,26 +925,8 @@ async fn run_session(
         let mapping = accepted.as_ref().unwrap().input_mapping.clone();
 
         // A resumed attachment may have persisted frames whose acknowledgements were lost.
-        if pending_input_disposal {
-            input_terminal = mapping
-                .high_water
-                .as_ref()
-                .is_some_and(|water| water.terminal);
-        }
-        if let Some(high_water) = mapping.high_water.as_ref() {
-            if high_water.terminal {
-                input_terminal = true;
-                retained.clear();
-                retained_bytes = 0;
-            }
-            while retained
-                .front()
-                .is_some_and(|frame| frame.end_sequence <= high_water.highest_contiguous_sequence)
-            {
-                retained_bytes -= retained.pop_front().unwrap().encoded_bytes;
-            }
-        }
-        for retained_frame in &retained {
+        input.apply_high_water(&mapping);
+        for retained_frame in &input.retained {
             let request = with_attachment(retained_frame.request.clone(), &mapping, epoch);
             if let Err(error) = protocol.validate_trusted_request(&request) {
                 send_error(&events, HttpSessionError::Protocol(error)).await;
@@ -747,11 +938,11 @@ async fn run_session(
         }
         // Output disposal is durable only once its terminal response is observed. Reissue any
         // still-pending controls after every accepted attachment.
-        for stream_id in pending_output_disposals.iter().copied().collect::<Vec<_>>() {
-            let Some(&durable_id) = output_controls.get(&stream_id) else {
+        for stream_id in output.pending_disposals.iter().copied().collect::<Vec<_>>() {
+            let Some(&durable_id) = output.controls.get(&stream_id) else {
                 continue;
             };
-            if terminal_outputs.contains(&durable_id) {
+            if output.terminals.contains(&durable_id) {
                 continue;
             }
             let request = output_cancel_request(
@@ -770,10 +961,10 @@ async fn run_session(
         }
 
         loop {
-            if pending_input_disposal && !input_terminal && retained.is_empty() {
+            if input.disposal_pending && !input.terminal && input.retained.is_empty() {
                 let request = cancel_request(
                     INPUT_STREAM_ID,
-                    next_input_sequence,
+                    input.next_sequence,
                     StreamCancelRole::InputProducer,
                     StreamCancelReason::ConsumerDrop,
                     &mapping,
@@ -783,13 +974,12 @@ async fn run_session(
                     send_error(&events, HttpSessionError::Protocol(error)).await;
                     return;
                 }
-                input_terminal = true;
+                input.terminal = true;
                 if request_tx.send(request).await.is_err() {
                     continue 'attempts;
                 }
             }
-            let can_read_input = retained.len() < limits.retained_input_frames
-                && retained_bytes < limits.retained_input_bytes;
+            let can_read_input = input.can_read(&limits);
             tokio::select! {
                 _ = async {
                     tokio::select! {
@@ -797,71 +987,12 @@ async fn run_session(
                         _ = events.closed() => { cancelled.cancel(); },
                     }
                 } => {
-                    // Transport EOF only detaches. Send explicit stream terminals while
-                    // this attachment is still alive, then allow their delivery to drain.
-                    // The owner's cleanup timeout bounds this entire cancellation path.
                     commands.close();
                     controls.close();
-                    let mut input_cancel_sent = input_terminal;
-                    let mut cancellations = Vec::new();
-                    if !input_terminal && retained.is_empty() {
-                        cancellations.push(cancel_request(INPUT_STREAM_ID, next_input_sequence,
-                            StreamCancelRole::InputProducer, StreamCancelReason::Cancelled,
-                            &mapping, epoch));
-                        input_cancel_sent = true;
-                    }
-                    for (&stream_id, &durable_id) in &output_controls {
-                        if !terminal_outputs.contains(&durable_id) && !pending_output_disposals.contains(&stream_id) {
-                            cancellations.push(output_cancel_request(stream_id, durable_id, epoch, StreamCancelReason::Cancelled));
-                        }
-                    }
-                    for request in cancellations {
-                        if protocol.validate_trusted_request(&request).is_err()
-                            || request_tx.send(request).await.is_err() {
-                            return;
-                        }
-                    }
-                    while let Some(Ok(response)) = responses.next().await {
-                        if protocol.validate_response(&response).is_err() { return; }
-                        match response.response {
-                            Some(invocation_response::Response::InputAck(ack)) => {
-                                while retained.front().is_some_and(|frame| frame.end_sequence <= ack.highest_contiguous_sequence) {
-                                    retained.pop_front();
-                                }
-                            }
-                            Some(invocation_response::Response::StreamCancel(cancel)) if cancel.role() == StreamCancelRole::InputConsumer => {
-                                input_cancel_sent = true;
-                                retained.clear();
-                            }
-                            Some(invocation_response::Response::Result(result)) => {
-                                // The guest may return its output after the HTTP owner has gone.
-                                for mapping in &result.new_stream_mappings {
-                                    if mapping.role() == StreamMappingRole::Output
-                                        && let Some(id) = mapping.handle.as_ref().and_then(|handle| handle.stream_id.as_ref())
-                                        && output_controls.insert(mapping.transport_stream_id, uuid_pair(id)).is_none()
-                                    {
-                                        let request = output_cancel_request(mapping.transport_stream_id, uuid_pair(id), epoch, StreamCancelReason::Cancelled);
-                                        if protocol.validate_trusted_request(&request).is_err()
-                                            || request_tx.send(request).await.is_err() { return; }
-                                    }
-                                }
-                            }
-                            Some(invocation_response::Response::Finished(_)) => {
-                                completed.store(true, Ordering::Release);
-                                return;
-                            }
-                            _ => {}
-                        }
-                        // An ACK may already have left the executor before we observe it.
-                        // Only cancel at a sequence both peers have acknowledged.
-                        if !input_cancel_sent && retained.is_empty() {
-                            let request = cancel_request(INPUT_STREAM_ID, next_input_sequence,
-                                StreamCancelRole::InputProducer, StreamCancelReason::Cancelled, &mapping, epoch);
-                            if protocol.validate_trusted_request(&request).is_err()
-                                || request_tx.send(request).await.is_err() { return; }
-                            input_cancel_sent = true;
-                        }
-                    }
+                    cancel_and_drain(
+                        &mut input, &mut output, &mut protocol, &request_tx,
+                        &mut responses, &mapping, epoch, &completed,
+                    ).await;
                     return;
                 }
                 response = async {
@@ -885,62 +1016,46 @@ async fn run_session(
                     }
                     match response.response.unwrap() {
                         invocation_response::Response::InputAck(ack) => {
-                            while retained.front().is_some_and(|frame| frame.end_sequence <= ack.highest_contiguous_sequence) {
-                                retained_bytes -= retained.pop_front().unwrap().encoded_bytes;
-                            }
+                            input.acknowledge(ack.highest_contiguous_sequence);
                         }
                         invocation_response::Response::OutputItem(item) => {
                             let id = uuid_pair(item.durable_stream_id.as_ref().unwrap());
-                            output_cursors.insert(id, item.durable_offset.clone());
-                            output_controls.insert(item.transport_stream_id, id);
-                            if pending_output_disposals.contains(&item.transport_stream_id) {
+                            output.observe(item.transport_stream_id, id, item.durable_offset.clone());
+                            if output.pending_disposals.contains(&item.transport_stream_id) {
                                 continue;
                             }
                             permit.send(HttpSessionEvent::OutputItem(item));
                         }
                         invocation_response::Response::OutputEnd(end) => {
                             let id = uuid_pair(end.durable_stream_id.as_ref().unwrap());
-                            output_cursors.insert(id, end.durable_offset.clone());
-                            terminal_outputs.insert(id);
-                            pending_output_disposals.remove(&end.transport_stream_id);
+                            output.terminal(end.transport_stream_id, id, end.durable_offset.clone());
                             permit.send(HttpSessionEvent::OutputEnd(end));
                         }
                         invocation_response::Response::OutputError(error) => {
                             let id = uuid_pair(error.durable_stream_id.as_ref().unwrap());
-                            output_cursors.insert(id, error.durable_offset.clone());
-                            terminal_outputs.insert(id);
-                            pending_output_disposals.remove(&error.transport_stream_id);
+                            output.terminal(error.transport_stream_id, id, error.durable_offset.clone());
                             permit.send(HttpSessionEvent::OutputError(error));
                         }
                         invocation_response::Response::Result(result) => {
-                            for mapping in &result.new_stream_mappings {
-                                if mapping.role() == StreamMappingRole::Output
-                                    && let Some(stream_id) = mapping.handle.as_ref().and_then(|handle| handle.stream_id.as_ref())
-                                {
-                                    output_controls.entry(mapping.transport_stream_id).or_insert(uuid_pair(stream_id));
-                                }
-                            }
-                            if let Some(expected) = &result_value {
+                            output.discover_result_streams(&result.new_stream_mappings);
+                            if let Some(expected) = &output.result_value {
                                 if expected != &result.result {
                                     send_error(&events, HttpSessionError::Protocol("resumed result changed".into())).await;
                                     return;
                                 }
                                 continue;
                             }
-                            result_value = Some(result.result.clone());
+                            output.result_value = Some(result.result.clone());
                             permit.send(HttpSessionEvent::Result(result));
                         }
                         invocation_response::Response::StreamCancel(cancel) => {
                             if cancel.role() == StreamCancelRole::InputConsumer {
-                                input_terminal = true;
-                                retained.clear();
-                                retained_bytes = 0;
+                                input.terminal = true;
+                                input.clear();
                             }
                             if cancel.role() == StreamCancelRole::OutputProducer {
                                 let id = uuid_pair(cancel.durable_stream_id.as_ref().unwrap());
-                                output_cursors.insert(id, cancel.durable_offset.clone());
-                                terminal_outputs.insert(id);
-                                pending_output_disposals.remove(&cancel.transport_stream_id);
+                                output.terminal(cancel.transport_stream_id, id, cancel.durable_offset.clone());
                             }
                             permit.send(HttpSessionEvent::StreamCancel(cancel));
                         }
@@ -963,7 +1078,7 @@ async fn run_session(
                             if command.is_none() { controls_open = false; }
                             command
                         },
-                        command = commands.recv(), if commands_open && (can_read_input || input_terminal) => {
+                        command = commands.recv(), if commands_open && (can_read_input || input.terminal) => {
                             if command.is_none() { commands_open = false; }
                             command
                         },
@@ -973,72 +1088,128 @@ async fn run_session(
                     let Some(command) = command else {
                         continue;
                     };
-                    let requests = match command {
-                        Command::Input(bytes, permit) => {
-                            if input_terminal || pending_input_disposal {
-                                continue;
-                            }
-                            let sequence = next_input_sequence;
-                            next_input_sequence += 1;
-                            vec![(InvocationRequest { request: Some(invocation_request::Request::InputItem(InputStreamItem {
-                                        transport_stream_id: INPUT_STREAM_ID,
-                                        sequence,
-                                        payload: Some(input_stream_item::Payload::Value(SchemaValue {
-                                            value: Some(schema_value::Value::ListValue(ListValue {
-                                                elements: bytes.into_iter().map(|byte| SchemaValue {
-                                                    value: Some(schema_value::Value::U8Value(byte as u32)),
-                                                }).collect(),
-                                            })),
-                                        })),
-                                        durable_stream_id: None,
-                                        epoch: 0,
-                                    })) }, Some(permit))]
-                        }
-                        Command::InputEof(permit) => {
-                            if input_terminal || pending_input_disposal { continue; }
-                            input_terminal = true;
-                            vec![(InvocationRequest { request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
-                            transport_stream_id: INPUT_STREAM_ID, sequence: next_input_sequence,
-                            durable_stream_id: None, epoch: 0,
-                        })) }, Some(permit))]
-                        }
-                        Command::DisposeInput => {
-                            if input_terminal { continue; }
-                            pending_input_disposal = true;
-                            continue;
-                        },
-                        Command::DisposeOutput { stream_id } => {
-                            let Some(&durable_id) = output_controls.get(&stream_id) else {
-                                send_error(&events, HttpSessionError::Protocol(format!("output stream {stream_id} is unknown"))).await;
-                                return;
-                            };
-                            if terminal_outputs.contains(&durable_id) || !pending_output_disposals.insert(stream_id) {
-                                continue;
-                            }
-                            vec![(output_cancel_request(stream_id, durable_id, epoch, StreamCancelReason::ConsumerDrop), None)]
+                    let prepared = match command.prepare(&mut input, &mut output, epoch) {
+                        Ok(Some(prepared)) => prepared,
+                        Ok(None) => continue,
+                        Err(error) => {
+                            send_error(&events, error).await;
+                            return;
                         }
                     };
-                    for (plain, permit) in requests {
-                        let request = with_attachment(plain, &mapping, epoch);
-                        if let Err(error) = protocol.validate_trusted_request(&request) {
-                            send_error(&events, HttpSessionError::Protocol(error)).await;
-                            return;
-                        }
-                        let encoded_bytes = request.encoded_len();
-                        if permit.is_some() && retained.len() >= limits.retained_input_frames {
-                            send_error(&events, HttpSessionError::RetainedInputLimit).await;
-                            return;
-                        }
-                        let end_sequence = request_end_sequence(&request);
-                        let retain = permit.is_some() || matches!(request.request, Some(invocation_request::Request::InputEnd(_)));
-                        if retain {
-                            retained.push_back(RetainedInput { request: request.clone(), encoded_bytes, end_sequence, _permit: permit });
-                            retained_bytes += encoded_bytes;
-                        }
-                        if request_tx.send(request).await.is_err() { continue 'attempts; }
+                    let request = with_attachment(prepared.request, &mapping, epoch);
+                    if let Err(error) = protocol.validate_trusted_request(&request) {
+                        send_error(&events, HttpSessionError::Protocol(error)).await;
+                        return;
+                    }
+                    if let Err(error) = input.retain(request.clone(), prepared.credits, &limits) {
+                        send_error(&events, error).await;
+                        return;
+                    }
+                    if request_tx.send(request).await.is_err() { continue 'attempts; }
+                }
+            }
+        }
+    }
+}
+
+async fn cancel_and_drain(
+    input: &mut InputProgress,
+    output: &mut OutputProgress,
+    protocol: &mut InvocationSessionState,
+    requests: &mpsc::Sender<InvocationRequest>,
+    responses: &mut InvocationResponseStream,
+    mapping: &DurableStreamMapping,
+    epoch: u64,
+    completed: &AtomicBool,
+) {
+    // Transport EOF only detaches. Send explicit stream terminals while this attachment
+    // is alive, then drain their delivery within the owner's cleanup timeout.
+    let mut input_cancel_sent = input.terminal;
+    let mut cancellations = Vec::new();
+    if !input.terminal && input.retained.is_empty() {
+        cancellations.push(cancel_request(
+            INPUT_STREAM_ID,
+            input.next_sequence,
+            StreamCancelRole::InputProducer,
+            StreamCancelReason::Cancelled,
+            mapping,
+            epoch,
+        ));
+        input_cancel_sent = true;
+    }
+    for (&stream_id, &durable_id) in &output.controls {
+        if !output.terminals.contains(&durable_id) && !output.pending_disposals.contains(&stream_id)
+        {
+            cancellations.push(output_cancel_request(
+                stream_id,
+                durable_id,
+                epoch,
+                StreamCancelReason::Cancelled,
+            ));
+        }
+    }
+    for request in cancellations {
+        if protocol.validate_trusted_request(&request).is_err()
+            || requests.send(request).await.is_err()
+        {
+            return;
+        }
+    }
+    while let Some(Ok(response)) = responses.next().await {
+        if protocol.validate_response(&response).is_err() {
+            return;
+        }
+        match response.response {
+            Some(invocation_response::Response::InputAck(ack)) => {
+                input.acknowledge(ack.highest_contiguous_sequence);
+            }
+            Some(invocation_response::Response::StreamCancel(cancel))
+                if cancel.role() == StreamCancelRole::InputConsumer =>
+            {
+                input_cancel_sent = true;
+                input.clear();
+            }
+            Some(invocation_response::Response::Result(result)) => {
+                // The guest may return its output after the HTTP owner has gone.
+                for (stream_id, durable_id) in
+                    output.discover_result_streams(&result.new_stream_mappings)
+                {
+                    let request = output_cancel_request(
+                        stream_id,
+                        durable_id,
+                        epoch,
+                        StreamCancelReason::Cancelled,
+                    );
+                    if protocol.validate_trusted_request(&request).is_err()
+                        || requests.send(request).await.is_err()
+                    {
+                        return;
                     }
                 }
             }
+            Some(invocation_response::Response::Finished(_)) => {
+                completed.store(true, Ordering::Release);
+                return;
+            }
+            _ => {}
+        }
+        // An ACK may already have left the executor before we observe it.
+        // Only cancel at a sequence both peers have acknowledged.
+        if !input_cancel_sent && input.retained.is_empty() {
+            let request = cancel_request(
+                INPUT_STREAM_ID,
+                input.next_sequence,
+                StreamCancelRole::InputProducer,
+                StreamCancelReason::Cancelled,
+                mapping,
+                epoch,
+            );
+            if protocol.validate_trusted_request(&request).is_err()
+                || requests.send(request).await.is_err()
+            {
+                return;
+            }
+            input_cancel_sent = true;
         }
     }
 }

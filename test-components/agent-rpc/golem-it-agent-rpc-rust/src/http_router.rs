@@ -1,12 +1,7 @@
-use golem_rust::agentic::{
-    AgentStream, EnrichedAgentMethod, EnrichedParameterSchema, ExtendedAgentConstructor,
-    ExtendedAgentType, spawn_local,
+use golem_rust::agentic::{AgentStream, spawn_local};
+use golem_rust::{
+    FromSchema, IntoSchema, agent_definition, agent_implementation, description, endpoint,
 };
-use golem_rust::golem_agentic::golem::agent::common::{
-    AgentMode, AgentTypeKind, AuthDetails, CorsOptions, HttpEndpointDetails, HttpMethod,
-    HttpMountDetails, PathSegment, Snapshotting,
-};
-use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
 
 #[derive(IntoSchema, FromSchema)]
 pub struct Header {
@@ -32,9 +27,18 @@ pub struct HttpResponse {
     pub body: AgentStream<Vec<u8>>,
 }
 
-#[agent_definition]
+#[agent_definition(
+    kind = "http-router",
+    ephemeral,
+    mount = "/raw",
+    auth = false,
+    cors = ["https://allowed.test"],
+    snapshotting = "disabled",
+)]
+#[description("Raw streaming HTTP router test fixture")]
 pub trait RawHttpRouter {
     fn new() -> Self;
+    #[endpoint(any = "/")]
     async fn route(&self, request: HttpRequest) -> HttpResponse;
 }
 
@@ -75,68 +79,6 @@ fn failing_stream(
 
 #[agent_implementation]
 impl RawHttpRouter for RawHttpRouterImpl {
-    fn __register_agent_type() {
-        use golem_rust::agentic::{AgentTypeName, register_agent_type};
-        let agent_type = ExtendedAgentType {
-            type_name: "RawHttpRouter".to_string(),
-            kind: AgentTypeKind::HttpRouter,
-            description: "Raw streaming HTTP router test fixture".to_string(),
-            source_language: "rust".to_string(),
-            constructor: ExtendedAgentConstructor {
-                name: None,
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: vec![],
-            },
-            methods: vec![EnrichedAgentMethod {
-                name: "route".to_string(),
-                description: String::new(),
-                http_endpoint: vec![HttpEndpointDetails {
-                    http_method: HttpMethod::Any,
-                    path_suffix: vec![],
-                    header_vars: vec![],
-                    query_vars: vec![],
-                    auth_details: None,
-                    cors_options: CorsOptions {
-                        allowed_patterns: vec![],
-                    },
-                }],
-                prompt_hint: None,
-                input_schema: vec![(
-                    "request".to_string(),
-                    EnrichedParameterSchema::Value(
-                        golem_rust::schema::try_into_schema_graph::<HttpRequest>()
-                            .expect("request schema"),
-                    ),
-                )],
-                output_schema: vec![(
-                    "result".to_string(),
-                    golem_rust::schema::try_into_schema_graph::<HttpResponse>()
-                        .expect("response schema"),
-                )],
-                read_only: None,
-            }],
-            dependencies: vec![],
-            mode: AgentMode::Ephemeral,
-            http_mount: Some(HttpMountDetails {
-                path_prefix: vec![PathSegment::Literal("raw".to_string())],
-                auth_details: Some(AuthDetails { required: false }),
-                phantom_agent: false,
-                cors_options: CorsOptions {
-                    allowed_patterns: vec!["https://allowed.test".to_string()],
-                },
-                webhook_suffix: vec![],
-                static_bindings: vec![],
-                filesystem_bindings: vec![],
-                openapi_provider_method: None,
-            }),
-            snapshotting: Snapshotting::Disabled,
-            config: vec![],
-            sorted_method_indices: vec![],
-        };
-        register_agent_type(AgentTypeName(agent_type.type_name.clone()), agent_type);
-    }
-
     fn new() -> Self {
         Self
     }

@@ -225,6 +225,28 @@ fn request(body: &'static str, session: bool, origin: bool) -> Request {
 }
 
 #[test]
+async fn typed_route_can_decline_h2c_upgrade_and_dispatch_over_http1() {
+    let mut request = request("not-json", true, false);
+    request
+        .headers_mut()
+        .insert(http::header::UPGRADE, "h2c".parse().unwrap());
+    request.headers_mut().insert(
+        http::header::CONNECTION,
+        "Upgrade, HTTP2-Settings".parse().unwrap(),
+    );
+    request.headers_mut().insert(
+        "http2-settings",
+        "AAEAAEAAAAIAAAABAAMAAABk".parse().unwrap(),
+    );
+    let response = request_handler().handle_request(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(
+        response.headers()[http::header::ALLOW],
+        "PUT, HEAD, GET, DELETE"
+    );
+}
+
+#[test]
 async fn durable_stream_route_is_guarded_at_the_request_handler_boundary() {
     let handler = request_handler();
 

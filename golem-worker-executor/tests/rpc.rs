@@ -784,7 +784,7 @@ async fn interrupt_output_producer_after_result(
         .validate_trusted_request(&start)
         .map_err(anyhow::Error::msg)?;
     let (mut requests, receiver) = mpsc::channel(8);
-    requests.send(start).await?;
+    requests.send(start.clone()).await?;
     let mut responses = executor
         .client
         .clone()
@@ -928,29 +928,122 @@ async fn interrupt_output_producer_after_result(
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))),
         "interruption must not become an invocation error or retry"
     );
-    let failure = tokio::time::timeout(Duration::from_secs(5), async {
+    assert_interrupted_transport_closed(&mut responses, &mut state).await?;
+    drop(requests);
+    drop(responses);
+    assert_failed_redispatch(&executor, start).await?;
+    let method_starts = executor
+        .get_oplog(&agent_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(
+                        &started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name == "produce_then_spin"
+                    )
+            )
+        })
+        .count();
+    assert_eq!(
+        method_starts, 1,
+        "redispatch restarted the interrupted producer"
+    );
+    Ok(())
+}
+
+async fn assert_interrupted_transport_closed(
+    responses: &mut tonic::Streaming<InvocationResponse>,
+    state: &mut InvocationSessionState,
+) -> anyhow::Result<()> {
+    // Owner retirement does not wait for transport delivery. Durable interruption and
+    // same-key redispatch are checked separately from this disposable attachment.
+    tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let response = responses
-                .message()
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("interrupted producer closed without completion"))?;
+            let response = match responses.message().await {
+                Ok(Some(response)) => response,
+                Ok(None) => return Ok(()),
+                Err(error)
+                    if matches!(
+                        error.code(),
+                        tonic::Code::Cancelled | tonic::Code::Unavailable
+                    ) =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
+            };
             state
                 .validate_response(&response)
                 .map_err(anyhow::Error::msg)?;
             if let Some(invocation_response::Response::Finished(finished)) = response.response {
-                return match finished.outcome {
-                    Some(invocation_session_completion::Outcome::Failure(failure)) => Ok(failure),
-                    other => anyhow::bail!("interrupted producer did not fail: {other:?}"),
+                let Some(invocation_session_completion::Outcome::Failure(failure)) =
+                    finished.outcome
+                else {
+                    anyhow::bail!("interrupted producer completed successfully");
                 };
+                assert_ne!(failure.kind, InvocationFailureKind::Protocol as i32);
+                return Ok(());
             }
         }
     })
     .await
-    .map_err(|_| anyhow::anyhow!("interrupted producer did not terminalize"))??;
-    assert_ne!(failure.kind, InvocationFailureKind::Protocol as i32);
-    assert!(state.is_complete());
+    .map_err(|_| anyhow::anyhow!("interrupted transport remained open"))?
+}
+
+async fn assert_failed_redispatch(
+    executor: &TestWorkerExecutor,
+    mut start: InvocationRequest,
+) -> anyhow::Result<String> {
+    let Some(invocation_request::Request::Start(request)) = start.request.as_mut() else {
+        unreachable!("redispatch requires the original Start");
+    };
+    request.attempt_id = Some(uuid::Uuid::new_v4().into());
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&start)
+        .map_err(anyhow::Error::msg)?;
+    let (requests, receiver) = mpsc::channel(1);
+    requests.send(start).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let failure = tokio::time::timeout(Duration::from_secs(10), async {
+        let failure = loop {
+            let response = responses
+                .message()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("same-key redispatch closed without a terminal"))?;
+            state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            match response.response {
+                Some(invocation_response::Response::Finished(finished)) => {
+                    let Some(invocation_session_completion::Outcome::Failure(failure)) =
+                        finished.outcome
+                    else {
+                        anyhow::bail!("same-key redispatch completed successfully");
+                    };
+                    assert_ne!(failure.kind, InvocationFailureKind::Protocol as i32);
+                    break failure.message;
+                }
+                Some(invocation_response::Response::Rejected(rejected)) => break rejected.error,
+                _ => {}
+            }
+        };
+        assert!(state.is_complete());
+        Ok::<_, anyhow::Error>(failure)
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("same-key redispatch did not terminalize"))??;
     drop(requests);
-    Ok(())
+    Ok(failure)
 }
 
 #[test]
@@ -1254,7 +1347,11 @@ async fn streaming_output_resume_restores_exact_cursors(
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: start.expected_callee_fingerprint,
             expected_epoch: accepted.epoch,
-            operation: ResumeOperation::Takeover as i32,
+            operation: if restart_executor {
+                ResumeOperation::Takeover
+            } else {
+                ResumeOperation::Resume
+            } as i32,
             cursors: cursors.into_values().collect(),
             auth_ctx: start.auth_ctx.clone(),
             principal: start.principal.clone(),
@@ -1715,28 +1812,11 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
         "host-wait invocation terminated before interruption"
     );
     executor.interrupt(&worker_agent_id).await?;
-    let failure = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let response = responses
-                .message()
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("interrupted session closed without a terminal"))?;
-            state
-                .validate_response(&response)
-                .map_err(anyhow::Error::msg)?;
-            if let Some(invocation_response::Response::Finished(finished)) = response.response {
-                return match finished.outcome {
-                    Some(invocation_session_completion::Outcome::Failure(failure)) => Ok(failure),
-                    other => {
-                        anyhow::bail!("interrupted held-input session did not fail: {other:?}")
-                    }
-                };
-            }
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("interrupted held-input session did not terminalize"))??;
-    assert!(state.is_complete());
+    assert_interrupted_transport_closed(&mut responses, &mut state).await?;
+    assert_eq!(
+        executor.get_worker_metadata(&worker_agent_id).await?.status,
+        AgentStatus::Interrupted
+    );
     drop(requests);
     drop(responses);
 
@@ -1753,56 +1833,12 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
         "explicit resume failed with the wrong category: {resume_error}"
     );
 
-    let mut redispatch = start_request;
-    let Some(invocation_request::Request::Start(start)) = redispatch.request.as_mut() else {
-        unreachable!("constructed a Start request")
-    };
-    start.attempt_id = Some(uuid::Uuid::new_v4().into());
-    let mut redispatch_state = InvocationSessionState::default();
-    redispatch_state
-        .validate_trusted_request(&redispatch)
-        .map_err(anyhow::Error::msg)?;
-    let (redispatch_requests, receiver) = mpsc::channel(1);
-    redispatch_requests.send(redispatch).await?;
-    let mut redispatch_responses = executor
-        .client
-        .clone()
-        .invoke_agent_session(ReceiverStream::new(receiver))
-        .await?
-        .into_inner();
-    let redispatch_terminal = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let response = redispatch_responses
-                .message()
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("same-key redispatch closed without a terminal"))?;
-            redispatch_state
-                .validate_response(&response)
-                .map_err(anyhow::Error::msg)?;
-            match response.response {
-                Some(invocation_response::Response::Finished(finished)) => {
-                    return Ok::<_, anyhow::Error>((
-                        matches!(
-                            finished.outcome,
-                            Some(invocation_session_completion::Outcome::Failure(_))
-                        ),
-                        format!("{:?}", finished.outcome),
-                    ));
-                }
-                Some(invocation_response::Response::Rejected(rejected)) => {
-                    return Ok((true, format!("Rejected({})", rejected.error)));
-                }
-                _ => {}
-            }
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("same-key redispatch did not terminalize"))??;
-    assert!(redispatch_terminal.0, "same-key redispatch did not fail");
+    // Start with a new attempt cannot replace the persisted streaming session;
+    // it is rejected at attachment admission before ephemeral lifecycle checks.
+    let redispatch_error = assert_failed_redispatch(&executor, start_request).await?;
     assert!(
-        redispatch_terminal.1.contains(inactive_ephemeral_error),
-        "same-key redispatch failed with the wrong category: {}",
-        redispatch_terminal.1
+        redispatch_error.contains("AttemptConflict"),
+        "same-key redispatch failed with the wrong category: {redispatch_error}"
     );
     let method_starts = executor
         .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
@@ -1820,15 +1856,10 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
             )
         })
         .count();
-    eprintln!(
-        "held-input interrupt failure: kind={}, message={}; resume failed: {resume_error}; same-key redispatch={}; method_starts={method_starts}",
-        failure.kind, failure.message, redispatch_terminal.1
-    );
     assert_eq!(
         method_starts, 1,
         "resume or redispatch restarted hold_input"
     );
-    drop(redispatch_requests);
     Ok(())
 }
 

@@ -40,6 +40,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
     let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
 
     let AgentDefinitionAttributes {
+        agent_kind,
         agent_mode,
         agent_is_durable,
         http_mount,
@@ -64,6 +65,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
 
     match get_agent_type_with_remote_client(
         &agent_definition_trait,
+        agent_kind,
         agent_mode,
         agent_is_durable,
         http_mount,
@@ -199,6 +201,7 @@ struct AgentTypeWithRemoteClient {
 
 fn get_agent_type_with_remote_client(
     agent_definition_trait: &ItemTrait,
+    kind_value: syn::Ident,
     mode_value: proc_macro2::TokenStream,
     agent_is_durable: bool,
     http_options: Option<proc_macro2::TokenStream>,
@@ -240,6 +243,13 @@ fn get_agent_type_with_remote_client(
                     return Some(err.to_compile_error());
                 }
             };
+
+            if kind_value == "Regular" && parsed_endpoint_details.iter().any(|endpoint| endpoint.http_method == "any") {
+                return Some(syn::Error::new_spanned(
+                    &trait_fn.sig.ident,
+                    "ANY endpoints require kind = \"http-router\"",
+                ).to_compile_error());
+            }
 
             if !parsed_endpoint_details.is_empty() && is_constructor_method(&trait_fn.sig, None) {
                 return Some(
@@ -631,7 +641,7 @@ fn get_agent_type_with_remote_client(
         agent_type: quote! {
             golem_rust::agentic::ExtendedAgentType {
                 type_name: #agent_trait_name.to_string(),
-                kind: golem_rust::golem_agentic::golem::agent::common::AgentTypeKind::Regular,
+                kind: golem_rust::golem_agentic::golem::agent::common::AgentTypeKind::#kind_value,
                 description: #high_level_description_ident.to_string(),
                 source_language: "rust".to_string(),
                 methods: vec![#(#methods),*],

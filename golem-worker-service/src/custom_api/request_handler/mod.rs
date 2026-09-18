@@ -91,8 +91,7 @@ impl RequestHandler {
         if matches!(
             *request.method(),
             http::Method::CONNECT | http::Method::TRACE
-        ) || request.headers().contains_key(http::header::UPGRADE)
-        {
+        ) {
             return Err(RequestHandlerError::RawRequest(StatusCode::NOT_IMPLEMENTED).into());
         }
         if request
@@ -111,6 +110,13 @@ impl RequestHandler {
             .resolve_matching_route(&request)
             .await
             .map_err(RequestHandlerError::from)?;
+        if matches!(
+            matching_route.route.behavior,
+            RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_)
+        ) && request.headers().contains_key(http::header::UPGRADE)
+        {
+            return Err(RequestHandlerError::RawRequest(StatusCode::NOT_IMPLEMENTED).into());
+        }
         let mut request = RichRequest::new(request);
         let request_method = request.underlying.method().clone();
 

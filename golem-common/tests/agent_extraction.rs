@@ -45,7 +45,13 @@ async fn can_extract_agent_type_schemas_from_component_with_dynamic_rpc() -> any
         false,
     )
     .await?;
-    assert_valid_regular_agent_types(&agent_types);
+    let (routers, regular): (Vec<_>, Vec<_>) = agent_types
+        .into_iter()
+        .partition(|agent| agent.type_name.0 == "RawHttpRouter");
+    assert!(routers.len() == 1);
+    assert!(routers[0].kind == AgentTypeKind::HttpRouter);
+    routers[0].validate().unwrap();
+    assert_valid_regular_agent_types(&regular);
     Ok(())
 }
 

@@ -2237,6 +2237,34 @@ mod tests {
         }
     }
 
+    #[agent_definition(
+        kind = "http-router",
+        ephemeral,
+        mount = "/raw",
+        auth = false,
+        cors = ["https://allowed.test"],
+        snapshotting = "disabled",
+    )]
+    trait HttpRouterAgent {
+        fn new() -> Self;
+
+        #[endpoint(any = "/")]
+        fn route(&self, request: String) -> String;
+    }
+
+    struct HttpRouterAgentImpl;
+
+    #[agent_implementation]
+    impl HttpRouterAgent for HttpRouterAgentImpl {
+        fn new() -> Self {
+            Self
+        }
+
+        fn route(&self, request: String) -> String {
+            request
+        }
+    }
+
     #[test]
     fn test_all_http_methods_supported() {
         use golem_rust::agentic::get_all_agent_types;
@@ -2281,5 +2309,35 @@ mod tests {
                 method_name
             );
         }
+
+        let router = agent_types
+            .iter()
+            .find(|agent| agent.type_name == "HttpRouterAgent")
+            .expect("HttpRouterAgent not found");
+        assert!(matches!(router.kind, AgentTypeKind::HttpRouter));
+        assert!(matches!(router.mode, AgentMode::Ephemeral));
+        assert!(matches!(router.snapshotting, Snapshotting::Disabled));
+
+        let mount = router.http_mount.as_ref().expect("HTTP mount not found");
+        assert_eq!(
+            mount.auth_details.as_ref().map(|auth| auth.required),
+            Some(false)
+        );
+        assert_eq!(
+            mount.cors_options.allowed_patterns,
+            vec!["https://allowed.test"]
+        );
+
+        let route = router
+            .methods
+            .iter()
+            .find(|method| method.name == "route")
+            .expect("route method not found");
+        assert_eq!(route.http_endpoint.len(), 1);
+        assert!(matches!(
+            route.http_endpoint[0].http_method,
+            golem_rust::golem_agentic::golem::agent::common::HttpMethod::Any
+        ));
+        assert!(route.http_endpoint[0].path_suffix.is_empty());
     }
 }
