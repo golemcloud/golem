@@ -151,13 +151,9 @@ export interface Container {
   clear(): Promise<void>;
 
   /**
-   * Read an object's bytes. With no range, the whole object is read (with a
-   * recovery retry for the host's inclusive/exclusive end divergence). With an
-   * explicit `[start, end]` range the bytes are passed to the host verbatim.
-   *
-   * **Backend caveat.** The Golem host diverges across backends: in-memory +
-   * filesystem treat `end` as exclusive (Rust range), S3 treats it as
-   * inclusive. The WIT spec says inclusive. Ranged reads are not portable.
+   * Read an object's bytes. With no range, the whole object is read. With an
+   * explicit `[start, end]` range, both offsets are inclusive, and the read
+   * fails when a byte of the range is not in the object.
    */
   getData(name: string, start?: bigint, end?: bigint): Promise<Uint8Array>;
   /** Create or replace `name` with `data` (chunked at 4096 bytes per write). */
@@ -279,19 +275,14 @@ const makeContainer = (name: string, handle: ContainerNS.Container): Container =
       wrap('container.clear', () => handle.clear());
     },
     async getData(objectName, start, end) {
-      // Explicit range — pass through verbatim (backend semantics diverge).
       if (start !== undefined && end !== undefined) {
         return readRange(handle, objectName, start, end);
       }
-      // Whole-object read. The WIT spec says `end` is inclusive, but the Golem
-      // in-memory and filesystem backends treat it as exclusive. Tolerate both:
+      // Whole-object read. `end` is inclusive, so an empty object has no range to read.
       const meta = await objectInfo(objectName);
       const size = meta.size;
       if (size === 0n) return new Uint8Array(0);
-      const firstAttempt = readRange(handle, objectName, 0n, size - 1n);
-      if (BigInt(firstAttempt.length) === size) return firstAttempt;
-      // Backend treats `end` as exclusive — replay with end = size.
-      return readRange(handle, objectName, 0n, size);
+      return readRange(handle, objectName, 0n, size - 1n);
     },
     async writeData(objectName, data) {
       const ov = buildOutgoingValue(data);

@@ -94,6 +94,7 @@ wasmtime-wasi = { workspace = true, optional = true }
 
 [dev-dependencies]
 assert2.workspace = true
+aws-smithy-runtime-api = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }

@@ -50,6 +50,12 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error>;
 
+    /// Reads the bytes from `start` to `end` of a blob. Both offsets are inclusive.
+    ///
+    /// The result has `end - start + 1` bytes. `None` means that no blob has the path. A range
+    /// with a byte that is not in the blob gives an error that downcasts to [`BlobRangeError`]:
+    /// an `end` at or after the length of the blob, a `start` after `end`, and each range of an
+    /// empty blob. A `start` after `end` gives this error before the backend reads the blob.
     async fn get_raw_slice(
         &self,
         target_label: &'static str,
@@ -59,10 +65,21 @@ pub trait BlobStorage: Debug + Send + Sync {
         start: u64,
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
+        if start > end {
+            return Err(BlobRangeError { start, end }.into());
+        }
         let data = self
             .get_raw(target_label, op_label, namespace, path)
             .await?;
-        Ok(data.map(|data| data[(start as usize)..(end as usize)].to_vec()))
+        data.map(|data| {
+            usize::try_from(start)
+                .ok()
+                .zip(usize::try_from(end).ok())
+                .and_then(|(first, last)| data.get(first..=last))
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| Error::from(BlobRangeError { start, end }))
+        })
+        .transpose()
     }
 
     async fn get_metadata(
@@ -128,6 +145,21 @@ pub trait BlobStorage: Debug + Send + Sync {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error>;
+
+    /// Lists each blob below a path, at all depths, with its size.
+    ///
+    /// Each path in the result is relative to the root of the namespace, as in `list_dir`. The
+    /// result has no directories. An object that a backend writes to record a directory is not in
+    /// the result. A path that does not exist, or the path of a blob, gives an empty result. Paths
+    /// that differ only in case are different paths, unless the backend stores them as one blob.
+    /// The order of the result is not specified.
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, Error>;
 
     /// Deletes the directory at the path and all the entries below it, at any depth.
     ///
@@ -293,6 +325,16 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
             .await
     }
 
+    pub async fn list_blobs_below(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        self.storage
+            .list_blobs_below(self.svc_name, self.api_name, namespace, path)
+            .await
+    }
+
     pub async fn delete_dir(
         &self,
         namespace: BlobStorageNamespace,
@@ -412,6 +454,25 @@ pub struct BlobMetadata {
     pub size: u64,
 }
 
+/// The path and the size of one blob.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ListedBlob {
+    /// The path of the blob, relative to the root of its namespace.
+    pub path: Box<Path>,
+    /// The size of the blob in bytes.
+    pub size: u64,
+}
+
+/// A ranged read asked for a byte that is not in the blob.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the byte range {start}-{end} is not in the blob")]
+pub struct BlobRangeError {
+    /// The offset of the first byte of the range.
+    pub start: u64,
+    /// The offset of the last byte of the range.
+    pub end: u64,
+}
+
 pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
     if path.is_absolute() {
         return Err(anyhow!("Blob path must be relative: {path:?}"));
@@ -455,6 +516,19 @@ pub(crate) fn blob_parent_to_string(path: &Path) -> Result<String, Error> {
         Some(parent) => blob_path_to_string(parent),
         None => Ok(String::new()),
     }
+}
+
+/// Makes the path of a blob from the path of its directory and its name.
+///
+/// An empty directory path is the root of the namespace. The path is made in one allocation of
+/// its final size.
+pub(crate) fn blob_child_path(directory: &str, name: &str) -> Box<Path> {
+    let separator = if directory.is_empty() { "" } else { "/" };
+    let mut path = String::with_capacity(directory.len() + separator.len() + name.len());
+    path.push_str(directory);
+    path.push_str(separator);
+    path.push_str(name);
+    PathBuf::from(path).into_boxed_path()
 }
 
 pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
