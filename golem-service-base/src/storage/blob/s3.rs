@@ -295,12 +295,30 @@ impl S3BlobStorage {
 
     /// Checks that a ranged read got the bytes from `start` to `end`.
     ///
-    /// If a range ends after the object, S3 sends only the bytes that exist. That answer gives a
-    /// `BlobRangeError`. A missing `Content-Range`, or a range that starts at a different byte,
-    /// gives a different error.
-    fn check_content_range(content_range: Option<&str>, start: u64, end: u64) -> Result<(), Error> {
+    /// S3 sends a `Content-Range` when it applies the range of the request. If the range ends
+    /// after the object, S3 sends only the bytes that exist. That answer gives a
+    /// `BlobRangeError`. A range that starts at a different byte gives a different error.
+    ///
+    /// S3 sends the whole object and no `Content-Range` when it does not apply the range. The
+    /// content length is then the size of the object, and an `end` at or after that size gives a
+    /// `BlobRangeError`. MinIO answers an offset at the top of the `u64` range in this way.
+    /// Any other answer without a `Content-Range` gives a different error.
+    fn check_content_range(
+        content_range: Option<&str>,
+        content_length: Option<i64>,
+        start: u64,
+        end: u64,
+    ) -> Result<(), Error> {
+        let Some(content_range) = content_range else {
+            return match content_length.and_then(|length| u64::try_from(length).ok()) {
+                Some(size) if end >= size => Err(BlobRangeError { start, end }.into()),
+                _ => Err(anyhow!(
+                    "S3 returned the whole object of {content_length:?} bytes for the byte range {start}-{end}"
+                )),
+            };
+        };
         let returned = content_range
-            .and_then(|value| value.strip_prefix("bytes "))
+            .strip_prefix("bytes ")
             .and_then(|value| value.split_once('/'))
             .and_then(|(range, _)| range.split_once('-'))
             .and_then(|(first, last)| first.parse::<u64>().ok().zip(last.parse::<u64>().ok()));
@@ -652,7 +670,12 @@ impl BlobStorage for S3BlobStorage {
 
         match result {
             Ok(response) => {
-                Self::check_content_range(response.content_range(), start, end)?;
+                Self::check_content_range(
+                    response.content_range(),
+                    response.content_length(),
+                    start,
+                    end,
+                )?;
                 let body = response.body;
                 let aggregated_bytes = body.collect().await?;
                 let bytes = aggregated_bytes.to_vec();

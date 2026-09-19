@@ -134,6 +134,7 @@ impl HttpConnector for ScriptedTransport {
             requests.len() - 1
         };
         let answer = (self.script)(&sent, earlier);
+        let content_length = answer.body.len().to_string();
         let mut response = HttpResponse::new(
             StatusCode::try_from(answer.status).unwrap(),
             SdkBody::from(answer.body),
@@ -141,6 +142,11 @@ impl HttpConnector for ScriptedTransport {
         response
             .headers_mut()
             .insert("content-type", "application/xml");
+        // A server sends the length of the body that it sends. The range check of a ranged
+        // read reads it.
+        response
+            .headers_mut()
+            .insert("content-length", content_length);
         if let Some(content_range) = answer.content_range {
             response
                 .headers_mut()
@@ -453,6 +459,44 @@ async fn get_raw_slice_turns_416_into_a_range_error_without_a_retry() {
         (
             Err(Some(BlobRangeError { start: 6, end: 9 })),
             vec![Some("bytes=6-9".to_string())]
+        )
+    );
+}
+
+#[test]
+async fn get_raw_slice_turns_an_ignored_range_into_a_range_error() {
+    // S3 sends the whole object and no content range when it does not apply the range of
+    // the request. MinIO answers an offset at the top of the `u64` range in this way, which
+    // is the offset that a guest reaches the host with after it gives a negative offset.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, "abcdef"));
+
+    let result = storage
+        .get_raw_slice(
+            "test",
+            "get-raw-slice",
+            namespace(),
+            Path::new("blob"),
+            u64::MAX,
+            u64::MAX,
+        )
+        .await;
+
+    assert_eq!(
+        (
+            result.map_err(|error| error.downcast_ref::<BlobRangeError>().copied()),
+            sent(&requests)
+                .iter()
+                .map(|request| request.range.clone())
+                .collect::<Vec<_>>()
+        ),
+        (
+            Err(Some(BlobRangeError {
+                start: u64::MAX,
+                end: u64::MAX
+            })),
+            vec![Some(
+                "bytes=18446744073709551615-18446744073709551615".to_string()
+            )]
         )
     );
 }

@@ -1868,6 +1868,10 @@ async fn get_raw_slice_uses_inclusive_ranges(
         ("ranges/blob", 3, 2),
         ("ranges/empty", 0, 0),
         ("ranges/missing", 3, 2),
+        // A guest gives an offset as a `u64`. A negative offset reaches the host as the
+        // value that it wraps to, which is at the top of the `u64` range.
+        ("ranges/blob", u64::MAX, 2),
+        ("ranges/blob", u64::MAX, u64::MAX),
     ];
     let range_errors = futures::stream::iter(outside)
         .then(|(path, start, end)| async move {
