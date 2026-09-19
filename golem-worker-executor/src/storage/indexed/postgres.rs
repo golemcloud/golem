@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    ScanResume,
 };
 use crate::services::golem_config::IndexedStoragePostgresConfig;
 use async_trait::async_trait;
@@ -35,6 +35,10 @@ use tokio::sync::Semaphore;
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/indexed");
 
 const DB_TYPE: &str = "postgres";
+const SCAN_INCLUSIVE_BOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key >= $2 AND key < $3 ORDER BY key LIMIT $4;";
+const SCAN_EXCLUSIVE_BOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 AND key < $3 ORDER BY key LIMIT $4;";
+const SCAN_INCLUSIVE_UNBOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key >= $2 ORDER BY key LIMIT $3;";
+const SCAN_EXCLUSIVE_UNBOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 ORDER BY key LIMIT $3;";
 
 #[derive(Debug, Clone)]
 pub struct PostgresIndexedStorage {
@@ -162,21 +166,6 @@ impl PostgresIndexedStorage {
             None => None,
         }
     }
-
-    fn to_like_prefix(prefix: &str) -> String {
-        let mut result = String::with_capacity(prefix.len() + 1);
-        for ch in prefix.chars() {
-            match ch {
-                '%' | '_' | '\\' => {
-                    result.push('\\');
-                    result.push(ch);
-                }
-                _ => result.push(ch),
-            }
-        }
-        result.push('%');
-        result
-    }
 }
 
 #[async_trait]
@@ -221,58 +210,6 @@ impl IndexedStorage for PostgresIndexedStorage {
             .map_err(Self::classify_repo_error_general)
     }
 
-    async fn scan(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        let _permit = self.acquire_permit().await;
-        let count_i64 = Self::to_i64(count, "count")?;
-        let cursor_i64 = Self::to_i64(cursor, "cursor")?;
-        let query = match prefix {
-            Some(prefix) => {
-                let key = Self::to_like_prefix(prefix);
-                sqlx::query_as(
-                    "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key LIKE $2 ESCAPE '\\' ORDER BY key LIMIT $3 OFFSET $4;",
-                )
-                .bind(Self::meta_namespace(namespace))
-                .bind(key)
-                .bind(count_i64)
-                .bind(cursor_i64)
-            }
-            None => sqlx::query_as(
-                "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 ORDER BY key LIMIT $2 OFFSET $3;",
-            )
-            .bind(Self::meta_namespace(namespace))
-            .bind(count_i64)
-            .bind(cursor_i64),
-        };
-
-        let keys = self
-            .pool
-            .with_ro(svc_name, api_name)
-            .fetch_all_as::<(String,), _>(query)
-            .await
-            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
-            .map_err(Self::classify_repo_error_general)?;
-
-        let new_cursor = if keys.len() < count as usize {
-            0
-        } else {
-            cursor.checked_add(count).ok_or_else(|| {
-                IndexedStorageError::Other(
-                    "Postgres indexed storage scan cursor overflow".to_string(),
-                )
-            })?
-        };
-
-        Ok((new_cursor, keys))
-    }
-
     async fn scan_stable(
         &self,
         svc_name: &'static str,
@@ -284,28 +221,27 @@ impl IndexedStorage for PostgresIndexedStorage {
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         let count_i64 = Self::to_i64(count, "count")?;
-        // Stored keys are never empty, so `key > ''` starts the first page at the first key.
-        let after = resume
-            .map(|resume| resume.into_marker("Postgres"))
-            .transpose()?
-            .unwrap_or_default();
-        let query = match prefix {
-            Some(prefix) => {
-                let like = Self::to_like_prefix(prefix);
-                sqlx::query_as(
-                    "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 AND key LIKE $3 ESCAPE '\\' ORDER BY key LIMIT $4;",
-                )
-                .bind(Self::meta_namespace(namespace))
-                .bind(after)
-                .bind(like)
-                .bind(count_i64)
-            }
-            None => sqlx::query_as(
-                "SELECT DISTINCT key FROM index_storage WHERE namespace = $1 AND key > $2 ORDER BY key LIMIT $3;",
-            )
-            .bind(Self::meta_namespace(namespace))
-            .bind(after)
-            .bind(count_i64),
+        let bounds = super::stable_scan_key_bounds(prefix, resume, "Postgres")?;
+        let namespace = Self::meta_namespace(namespace);
+        let query = match (bounds.inclusive, bounds.upper) {
+            (true, Some(upper)) => sqlx::query_as(SCAN_INCLUSIVE_BOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(upper)
+                .bind(count_i64),
+            (false, Some(upper)) => sqlx::query_as(SCAN_EXCLUSIVE_BOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(upper)
+                .bind(count_i64),
+            (true, None) => sqlx::query_as(SCAN_INCLUSIVE_UNBOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(count_i64),
+            (false, None) => sqlx::query_as(SCAN_EXCLUSIVE_UNBOUNDED_QUERY)
+                .bind(namespace)
+                .bind(bounds.lower)
+                .bind(count_i64),
         };
 
         let keys = self

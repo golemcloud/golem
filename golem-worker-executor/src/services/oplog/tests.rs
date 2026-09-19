@@ -641,21 +641,6 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         self.inner.exists(svc_name, api_name, namespace, key).await
     }
 
-    async fn scan(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: crate::storage::indexed::ScanCursor,
-        count: u64,
-    ) -> Result<(crate::storage::indexed::ScanCursor, Vec<String>), IndexedStorageError> {
-        self.count_read();
-        self.inner
-            .scan(svc_name, api_name, namespace, prefix, cursor, count)
-            .await
-    }
-
     async fn scan_stable(
         &self,
         svc_name: &'static str,
@@ -6729,103 +6714,231 @@ async fn concurrent_get_or_open_does_not_cause_unique_key_violation(_tracing: &T
 }
 
 // ---------------------------------------------------------------------------
-// Step 8: Scan-cursor mode-bit encoding helpers
+// Scan cursor encoding and phase transitions
 // ---------------------------------------------------------------------------
 
 #[test]
-fn scan_cursor_helpers_initial_cursor_starts_in_durable_phase() {
-    // A freshly-constructed ScanCursor has cursor == 0 and the active
-    // phase must be `Durable` with `Ephemeral` queued as next.
-    let (active, next) = scan_modes(None, 0);
-    assert_eq!(active, AgentMode::Durable);
-    assert_eq!(next, Some(AgentMode::Ephemeral));
-    assert_eq!(cursor_value(0), 0);
+fn scan_cursor_initial_state_starts_in_durable_mode() {
+    let state = decode_scan_cursor(&ScanCursor::default(), None).unwrap();
+    assert_eq!(state.layer, 0);
+    assert_eq!(state.mode, AgentMode::Durable);
+    assert_eq!(state.resume, None);
 }
 
 #[test]
-fn scan_cursor_helpers_high_bit_marks_ephemeral_phase() {
-    let (active, next) = scan_modes(None, SCAN_CURSOR_EPHEMERAL_BIT);
-    assert_eq!(active, AgentMode::Ephemeral);
-    assert_eq!(next, None);
-    // The high bit must not leak into the storage cursor value.
-    assert_eq!(cursor_value(SCAN_CURSOR_EPHEMERAL_BIT), 0);
-}
+fn scan_cursor_round_trips_marker_resume() {
+    let cursor = next_scan_cursor(
+        OplogScanState {
+            layer: 2,
+            mode: AgentMode::Durable,
+            resume: None,
+        },
+        None,
+        Some(ScanResume::Marker("agent-key".to_string())),
+    )
+    .unwrap();
 
-#[test]
-fn scan_cursor_helpers_value_mask_strips_only_high_bit() {
-    let raw = SCAN_CURSOR_EPHEMERAL_BIT | 0x42;
-    let (active, next) = scan_modes(None, raw);
-    assert_eq!(active, AgentMode::Ephemeral);
-    assert_eq!(next, None);
-    assert_eq!(cursor_value(raw), 0x42);
-}
-
-#[test]
-fn scan_cursor_helpers_explicit_single_mode_does_not_phase_transition() {
-    let (active, next) = scan_modes(Some(AgentMode::Durable), 0);
-    assert_eq!(active, AgentMode::Durable);
-    assert_eq!(next, None);
-
-    let (active, next) = scan_modes(Some(AgentMode::Ephemeral), 0);
-    assert_eq!(active, AgentMode::Ephemeral);
-    assert_eq!(next, None);
-
-    // The high bit is only meaningful for `modes == None`; with an explicit
-    // mode the helper must ignore it.
-    let (active, next) = scan_modes(Some(AgentMode::Durable), SCAN_CURSOR_EPHEMERAL_BIT);
-    assert_eq!(active, AgentMode::Durable);
-    assert_eq!(next, None);
-}
-
-#[test]
-fn scan_cursor_helpers_durable_phase_in_progress_is_round_trip_stable() {
-    // While the durable phase is still in progress (cursor_val != 0) the
-    // returned cursor must keep the high bit clear and round-trip back to
-    // the same active mode.
-    let cur = next_scan_cursor(123, AgentMode::Durable, Some(AgentMode::Ephemeral), 2);
-    assert_eq!(cur.layer, 2);
-    assert_eq!(cur.cursor & SCAN_CURSOR_EPHEMERAL_BIT, 0);
-    assert_eq!(cursor_value(cur.cursor), 123);
-    let (active, next) = scan_modes(None, cur.cursor);
-    assert_eq!(active, AgentMode::Durable);
-    assert_eq!(next, Some(AgentMode::Ephemeral));
-}
-
-#[test]
-fn scan_cursor_helpers_durable_phase_finished_advances_to_ephemeral() {
-    // When the durable phase finishes (cursor_val == 0) and there is a next
-    // phase, the helper must hand control over to that phase by setting
-    // the high bit. The resulting cursor must NOT be `is_finished`.
-    let cur = next_scan_cursor(0, AgentMode::Durable, Some(AgentMode::Ephemeral), 0);
-    assert_eq!(cur.cursor, SCAN_CURSOR_EPHEMERAL_BIT);
-    assert_eq!(cur.layer, 0);
-    assert!(!cur.is_finished());
-    let (active, next) = scan_modes(None, cur.cursor);
-    assert_eq!(active, AgentMode::Ephemeral);
-    assert_eq!(next, None);
-}
-
-#[test]
-fn scan_cursor_helpers_ephemeral_phase_in_progress_keeps_high_bit_set() {
-    let cur = next_scan_cursor(7, AgentMode::Ephemeral, None, 0);
+    assert!(cursor.as_str().starts_with(SCAN_CURSOR_PREFIX));
     assert_eq!(
-        cur.cursor & SCAN_CURSOR_EPHEMERAL_BIT,
-        SCAN_CURSOR_EPHEMERAL_BIT
+        decode_scan_cursor(&cursor, None).unwrap(),
+        OplogScanState {
+            layer: 2,
+            mode: AgentMode::Durable,
+            resume: Some(ScanResume::Marker("agent-key".to_string())),
+        }
     );
-    assert_eq!(cursor_value(cur.cursor), 7);
-    assert!(!cur.is_finished());
-    let (active, next) = scan_modes(None, cur.cursor);
-    assert_eq!(active, AgentMode::Ephemeral);
-    assert_eq!(next, None);
 }
 
 #[test]
-fn scan_cursor_helpers_both_phases_finished_yields_terminal_cursor() {
-    // After the ephemeral phase (the last one) finishes, the returned
-    // cursor must compare equal to the default and be `is_finished`.
-    let cur = next_scan_cursor(0, AgentMode::Ephemeral, None, 0);
-    assert_eq!(cur, ScanCursor::default());
-    assert!(cur.is_finished());
+fn scan_cursor_decodes_fixed_wire_format_fixtures() {
+    let fixtures = [
+        (
+            "gsc1_eyJsYXllciI6MCwibW9kZSI6IkR1cmFibGUiLCJyZXN1bWUiOnsidHlwZSI6Im1hcmtlciIsInZhbHVlIjoiYWdlbnQta2V5In19",
+            OplogScanState {
+                layer: 0,
+                mode: AgentMode::Durable,
+                resume: Some(ScanResume::Marker("agent-key".to_string())),
+            },
+        ),
+        (
+            "gsc1_eyJsYXllciI6MiwibW9kZSI6IkVwaGVtZXJhbCIsInJlc3VtZSI6eyJ0eXBlIjoiY3Vyc29yIiwidmFsdWUiOjE3fX0",
+            OplogScanState {
+                layer: 2,
+                mode: AgentMode::Ephemeral,
+                resume: Some(ScanResume::Cursor(17)),
+            },
+        ),
+        (
+            "gsc1_eyJsYXllciI6MSwibW9kZSI6IkR1cmFibGUiLCJyZXN1bWUiOm51bGx9",
+            OplogScanState {
+                layer: 1,
+                mode: AgentMode::Durable,
+                resume: None,
+            },
+        ),
+    ];
+
+    for (token, expected) in fixtures {
+        assert_eq!(
+            encode_scan_cursor(expected.clone()).unwrap().as_str(),
+            token
+        );
+        assert_eq!(
+            decode_scan_cursor(&ScanCursor::new(token.to_string()), None).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn scan_cursor_durable_completion_advances_to_ephemeral() {
+    let cursor = next_scan_cursor(
+        OplogScanState {
+            layer: 1,
+            mode: AgentMode::Durable,
+            resume: Some(ScanResume::Cursor(17)),
+        },
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        decode_scan_cursor(&cursor, None).unwrap(),
+        OplogScanState {
+            layer: 1,
+            mode: AgentMode::Ephemeral,
+            resume: None,
+        }
+    );
+}
+
+#[test]
+fn scan_cursor_single_or_ephemeral_mode_completion_is_terminal() {
+    for (mode, modes) in [
+        (AgentMode::Durable, Some(AgentMode::Durable)),
+        (AgentMode::Ephemeral, Some(AgentMode::Ephemeral)),
+        (AgentMode::Ephemeral, None),
+    ] {
+        let cursor = next_scan_cursor(
+            OplogScanState {
+                layer: 0,
+                mode,
+                resume: None,
+            },
+            modes,
+            None,
+        )
+        .unwrap();
+        assert!(cursor.is_finished());
+    }
+}
+
+#[test]
+fn scan_cursor_rejects_malformed_and_mode_mismatched_tokens() {
+    for cursor in [
+        ScanCursor::new("0/123".to_string()),
+        ScanCursor::new("gsc1_%%%".to_string()),
+        ScanCursor::new("gsc1_e30".to_string()),
+    ] {
+        assert!(decode_scan_cursor(&cursor, None).is_err());
+    }
+
+    let cursor = first_scan_cursor(0, Some(AgentMode::Ephemeral)).unwrap();
+    assert!(decode_scan_cursor(&cursor, Some(AgentMode::Durable)).is_err());
+}
+
+#[test]
+async fn oplog_services_reject_invalid_cursor_layers_and_resumes(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let compressed: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed_storage,
+        1,
+        RetryConfig::default(),
+    ));
+    let blob = Arc::new(BlobOplogArchiveService::new(blob_storage, 2));
+    let multilayer = MultiLayerOplogService::new(
+        primary.clone(),
+        nev![compressed, blob.clone() as Arc<dyn OplogArchiveService>],
+        1000,
+        10,
+    );
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
+
+    let layer_one = first_scan_cursor(1, Some(AgentMode::Durable)).unwrap();
+    assert!(matches!(
+        primary
+            .scan_for_component(
+                &environment_id,
+                &component_id,
+                Some(AgentMode::Durable),
+                layer_one,
+                1,
+            )
+            .await,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+
+    let last_valid_layer = first_scan_cursor(2, Some(AgentMode::Durable)).unwrap();
+    multilayer
+        .scan_for_component(
+            &environment_id,
+            &component_id,
+            Some(AgentMode::Durable),
+            last_valid_layer,
+            1,
+        )
+        .await
+        .unwrap();
+    let invalid_layer = first_scan_cursor(3, Some(AgentMode::Durable)).unwrap();
+    assert!(matches!(
+        multilayer
+            .scan_for_component(
+                &environment_id,
+                &component_id,
+                Some(AgentMode::Durable),
+                invalid_layer,
+                1,
+            )
+            .await,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+
+    for resume in [
+        ScanResume::Marker("marker".to_string()),
+        ScanResume::Cursor(1),
+    ] {
+        let cursor = encode_scan_cursor(OplogScanState {
+            layer: 2,
+            mode: AgentMode::Durable,
+            resume: Some(resume),
+        })
+        .unwrap();
+        assert!(matches!(
+            blob.scan_for_component(
+                &environment_id,
+                &component_id,
+                Some(AgentMode::Durable),
+                cursor,
+                1,
+            )
+            .await,
+            Err(WorkerExecutorError::InvalidRequest { .. })
+        ));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -7140,8 +7253,7 @@ async fn scan_for_component_paginates_across_mode_boundary(_tracing: &Tracing) {
     loop {
         iterations += 1;
         // The cursor passed in must encode the active mode for the next page.
-        let (active_in, _) = scan_modes(None, cursor.cursor);
-        match active_in {
+        match decode_scan_cursor(&cursor, None).unwrap().mode {
             AgentMode::Durable => saw_durable_phase = true,
             AgentMode::Ephemeral => saw_ephemeral_phase = true,
         }
