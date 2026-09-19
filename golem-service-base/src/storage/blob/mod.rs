@@ -470,7 +470,8 @@ pub struct BlobRangeError {
     pub end: u64,
 }
 
-/// Gives the bytes from `start` to `end` of a whole blob. Both offsets are inclusive.
+/// Gives the bytes from `start` to `end` of `blob`, which holds the full blob. Both offsets are
+/// inclusive.
 ///
 /// A range with a byte that is not in the blob gives a [`BlobRangeError`]. An `end` at or after
 /// the length of the blob is not in the blob. A `start` after `end` is not in the blob. No

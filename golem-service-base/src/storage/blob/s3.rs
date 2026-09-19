@@ -53,13 +53,14 @@ use tracing::info;
 /// The largest number of keys that S3 accepts in one `DeleteObjects` request.
 const MAX_KEYS_PER_DELETE_OBJECTS: usize = 1_000;
 
-/// The backend assumes that a response with this HTTP status, and without a `Content-Range`,
-/// holds the whole object. RFC 9110 lets a server ignore the range and give this response
-/// (sections 14.2 and 15.5.17).
+/// The backend uses the body of a response with this HTTP status, and without a
+/// `Content-Range`, as the full object, unless its `Content-Length` shows that `end` is not in
+/// the object (`response_body`). RFC 9110 lets a server ignore the range and give this
+/// response (sections 14.2 and 15.5.17).
 const HTTP_OK: u16 = 200;
 
-/// The backend assumes that a response with this HTTP status answers a range with no byte in
-/// the object (RFC 9110, section 15.5.17).
+/// A response with this HTTP status tells the backend that the range has no byte in the
+/// object (RFC 9110, section 15.5.17). `get_raw_slice` gives a `BlobRangeError` for it.
 const RANGE_NOT_SATISFIABLE: u16 = 416;
 
 /// The name of the object that records a directory, because S3 has no directories.
@@ -111,10 +112,10 @@ enum ResponseBody {
     /// The backend uses the body as the bytes of the range. The range has `length` bytes. This
     /// is the variant of a response whose `Content-Range` gives the range.
     Range { length: u64 },
-    /// The backend uses the body as the whole object, and cuts the range out of it. This is
+    /// The backend uses the body as the full object, and cuts the range out of it. This is
     /// the variant of a 200 response without a `Content-Range`, unless its `Content-Length`
-    /// puts `end` outside the object. The backend does not check that the body is the object,
-    /// so an error page with the status 200 gets this variant too.
+    /// shows that `end` is not in the object. The backend does not check that the body is the
+    /// object, so an error page with the status 200 gets this variant too.
     WholeObject,
 }
 
@@ -363,12 +364,12 @@ impl S3BlobStorage {
     /// Any other `Content-Range` gives a different error. So does a range with more bytes than
     /// a `u64` counts, which is only the range 0 to `u64::MAX`.
     ///
-    /// The backend assumes that a 200 response without a `Content-Range` holds the whole object
+    /// The backend uses the body of a 200 response without a `Content-Range` as the full object
     /// (RFC 9110, section 15.3.1). RFC 9110 lets a server ignore the range and give this
     /// response (sections 14.2 and 15.5.17). The backend uses the `Content-Length` of this
-    /// response as the size of the object. A `Content-Length` that puts `end` outside the
-    /// object gives a `BlobRangeError` before the body is read. Without a `Content-Length`, the
-    /// backend uses the length of the body as the size. The backend does not check that the
+    /// response as the size of the object. A `Content-Length` that shows that `end` is not in
+    /// the object gives a `BlobRangeError` before the body is read. Without a `Content-Length`,
+    /// the backend uses the length of the body as the size. The backend does not check that the
     /// body is the object. A 200 response with a different body, for example an error page,
     /// gives the range of that body.
     ///
@@ -445,7 +446,7 @@ impl S3BlobStorage {
 
     /// Sends one `DeleteObjects` request in quiet mode, with retries.
     ///
-    /// A response that reports an error for a key is a failed attempt, so the whole request goes
+    /// A response that reports an error for a key is a failed attempt, so the request goes
     /// again within the retry budget. The new attempt sends the keys that the attempt before
     /// deleted too. The backend relies on S3 to report such a key as deleted, not as an error.
     async fn delete_objects_request(
@@ -505,17 +506,22 @@ impl S3BlobStorage {
         })
     }
 
-    /// Tells whether a `GetObject` error is one that the backend expects and answers with a
-    /// value: `None` for a missing key, and a `BlobRangeError` for a 416. The backend does not
-    /// retry such an error, does not log it, and does not count it as a failure.
-    fn is_expected_get_object_error(error: &GetObjectError, response: &HttpResponse) -> bool {
+    /// Tells whether a `GetObject` error is a missing key or a 416. The retry loop stops at
+    /// such an error: the backend does not send the request again, does not write the error to
+    /// the error log, and does not count it as a failure.
+    ///
+    /// What the backend then gives is set at each `get_object` call. `get_raw`, `get_stream`
+    /// and `get_raw_slice` give `Ok(None)` for a missing key. `get_raw_slice` gives an
+    /// `Err` that holds a `BlobRangeError` for a 416. `get_raw` and `get_stream` send no
+    /// range, and give a 416 as an `Err` that holds the SDK error.
+    fn is_final_get_object_error(error: &GetObjectError, response: &HttpResponse) -> bool {
         matches!(error, NoSuchKey(_)) || Self::is_range_not_satisfiable(response)
     }
 
     fn is_get_object_error_retriable(error: &SdkError<GetObjectError>) -> bool {
         match error {
             SdkError::ServiceError(service_error) => {
-                !Self::is_expected_get_object_error(service_error.err(), service_error.raw())
+                !Self::is_final_get_object_error(service_error.err(), service_error.raw())
             }
             _ => true,
         }
@@ -594,13 +600,12 @@ impl S3BlobStorage {
     /// logs for a `GetObject` error, or `None` for an error that the loop does not log and does
     /// not count as a failure.
     ///
-    /// A missing key and a 416 are answers that the backend expects
-    /// (`is_expected_get_object_error`), not failures of S3. They stay out of the error log and
-    /// out of the failure counter. Every other error gets its text.
+    /// A missing key and a 416 (`is_final_get_object_error`) stay out of the error log and out
+    /// of the failure counter. Every other error gets its text.
     fn get_object_error_as_loggable(error: &SdkError<GetObjectError>) -> Option<String> {
         match error {
             SdkError::ServiceError(service_error)
-                if Self::is_expected_get_object_error(service_error.err(), service_error.raw()) =>
+                if Self::is_final_get_object_error(service_error.err(), service_error.raw()) =>
             {
                 None
             }

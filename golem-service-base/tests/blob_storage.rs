@@ -1157,9 +1157,8 @@ async fn fs_list_blobs_below_fails_for_a_directory_that_it_cannot_read(
 ) {
     let storage = test.get_blob_storage().await;
     // Writing a blob creates the directory of the namespace. Below it, the test lists a name of
-    // 300 bytes. The test assumes that the filesystem that holds the namespace refuses a name
-    // of that length, so the directory read fails with an error that is not "not found" and
-    // not "not a directory".
+    // 300 bytes. The filesystem that holds the namespace must not accept a name of that length,
+    // so the directory read gives an error that is not "not found" and not "not a directory".
     put_blobs(&storage, namespace, &[("blob", 1)]).await;
     let too_long = "x".repeat(300);
 
@@ -1878,7 +1877,7 @@ async fn get_raw_slice_uses_inclusive_ranges(
         // range with `strconv.ParseInt(s, 10, 64)` in `parseRequestRangeSpec`
         // (`cmd/httprange.go`), so 2^64-1 overflows `int64` and gives a parse error that
         // is not `errInvalidRange`. `getObjectHandler` (`cmd/object-handlers.go`) ignores
-        // such a parse error and serves a regular GET: the status 200, the whole object and
+        // such a parse error and serves a regular GET: the status 200, the full object and
         // no `Content-Range`. This is the integer overflow path of MinIO, not a behaviour
         // of S3.
         ("ranges/blob", u64::MAX, 2),

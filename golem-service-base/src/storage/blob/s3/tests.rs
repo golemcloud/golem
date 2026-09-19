@@ -119,9 +119,9 @@ impl Answer {
         }
     }
 
-    /// The whole object with the status 200 and its `Content-Length`. The backend assumes that
-    /// this is the answer of a server that ignores the range. A read of the body adds 1 to
-    /// `body_reads`.
+    /// The full object with the status 200 and its `Content-Length`, the response of a server
+    /// that ignores the range. The backend uses the body as the full object. A read of the body
+    /// adds 1 to `body_reads`.
     fn whole_object(body: &str, body_reads: &Arc<AtomicUsize>) -> Self {
         Self {
             content_length: Some(body.len()),
@@ -657,12 +657,12 @@ async fn get_raw_slice_keeps_a_416_and_a_missing_object_out_of_the_error_log() {
 
 #[test]
 async fn get_raw_slice_takes_the_range_out_of_a_200_response() {
-    // The script answers 200 with the whole object, no content range and no content length.
-    // The backend assumes that this is the response of a server that ignores the range (RFC
-    // 9110, sections 14.2 and 15.5.17). The last range is the one that a guest reaches the host
-    // with after it gives a negative offset for the start and the end. The S3 case of
-    // `get_raw_slice_uses_inclusive_ranges` in `tests/blob_storage.rs` sends the same range
-    // to MinIO.
+    // The script gives 200 with the full object, no content range and no content length. The
+    // backend uses the body as the full object, which is what RFC 9110 lets a server that
+    // ignores the range send (sections 14.2 and 15.5.17). The last range is the one that a
+    // guest reaches the host with after it gives a negative offset for the start and the end.
+    // The S3 case of `get_raw_slice_uses_inclusive_ranges` in `tests/blob_storage.rs` sends
+    // the same range to MinIO.
     let (storage, requests) = scripted_storage("", |request, _| {
         if request.uri.contains("empty") {
             Answer::new(200, "")
@@ -717,7 +717,7 @@ async fn get_raw_slice_takes_the_range_out_of_a_200_response() {
 
 #[test]
 async fn get_raw_slice_refuses_a_range_past_the_content_length_without_reading_the_body() {
-    // The script answers 200 with the whole object and its content length, and counts the
+    // The script gives 200 with the full object and its content length, and counts the
     // bodies that get read.
     let body_reads = Arc::new(AtomicUsize::new(0));
     let (storage, requests) = scripted_storage("", {
@@ -766,7 +766,7 @@ async fn get_raw_slice_refuses_a_range_past_the_content_length_without_reading_t
 #[test]
 async fn get_raw_slice_reads_the_status_of_the_attempt_that_gave_the_output() {
     // The SDK makes 2 attempts for the one request of the blob storage. The first gets a
-    // server error, and the second gets the whole object with the status 200.
+    // server error, and the second gets the full object with the status 200.
     let (storage, requests) = scripted_storage_with(
         RetryConfig::standard()
             .with_max_attempts(2)
@@ -839,7 +839,7 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
     let short_body = read_error(0, 2).await;
     let long_body = read_error(3, 4).await;
     let without_content_range = read_error(0, 5).await;
-    // The backend does not assume that a 206 response without a content range holds the whole
+    // The backend does not use the body of a 206 response without a content range as the full
     // object, so its content length does not tell the backend whether the range is in the
     // object.
     let partial_without_content_range = read_error(0, 9).await;
