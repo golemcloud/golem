@@ -286,7 +286,24 @@ impl DurableStreamStore {
                     return Err(StreamStoreError::InvalidAttachmentState);
                 }
                 let terminal = match &output.source {
-                    ProducerOutputSource::New(_) => Some((0, entity_parent_start_index)),
+                    ProducerOutputSource::New(request) => {
+                        if let Some(stream_id) = index.coordinates.get(&request.coordinate) {
+                            let stream = index
+                                .streams
+                                .get(stream_id)
+                                .ok_or(StreamStoreError::UnknownStream(*stream_id))?;
+                            if stream.terminal {
+                                None
+                            } else {
+                                Some((
+                                    stream.next_sequence,
+                                    index.entity_parent_start_index(*stream_id)?,
+                                ))
+                            }
+                        } else {
+                            Some((0, entity_parent_start_index))
+                        }
+                    }
                     ProducerOutputSource::Existing(handle) if self.owns_handle_identity(handle) => {
                         let stream = index
                             .streams
@@ -308,7 +325,7 @@ impl DurableStreamStore {
                 cancellations.push((position, epoch, terminal, applied_locally));
             }
         }
-        let requests = outputs
+        let mut requests = outputs
             .iter()
             .filter_map(|output| match &output.source {
                 ProducerOutputSource::New(request) => Some(request.clone()),
@@ -393,6 +410,7 @@ impl DurableStreamStore {
                     .map(|registration| registration.issue(self.generation()))
             })
             .collect::<Vec<_>>();
+        let mut registered_handles = Vec::new();
         if existing_handles.iter().any(Option::is_some) {
             if existing_handles.iter().any(Option::is_none) {
                 return Err(StreamStoreError::RegistrationDivergence);
@@ -401,18 +419,18 @@ impl DurableStreamStore {
                 .into_iter()
                 .map(Option::unwrap)
                 .collect::<Vec<_>>();
-            let sources = handles
-                .iter()
-                .map(|handle| {
-                    let registration = index.registrations.get(&handle.stream_id).unwrap();
-                    StreamRecordReference::Local(LocalStreamId(
-                        registration.registration_oplog_index,
-                    ))
-                })
-                .collect();
-            let expected = make_result(sources);
-            drop(index);
             if let Some(offset) = result_offset {
+                let sources = handles
+                    .iter()
+                    .map(|handle| {
+                        let registration = index.registrations.get(&handle.stream_id).unwrap();
+                        StreamRecordReference::Local(LocalStreamId(
+                            registration.registration_oplog_index,
+                        ))
+                    })
+                    .collect();
+                let expected = make_result(sources);
+                drop(index);
                 let record = self.read_session_record(offset).await?;
                 if record == expected {
                     crate::metrics::durable_stream::record_producer_operation(
@@ -424,8 +442,9 @@ impl DurableStreamStore {
                         session_record: record,
                     });
                 }
+                return Err(StreamStoreError::RegistrationDivergence);
             }
-            return Err(StreamStoreError::RegistrationDivergence);
+            registered_handles = handles;
         }
         if index.finished_sessions.contains(&result_session_key) {
             return Err(StreamStoreError::SessionFinished(result_session_key));
@@ -443,12 +462,15 @@ impl DurableStreamStore {
                 .copied()
                 .unwrap_or_default();
             if current
-                .checked_add(requests.len())
+                .checked_add(requests.len() - registered_handles.len())
                 .is_none_or(|count| count > MAX_DURABLE_STREAMS_PER_SESSION)
             {
                 crate::metrics::durable_stream::record_limit_violation("streams_per_session");
                 return Err(StreamStoreError::StreamLimit);
             }
+        }
+        if !registered_handles.is_empty() {
+            requests.clear();
         }
         for request in &requests {
             if registration_coordinate_depth(&request.coordinate) > MAX_STREAM_VALUE_TRAVERSAL_DEPTH
@@ -473,12 +495,13 @@ impl DurableStreamStore {
             .iter()
             .map(|(id, registration)| (*id, LocalStreamId(registration.registration_oplog_index)))
             .collect::<HashMap<_, _>>();
+        let existing_handles = registered_handles.clone();
         context.begin_durable_effect();
         let entries = self
             .oplog
             .add_durable_stream_batch(Box::new(move |first_index| {
                 let mut result = Vec::with_capacity(requests.len() + 1);
-                let mut handles = Vec::with_capacity(requests.len());
+                let mut handles = existing_handles;
                 for (sub_index, request) in requests.into_iter().enumerate() {
                     let oplog_index = OplogIndex::from_u64(
                         first_index.as_u64()
@@ -593,7 +616,8 @@ impl DurableStreamStore {
             .map_err(StreamStoreError::Oplog)?;
         self.commit(context).await;
 
-        let mut handles = Vec::new();
+        let registered_count = registered_handles.len();
+        let mut handles = registered_handles;
         let mut session_record = None;
         let mut cancelled_count = 0;
         for (oplog_index, entry) in entries {
@@ -691,7 +715,7 @@ impl DurableStreamStore {
                 }
             }
         }
-        self.record_registered_streams(handles.len());
+        self.record_registered_streams(handles.len() - registered_count);
         self.record_terminal_streams(cancelled_count);
         crate::metrics::durable_stream::record_producer_operation("register_result", false);
         Ok(ResultStreamRegistration {

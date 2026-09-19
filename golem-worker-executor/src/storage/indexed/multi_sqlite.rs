@@ -438,28 +438,31 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             .await
     }
 
-    async fn publish_staged(
+    async fn move_if_absent(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        agent_id: &AgentId,
-        agent_mode: golem_common::model::agent::AgentMode,
-        stage_key: &str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
         target_key: &str,
         expected_last_id: u64,
     ) -> Result<bool, IndexedStorageError> {
-        let namespace = IndexedStorageNamespace::OpLog {
-            agent_id: agent_id.clone(),
-            agent_mode,
-        };
-        self.storage_by_namespace(&namespace)
+        let source_db = self.namespace_to_db(&source_namespace).await;
+        let target_db = self.namespace_to_db(&target_namespace).await;
+        if source_db != target_db {
+            return Err(IndexedStorageError::Other(
+                "multi-SQLite cannot atomically move indexes across databases".to_string(),
+            ));
+        }
+        self.storage_by_db_name(target_db)
             .await?
-            .publish_staged(
+            .move_if_absent(
                 svc_name,
                 api_name,
-                agent_id,
-                agent_mode,
-                stage_key,
+                source_namespace,
+                source_key,
+                target_namespace,
                 target_key,
                 expected_last_id,
             )

@@ -13,6 +13,73 @@ of environment state; authorization is enforced before any backend runs.
 accepted call becomes an `OwnerToolOperation` (`prepare_tool_call`) and is executed by
 `execute_accepted_tool_call` as a `ToolSidecarInvocation` driven by a `ToolExecutionTask`.
 
+Native external calls use `AgentInvocation::ExternalTool`, not a synthetic guest method.
+`Worker::invoke_external_tool` fences the owner fingerprint and resolves a coherent
+`ToolActivationSnapshot` before ordinary queue admission. The snapshot is stored in the invocation
+payload; retries attach to the accepted key before consulting deployment state. New admissions
+use the revision folded from oplog status, even when the owner's Store is not loaded. An update
+queued ahead of a tool does not change the binding already pinned at admission.
+Registry resolution prefers the active deployment when it contains that component revision,
+including after an environment rollback. Owners on revisions absent from the active deployment
+use the latest deployment that contains their revision. Accepted invocation snapshots are unchanged.
+
+Public REST, CLI and native invocation sessions address either an exact, already-existing real
+owner or a component target for which the executor creates an ephemeral virtual owner. They never
+silently create a named real owner. The typed input and success/custom-error result carry
+materialized scalar schemas and values only: streams cannot be nested recursively in those values.
+The only streaming tool attachments are optional byte `stdin` and byte `stdout` roots.
+
+MCP exports use the same native session path, always with a fresh component-backed ephemeral
+owner. The authenticated compiled MCP definition supplies an expected deployment revision;
+`prepare_external_tool_invocation` compares it with the selected activation before queueing.
+The check also applies to an already accepted activation and scalar scheduling. A stale listing
+cannot select historical activation state or reinterpret its input against a newer deployment.
+MCP authenticates before dispatch and grants only Invoke on the exact fresh owner, not System
+authority. Its finite stream adapter buffers at most 16 MiB per direction while draining stdout
+concurrently with stdin.
+
+`worker/invocation.rs` drives `invoke_external_tool` through a registered `NativeToolTask` under
+the same invocation start, deadline, principal/scope, tail settlement and committed completion as
+methods. Registering the task lets Wasmtime account for pending host I/O rather than reporting an
+idle-store deadlock. Native dispatch uses the same entity boundary without an outer call-tool
+`Start`; its root result is delivered directly, with no guest completion marker. Replay runs the
+dispatcher again using the activation pinned when the invocation was accepted and reconstructs
+completed bodies before checking the invocation result. Internal input/result envelopes carry
+stdin/stdout as ordinary schema-value streams. The Prepared Output mapping starts generic pumping
+before the result exists; `materialize_result` later binds the same handle, without re-registering
+or starting a second pump. The shared byte drain compares historical bytes and terminals rather
+than republishing them. Execution and draining run together with `try_join!`; only after both
+complete is the structured outcome recorded inside the result envelope in the session journal.
+Replaying changed bytes, terminals or structured results is rejected.
+An `ExternalTool` result invalidates read-only method caches even when it contains a tool error:
+the body may have mutated owner state before returning that error.
+
+Virtual owners persist `OwnerKind::EphemeralExternalTool` and use a reserved name derived from the
+idempotency key, scoped by the actual component and environment. They use the resolved component
+baseline, never an arbitrary exported agent schema. `RunningWorker::create_instance` reads owner
+metadata and instantiates that component through `InstanceHost::instantiate`, with normal executable,
+linear-memory, filesystem and concurrent-agent admission. Component/core initializers run, but no
+agent type or constructor parameters are selected and no `AgentInitialization` is queued.
+Ephemeral preparation replays initialization only for a resolved typed agent owner, not merely
+because the component exports agent schemas. The pending external-tool invocation starts once,
+through the normal live queue after preparation.
+
+Virtual owners follow ordinary ephemeral admission, unloading and retention: one accepted key,
+concurrent same-key convergence, and no restart of accepted incomplete work after Store or executor
+loss. During core initialization as well as tool execution, the invocation loop turns recovery
+decisions into a terminal interruption and closes the owner rather than starting a replacement Store.
+Reconstructed owners exist only for observation. Updates, guest snapshots and revert are rejected;
+delete, interrupt and result lookup use exact-existing access rather than creating a guest agent.
+`ComponentMetadata::owner_plugins` selects baseline or agent-type installations using the persisted
+kind, including for oplog forwarding and public plugin descriptions.
+
+Secret-bearing success and custom-error responses pass through the durable
+`GolemToolResponseSecretHoldAdmission` read. Completed replay restores its recorded allow/deny
+decision rather than consulting current permissions; incomplete admission checks permissions
+after returning to live. This accessor call is cancellable because the guest-facing tool APIs
+also use it. Guest cancellation must record a cancellation terminal, not abandon an admission
+`Start` as incomplete work. Responses without secrets need no admission call.
+
 Entity bodies (tool sidecars, middleware chains) run in their own Wasmtime `Store` but have **no
 oplog of their own**. `durable_host/entity.rs` is the "durable owner-oplog boundary for transient
 entity bodies": `EntityInvocationDurability` wraps a `DurableCallSession<GolemEntityInvoke,
@@ -88,6 +155,15 @@ Store's `local_live_tail`; completed replays reuse historical memory charges and
 pressure (`completed_tool_replay_bypasses_current_attachment_memory_pressure`,
 `incomplete_tool_replay_persists_attachment_upgrade_rejection`). Attachments
 (`tool/attachment.rs`) are in-memory stdin/stdout endpoints and are recreated, never preserved.
+
+`AcceptedToolCall::attachment_counterparty` separates two attachment protocols. A guest
+counterparty shares the body's causal lane: filesystem-capable guest tools retain EOF stdin
+staging before body execution and publish stdout only after the body terminal and lane return.
+A native external call has a `SessionJournal` counterparty. Its root byte streams
+are independent of the guest lane, so stdin and stdout are configured live and EOF staging is
+skipped; entity-slot registration, owner-lane acquisition and handoff are unchanged. This avoids
+deadlocking a filesystem-capable body behind a session stream whose progress does not use its
+lane.
 
 ### Scheduling
 

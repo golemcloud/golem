@@ -574,6 +574,10 @@ impl DurableStreamStore {
                             + u64::try_from(sub_index)
                                 .expect("durable stream batch size fits in u64"),
                     );
+                    let role = request
+                        .session_mapping
+                        .as_ref()
+                        .map_or(SessionStreamRole::Input, |mapping| mapping.role);
                     let record = registration_record(
                         oplog_index,
                         environment_id,
@@ -596,7 +600,7 @@ impl DurableStreamStore {
                     bindings.push(StreamBindingRecord {
                         transport_stream_id,
                         source: StreamRecordReference::Local(LocalStreamId(oplog_index)),
-                        role: SessionStreamRole::Input,
+                        role,
                     });
                     result.push(DurableStreamOplogRecord::Registered(
                         entity_parent_start_index,
@@ -608,7 +612,13 @@ impl DurableStreamStore {
                         .expect("registered inputs require a descriptor builder")(
                         bindings
                     );
-                    prepared.attempt.invocation.stream_handles = handles;
+                    prepared.attempt.invocation.stream_handles = prepared
+                        .stream_mappings
+                        .iter()
+                        .zip(handles)
+                        .filter(|(binding, _)| binding.role == SessionStreamRole::Input)
+                        .map(|(_, handle)| handle)
+                        .collect();
                     prepared
                 });
                 let prepared_record = StreamSessionRecord::Prepared(prepared);

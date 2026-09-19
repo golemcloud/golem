@@ -351,7 +351,7 @@ mod tests {
         let payload = "failure".to_string().into_typed_schema_value().unwrap();
         let wire_payload = encode_typed_schema_value_owned(payload).unwrap();
         let decoded = decode_wire_error(
-            wire::ToolError::CustomError(wire::CustomToolError {
+            wire::ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
                 name: "failure".to_string(),
                 payload: wire_payload,
             }),
@@ -367,7 +367,7 @@ mod tests {
         let payload = "failure".to_string().into_typed_schema_value().unwrap();
         let wire_payload = encode_typed_schema_value_owned(payload).unwrap();
         let decoded = decode_wire_error::<String>(
-            wire::ToolError::CustomError(wire::CustomToolError {
+            wire::ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
                 name: "failure".to_string(),
                 payload: wire_payload,
             }),

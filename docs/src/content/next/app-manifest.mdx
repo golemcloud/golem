@@ -113,23 +113,26 @@ tools:
 
 In this example, `build/assistant.wasm` must export both `SupportAgent` and the `search` tool.
 
-### Agent bindings
+### Component and agent bindings
 
-Tool bindings select which deployed tools are available to an agent and provide invocation parameters. Use the automatically selected `app-env:<environment>` agent preset to vary bindings by environment. Map merge modes are `upsert` (the default), `replace`, or `remove`; parameter maps use the same modes.
+Tool bindings select which deployed tools an owner can invoke and provide invocation parameters. A component binding authorizes fresh owners such as tools-only MCP calls and is also inherited as a default by real agents exported by that component. Agent bindings alone do not authorize a fresh component owner. Use the automatically selected `app-env:<environment>` agent preset to vary real-agent bindings by environment. Map merge modes are `upsert` (the default), `replace`, or `remove`; parameter maps use the same modes.
 
 ```yaml
 environments:
   production:
     server: cloud
 
-agents:
-  SupportAgent:
+components:
+  support:assistant:
     tools:
       search:
         version: "1.0.0"
         parameters:
           index: documentation
           limit: 20
+
+agents:
+  SupportAgent:
     presets:
       app-env:production:
         tools:
@@ -137,7 +140,14 @@ agents:
             parametersMergeMode: upsert
             parameters:
               limit: 5
+
+  RestrictedAgent:
+    toolsMergeMode: remove
+    tools:
+      search: {}
 ```
+
+`RestrictedAgent` opts out of the inherited `search` binding. If no agent should inherit a tool, prefer a separate agentless owner component rather than adding the binding to a component that exports agents.
 
 For a component-implemented tool, `version` can be omitted to use the version discovered from the component. When specified, it must match that version. The optional `account` must be the account that owns the locally deployed implementing component.
 
@@ -878,6 +888,23 @@ The generator reads only the release's safe tool definition and metadata digest.
   </Field>
 
   <Field meta={{
+    path: "components.<component-name>.tools",
+  }}>
+    ***Optional map of tool bindings*** inherited by agents exported by the component and used as the authorization baseline for fresh component owners, including tools-only MCP calls.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.toolsMergeMode",
+  }}>
+    ***Optional merge mode*** for <FieldLink path="components.<component-name>.tools"/>. Accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "upsert", isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "replace"}}></EnumValue>
+      <EnumValue meta={{value: "remove"}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
     path: "components.<component-name>.envMergeMode",
     since: Release.R_1_4_0
   }}>
@@ -1539,6 +1566,18 @@ The generator reads only the release's safe tool definition and metadata digest.
     since: Release.R_1_5_0
   }}>
     ***Optional string map*** of environment variables for the agent.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.tools",
+  }}>
+    ***Optional map of tool bindings*** merged over bindings inherited from the implementing component. Agent bindings affect real agents only and cannot authorize fresh component owners.
+  </Field>
+
+  <Field meta={{
+    path: "agents.<agent-type-name>.toolsMergeMode",
+  }}>
+    ***Optional merge mode*** for <FieldLink path="agents.<agent-type-name>.tools"/>: `upsert` (the default), `replace`, or `remove`.
   </Field>
 
   <Field meta={{

@@ -897,16 +897,20 @@ fn tool_wit_uses_directional_started_stream_contract() {
         .expect("failed to read canonical tool host WIT");
     let guest = std::fs::read_to_string(tool_wit.join("guest.wit"))
         .expect("failed to read canonical tool guest WIT");
-    let rpc_error = host
-        .split_once("variant rpc-error {")
-        .and_then(|(_, rest)| rest.split_once("\n  }").map(|(body, _)| body))
-        .expect("host WIT must define rpc-error");
+    let core =
+        std::fs::read_to_string(workspace_root.join("wit/deps/golem-core-v2/golem-core-v2.wit"))
+            .expect("failed to read canonical core WIT");
+    let rpc_error = core
+        .split_once("variant tool-rpc-error {")
+        .and_then(|(_, rest)| rest.split_once("\n    }").map(|(body, _)| body))
+        .expect("core WIT must define tool-rpc-error");
 
     assert!(common.contains(
         "record invocation-result {\n    %result: option<typed-schema-value>,\n    stdout:  option<stream<u8>>,\n  }"
     ));
 
     for required in [
+        "use golem:core/types@2.0.0.{typed-schema-value, component-id, tool-rpc-error};",
         "type byte-stream-item = result<list<u8>, byte-stream-failure>;",
         "create-stdin: func() -> tuple<\n    own<tool-stdin-writer>,\n    own<tool-stdin>,\n    own<tool-stdin-closed>\n  >;",
         "create-stdout: func() -> tuple<own<tool-stdout>, stream<byte-stream-item>>;",
@@ -916,8 +920,8 @@ fn tool_wit_uses_directional_started_stream_contract() {
         "stdout:       option<own<tool-stdout>>",
         "invoke: func(",
         "async-invoke-and-await: func(",
-        "get: async func() -> result<invocation-result, rpc-error>;",
-        "get-invoke-results: async func(\n    futures: list<borrow<future-invoke-result>>,\n  ) -> list<result<invocation-result, rpc-error>>;",
+        "get: async func() -> result<invocation-result, tool-rpc-error>;",
+        "get-invoke-results: async func(\n    futures: list<borrow<future-invoke-result>>,\n  ) -> list<result<invocation-result, tool-rpc-error>>;",
     ] {
         assert!(
             host.contains(required),

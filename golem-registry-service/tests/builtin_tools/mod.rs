@@ -116,6 +116,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
     let error = provision_descriptors(
         std::slice::from_ref(&mismatch),
         owner,
+        &services.auth_service,
         &services.application_service,
         &services.environment_service,
         &services.component_service,
@@ -152,6 +153,7 @@ async fn provision(services: &Services, owner: AccountId, descriptors: &[Builtin
     provision_descriptors(
         descriptors,
         owner,
+        &services.auth_service,
         &services.application_service,
         &services.environment_service,
         &services.component_service,

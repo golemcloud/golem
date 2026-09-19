@@ -29,7 +29,7 @@ use golem_common::base_model::OplogIndex;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
@@ -1899,6 +1899,7 @@ impl TestCaseBuilder {
             entries: vec![TestEntry {
                 oplog_entry: OplogEntry::create(
                     owned_agent_id.agent_id(),
+                    OwnerKind::ComponentAgent,
                     AgentMode::Durable,
                     component_revision,
                     vec![],
@@ -2615,7 +2616,9 @@ async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
                 format_version: 1,
                 session_key: session_key.clone(),
                 target_component_revision: ComponentRevision::INITIAL,
-                method_name: "large-cold-status".to_string(),
+                target: golem_common::base_model::durable_stream::PersistedInvocationTarget::AgentMethod {
+                    method_name: "large-cold-status".to_string(),
+                },
                 invocation_value: vec![7; 70 * 1024],
                 stream_handles: Vec::new(),
                 execution_config: Vec::new(),

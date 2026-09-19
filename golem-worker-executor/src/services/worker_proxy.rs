@@ -1255,6 +1255,7 @@ mod tests {
                                 callee_fingerprint: start.expected_callee_fingerprint,
                                 method_name: start.method_name.clone(),
                                 joined_origin_observer: false,
+                                ..Default::default()
                             },
                         )),
                     };
@@ -1310,6 +1311,7 @@ mod tests {
                                 callee_fingerprint: resume.expected_callee_fingerprint,
                                 method_name: Some("streaming-method".to_string()),
                                 joined_origin_observer: false,
+                                ..Default::default()
                             },
                         )),
                     };

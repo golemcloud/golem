@@ -154,6 +154,18 @@ only a registration found in this owner's journal may become `Local`. Nested str
 immediately preceding their enclosing item batch are validated and applied on a cloned index, so
 the complete binding set and item become visible atomically or not at all.
 
+Native external tools reuse these journals but deliberately expose a narrower shape. Their typed
+input and structured success/custom-error result are fully materialized scalar schema values; they
+cannot contain recursive typed streams. Internal envelopes lower the attachments to ordinary
+schema values: `{ arguments, stdin: option<stream<u8>> }` and
+`{ outcome, stdout: option<stream<u8>> }`. Recursive input materialization and reconstruction own
+stdin; only the tool boundary converts its durable consumer to a WIT attachment. Prepared records
+can contain Output mappings at normal result-leaf coordinates, so generic pumping delivers stdout
+before stdin EOF or result readiness. `materialize_result` binds that existing output handle after
+execution and draining join. The shared byte drain compares historical bytes and terminals without
+writes or republication, independent of batching, and appends only the live suffix. Ordinary methods
+still register outputs when returning. Requested output declarations participate in retry identity.
+
 The ownership layers are deliberately local. `DurableStreamStore` is the existing per-worker
 journal/index store; it still owns queue admission, serialized local mutations, durable commit and
 post-commit publication, and reports `StreamStoreError`. A per-invocation `StreamSession` runtime
@@ -193,6 +205,11 @@ are still being produced and consumed. Three crash windows follow:
 Provider reconstruction drains terminal outputs against their committed records without waiting
 for a consumer attachment; the consumer may already have finished and detached permanently.
 For agent RPC, open outputs still require an active attachment before production.
+
+For a native tool, body execution and stdout draining are joined before the structured result is
+materialized. This ordering prevents a result from becoming durable while stdout is still
+unvalidated. Historical stdout is never published a second time: every byte and the terminal must
+match the producer journal before live output may continue.
 
 ### Exactly-once item delivery
 

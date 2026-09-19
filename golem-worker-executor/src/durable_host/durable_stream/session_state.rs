@@ -898,6 +898,13 @@ impl SessionControlMetadata {
                 vec![record.mapping.clone()]
             }
             StreamSessionRecord::Prepared(record) if record_matches => {
+                for mapping in &record.stream_mappings {
+                    if mapping.role == SessionStreamRole::Output
+                        && !self.root_outputs.contains(&mapping.transport_stream_id)
+                    {
+                        self.root_outputs.push(mapping.transport_stream_id);
+                    }
+                }
                 record.stream_mappings.clone()
             }
             StreamSessionRecord::TopologyPrepared(record) if record_matches => {

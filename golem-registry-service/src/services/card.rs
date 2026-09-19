@@ -463,6 +463,16 @@ impl CardService {
                 )
                 .await?
                 .account_email),
+            Some(CardManagedBy::ComponentInitial(managed_by)) => Ok(self
+                .component_service
+                .get_component_revision(
+                    managed_by.component_id,
+                    managed_by.component_revision,
+                    true,
+                    &AuthCtx::System,
+                )
+                .await?
+                .account_email),
             Some(CardManagedBy::RuntimeDerived(managed_by)) => Ok(self
                 .environment_service
                 .default_card_ref_by_environment(managed_by.environment_id)

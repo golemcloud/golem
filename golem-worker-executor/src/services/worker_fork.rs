@@ -29,7 +29,7 @@ use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogServiceOps};
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -57,7 +57,7 @@ use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::base_model::regions::DeletedRegionsBuilder;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
@@ -485,6 +485,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(OwnedAgentId, OwnedAgentId), WorkerExecutorError> {
+        OwnerKind::ComponentAgent
+            .validate_instance_name(&target_agent_id.agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
         let second_index = OplogIndex::INITIAL.next();
 
         if oplog_index_cut_off < second_index {
@@ -513,12 +516,18 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let owned_source_agent_id = OwnedAgentId::new(environment_id, source_agent_id);
 
-        self.worker_service
+        let source_metadata = self
+            .worker_service
             .get(&owned_source_agent_id)
             .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 source_agent_id.clone(),
             ))?;
+        if source_metadata.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+            return Err(WorkerExecutorError::invalid_request(
+                "External-tool owners cannot be forked",
+            ));
+        }
 
         Ok((owned_source_agent_id, owned_target_agent_id))
     }
@@ -601,6 +610,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // See https://github.com/golemcloud/golem/issues/3099
         let target_worker_metadata = AgentMetadata {
             agent_id: target_agent_id.clone(),
+            owner_kind: initial_source_worker_metadata.owner_kind,
             created_by: initial_source_worker_metadata.created_by,
             created_by_email: initial_source_worker_metadata.created_by_email,
             environment_id,
@@ -638,6 +648,16 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             source_oplog,
             self.extra_deps.clone(),
         );
+        let read_source = |index| {
+            let source = &owned_source_agent_id;
+            async move {
+                self.oplog_service
+                    .read_exact(source, agent_mode, index, 1)
+                    .await
+                    .remove(&index)
+                    .expect("fork source oplog entry is missing")
+            }
+        };
 
         // Copy the inclusive prefix. Ordinary calls recover from that prefix, even if their
         // terminal or delivery marker is absent. Atomic and transaction outcomes remain paired.
@@ -666,7 +686,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         .await
         .map_err(WorkerExecutorError::runtime)?;
         if let Some(spanning) = crate::worker::cut_point::find_construct_spanning_cut_point(
-            |idx| source_oplog.read(idx),
+            read_source,
             oplog_index_cut_off,
             source_oplog_end,
             &source_skipped_regions,
@@ -697,7 +717,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         })?;
         fork_cut.export = export.map(|candidate| candidate.export.clone());
 
-        let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
+        let initial_oplog_entry = read_source(OplogIndex::INITIAL).await;
         let initial_size = golem_common::serialization::serialize(&initial_oplog_entry)
             .map_err(WorkerExecutorError::runtime)?
             .len() as u64;
@@ -732,7 +752,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         for oplog_index in oplog_range {
             let mut entry = rewrite_forked_oplog_entry(
-                source_oplog.read(oplog_index).await,
+                read_source(oplog_index).await,
                 &owned_source_agent_id.agent_id,
                 &owned_target_agent_id.agent_id,
             );
@@ -742,12 +762,13 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     .len() as u64,
             );
             payload::copy_entry_payloads(&mut entry, |payload_id, md5_hash| {
-                let source_oplog = &source_oplog;
                 let new_oplog = &new_oplog;
+                let source = &owned_source_agent_id;
                 let external_payload_bytes = external_payload_bytes.clone();
                 async move {
-                    let bytes = source_oplog
-                        .download_raw_payload(payload_id, md5_hash)
+                    let bytes = self
+                        .oplog_service
+                        .download_raw_payload(source, agent_mode, payload_id, md5_hash)
                         .await?;
                     external_payload_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
                     new_oplog.upload_raw_payload(bytes).await
@@ -821,7 +842,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             if deleted_regions.is_in_deleted_region(oplog_index) {
                 continue;
             }
-            let entry = source_oplog.read(oplog_index).await;
+            let entry = read_source(oplog_index).await;
             match &entry {
                 OplogEntry::PendingUpdate { description, .. } => {
                     pending_update_revisions.push(*description.target_revision());
@@ -855,10 +876,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     continue;
                 }
                 if let OplogEntry::PendingAgentInvocation { payload, .. } =
-                    source_oplog.read(pending_index).await
+                    read_source(pending_index).await
                     && matches!(
-                        source_oplog
-                            .download_payload(payload)
+                        self.oplog_service
+                            .download_payload(&owned_source_agent_id, agent_mode, payload)
                             .await
                             .map_err(WorkerExecutorError::runtime)?,
                         golem_common::model::AgentInvocationPayload::AgentInitialization { .. }
@@ -1052,6 +1073,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         match entry {
             OplogEntry::Create {
                 timestamp,
+                owner_kind,
                 agent_mode,
                 component_revision,
                 env,
@@ -1068,6 +1090,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             } => Some(OplogEntry::Create {
                 timestamp,
                 agent_id: agent_id.clone(),
+                owner_kind,
                 agent_mode,
                 component_revision,
                 env,

@@ -2041,6 +2041,7 @@ mod tests {
             };
             let account = AccountId::new();
             let metadata = AgentMetadata {
+                owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
                 agent_id: identity.agent_id.clone(),
                 env: vec![],
                 environment_id: identity.environment_id,
@@ -2056,6 +2057,7 @@ mod tests {
             };
             let create = OplogEntry::create(
                 identity.agent_id.clone(),
+                golem_common::model::agent::OwnerKind::ComponentAgent,
                 AgentMode::Durable,
                 golem_common::model::component::ComponentRevision::INITIAL,
                 vec![],

@@ -130,7 +130,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 │ outer loop (one iteration = one resident instance)                  │
 │  create Store + instance ──▶ prepare_instance                       │
 │    durable agent:  handle PendingUpdate ▸ try snapshot ▸ resume_replay│
-│    ephemeral:      replay first invocation only, append Restart     │
+│    ephemeral:      replay typed initialization only, append Restart │
 │  ──▶ inner loop: pop durable queue, run invocation, persist Finished │
 │  ──▶ instance ends (idle / interrupt / trap / suspend)               │
 │  ──▶ RetryDecision: Immediate | Delayed | ReacquirePermits | None | TryStop │
@@ -139,7 +139,10 @@ run loop (`worker/invocation_loop.rs::run`) is:
 
 `resume_replay` (`durable_host/mod.rs`) loops `get_oplog_entry_agent_invocation_started`, replays
 each recorded invocation in `InvocationMode::Replay`, and when there is no further
-`AgentInvocationStarted` it switches to live. Replay starts from the chosen snapshot baseline
+`AgentInvocationStarted` it switches to live. Ephemeral owners replay at most one recorded
+`AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
+tool owners instantiate the deployed component but never queue or replay an agent constructor.
+Replay starts from the chosen snapshot baseline
 (see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. Interruption kinds
 (`Worker::set_interrupting`): `Interrupt` stays interrupted, `Restart` is a simulated crash with
 automatic recovery, `Suspend` unloads and resumes on demand; all three end in the same

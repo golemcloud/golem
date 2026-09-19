@@ -128,13 +128,14 @@ use golem_common::cache::PendingOrFinal;
 use golem_common::model::AgentStatus;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{
-    AgentMode, InvocationFreshnessDisposition, ParsedAgentId, Principal, Snapshotting,
-    SnapshottingConfig, ephemeral_invocation_phantom_id,
+    AgentMode, InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal,
+    ResolvedOwnerContext, Snapshotting, SnapshottingConfig, ephemeral_invocation_phantom_id,
 };
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
     ExecutableTarget, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
@@ -144,6 +145,7 @@ use golem_common::model::oplog::{
     TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::worker::{
     AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget, TypedAgentConfigEntry,
 };
@@ -156,6 +158,7 @@ use golem_common::model::{
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
 use golem_common::related_span;
+use golem_common::schema::TypedSchemaValue;
 use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
@@ -176,9 +179,28 @@ use uuid::Uuid;
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
+pub(crate) fn require_expected_tool_deployment_revision(
+    expected: Option<DeploymentRevision>,
+    actual: DeploymentRevision,
+) -> Result<(), WorkerExecutorError> {
+    if expected.is_some_and(|expected| expected != actual) {
+        Err(WorkerExecutorError::invalid_request(
+            "external tool deployment revision does not match",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 pub const PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT: &str =
     "permission card transfer payload conflict";
 pub const PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH: &str = "install-recipient-mismatch";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkerCreationMode {
+    ComponentAgent,
+    EphemeralExternalTool,
+}
 
 /// Resolved read-only `AgentMethod` invocation data needed to build the
 /// cache key and entry.
@@ -589,6 +611,7 @@ pub struct Worker<Ctx: WorkerCtx> {
 /// fields remain private and it is not a construction or lifecycle API.
 #[doc(hidden)]
 pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
+    owner_context: ResolvedOwnerContext,
     parsed_agent_id: Option<ParsedAgentId>,
 
     oplog: Arc<dyn Oplog>,
@@ -1304,6 +1327,48 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
     }
 
+    /// Resolves an already-created owner. Unlike ordinary invocation ingress, this path cannot
+    /// create or recreate an owner and is therefore suitable for authority carrying an expected
+    /// owner fingerprint.
+    pub async fn get_exact_existing_suspended<T>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        principal: Principal,
+    ) -> Result<Arc<Self>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        deps.active_agents()
+            .get_existing(deps, owned_agent_id, principal)
+            .await
+    }
+
+    /// Pins an existing owner's response metadata without allowing owner creation.
+    pub(crate) async fn get_exact_existing_suspended_for_response<T>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        principal: Principal,
+    ) -> Result<(Arc<Self>, Option<Arc<EphemeralResponseLease>>), WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        loop {
+            let worker =
+                Self::get_exact_existing_suspended(deps, owned_agent_id, principal.clone()).await?;
+            if worker.agent_mode() != AgentMode::Ephemeral {
+                return Ok((worker, None));
+            }
+            if let Some(lease) = worker
+                .durable_stream_producer
+                .retain_response_or_wait_for_archive()
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            {
+                return Ok((worker, Some(lease)));
+            }
+        }
+    }
+
     /// Pins response metadata before normal ephemeral archival, or joins archival and reloads.
     pub(crate) async fn get_or_create_suspended_for_response<T>(
         deps: &T,
@@ -1545,6 +1610,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation_context_stack: InvocationContextStack,
         principal: Principal,
         freshness_disposition: InvocationFreshnessDisposition,
+        creation_mode: WorkerCreationMode,
     ) -> Result<(), WorkerExecutorError> {
         loop {
             let worker = self.clone();
@@ -1577,6 +1643,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     worker_agent_config,
                     parent,
                     freshness_disposition,
+                    creation_mode,
                 )
                 .await;
                 worker
@@ -1652,7 +1719,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     *instance = WorkerInstance::Initializing(completion.clone());
                     let worker = self.clone();
                     tokio::spawn(async move {
-                        let result = build.await;
+                        let result = crate::worker::invocation::with_invocation_stack(build).await;
                         let published = result.as_ref().map(|_| ()).map_err(Clone::clone);
                         let mut instance = worker.instance.lock().await;
                         *instance = match result {
@@ -1747,7 +1814,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             current_status,
             mut persisted_status,
             execution_status,
-            agent_id,
+            owner_context,
             snapshot_policy,
             oplog,
             initial_component,
@@ -1824,7 +1891,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             "worker_read_only_cache",
         );
 
-        let current_component = Arc::new(arc_swap::ArcSwap::from(initial_component));
+        let current_component = Arc::new(arc_swap::ArcSwap::from(initial_component.clone()));
 
         let last_known_status_detached = Arc::new(AtomicBool::new(false));
         let status_flusher = status_flusher::AgentStatusFlusher::new(
@@ -1875,7 +1942,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         ));
 
         let worker = ResolvedWorkerData {
-            parsed_agent_id: agent_id.clone(),
+            parsed_agent_id: owner_context.agent().cloned(),
+            owner_context,
             tasks: oplog
                 .task_owner()
                 .cloned()
@@ -1943,7 +2011,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // A crash may leave only Create. The initialization reservation excludes ordinary
         // invocation admission; the status actor still performs the persisted dedupe.
-        if let (Some(agent_id), Some((invocation_context, principal))) = (&agent_id, initialization)
+        if let (Some(agent_id), Some((invocation_context, principal))) =
+            (worker.owner_context.agent(), initialization)
             && last_oplog_idx <= OplogIndex::from_u64(2)
             && !reconstructed_ephemeral
         {
@@ -2016,13 +2085,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let worker_metadata = self.get_latest_worker_metadata().await;
-        let agent_effective_surface = match &self.parsed_agent_id {
-            Some(agent_id) => agent_effective_surface_from_component_metadata(
-                &owner_component_metadata,
-                &self.owned_agent_id,
-                agent_id,
-            )?,
-            None => golem_common::model::card::EffectiveSurface::default(),
+        let agent_effective_surface = match &self.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => {
+                agent_effective_surface_from_component_metadata(
+                    &owner_component_metadata,
+                    &self.owned_agent_id,
+                    agent_id,
+                )?
+            }
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                crate::durable_host::owner_effective_surface_from_component_metadata(
+                    &owner_component_metadata,
+                    &self.owned_agent_id,
+                    &self.owner_context,
+                )?
+            }
         };
         use golem_common::model::entity::EntityActivationSource;
         let executable_revision = match (&executable, activation.source()) {
@@ -2052,19 +2129,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ));
             }
         };
-        let initial_agent_config = match &self.parsed_agent_id {
-            Some(agent_id) => {
+        let initial_agent_config = match &self.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => {
                 let component_config = owner_component_metadata
                     .metadata
                     .agent_type_config(&agent_id.agent_type)
-                    .map(|config| config.to_vec())
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                    .to_vec();
                 effective_agent_config(worker_metadata.config, component_config)?
                     .into_iter()
                     .map(|(path, value)| TypedAgentConfigEntry { path, value })
                     .collect()
             }
-            None => worker_metadata.config,
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                effective_agent_config(
+                    worker_metadata.config,
+                    owner_component_metadata
+                        .metadata
+                        .component_provision_config()
+                        .config
+                        .clone(),
+                )?
+                .into_iter()
+                .map(|(path, value)| TypedAgentConfigEntry { path, value })
+                .collect()
+            }
         };
         let filesystem_generation = self
             .owner_runtime_resources
@@ -2131,7 +2220,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ctx::create(
             worker_metadata.created_by,
             self.owned_agent_id.clone(),
-            self.parsed_agent_id.clone(),
+            self.owner_context.clone(),
             self.promise_service(),
             self.worker_service(),
             self.worker_enumeration_service(),
@@ -3227,6 +3316,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: Arc<Self>,
         invocation: AgentInvocation,
     ) -> Result<ResultOrSubscription, WorkerExecutorError> {
+        if !matches!(invocation, AgentInvocation::ExternalTool { .. }) {
+            self.ensure_component_agent_ingress("regular invocation")?;
+        }
         let idempotency_key = Self::require_idempotency_key(&invocation)?;
 
         // Classification uses the in-memory component snapshot - no metadata
@@ -3354,7 +3446,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         _ => None,
                     })
                     .await;
-                if let Ok(Ok(output)) = wait_result
+                if let Ok(result) = wait_result
+                    && let Ok(output) = *result
                     && matches!(output.result, AgentInvocationResult::AgentMethod { .. })
                 {
                     populate_read_only_cache(&cache, &read_only_cache_epoch, &ro, epoch, output)
@@ -3364,6 +3457,164 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         Ok(result)
+    }
+
+    /// Admits a native external-tool invocation for this exact owner.
+    ///
+    /// The caller is trusted to have authenticated the supplied principal and context at its
+    /// ingress boundary. This method preserves ordinary invocation queue, idempotency, scope-card,
+    /// result, and cache-invalidation semantics; it does not establish a separate permission
+    /// boundary.
+    pub async fn invoke_external_tool(
+        self: Arc<Self>,
+        expected_fingerprint: AgentFingerprint,
+        idempotency_key: IdempotencyKey,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+        scope_card: Option<golem_common::model::card::ScopeCard>,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        if self.initial_worker_metadata.fingerprint != expected_fingerprint {
+            return Err(WorkerExecutorError::invalid_request(
+                "external tool invocation owner fingerprint does not match",
+            ));
+        }
+
+        // A retry attaches to the already accepted payload/result. In particular it must not
+        // resolve the tool against a newer environment deployment.
+        if self.lookup_invocation_result(&idempotency_key).await != LookupResult::New {
+            return self.await_enqueued_invocation(idempotency_key).await;
+        }
+
+        let invocation = self
+            .prepare_external_tool_invocation(
+                idempotency_key,
+                tool_name,
+                command_path,
+                input,
+                false,
+                false,
+                None,
+                invocation_context,
+                principal,
+                scope_card,
+            )
+            .await?;
+        self.invoke_and_await(invocation).await
+    }
+
+    pub(crate) async fn prepare_external_tool_invocation(
+        &self,
+        idempotency_key: IdempotencyKey,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        stdin: bool,
+        stdout: bool,
+        expected_deployment_revision: Option<DeploymentRevision>,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+        scope_card: Option<golem_common::model::card::ScopeCard>,
+    ) -> Result<AgentInvocation, WorkerExecutorError> {
+        if let Some(scope_card) = &scope_card {
+            crate::services::card::validate_scope_card(self.card_service().as_ref(), scope_card)
+                .await?;
+        }
+        let accepted_index = self
+            .durable_stream_session_status(&idempotency_key)
+            .await?
+            .and_then(|status| status.initial_pending_invocation_oplog_index);
+        let activation = if let Some(index) = accepted_index {
+            let OplogEntry::PendingAgentInvocation {
+                idempotency_key: accepted_key,
+                payload,
+                ..
+            } = self.oplog.read(index).await
+            else {
+                return Err(WorkerExecutorError::runtime(
+                    "native session does not reference a pending invocation",
+                ));
+            };
+            if accepted_key != idempotency_key {
+                return Err(WorkerExecutorError::runtime(
+                    "native session references a different invocation key",
+                ));
+            }
+            let payload: AgentInvocationPayload = self
+                .oplog
+                .download_payload(payload)
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            let AgentInvocationPayload::ExternalTool { activation, .. } = payload else {
+                return Err(WorkerExecutorError::invalid_request(
+                    "invocation key is already bound to an agent method",
+                ));
+            };
+            activation
+        } else {
+            // The resident component snapshot starts at the CREATE revision and is only refreshed by
+            // instance startup. Admission can happen while the owner is cold, so resolve against the
+            // revision folded from the authoritative oplog status instead.
+            let component_revision = self.last_known_status.load().component_revision;
+            let component = self
+                .component_service()
+                .get_metadata(self.owned_agent_id.component_id(), Some(component_revision))
+                .await?;
+            let owner = match &self.owner_context {
+                ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
+                    agent_type_name: agent.agent_type.clone(),
+                },
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                    ToolBindingOwner::ComponentBaseline {
+                        component_id: component.id,
+                    }
+                }
+            };
+            match self
+                .environment_state_service()
+                .get_tool_activation(
+                    self.owned_agent_id.environment_id,
+                    component.id,
+                    component_revision,
+                    &owner,
+                    &tool_name,
+                )
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            {
+                crate::services::environment_state::ToolActivationOutcome::Ready(activation) => {
+                    activation
+                }
+                crate::services::environment_state::ToolActivationOutcome::NotBound => {
+                    return Err(WorkerExecutorError::permission_denied(format!(
+                        "tool '{tool_name}' is not bound to owner '{owner:?}'"
+                    )));
+                }
+                crate::services::environment_state::ToolActivationOutcome::NotRegistered => {
+                    return Err(WorkerExecutorError::invalid_request(format!(
+                        "tool '{tool_name}' is not registered"
+                    )));
+                }
+            }
+        };
+        require_expected_tool_deployment_revision(
+            expected_deployment_revision,
+            activation.registered_tool.deployment_revision,
+        )?;
+        Ok(AgentInvocation::ExternalTool {
+            idempotency_key,
+            tool_name,
+            command_path,
+            input: Box::new(input),
+            stdin,
+            stdout,
+            activation,
+            invocation_context,
+            principal,
+            scope_card,
+        })
     }
 
     /// Invokes the worker and awaits for a result.
@@ -3836,6 +4087,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         })
     }
 
+    fn ensure_component_agent_ingress(&self, operation: &str) -> Result<(), WorkerExecutorError> {
+        if self.initial_worker_metadata.owner_kind != OwnerKind::ComponentAgent {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "{operation} is not supported for an external tool owner"
+            )));
+        }
+        Ok(())
+    }
+
     /// Enqueue attempting an update.
     ///
     /// The update itself is not performed by the invocation queue's processing loop,
@@ -3867,6 +4127,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         target_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
+        self.ensure_component_agent_ingress("manual update")?;
         self.enqueue_worker_invocation(AgentInvocation::ManualUpdate { target_revision })
             .await
     }
@@ -3980,7 +4241,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.events().publish(Event::InvocationCompleted {
             agent_id: self.owned_agent_id.agent_id(),
             idempotency_key: key.clone(),
-            result,
+            result: Box::new(result),
         });
     }
 
@@ -4860,11 +5121,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         invocation: &AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
-        let AgentInvocation::AgentMethod {
-            idempotency_key, ..
-        } = invocation
-        else {
-            return Ok(());
+        let idempotency_key = match invocation {
+            AgentInvocation::AgentMethod {
+                idempotency_key, ..
+            }
+            | AgentInvocation::ExternalTool {
+                idempotency_key, ..
+            } => idempotency_key,
+            _ => return Ok(()),
         };
         if self.agent_mode() != AgentMode::Ephemeral {
             return Ok(());
@@ -5035,6 +5299,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         invocation: AgentInvocation,
     ) -> Result<OplogEntry, WorkerExecutorError> {
+        self.accept_ephemeral_invocation(&invocation)?;
         let (idempotency_key, invocation_payload, invocation_context) = invocation.into_parts();
         let invocation_context = invocation_context
             .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
@@ -5188,6 +5453,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return Err(error.clone());
         }
+        let roles = request
+            .registrations
+            .iter()
+            .map(|(id, registration)| {
+                registration
+                    .session_mapping
+                    .as_ref()
+                    .map(|mapping| (*id, mapping.role))
+                    .ok_or_else(|| {
+                        WorkerExecutorError::invalid_request(
+                            "session registration has no stream role",
+                        )
+                    })
+            })
+            .collect::<Result<HashMap<_, _>, _>>()?;
         let mut invocation = Some(request.invocation);
         let mut acceptance_committed = Some(request.acceptance_committed);
         let mut attached_during_prepare = false;
@@ -5230,7 +5510,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .map(|mapping| mapping.handle.clone())
                     .collect()
             };
-            requested_attempt.invocation.stream_handles = requested_handles.clone();
+            requested_attempt.invocation.stream_handles = if foreign_mappings.is_empty() {
+                request
+                    .registrations
+                    .iter()
+                    .zip(&requested_handles)
+                    .filter(|((id, _), _)| roles[id] == SessionStreamRole::Input)
+                    .map(|(_, handle)| handle.clone())
+                    .collect()
+            } else {
+                requested_handles.clone()
+            };
             joined_origin = matches!(
                 acceptance_match,
                 DurableStreamingAcceptanceMatch::ExactAttempt
@@ -5287,7 +5577,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 {
                     bindings.push(
                         producer
-                            .local_binding(*transport_stream_id, handle, SessionStreamRole::Input)
+                            .local_binding(*transport_stream_id, handle, roles[transport_stream_id])
                             .await
                             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
                     );
@@ -6039,6 +6329,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    pub(crate) async fn native_tool_session(
+        &self,
+        idempotency_key: &IdempotencyKey,
+    ) -> Result<Option<(StreamSessionPreparedRecord, StreamSession)>, WorkerExecutorError> {
+        let Some(prepared) = self.prepared_stream_session(idempotency_key).await? else {
+            return Ok(None);
+        };
+        let streams = StreamSession::open(
+            self.durable_stream_producer().await?,
+            self.oplog.clone(),
+            StreamRegistrationInvocation::Local(prepared.session_key.clone()),
+            prepared.stream_mappings.iter().cloned(),
+        )
+        .await
+        .map_err(WorkerExecutorError::runtime)?
+        .with_rpc(self.rpc())
+        .with_consumer_journal(self.durable_stream_consumer_journal())
+        .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
+        streams
+            .recover_session_mappings()
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        Ok(Some((prepared, streams)))
+    }
+
     /// Reconstructs stream-bearing invocation input from committed session mappings.
     pub async fn rehydrate_durable_streaming_invocation(
         &self,
@@ -6085,19 +6400,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .recover_session_mappings()
             .await
             .map_err(WorkerExecutorError::runtime)?;
-        let value = golem_api_grpc::proto::golem::schema::SchemaValue::decode(
-            prepared.attempt.invocation.invocation_value.as_slice(),
-        )
-        .map_err(|error| {
-            WorkerExecutorError::runtime(format!(
-                "failed to decode persisted durable invocation input: {error}"
-            ))
-        })?;
+        let encoded = prepared.attempt.invocation.invocation_value.as_slice();
+        let typed = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(encoded)
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "failed to decode persisted durable invocation input: {error}"
+                ))
+            })?;
+        let graph = typed
+            .graph
+            .ok_or_else(|| WorkerExecutorError::runtime("missing invocation input graph"))?
+            .try_into()
+            .map_err(WorkerExecutorError::runtime)?;
+        let value = typed
+            .value
+            .ok_or_else(|| WorkerExecutorError::runtime("missing invocation input value"))?;
         let input = streams
             .decode_initial(value, &mappings, SessionStreamRole::Input)
             .await
             .map_err(WorkerExecutorError::runtime)?;
-        Ok(replace_agent_method_input(invocation, input))
+        Ok(replace_invocation_input(
+            invocation,
+            TypedSchemaValue::new(graph, input),
+        ))
     }
 
     /// Persists stream-bearing result mappings and returns the transport value.
@@ -6362,15 +6687,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     fn durable_stream_consumer_auth_ctx(&self) -> Result<AuthCtx, WorkerExecutorError> {
-        let parsed_agent_id = self.parsed_agent_id.as_ref().ok_or_else(|| {
-            WorkerExecutorError::runtime(
-                "durable stream consumer is not a registered agent instance",
-            )
-        })?;
-        let surface = agent_effective_surface_from_component_metadata(
+        let surface = crate::durable_host::owner_effective_surface_from_component_metadata(
             self.current_component.load().as_ref(),
             &self.owned_agent_id,
-            parsed_agent_id,
+            &self.owner_context,
         )?;
         Ok(AuthCtx::agent_with_effective_surface(
             self.initial_worker_metadata.created_by,
@@ -7241,6 +7561,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
     ) -> Result<(), WorkerExecutorError> {
+        self.ensure_component_agent_ingress("revert")?;
         match target {
             RevertWorkerTarget::RevertToOplogIndex(target) => {
                 if resolved_revert.is_some() {
@@ -7667,7 +7988,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         } if *agent_id == self.owned_agent_id.agent_id
                             && idempotency_key == key =>
                         {
-                            Some(LookupResult::Complete(result.clone()))
+                            Some(LookupResult::Complete(*result.clone()))
                         }
                         _ => None,
                     });
@@ -8361,6 +8682,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             initial_worker_metadata,
             last_known_status,
         } = metadata;
+        initial_worker_metadata
+            .owner_kind
+            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+            .map_err(WorkerExecutorError::runtime)?;
         let persisted_status = last_known_status.clone();
         let agent_mode = initial_worker_metadata.agent_mode;
         let current_status = calculate_last_known_status_with_checkpoint(
@@ -8382,22 +8707,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
         let current_status = Arc::new(arc_swap::ArcSwap::from_pointee(current_status));
-        let agent_id = if initial_component.metadata.is_agent() {
-            Some(
-                ParsedAgentId::parse(
-                    &owned_agent_id.agent_id.agent_id,
-                    &initial_component.metadata,
-                )
-                .map_err(|error| {
-                    WorkerExecutorError::invalid_request(format!("Invalid agent id: {error}"))
-                })?,
-            )
-        } else {
-            None
-        };
+        let owner_context = ResolvedOwnerContext::from_authoritative_kind(
+            initial_worker_metadata.owner_kind,
+            &owned_agent_id.agent_id.agent_id,
+            &initial_component.metadata,
+        )
+        .map_err(WorkerExecutorError::invalid_request)?;
+        if matches!(owner_context, ResolvedOwnerContext::ComponentBaseline)
+            && initial_worker_metadata.agent_mode == AgentMode::Durable
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "An external tool owner cannot use durable mode",
+            ));
+        }
+        let agent_id = owner_context.agent().cloned();
         let ResolvedAgentProperties {
             snapshot_policy, ..
         } = resolve_agent_properties(this, agent_id.as_ref(), &initial_component.metadata);
+        let snapshot_policy =
+            if initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+                SnapshotPolicy::Disabled
+            } else {
+                snapshot_policy
+            };
         let execution_status = Arc::new(std::sync::RwLock::new(ExecutionStatus::Suspended {
             agent_mode,
             timestamp: Timestamp::now_utc(),
@@ -8420,7 +8752,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             current_status,
             persisted_status,
             execution_status,
-            agent_id,
+            owner_context,
             snapshot_policy,
             oplog,
             initial_component: Arc::new(initial_component),
@@ -8445,8 +8777,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_agent_config: Vec<AgentConfigEntryDto>,
         parent: Option<AgentId>,
         freshness_disposition: InvocationFreshnessDisposition,
+        creation_mode: WorkerCreationMode,
     ) -> Result<GetOrCreateWorkerResult, WorkerExecutorError> {
         let component_id = owned_agent_id.component_id();
+
+        if creation_mode == WorkerCreationMode::ComponentAgent {
+            OwnerKind::ComponentAgent
+                .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+                .map_err(WorkerExecutorError::invalid_request)?;
+        }
 
         // KnownFresh has already been validated against the ephemeral agent type, phantom ID, and
         // idempotency key at invocation ingress. All other paths retain the checked lookup.
@@ -8465,23 +8804,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .get_metadata(component_id, component_revision)
                     .await?;
 
-                let agent_id = if component.metadata.is_agent() {
-                    let agent_id = ParsedAgentId::parse(
-                        &owned_agent_id.agent_id.agent_id,
-                        &component.metadata,
-                    )
-                    .map_err(|err| {
-                        WorkerExecutorError::invalid_request(format!("Invalid agent id: {}", err))
-                    })?;
-                    Some(agent_id)
+                let virtual_owner = creation_mode == WorkerCreationMode::EphemeralExternalTool;
+                let owner_kind = if virtual_owner {
+                    OwnerKind::EphemeralExternalTool
                 } else {
-                    None
+                    OwnerKind::ComponentAgent
                 };
+                let owner_context = ResolvedOwnerContext::from_authoritative_kind(
+                    owner_kind,
+                    &owned_agent_id.agent_id.agent_id,
+                    &component.metadata,
+                )
+                .map_err(WorkerExecutorError::invalid_request)?;
+                if virtual_owner && component.environment_id != owned_agent_id.environment_id {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "owner environment does not match the component environment",
+                    ));
+                }
+                let agent_id = owner_context.agent().cloned();
 
                 let ResolvedAgentProperties {
                     agent_mode,
                     snapshot_policy,
                 } = resolve_agent_properties(this, agent_id.as_ref(), &component.metadata);
+                let (agent_mode, snapshot_policy) = if virtual_owner {
+                    (AgentMode::Ephemeral, SnapshotPolicy::Disabled)
+                } else {
+                    (agent_mode, snapshot_policy)
+                };
 
                 let execution_status = ExecutionStatus::Suspended {
                     agent_mode,
@@ -8518,11 +8868,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     component_revision_for_replay: component.revision,
                     component_size: component.component_size,
                     total_linear_memory_size: component.metadata.initial_linear_memory_bytes(),
-                    active_plugins: agent_id
-                        .as_ref()
-                        .and_then(|agent_id| {
-                            component.metadata.agent_type_plugins(&agent_id.agent_type)
-                        })
+                    active_plugins: component
+                        .metadata
+                        .owner_plugins(owner_kind, agent_id.as_ref().map(|agent| &agent.agent_type))
                         .unwrap_or_default()
                         .iter()
                         .map(|i| i.environment_plugin_grant_id)
@@ -8542,6 +8890,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
+                    owner_kind,
                     env: worker_env,
                     config: initial_agent_config,
                     environment_id: component.environment_id,
@@ -8571,6 +8920,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 let initial_oplog_entry = OplogEntry::create(
                     initial_worker_metadata.agent_id.clone(),
+                    initial_worker_metadata.owner_kind,
                     initial_worker_metadata.agent_mode,
                     initial_worker_metadata.last_known_status.component_revision,
                     initial_worker_metadata.env.clone(),
@@ -8631,7 +8981,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     current_status: initial_status,
                     persisted_status: None,
                     execution_status,
-                    agent_id,
+                    owner_context,
                     snapshot_policy,
                     oplog,
                     initial_component: Arc::new(component),
@@ -8940,6 +9290,9 @@ impl WaitingWorker {
             // concurrency slot above; otherwise one account could exhaust the
             // memory headroom with workers that are not allowed to run yet.
             let phase_start = std::time::Instant::now();
+            // Not spanned, for the same reason as the charge resolution above:
+            // `acquire_memory` retries on the same 500ms delay and logs once per
+            // attempt. Its duration is recorded as a metric instead.
             let (memory_grant, component_charge) = parent
                 .active_agents()
                 .acquire_with_component_charge(
@@ -8948,9 +9301,6 @@ impl WaitingWorker {
                     requirement.component_revision,
                     requirement.module_bytes,
                 )
-                // Not spanned, for the same reason as the charge resolution above:
-                // `acquire_memory` retries on the same 500ms delay and logs once per
-                // attempt. Its duration is recorded as a metric instead.
                 .await;
             crate::metrics::workers::record_worker_admission_wait(
                 AdmissionPhase::Memory,
@@ -9453,14 +9803,12 @@ impl RunningWorker {
                     .await?
             };
 
-        let agent_effective_surface = match &parent.parsed_agent_id {
-            Some(agent_id) => agent_effective_surface_from_component_metadata(
+        let agent_effective_surface =
+            crate::durable_host::owner_effective_surface_from_component_metadata(
                 &component_metadata_for_replay,
                 &parent.owned_agent_id,
-                agent_id,
-            )?,
-            None => golem_common::model::card::EffectiveSurface::default(),
-        };
+                &parent.owner_context,
+            )?;
 
         let mut skipped_regions = worker_metadata.last_known_status.skipped_regions;
         let mut last_snapshot_index = worker_metadata
@@ -9494,7 +9842,20 @@ impl RunningWorker {
                     .get(&agent_id.agent_type)
             })
             .map(|config| config.files.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                if matches!(
+                    parent.owner_context,
+                    ResolvedOwnerContext::ComponentBaseline
+                ) {
+                    component_metadata_for_replay
+                        .metadata
+                        .component_provision_config()
+                        .files
+                        .clone()
+                } else {
+                    Vec::new()
+                }
+            });
         let limits = filesystems
             .resolved_limits(parent.resource_entry.max_disk_space_limit())
             .map_err(|error| CreateWorkerInstanceError {
@@ -9639,7 +10000,7 @@ impl RunningWorker {
         let mut context = match Ctx::create(
             worker_metadata.created_by,
             OwnedAgentId::new(worker_metadata.environment_id, &worker_metadata.agent_id),
-            parent.parsed_agent_id.clone(),
+            parent.owner_context.clone(),
             parent.promise_service(),
             parent.worker_service(),
             parent.worker_enumeration_service(),
@@ -9723,21 +10084,20 @@ impl RunningWorker {
             // the same durability suppression as snapshot loading, without consuming the tail.
             context.begin_call_snapshotting_function();
         }
-        let mut hosted = match instance_host.instantiate(context, &component).await {
-            Ok(hosted) => hosted,
+        let runtime = async {
+            let mut hosted = instance_host.instantiate(context, &component).await?;
+            instance_host.reconcile_linear_memories(&mut hosted).await?;
+            Ok::<_, WorkerExecutorError>(hosted.into_parts())
+        }
+        .await;
+        let (instance, mut store) = match runtime {
+            Ok(runtime) => runtime,
             Err(error) => {
                 return Err(
                     cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
                 );
             }
         };
-        if let Err(error) = instance_host.reconcile_linear_memories(&mut hosted).await {
-            drop(hosted);
-            return Err(
-                cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
-            );
-        }
-        let (instance, mut store) = hosted.into_parts();
         if last_snapshot_index.is_some() {
             store.data_mut().end_call_snapshotting_function();
         }
@@ -10430,6 +10790,20 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn external_tool_deployment_revision_fence_is_optional_and_exact() {
+        let listed = DeploymentRevision::try_from(7_u64).unwrap();
+        let changed = DeploymentRevision::try_from(8_u64).unwrap();
+
+        assert!(require_expected_tool_deployment_revision(None, changed).is_ok());
+        assert!(require_expected_tool_deployment_revision(Some(listed), listed).is_ok());
+        let error = require_expected_tool_deployment_revision(Some(listed), changed).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Invalid request: external tool deployment revision does not match"
+        );
+    }
+
+    #[test]
     fn recovery_acknowledgement_keeps_newer_cancellation_work_dirty() {
         let key = crate::durable_host::durable_stream::tests::identity().invocation;
         let mut cache = DurableTopologyRecoveryCache::default();
@@ -11039,7 +11413,9 @@ mod tests {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key,
                 target_component_revision: ComponentRevision::INITIAL,
-                method_name: "consume".to_string(),
+                target: golem_common::base_model::durable_stream::PersistedInvocationTarget::AgentMethod {
+                    method_name: "consume".to_string(),
+                },
                 invocation_value: vec![1],
                 stream_handles: Vec::new(),
                 execution_config: vec![2],
@@ -11056,7 +11432,10 @@ mod tests {
         assert!(!stream_attempt_matches(&attempt, &mismatched));
 
         let mut mismatched = attempt.clone();
-        mismatched.invocation.method_name = "other".to_string();
+        mismatched.invocation.target =
+            golem_common::base_model::durable_stream::PersistedInvocationTarget::AgentMethod {
+                method_name: "other".to_string(),
+            };
         assert!(!stream_attempt_matches(&attempt, &mismatched));
 
         let mut mismatched = attempt.clone();
@@ -11620,7 +11999,7 @@ fn stream_slot_session_matches(
         && persisted.invocation.session_key == requested.invocation.session_key
         && persisted.invocation.target_component_revision
             == requested.invocation.target_component_revision
-        && persisted.invocation.method_name == requested.invocation.method_name
+        && persisted.invocation.target == requested.invocation.target
         && persisted.invocation.invocation_value == requested.invocation.invocation_value
         && persisted.invocation.effective_identity == requested.invocation.effective_identity
 }
@@ -11648,7 +12027,7 @@ fn persisted_stream_descriptor_matches(
     persisted.format_version == requested.format_version
         && persisted.session_key == requested.session_key
         && persisted.target_component_revision == requested.target_component_revision
-        && persisted.method_name == requested.method_name
+        && persisted.target == requested.target
         && persisted.invocation_value == requested.invocation_value
         && persisted.execution_config == requested.execution_config
         && persisted.effective_identity == requested.effective_identity
@@ -11733,7 +12112,7 @@ pub(crate) fn same_origin_stream_invocation(
         || original.format_version != retry.format_version
         || original.session_key != retry.session_key
         || original.target_component_revision != retry.target_component_revision
-        || original.method_name != retry.method_name
+        || original.target != retry.target
         || original.invocation_value != retry.invocation_value
         || original.stream_handles.len() != retry.stream_handles.len()
         || original
@@ -12036,28 +12415,18 @@ fn validate_stream_session_record(record: &StreamSessionRecord) -> Result<(), Wo
     }
 }
 
-fn replace_agent_method_input(
-    invocation: AgentInvocation,
-    replacement: golem_common::schema::SchemaValue,
+fn replace_invocation_input(
+    mut invocation: AgentInvocation,
+    replacement: TypedSchemaValue,
 ) -> AgentInvocation {
-    match invocation {
-        AgentInvocation::AgentMethod {
-            idempotency_key,
-            method_name,
-            invocation_context,
-            principal,
-            scope_card,
-            ..
-        } => AgentInvocation::AgentMethod {
-            idempotency_key,
-            method_name,
-            input: replacement,
-            invocation_context,
-            principal,
-            scope_card,
-        },
-        other => other,
+    match &mut invocation {
+        AgentInvocation::AgentMethod { input, .. } => *input = replacement.into_parts().1,
+        AgentInvocation::ExternalTool { input, .. } => {
+            **input = replacement;
+        }
+        _ => {}
     }
+    invocation
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -12072,7 +12441,7 @@ pub(crate) struct GetOrCreateWorkerResult {
     /// The status value currently persisted in the live cache, used as the first delta baseline.
     persisted_status: Option<AgentStatusRecord>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    agent_id: Option<ParsedAgentId>,
+    owner_context: ResolvedOwnerContext,
     snapshot_policy: SnapshotPolicy,
     pub(crate) oplog: Arc<dyn Oplog>,
     /// Loaded during `get_or_create_worker_metadata` and stored on the

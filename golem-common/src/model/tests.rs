@@ -711,6 +711,7 @@ fn worker_filter_combination() {
 fn worker_filter_matches() {
     let component_id = ComponentId::new();
     let worker_metadata = AgentMetadata {
+        owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         agent_id: AgentId {
             agent_id: "worker-1".to_string(),
             component_id,
@@ -1085,6 +1086,65 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
             ..
         } if decoded_scope_card == scope_card
     ));
+}
+
+#[test]
+fn external_tool_results_round_trip_and_treat_nan_as_replay_equivalent() {
+    use crate::model::AgentInvocationResult;
+    use crate::model::oplog::payload::types::{
+        SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
+    };
+    use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+    use crate::serialization::{deserialize, serialize};
+
+    let success = AgentInvocationResult::ExternalTool {
+        result: Ok(SerializableToolInvocationResult {
+            result: Some(Box::new(TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::f64()),
+                SchemaValue::F64(f64::NAN),
+            ))),
+        }),
+    };
+    let decoded_success: AgentInvocationResult =
+        deserialize(&serialize(&success).unwrap()).unwrap();
+    assert!(success.replay_equivalent(&decoded_success));
+
+    let failure = AgentInvocationResult::ExternalTool {
+        result: Err(SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::InvalidCommandPath(vec![
+                "admin".to_string(),
+                "rotate".to_string(),
+            ]),
+        ))),
+    };
+    let decoded_failure: AgentInvocationResult =
+        deserialize(&serialize(&failure).unwrap()).unwrap();
+    assert_eq!(failure, decoded_failure);
+}
+
+#[test]
+fn external_tool_custom_error_nan_is_replay_equivalent_after_round_trip() {
+    use crate::base_model::tool::{
+        SerializableCustomToolError, SerializableToolError, SerializableToolRpcError,
+    };
+    use crate::model::AgentInvocationResult;
+    use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+    use crate::serialization::{deserialize, serialize};
+
+    let result = AgentInvocationResult::ExternalTool {
+        result: Err(SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                name: "nan".to_string(),
+                payload: TypedSchemaValue::new(
+                    SchemaGraph::anonymous(SchemaType::f64()),
+                    SchemaValue::F64(f64::NAN),
+                ),
+            })),
+        ))),
+    };
+    let decoded: AgentInvocationResult = deserialize(&serialize(&result).unwrap()).unwrap();
+
+    assert!(result.replay_equivalent(&decoded));
 }
 
 #[test]

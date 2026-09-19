@@ -635,7 +635,9 @@ async fn prepare_session(
                     format_version: 1,
                     session_key: session_key.clone(),
                     target_component_revision: metadata.last_known_status.component_revision,
-                    method_name: "increment".into(),
+                    target: PersistedInvocationTarget::AgentMethod {
+                        method_name: "increment".into(),
+                    },
                     invocation_value: vec![],
                     stream_handles: vec![],
                     execution_config: vec![],

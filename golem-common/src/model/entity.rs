@@ -1329,7 +1329,9 @@ mod tests {
         let binding = CompiledToolBinding {
             deployment_revision,
             release_id: None,
-            agent_type_name: AgentTypeName("Example".to_string()),
+            owner: crate::model::tool::ToolBindingOwner::AgentType {
+                agent_type_name: AgentTypeName("Example".to_string()),
+            },
             tool_name: ToolName::try_from("search").unwrap(),
             version: "1.0.0".to_string(),
             metadata_version: "0.1.0".to_string(),

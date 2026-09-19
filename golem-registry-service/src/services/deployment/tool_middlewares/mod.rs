@@ -13,8 +13,11 @@
 // limitations under the License.
 
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::component::{ComponentId, ComponentName};
 use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::tool::{CompiledToolBinding, RegisteredTool, ToolBindingInput, ToolName};
+use golem_common::model::tool::{
+    CompiledToolBinding, RegisteredTool, ToolBindingInput, ToolBindingOwner, ToolName,
+};
 use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
     ToolMiddlewareInstallation, ToolMiddlewareMergeMode,
@@ -49,11 +52,12 @@ pub struct CompiledToolMiddlewareChains {
 pub fn compile_tool_middleware_chains(
     deployment_revision: DeploymentRevision,
     registered_tools: &[RegisteredTool],
-    agent_tool_bindings: &[CompiledToolBinding],
+    tool_bindings: &[CompiledToolBinding],
     middleware_registrations: &[RegisteredToolMiddleware],
     universal_installations: &[ToolMiddlewareInstallation],
     environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
     agent_tool_binding_inputs: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
+    component_names: &BTreeMap<ComponentId, ComponentName>,
     compatibility_mode: ToolCompatibilityMode,
 ) -> CompiledToolMiddlewareChains {
     let tools = registered_tools
@@ -119,7 +123,7 @@ pub fn compile_tool_middleware_chains(
         };
     }
 
-    for binding in agent_tool_bindings {
+    for binding in tool_bindings {
         let Some(tool) = tools.get(&binding.tool_name) else {
             errors.push(diagnostic(
                 binding,
@@ -129,10 +133,15 @@ pub fn compile_tool_middleware_chains(
             continue;
         };
         let environment = environment_tool_bindings.get(&binding.tool_name);
-        let agent = agent_tool_binding_inputs
-            .get(&binding.agent_type_name)
-            .and_then(|bindings| bindings.get(&binding.tool_name));
-        let per_tool = effective_installations(environment, agent);
+        let owner_binding = match &binding.owner {
+            ToolBindingOwner::AgentType { agent_type_name } => agent_tool_binding_inputs
+                .get(agent_type_name)
+                .and_then(|bindings| bindings.get(&binding.tool_name)),
+            ToolBindingOwner::ComponentBaseline { component_id } => component_names
+                .get(component_id)
+                .and_then(|name| tool.component_bindings.get(name)),
+        };
+        let per_tool = effective_installations(environment, owner_binding);
         let mut resolved = Vec::new();
         let mut valid = true;
         for (installation, universal) in universal_installations
@@ -229,6 +238,7 @@ pub fn compile_tool_middleware_chains(
                 middleware: (*registration).clone(),
                 parameters: installation.parameters.clone(),
                 provision: registration.provision.clone(),
+                config_keys_readable: binding.config_keys_readable.clone(),
                 secret_keys_readable: binding.secret_keys_readable.clone(),
                 secret_keys_revealable: binding.secret_keys_revealable.clone(),
                 filesystem_access: installation.filesystem_access,
@@ -245,7 +255,7 @@ pub fn compile_tool_middleware_chains(
         debug_assert_eq!(compiled_reversed.len(), universal_count + per_tool.len());
         chains.push(CompiledToolMiddlewareChain {
             deployment_revision,
-            agent_type_name: binding.agent_type_name.clone(),
+            owner: binding.owner.clone(),
             tool_name: binding.tool_name.clone(),
             effective_definition: effective,
             occurrences: compiled_reversed,
@@ -585,7 +595,10 @@ fn diagnostic(
     message: impl Into<String>,
 ) -> ToolMiddlewareCompileDiagnostic {
     ToolMiddlewareCompileDiagnostic {
-        agent_type_name: Some(binding.agent_type_name.clone()),
+        agent_type_name: match &binding.owner {
+            ToolBindingOwner::AgentType { agent_type_name } => Some(agent_type_name.clone()),
+            ToolBindingOwner::ComponentBaseline { .. } => None,
+        },
         tool_name: Some(binding.tool_name.clone()),
         middleware_name,
         message: message.into(),

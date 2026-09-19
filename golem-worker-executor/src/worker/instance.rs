@@ -593,11 +593,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .await
     }
 
-    pub(crate) async fn instantiate(
-        &self,
-        context: Ctx,
-        component: &Component,
-    ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
+    pub(crate) fn create_store(&self, context: Ctx) -> Result<Store<Ctx>, WorkerExecutorError> {
         let owner = self.owner()?;
         let engine = owner.engine();
         let mut store = Store::new(&engine, context);
@@ -632,7 +628,16 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .set_fuel(u64::MAX)
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         store.limiter_async(|ctx| ctx.resource_limiter());
-        let mut store = StoreFuelGuard::new(store);
+        Ok(store)
+    }
+
+    pub(crate) async fn instantiate(
+        &self,
+        context: Ctx,
+        component: &Component,
+    ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
+        let owner = self.owner()?;
+        let mut store = StoreFuelGuard::new(self.create_store(context)?);
 
         let linker = (*owner.linker()).clone();
         let instance_pre = linker

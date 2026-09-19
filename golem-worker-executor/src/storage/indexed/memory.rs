@@ -276,50 +276,43 @@ impl IndexedStorage for InMemoryIndexedStorage {
         }
     }
 
-    async fn publish_staged(
+    async fn move_if_absent(
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-        agent_id: &AgentId,
-        agent_mode: golem_common::model::agent::AgentMode,
-        stage_key: &str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
         target_key: &str,
         expected_last_id: u64,
     ) -> Result<bool, IndexedStorageError> {
-        let stage = Self::composite_key(
-            IndexedStorageNamespace::StagedOpLog {
-                agent_id: agent_id.clone(),
-                agent_mode,
-            },
-            stage_key,
-        );
-        let target = Self::composite_key(
-            IndexedStorageNamespace::OpLog {
-                agent_id: agent_id.clone(),
-                agent_mode,
-            },
-            target_key,
-        );
+        let source = Self::composite_key(source_namespace, source_key);
+        let target = Self::composite_key(target_namespace, target_key);
         if self.data.contains_async(&target).await {
             return Ok(false);
         }
-        let staged = self
+        let source_entries = self
             .data
-            .read_async(&stage, |_, entries| entries.clone())
+            .read_async(&source, |_, entries| entries.clone())
             .await
-            .ok_or_else(|| IndexedStorageError::Other("staged oplog is missing".to_string()))?;
+            .ok_or_else(|| IndexedStorageError::Other("source index is missing".to_string()))?;
         if expected_last_id == 0
-            || staged.len() as u64 != expected_last_id
-            || staged.keys().copied().ne(1..=expected_last_id)
+            || source_entries.len() as u64 != expected_last_id
+            || source_entries.keys().copied().ne(1..=expected_last_id)
         {
             return Err(IndexedStorageError::Other(
-                "staged oplog is empty, gapped, or has an unexpected tip".to_string(),
+                "source index is empty, gapped, or has an unexpected tip".to_string(),
             ));
         }
-        if self.data.insert_async(target, staged).await.is_err() {
+        if self
+            .data
+            .insert_async(target, source_entries)
+            .await
+            .is_err()
+        {
             return Ok(false);
         }
-        self.data.remove_async(&stage).await;
+        self.data.remove_async(&source).await;
         Ok(true)
     }
 
@@ -504,6 +497,13 @@ mod tests {
         }
     }
 
+    fn primary_namespace() -> IndexedStorageNamespace {
+        IndexedStorageNamespace::OpLog {
+            agent_id: test_agent_id(),
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
+        }
+    }
+
     #[test]
     async fn staged_publication_is_atomic_validated_and_hidden() {
         let storage = super::InMemoryIndexedStorage::new();
@@ -540,12 +540,12 @@ mod tests {
         );
         assert!(
             storage
-                .publish_staged(
+                .move_if_absent(
                     "test",
                     "publish",
-                    &test_agent_id(),
-                    golem_common::model::agent::AgentMode::Durable,
+                    staged_namespace(),
                     "stage",
+                    primary_namespace(),
                     "target",
                     2
                 )
@@ -598,12 +598,12 @@ mod tests {
             }
             assert!(
                 storage
-                    .publish_staged(
+                    .move_if_absent(
                         "test",
                         "publish",
-                        &test_agent_id(),
-                        golem_common::model::agent::AgentMode::Durable,
+                        staged_namespace(),
                         key,
+                        primary_namespace(),
                         key,
                         tip
                     )
@@ -648,12 +648,12 @@ mod tests {
             let storage = storage.clone();
             tokio::spawn(async move {
                 storage
-                    .publish_staged(
+                    .move_if_absent(
                         "test",
                         "publish",
-                        &test_agent_id(),
-                        golem_common::model::agent::AgentMode::Durable,
+                        staged_namespace(),
                         "first",
+                        primary_namespace(),
                         "target",
                         1,
                     )
@@ -665,12 +665,12 @@ mod tests {
             let storage = storage.clone();
             tokio::spawn(async move {
                 storage
-                    .publish_staged(
+                    .move_if_absent(
                         "test",
                         "publish",
-                        &test_agent_id(),
-                        golem_common::model::agent::AgentMode::Durable,
+                        staged_namespace(),
                         "second",
+                        primary_namespace(),
                         "target",
                         1,
                     )
@@ -696,16 +696,16 @@ mod tests {
             .unwrap();
         assert!(
             !storage
-                .publish_staged(
+                .move_if_absent(
                     "test",
                     "publish",
-                    &test_agent_id(),
-                    golem_common::model::agent::AgentMode::Durable,
+                    staged_namespace(),
                     if before[0].1 == b"first" {
                         "second"
                     } else {
                         "first"
                     },
+                    primary_namespace(),
                     "target",
                     1
                 )
@@ -747,12 +747,12 @@ mod tests {
             let storage = storage.clone();
             tokio::spawn(async move {
                 storage
-                    .publish_staged(
+                    .move_if_absent(
                         "test",
                         "publish",
-                        &test_agent_id(),
-                        golem_common::model::agent::AgentMode::Durable,
+                        staged_namespace(),
                         "third",
+                        primary_namespace(),
                         "ordinary-race",
                         1,
                     )

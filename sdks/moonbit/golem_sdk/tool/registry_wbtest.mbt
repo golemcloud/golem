@@ -58,12 +58,12 @@ test "stdout validation follows selected command metadata for definitions and wi
     assert_true(validate_tool_stdout(name, [], false) is Ok(_))
     assert_true(
       validate_tool_stdout(name, [], true)
-      is Err(@toolCommon.ToolError::InvalidInput(_)),
+      is Err(@types.ToolError::InvalidInput(_)),
     )
     for path in [["required"], ["required-alias"]] {
       assert_true(
         validate_tool_stdout(name, path, false)
-        is Err(@toolCommon.ToolError::InvalidInput(_)),
+        is Err(@types.ToolError::InvalidInput(_)),
       )
       assert_true(validate_tool_stdout(name, path, true) is Ok(_))
     }
@@ -71,13 +71,13 @@ test "stdout validation follows selected command metadata for definitions and wi
       assert_true(validate_tool_stdout(name, ["optional"], supplied) is Ok(_))
       assert_true(
         validate_tool_stdout(name, ["missing"], supplied)
-        is Err(@toolCommon.ToolError::InvalidCommandPath(_)),
+        is Err(@types.ToolError::InvalidCommandPath(_)),
       )
     }
   }
   assert_true(
     validate_tool_stdout("missing-tool", [], true)
-    is Err(@toolCommon.ToolError::InvalidToolName(_)),
+    is Err(@types.ToolError::InvalidToolName(_)),
   )
 }
 
@@ -96,7 +96,7 @@ test "grafted stdout follows mount aliases rather than parent metadata" {
   register_tool_def(grafted)
   assert_true(
     validate_tool_stdout("stdout-parent", [], true)
-    is Err(@toolCommon.ToolError::InvalidInput(_)),
+    is Err(@types.ToolError::InvalidInput(_)),
   )
   assert_true(
     validate_tool_stdout(
@@ -108,7 +108,7 @@ test "grafted stdout follows mount aliases rather than parent metadata" {
   )
   assert_true(
     validate_tool_stdout("stdout-parent", ["mounted", "required"], false)
-    is Err(@toolCommon.ToolError::InvalidInput(_)),
+    is Err(@types.ToolError::InvalidInput(_)),
   )
 }
 
@@ -144,7 +144,7 @@ test "ordinary registry keeps private invokers hidden and releases rejected stdi
           None,
           Principal::Anonymous,
         )
-        is Err(@toolCommon.ToolError::InvalidToolName(_)),
+        is Err(@types.ToolError::InvalidToolName(_)),
       )
       assert_eq(dropped.val, 1)
     }

@@ -361,7 +361,15 @@ async fn staged_publication_preserves_atomic_visibility(
         }
         assert!(
             storage
-                .publish_staged("test", "publish", &agent, mode, key, key, expected)
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    expected,
+                )
                 .await
                 .is_err()
         );
@@ -404,8 +412,24 @@ async fn staged_publication_preserves_atomic_visibility(
             .is_empty()
     );
     let (first, second) = tokio::join!(
-        storage.publish_staged("test", "publish", &agent, mode, "first", "target", 3),
-        storage.publish_staged("test", "publish", &agent, mode, "second", "target", 3),
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged.clone(),
+            "first",
+            visible.clone(),
+            "target",
+            3,
+        ),
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged.clone(),
+            "second",
+            visible.clone(),
+            "target",
+            3,
+        ),
     );
     let first = first.unwrap();
     assert_ne!(first, second.unwrap());
@@ -436,7 +460,15 @@ async fn staged_publication_preserves_atomic_visibility(
     );
     assert!(
         !storage
-            .publish_staged("test", "publish", &agent, mode, loser, "target", 3)
+            .move_if_absent(
+                "test",
+                "publish",
+                staged.clone(),
+                loser,
+                visible.clone(),
+                "target",
+                3,
+            )
             .await
             .unwrap()
     );
@@ -502,7 +534,15 @@ async fn staged_publication_preserves_atomic_visibility(
             .unwrap();
         assert!(
             !storage
-                .publish_staged("test", "publish", &agent, mode, key, key, 1)
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    1,
+                )
                 .await
                 .unwrap()
         );
@@ -518,7 +558,15 @@ async fn staged_publication_preserves_atomic_visibility(
         );
         assert!(
             storage
-                .publish_staged("test", "publish", &agent, mode, key, key, 1)
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    1,
+                )
                 .await
                 .unwrap()
         );
@@ -542,11 +590,27 @@ async fn staged_publication_preserves_atomic_visibility(
     );
 
     storage
-        .append("test", "stage", "entry", staged, "race", 1, vec![51])
+        .append(
+            "test",
+            "stage",
+            "entry",
+            staged.clone(),
+            "race",
+            1,
+            vec![51],
+        )
         .await
         .unwrap();
     let (published, ordinary) = tokio::join!(
-        storage.publish_staged("test", "publish", &agent, mode, "race", "ordinary", 1),
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged,
+            "race",
+            visible.clone(),
+            "ordinary",
+            1,
+        ),
         storage.append(
             "test",
             "create",

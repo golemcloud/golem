@@ -166,6 +166,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
                 durable_input_mappings: Vec::new(),
                 scope_card: None,
                 origin_invocation: None,
+                external_tool: None,
             })
             .await
             .expect_err("scheduled streaming invocation must be rejected");
@@ -247,6 +248,7 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
             durable_input_mappings: Vec::new(),
             scope_card: None,
             origin_invocation: None,
+            external_tool: None,
         })
         .await
         .expect_err("the old streaming schema must still reject scheduling");
@@ -633,6 +635,7 @@ async fn immediate_scheduled_ephemeral_invocation_reuses_completed_result(
             durable_input_mappings: Vec::new(),
             scope_card: None,
             origin_invocation: None,
+            external_tool: None,
         })
         .await?;
 
@@ -687,6 +690,7 @@ async fn ephemeral_invocation_lookup_does_not_create_unknown_agent(
             durable_input_mappings: Vec::new(),
             scope_card: None,
             origin_invocation: None,
+            external_tool: None,
         })
         .await?;
     assert_eq!(executor.get_worker_metadata_opt(&worker_id).await?, None);
@@ -749,6 +753,7 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             durable_input_mappings: Vec::new(),
             scope_card: None,
             origin_invocation: None,
+            external_tool: None,
         })
         .await?;
 

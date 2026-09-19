@@ -170,6 +170,7 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
             durable_input_mappings: Vec::new(),
             scope_card: None,
             origin_invocation: None,
+            external_tool: None,
         })
         .await?;
     assert!(

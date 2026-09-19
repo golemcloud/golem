@@ -14,8 +14,8 @@ use golem_common::model::entity::{
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{
-    CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
-    ToolSource,
+    CompiledToolBinding, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
 use test_r::{test, timeout};
@@ -39,7 +39,11 @@ fn activation(filesystem: FilesystemCapability) -> Arc<EntityActivation> {
                     deployment_revision,
                     release_id: None,
                     metadata_digest: Default::default(),
-                    agent_type_name: golem_common::model::agent::AgentTypeName("Agent".to_string()),
+                    owner: ToolBindingOwner::AgentType {
+                        agent_type_name: golem_common::model::agent::AgentTypeName(
+                            "Agent".to_string(),
+                        ),
+                    },
                     tool_name,
                     version: "1".to_string(),
                     metadata_version: "1".to_string(),

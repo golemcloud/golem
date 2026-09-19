@@ -157,7 +157,9 @@ mod tests {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::durable_stream::StreamForkCutRecord;
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, RetryConfig};
+    use golem_common::model::{
+        AgentId, AgentMetadata, AgentStatusRecord, RetryConfig, agent::OwnerKind,
+    };
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use std::sync::Arc;
     use test_r::test;
@@ -256,6 +258,7 @@ mod tests {
                 stage_id,
                 AgentMetadata {
                     agent_id: target.agent_id.clone(),
+                    owner_kind: OwnerKind::ComponentAgent,
                     env: vec![],
                     environment_id: target.environment_id,
                     created_by: account,
@@ -274,6 +277,7 @@ mod tests {
         stage
             .add(OplogEntry::create(
                 target.agent_id.clone(),
+                OwnerKind::ComponentAgent,
                 AgentMode::Durable,
                 ComponentRevision::INITIAL,
                 vec![],

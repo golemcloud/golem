@@ -246,6 +246,7 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             AgentMode::Durable,
             OplogEntry::create(
                 owner.agent_id.clone(),
+                golem_common::model::agent::OwnerKind::ComponentAgent,
                 AgentMode::Durable,
                 ComponentRevision::INITIAL,
                 vec![],
@@ -389,6 +390,7 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             AgentMode::Durable,
             OplogEntry::create(
                 foreign.agent_id.clone(),
+                golem_common::model::agent::OwnerKind::ComponentAgent,
                 AgentMode::Durable,
                 ComponentRevision::INITIAL,
                 vec![],
@@ -561,7 +563,9 @@ fn prepared_record(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionReco
                 format_version: 1,
                 session_key,
                 target_component_revision: ComponentRevision::INITIAL,
-                method_name: "test".into(),
+                target: golem_common::base_model::durable_stream::PersistedInvocationTarget::AgentMethod {
+                    method_name: "test".into(),
+                },
                 invocation_value: vec![],
                 stream_handles: vec![],
                 execution_config: vec![],
@@ -612,6 +616,7 @@ fn prepared_with_reader(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessio
 fn agent_metadata(id: &OwnedAgentId) -> AgentMetadata {
     AgentMetadata {
         agent_id: id.agent_id.clone(),
+        owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         env: vec![],
         environment_id: id.environment_id,
         created_by: AccountId::new(),
@@ -649,6 +654,7 @@ async fn create_oplog(service: &dyn OplogService, id: &OwnedAgentId) -> Arc<dyn 
             AgentMode::Durable,
             OplogEntry::create(
                 id.agent_id.clone(),
+                golem_common::model::agent::OwnerKind::ComponentAgent,
                 AgentMode::Durable,
                 ComponentRevision::INITIAL,
                 vec![],
@@ -809,6 +815,7 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
                 AgentMode::Durable,
                 OplogEntry::create(
                     id.agent_id.clone(),
+                    golem_common::model::agent::OwnerKind::ComponentAgent,
                     AgentMode::Durable,
                     ComponentRevision::INITIAL,
                     vec![],
@@ -930,6 +937,7 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
             AgentMode::Durable,
             OplogEntry::create(
                 owner.agent_id.clone(),
+                golem_common::model::agent::OwnerKind::ComponentAgent,
                 AgentMode::Durable,
                 ComponentRevision::INITIAL,
                 vec![],
@@ -1140,6 +1148,7 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
             AgentMode::Durable,
             OplogEntry::create(
                 owner.agent_id.clone(),
+                golem_common::model::agent::OwnerKind::ComponentAgent,
                 AgentMode::Durable,
                 ComponentRevision::INITIAL,
                 vec![],

@@ -42,10 +42,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// `cli::environment` host implementations. This only reconstructs the existing worker
     /// environment; the filtered guest-visible result is recorded separately by the host call.
     fn build_unfiltered_environment(&self) -> wasmtime::Result<Vec<(String, String)>> {
-        let default_agent_env = self
-            .agent_type_provision_config()
-            .map(|c| c.env.clone())
-            .unwrap_or_default();
+        let default_agent_env = match self.owner_context() {
+            golem_common::model::agent::ResolvedOwnerContext::Agent(_) => self
+                .agent_type_provision_config()
+                .map(|c| c.env.clone())
+                .unwrap_or_default(),
+            golem_common::model::agent::ResolvedOwnerContext::ComponentWorker
+            | golem_common::model::agent::ResolvedOwnerContext::ComponentBaseline => self
+                .owner_component_metadata()
+                .metadata
+                .component_provision_config()
+                .env
+                .clone(),
+        };
 
         let worker_metadata = self.public_state.worker().get_initial_worker_metadata();
         let mut env =
@@ -66,7 +75,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 component_id: self.owned_agent_id.component_id(),
                 agent_id: current_agent_name,
             },
-            &self.state.agent_id.as_ref().map(|id| id.agent_type.clone()),
+            &self
+                .state
+                .owner_context
+                .agent()
+                .map(|id| id.agent_type.clone()),
             self.owner_component_metadata().revision,
         );
 

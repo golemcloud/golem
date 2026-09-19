@@ -486,14 +486,15 @@ pub(crate) mod tests {
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::durable_stream::{
-        AttachmentId, AttemptId, PersistedStreamInvocationDescriptor, StartAttemptDescriptor,
-        StreamForkCutRecord, StreamItemsPayload, StreamOffset, StreamRegistrationRecordCoordinate,
-        StreamRootKind, StreamSessionFinishedRecord, StreamSessionKey, StreamSessionPreparedRecord,
-        StreamSourceKind,
+        AttachmentId, AttemptId, PersistedInvocationTarget, PersistedStreamInvocationDescriptor,
+        StartAttemptDescriptor, StreamForkCutRecord, StreamItemsPayload, StreamOffset,
+        StreamRegistrationRecordCoordinate, StreamRootKind, StreamSessionFinishedRecord,
+        StreamSessionKey, StreamSessionPreparedRecord, StreamSourceKind,
     };
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::{
         AgentId, AgentMetadata, AgentStatusRecord, IdempotencyKey, RetryConfig, Timestamp,
+        agent::OwnerKind,
     };
     use golem_common::read_only_lock;
     use golem_schema::schema::SchemaFingerprintV1;
@@ -518,6 +519,7 @@ pub(crate) mod tests {
             let account = AccountId::new();
             let metadata = AgentMetadata {
                 agent_id: owner.agent_id.clone(),
+                owner_kind: OwnerKind::ComponentAgent,
                 env: vec![],
                 environment_id: owner.environment_id,
                 created_by: account,
@@ -532,6 +534,7 @@ pub(crate) mod tests {
             };
             let create = OplogEntry::create(
                 owner.agent_id.clone(),
+                OwnerKind::ComponentAgent,
                 AgentMode::Durable,
                 ComponentRevision::INITIAL,
                 vec![],
@@ -620,7 +623,9 @@ pub(crate) mod tests {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                     session_key: key.clone(),
                     target_component_revision: ComponentRevision::new(3).unwrap(),
-                    method_name: "output".into(),
+                    target: PersistedInvocationTarget::AgentMethod {
+                        method_name: "output".into(),
+                    },
                     invocation_value: vec![],
                     stream_handles: vec![],
                     execution_config: vec![],

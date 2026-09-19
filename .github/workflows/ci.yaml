@@ -61,7 +61,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
-        timeout-minutes: 15
+        timeout-minutes: 20
       - name: Packaging all binaries with cargo-nextest
         run: |
           mkdir -pv tmp
@@ -72,7 +72,7 @@ jobs:
         run: |
           mkdir tmp/golem-binaries
           tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
-        timeout-minutes: 2
+        timeout-minutes: 5
       - name: Save packaged binaries to cache
         uses: actions/cache/save@v5
         with:
