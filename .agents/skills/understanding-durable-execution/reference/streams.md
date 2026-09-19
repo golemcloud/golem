@@ -75,6 +75,22 @@ copied history, while later source writes are never inherited. Revert appends an
 and self-targeted `ForkCut`, raises the generation/epoch floor to fence every old handle, drains the
 old producer, then refolds and reconstructs through the ordinary worker lifecycle.
 
+Session control and topology recovery caches that encounter a committed cut in their suffix reload
+the authoritative session index, discarding pre-cut cached state. An uncommitted marker fails closed
+instead of repeatedly loading an index that cannot yet cover it.
+
+A repeated `Start` for a retained session reports the current epoch, even after a resume or revert.
+It does not reactivate foreign bindings when its original attempt no longer owns the attachment.
+Remote RPC uses a revoked acceptance for an explicit `Resume`; if still attached, it tries
+`Takeover`, allowing one switch back to `Resume` if the old transport detached in between.
+Ambiguous transport loss repeats the exact pending attempt; other definitive rejections are
+returned. These operations retain the invocation key and enforce existing attachment authority.
+
+An agent-owned output on the original callee remains attachment-gated after revert. On a fork,
+the prepared callee fingerprint differs from the new owner: output materialization drains into the
+fork's own oplog without waiting for the original consumer to attach. It grants no inherited
+attachment authority and does not reactivate the source's topology.
+
 When the retained history ends at `AgentInvocationStarted`, `resume_replay` completes the
 guarded replay-to-live transition before entering the guest. It keeps `InvocationMode::Replay`
 to reuse that start record, but publishes stderr and handles traps as live execution even if

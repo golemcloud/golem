@@ -46,9 +46,9 @@ use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InvocationFailure, InvocationFailureKind, InvocationRejected,
-    InvocationRejectionReason, InvocationRequest, InvocationStart, StreamInvocationIdentity,
-    invocation_request, invocation_response, invocation_session_completion,
-    invocation_session_result,
+    InvocationRejectionReason, InvocationRequest, InvocationStart, ResumeAttach, ResumeOperation,
+    StreamInvocationIdentity, invocation_request, invocation_response,
+    invocation_session_completion, invocation_session_result,
 };
 use golem_common::base_model::durable_stream::{
     DurableStreamReadRequest, StreamAttachmentControlRequest,
@@ -592,16 +592,20 @@ impl Rpc for RemoteInvocationRpc {
         };
         let mut accepted_inputs = Some(accepted_inputs);
         let mut retry_delay = std::time::Duration::from_millis(25);
+        let mut request = start;
+        let mut attachment_state_retries = 0;
         loop {
             let state = Arc::new(tokio::sync::Mutex::new(InvocationSessionState::default()));
             state
                 .lock()
                 .await
-                .validate_trusted_request(&start)
+                .validate_trusted_request(&request)
                 .map_err(|details| RpcError::ProtocolError { details })?;
             let (requests, receiver) = mpsc::channel(2);
-            if requests.send(start.clone()).await.is_err() {
-                tracing::warn!("retrying durable RPC Start after the local request stream closed");
+            if requests.send(request.clone()).await.is_err() {
+                tracing::warn!(
+                    "retrying durable RPC attachment request after the local request stream closed"
+                );
                 tokio::time::sleep(retry_delay).await;
                 retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(1));
                 continue;
@@ -613,7 +617,7 @@ impl Rpc for RemoteInvocationRpc {
             {
                 Ok(inbound) => inbound,
                 Err(error) => {
-                    tracing::warn!(%error, "retrying durable RPC Start after transport establishment failed");
+                    tracing::warn!(%error, "retrying durable RPC attachment request after transport establishment failed");
                     tokio::time::sleep(retry_delay).await;
                     retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(1));
                     continue;
@@ -637,12 +641,55 @@ impl Rpc for RemoteInvocationRpc {
                     .map_err(|details| RpcError::ProtocolError { details })?;
                 match response.response {
                     Some(invocation_response::Response::Accepted(accepted)) => {
+                        attachment_state_retries = 0;
+                        if accepted.attachment_id.is_some() {
+                            // Keep this exact attempt on ambiguous loss; only a new acceptance
+                            // supplies the epoch for the next resume attempt.
+                            request = InvocationRequest {
+                                request: Some(invocation_request::Request::ResumeAttach(
+                                    ResumeAttach {
+                                        idempotency_key: accepted.idempotency_key.clone(),
+                                        agent_id: accepted.agent_id.clone(),
+                                        environment_id: accepted.environment_id,
+                                        attachment_id: accepted.attachment_id,
+                                        expected_callee_fingerprint: accepted.callee_fingerprint,
+                                        expected_epoch: accepted.epoch,
+                                        attempt_id: Some(uuid::Uuid::new_v4().into()),
+                                        operation: ResumeOperation::Resume as i32,
+                                        cursors: Vec::new(),
+                                        auth_ctx: Some(auth_ctx.clone().into()),
+                                        principal: Some(
+                                            caller_agent_principal(self_agent_id).into(),
+                                        ),
+                                    },
+                                )),
+                            };
+                        }
                         if let Some(sender) = accepted_inputs.take() {
                             let _ = sender.send(accepted.stream_mappings);
                         }
                     }
                     Some(invocation_response::Response::Rejected(rejected)) => {
                         confirm_terminal_response_is_last(&mut inbound, &state).await?;
+                        if let Some(invocation_request::Request::ResumeAttach(resume)) =
+                            &mut request.request
+                            && attachment_state_retries < 2
+                            && InvocationRejectionReason::try_from(rejected.reason)
+                                == Ok(InvocationRejectionReason::InvalidAttachmentState)
+                        {
+                            // At one epoch an attached transport can detach once; reattachment
+                            // advances the epoch and is rejected separately as stale.
+                            resume.operation = if resume.operation == ResumeOperation::Resume as i32
+                            {
+                                ResumeOperation::Takeover as i32
+                            } else {
+                                ResumeOperation::Resume as i32
+                            };
+                            resume.attempt_id = Some(uuid::Uuid::new_v4().into());
+                            attachment_state_retries += 1;
+                            retry_reason = Some("attachment state changed".to_string());
+                            break;
+                        }
                         return Err(rpc_error_from_rejection(rejected));
                     }
                     Some(invocation_response::Response::Result(invocation_result)) => {
@@ -700,12 +747,15 @@ impl Rpc for RemoteInvocationRpc {
                             _ => rpc_error_from_invocation_finished(finished),
                         });
                     }
+                    Some(invocation_response::Response::AttachmentRevoked(_)) => {
+                        retry_reason = Some("attachment revoked".to_string());
+                        break;
+                    }
                     Some(invocation_response::Response::OutputItem(_))
                     | Some(invocation_response::Response::OutputEnd(_))
                     | Some(invocation_response::Response::OutputError(_))
                     | Some(invocation_response::Response::InputAck(_))
-                    | Some(invocation_response::Response::StreamCancel(_))
-                    | Some(invocation_response::Response::AttachmentRevoked(_)) => {}
+                    | Some(invocation_response::Response::StreamCancel(_)) => {}
                     None => unreachable!("response state validation rejects empty frames"),
                 }
             }
@@ -713,7 +763,7 @@ impl Rpc for RemoteInvocationRpc {
                 reason = retry_reason
                     .as_deref()
                     .unwrap_or("durable invocation response ended before publishing a result"),
-                "retrying identical durable RPC Start after ambiguous response loss"
+                "retrying durable RPC attachment after ambiguous response loss"
             );
             tokio::time::sleep(retry_delay).await;
             retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(1));

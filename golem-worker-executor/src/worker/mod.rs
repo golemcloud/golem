@@ -722,6 +722,35 @@ impl DurableTopologyRecoveryCache {
         }
     }
 
+    async fn reload(
+        &mut self,
+        service: &dyn WorkerService,
+        owner: &OwnedAgentId,
+        mode: AgentMode,
+        fingerprint: AgentFingerprint,
+    ) -> Result<(), String> {
+        let metadata = service
+            .lookup_durable_stream_recovery_metadata(owner, mode)
+            .await?;
+        *self = Self {
+            initialized: true,
+            covered_through: metadata.covered_through,
+            consumer_deleting: metadata.consumer_deleting.is_some_and(|record| {
+                record.consumer_environment_id == owner.environment_id
+                    && record.consumer == owner.agent_id
+                    && record.consumer_fingerprint == fingerprint
+            }),
+            ..Default::default()
+        };
+        for (key, control) in metadata.sessions {
+            if control.needs_recovery(owner, &key) {
+                self.dirty.insert(key.clone());
+                self.sessions.insert(key, control);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) async fn refresh(
         &mut self,
         oplog: &dyn Oplog,
@@ -731,25 +760,10 @@ impl DurableTopologyRecoveryCache {
         fingerprint: AgentFingerprint,
     ) -> Result<(), String> {
         if !self.initialized {
-            let metadata = service
-                .lookup_durable_stream_recovery_metadata(owner, mode)
-                .await?;
-            self.covered_through = metadata.covered_through;
-            self.consumer_deleting = metadata.consumer_deleting.is_some_and(|record| {
-                record.consumer_environment_id == owner.environment_id
-                    && record.consumer == owner.agent_id
-                    && record.consumer_fingerprint == fingerprint
-            });
-            for (key, control) in metadata.sessions {
-                if control.needs_recovery(owner, &key) {
-                    self.dirty.insert(key.clone());
-                    self.sessions.insert(key, control);
-                }
-            }
-            self.initialized = true;
+            self.reload(service, owner, mode, fingerprint).await?;
         }
         let current = oplog.current_oplog_index().await;
-        while self.covered_through < current {
+        'suffix: while self.covered_through < current {
             let count = (current.as_u64() - self.covered_through.as_u64()).min(1024);
             let entries = oplog.read_exact(self.covered_through.next(), count).await;
             for (index, entry) in &entries {
@@ -763,7 +777,11 @@ impl DurableTopologyRecoveryCache {
                     );
                 }
                 if matches!(record, StreamSessionRecord::ForkCut(_)) {
-                    return Err("fork marker requires worker reconstruction".into());
+                    self.reload(service, owner, mode, fingerprint).await?;
+                    if self.covered_through < *index {
+                        return Err("fork marker is not committed to the session index".into());
+                    }
+                    continue 'suffix;
                 }
                 if let StreamSessionRecord::ConsumerDeleting(record) = &record
                     && record.consumer_environment_id == owner.environment_id
@@ -5138,11 +5156,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let session_key = request.attempt.session_key.clone();
         let records = self.stream_session_records(&session_key, None).await?;
+        let status = self
+            .oplog
+            .raw_durable_stream_session_status(&session_key)
+            .await
+            .status
+            .map_err(WorkerExecutorError::runtime)?;
         let initial_epoch = match records.iter().find_map(|record| match record {
             StreamSessionRecord::Attached(attached) => Some(attached.epoch),
             _ => None,
         }) {
-            Some(epoch) => epoch,
+            Some(epoch) => status
+                .as_ref()
+                .and_then(|status| status.attachment_epoch)
+                .unwrap_or(epoch),
             None => producer.attachment_epoch_floor(),
         };
         let mut prepared_records = records.iter().filter_map(|record| match record {
@@ -5393,14 +5420,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let already_attached = attached.is_some();
-        let detached_join = already_attached
-            && self
-                .oplog
-                .raw_durable_stream_session_status(&session_key)
-                .await
-                .status
-                .map_err(WorkerExecutorError::runtime)?
-                .is_some_and(|status| status.attachment_attached == Some(false));
+        let current_attempt = status.as_ref().is_some_and(|status| {
+            status.attachment_attached == Some(true)
+                && status.attachment_epoch == Some(initial_epoch)
+                && status.attachment_attempt_id == Some(prepared.attempt.attempt_id)
+        });
         let retained_acceptance = already_attached;
         if joined_origin && !retained_acceptance {
             return Err(WorkerExecutorError::runtime(
@@ -5408,7 +5432,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let persisted_foreign_bindings = if detached_join
+        let persisted_foreign_bindings = if (retained_acceptance && !current_attempt)
             || joined_origin
             || foreign_mappings.is_empty()
             || records
@@ -5866,7 +5890,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             None => None,
         };
         let current = self.oplog.current_oplog_index().await;
-        while metadata.covered_through() < current {
+        'suffix: while metadata.covered_through() < current {
             let entries = self
                 .oplog
                 .read_exact(
@@ -5882,9 +5906,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .await
                         .map_err(WorkerExecutorError::runtime)?;
                     if matches!(record, StreamSessionRecord::ForkCut(_)) {
-                        return Err(WorkerExecutorError::runtime(
-                            "fork marker requires worker reconstruction",
-                        ));
+                        metadata = service
+                            .lookup_durable_stream_control_metadata(
+                                &self.owned_agent_id,
+                                self.agent_mode(),
+                                session_key,
+                            )
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
+                        if metadata.covered_through() < index {
+                            return Err(WorkerExecutorError::runtime(
+                                "fork marker is not committed to the session index",
+                            ));
+                        }
+                        resume_offset = match attempt {
+                            Some(attempt) => service
+                                .lookup_durable_stream_resume_offset(
+                                    &self.owned_agent_id,
+                                    self.agent_mode(),
+                                    session_key,
+                                    attempt,
+                                )
+                                .await
+                                .map_err(WorkerExecutorError::runtime)?,
+                            None => None,
+                        };
+                        continue 'suffix;
                     }
                     if let StreamSessionRecord::ResumeAttempt(record) = &record
                         && record.session_key == session_key.idempotency_key
@@ -6068,8 +6115,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             return Ok(value);
         };
+        // The original agent consumer can reattach after revert, but never to a new fork.
         let requires_attachment =
-            stream_effective_identity_is_agent(&prepared.attempt.effective_identity);
+            stream_effective_identity_is_agent(&prepared.attempt.effective_identity)
+                && prepared.attempt.session_key.callee_fingerprint
+                    == self.initial_worker_metadata.fingerprint;
         let mut streams = StreamSession::open(
             self.durable_stream_producer().await?,
             self.oplog.clone(),

@@ -686,6 +686,111 @@ async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
 
 #[test]
 #[test_r::timeout("30s")]
+async fn recovery_cache_refolds_a_cut_committed_after_its_snapshot() {
+    use golem_common::model::durable_stream::StreamForkCutRecord;
+    use golem_common::model::regions::OplogRegion;
+
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            1000,
+            1000,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let service = DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(ShardServiceDefault::new()),
+        oplog_service.clone(),
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let owner = owned_agent("cached-cut", ComponentId::new());
+    let key = IdempotencyKey::new("discarded".into());
+    let fingerprint = session_key(&owner, &key).callee_fingerprint;
+    let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
+    append_session(oplog.as_ref(), prepared_record(&owner, &key)).await;
+    oplog.commit(CommitLevel::Always).await;
+    let mut cache = crate::worker::DurableTopologyRecoveryCache::default();
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &service,
+            &owner,
+            AgentMode::Durable,
+            fingerprint,
+        )
+        .await
+        .unwrap();
+    assert_eq!(cache.sessions.len(), 1);
+    let region = OplogRegion {
+        start: OplogIndex::INITIAL.next(),
+        end: oplog.current_oplog_index().await,
+    };
+    let marker = DurableStreamOplogRecord::Session(
+        None,
+        Box::new(StreamSessionRecord::ForkCut(StreamForkCutRecord {
+            format_version: 1,
+            request_hash: vec![0; 32],
+            creation_fingerprint: fingerprint,
+            export: None,
+            cut_index: OplogIndex::INITIAL,
+            revert: Some(region.clone()),
+            epoch_floor: 2,
+            selected_stream_id: None,
+            retained_through: None,
+        })),
+    )
+    .into_inline_entry();
+    oplog
+        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .await;
+    // An uncommitted cut must fail closed, rather than repeatedly reloading an old index.
+    assert!(
+        cache
+            .refresh(
+                oplog.as_ref(),
+                &service,
+                &owner,
+                AgentMode::Durable,
+                fingerprint
+            )
+            .await
+            .is_err()
+    );
+    oplog.commit(CommitLevel::Always).await;
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &service,
+            &owner,
+            AgentMode::Durable,
+            fingerprint,
+        )
+        .await
+        .unwrap();
+    assert!(cache.sessions.is_empty());
+    assert!(cache.dirty.is_empty());
+    append_session(oplog.as_ref(), prepared_record(&owner, &key)).await;
+    cache
+        .refresh(
+            oplog.as_ref(),
+            &service,
+            &owner,
+            AgentMode::Durable,
+            fingerprint,
+        )
+        .await
+        .unwrap();
+    assert_eq!(cache.sessions.len(), 1);
+    assert_eq!(cache.dirty.len(), 1);
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chunks() {
     use golem_common::model::durable_stream::StreamForkCutRecord;
     use golem_common::model::regions::OplogRegion;
