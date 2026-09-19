@@ -37,7 +37,7 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_session::{
-    DurableByteInputProducer, DurableInputEndpoint, DurableInputProducer, ForwardedDurableInput,
+    DurableByteInputProducer, DurableInputEndpoint, DurableInputProducer,
 };
 use crate::durable_host::entity::{
     EntityInvocationDurability, IncompleteLiveRepairBeforeBody, RecordedEntityTerminal,
@@ -3926,12 +3926,12 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                 stdin: None,
             }
         };
-        let output_handle = session.as_ref().and_then(|(prepared, _)| {
+        let output_handle = session.as_ref().and_then(|(prepared, streams)| {
             prepared
                 .stream_mappings
                 .iter()
                 .find(|mapping| mapping.role == SessionStreamRole::Output)
-                .map(|mapping| mapping.handle.clone())
+                .and_then(|mapping| streams.handle(mapping.transport_stream_id))
         });
         if input.stdin.is_some() != has_stdin || output_handle.is_some() != has_stdout {
             return Err(wasmtime::Error::msg(
@@ -4055,9 +4055,17 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
         if let Some((prepared, streams)) = &session {
             let value = ToolInvocationOutput {
                 outcome: response.clone(),
-                stdout: output_handle.map(|handle| {
-                    SchemaValueStream::from_host_endpoint(ForwardedDurableInput { handle })
-                }),
+                stdout: prepared
+                    .stream_mappings
+                    .iter()
+                    .find(|mapping| mapping.role == SessionStreamRole::Output)
+                    .map(|mapping| {
+                        SchemaValueStream::from_host_endpoint(
+                            crate::durable_host::durable_session::RegisteredOutputStream {
+                                transport_stream_id: mapping.transport_stream_id,
+                            },
+                        )
+                    }),
             }
             .into_typed_schema_value()
             .map_err(|error| wasmtime::Error::msg(error.to_string()))?;

@@ -110,6 +110,15 @@ impl RedisKeyValueStorage {
                 "agent:rejected_periodic_snapshots:{}",
                 agent_id.to_redis_key()
             )),
+            KeyValueStorageNamespace::ExportForkAdmissions {
+                environment_id,
+                agent_id,
+                fingerprint,
+            } => Some(format!(
+                "export-fork-admissions:{environment_id}:{}:{}",
+                agent_id.to_redis_key(),
+                fingerprint.0
+            )),
             KeyValueStorageNamespace::RunningWorkers => None,
             KeyValueStorageNamespace::Promise { .. } => Some("promises".to_string()),
             KeyValueStorageNamespace::Schedule => None,
@@ -187,6 +196,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError> {
         for (_, value) in pairs {
@@ -201,7 +211,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         };
         self.redis
             .with(svc_name, api_name)
-            .compare_and_set_many_hash(namespace, key, expected, pairs)
+            .compare_and_set_many_hash(namespace, key, expected, deletes, pairs)
             .await
             .map_err(KeyValueStorageError::from)
     }

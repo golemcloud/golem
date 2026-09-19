@@ -560,6 +560,7 @@ impl TestDsl for TestWorkerExecutor {
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
             external_tool: None,
         })
         .await?;
@@ -607,6 +608,7 @@ impl TestDsl for TestWorkerExecutor {
                 expected_callee_fingerprint: None,
                 durable_input_mappings: Vec::new(),
                 scope_card: None,
+                origin_invocation: None,
                 external_tool: None,
             })
             .await?;

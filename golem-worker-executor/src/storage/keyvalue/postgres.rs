@@ -109,6 +109,15 @@ impl PostgresKeyValueStorage {
                     agent_id.to_redis_key()
                 )
             }
+            KeyValueStorageNamespace::ExportForkAdmissions {
+                environment_id,
+                agent_id,
+                fingerprint,
+            } => format!(
+                "export-fork-admissions:{environment_id}:{}:{}",
+                agent_id.to_redis_key(),
+                fingerprint.0
+            ),
             KeyValueStorageNamespace::Promise { .. } => "promises".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
             KeyValueStorageNamespace::UserDefined {
@@ -206,6 +215,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError> {
         let namespace = Self::namespace(namespace);
@@ -217,6 +227,7 @@ impl KeyValueStorage for PostgresKeyValueStorage {
             })
             .collect();
         let expected = expected.map(ToOwned::to_owned);
+        let deletes: Vec<String> = deletes.iter().map(|field| (*field).to_string()).collect();
         let key = key.to_string();
 
         self.pool
@@ -254,6 +265,16 @@ impl KeyValueStorage for PostgresKeyValueStorage {
                     };
                     if !matched {
                         return Ok(false);
+                    }
+                    for field in &deletes {
+                        tx.execute(
+                            sqlx::query(
+                                "DELETE FROM kv_storage WHERE namespace = $1 AND key = $2;",
+                            )
+                            .bind(&namespace)
+                            .bind(field),
+                        )
+                        .await?;
                     }
                     for chunk in pairs.chunks(Self::SET_MANY_WRITE_CHUNK_SIZE) {
                         let mut builder = QueryBuilder::<Postgres>::new(

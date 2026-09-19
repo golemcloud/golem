@@ -241,21 +241,41 @@ where
         if entries.is_empty() {
             return Ok(None);
         }
-        hydrate_stream_session_payloads(this, owned_agent_id, agent_mode, &mut entries).await?;
-        hydrate_initial_pending_evidence(this, owned_agent_id, agent_mode, &mut baseline, &entries)
+        let next = async {
+            let deleted = calculate_deleted_regions(baseline.deleted_regions.clone(), &entries);
+            hydrate_stream_session_payloads(
+                this,
+                owned_agent_id,
+                agent_mode,
+                &deleted,
+                &mut entries,
+            )
             .await?;
-        let finalize_oplog_processor_checkpoints =
-            entries.keys().next_back() == Some(&last_oplog_index);
-        baseline = match update_status_with_new_entries_internal(
-            agent_mode,
-            baseline,
-            entries,
-            &this.config().retry,
-            true,
-            finalize_oplog_processor_checkpoints,
-        )? {
-            Some(status) => status,
-            None => {
+            hydrate_initial_pending_evidence(
+                this,
+                owned_agent_id,
+                agent_mode,
+                &mut baseline,
+                &entries,
+            )
+            .await?;
+            let finalize_oplog_processor_checkpoints =
+                entries.keys().next_back() == Some(&last_oplog_index);
+            update_status_with_new_entries_internal(
+                agent_mode,
+                baseline,
+                entries,
+                &this.config().retry,
+                true,
+                finalize_oplog_processor_checkpoints,
+            )
+        }
+        .await;
+        baseline = match next {
+            Ok(Some(status)) => status,
+            Ok(None) | Err(_) => {
+                // A later chunk may revert the entry that failed hydration or folding. Resolve
+                // the complete deletion set before treating a retained-history error as fatal.
                 return fold_status_with_precomputed_regions(
                     this,
                     owned_agent_id,
@@ -284,36 +304,20 @@ where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
     let start = baseline.oplog_idx.next();
-    let mut deleted_regions = baseline.deleted_regions.clone();
-    let mut region_entries = BTreeMap::new();
-    let mut first = start;
-    while first <= last_oplog_index {
-        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let entries = this
-            .oplog_service()
-            .read_exact(owned_agent_id, agent_mode, first, count)
-            .await;
-        if entries.is_empty() {
-            return Ok(None);
-        }
-        deleted_regions = calculate_deleted_regions(deleted_regions, &entries);
-        region_entries.extend(entries.iter().filter_map(|(index, entry)| {
-            let relevant = matches!(
-                entry,
-                OplogEntry::Jump { .. }
-                    | OplogEntry::Revert { .. }
-                    | OplogEntry::PendingUpdate {
-                        description: UpdateDescription::SnapshotBased { .. },
-                        ..
-                    }
-                    | OplogEntry::SuccessfulUpdate { .. }
-                    | OplogEntry::FailedUpdate { .. }
-            );
-            relevant.then(|| (*index, entry.clone()))
-        }));
-        first = entries.keys().max().unwrap().next();
-    }
-
+    let Some(region_entries) = read_region_entries(
+        this,
+        owned_agent_id,
+        agent_mode,
+        start,
+        last_oplog_index,
+        chunk_size,
+    )
+    .await
+    else {
+        return Ok(None);
+    };
+    let deleted_regions =
+        calculate_deleted_regions(baseline.deleted_regions.clone(), &region_entries);
     let skipped_regions = calculate_skipped_regions(
         baseline.skipped_regions.clone(),
         &deleted_regions,
@@ -326,7 +330,7 @@ where
     baseline.deleted_regions = deleted_regions;
     baseline.skipped_regions = skipped_regions;
 
-    first = start;
+    let mut first = start;
     while first <= last_oplog_index {
         let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
         let mut entries = this
@@ -336,7 +340,14 @@ where
         if entries.is_empty() {
             return Ok(None);
         }
-        hydrate_stream_session_payloads(this, owned_agent_id, agent_mode, &mut entries).await?;
+        hydrate_stream_session_payloads(
+            this,
+            owned_agent_id,
+            agent_mode,
+            &baseline.deleted_regions,
+            &mut entries,
+        )
+        .await?;
         hydrate_initial_pending_evidence(this, owned_agent_id, agent_mode, &mut baseline, &entries)
             .await?;
         let finalize_oplog_processor_checkpoints =
@@ -361,12 +372,16 @@ async fn hydrate_stream_session_payloads<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    deleted_regions: &DeletedRegions,
     entries: &mut BTreeMap<OplogIndex, OplogEntry>,
 ) -> Result<(), String>
 where
     T: HasOplogService + Sync,
 {
-    for entry in entries.values_mut() {
+    for (index, entry) in entries.iter_mut() {
+        if deleted_regions.is_in_deleted_region(*index) {
+            continue;
+        }
         if let OplogEntry::StreamSession { record, .. } = entry {
             let decoded = this
                 .oplog_service()
@@ -391,7 +406,11 @@ async fn hydrate_initial_pending_evidence<T>(
 where
     T: HasOplogService + Sync,
 {
+    let deleted = calculate_deleted_regions(baseline.deleted_regions.clone(), entries);
     for (attached_idx, entry) in entries {
+        if deleted.is_in_deleted_region(*attached_idx) {
+            continue;
+        }
         let OplogEntry::StreamSession {
             record: OplogPayload::Inline(record),
             ..
@@ -404,7 +423,7 @@ where
         };
         let Some(status) = baseline
             .durable_stream_sessions
-            .get(&attached.session_key.idempotency_key)
+            .get(&attached.session_key)
             .cloned()
         else {
             continue;
@@ -417,7 +436,7 @@ where
         if !status.validate_initial_attachment_reference(*attached_idx, attached) {
             baseline
                 .durable_stream_sessions
-                .insert(attached.session_key.idempotency_key.clone(), status);
+                .insert(attached.session_key.clone(), status);
             continue;
         }
         let persisted_referent;
@@ -445,7 +464,7 @@ where
                 );
                 baseline
                     .durable_stream_sessions
-                    .insert(attached.session_key.idempotency_key.clone(), status);
+                    .insert(attached.session_key.clone(), status);
             }
             _ => {
                 status.lifecycle_error = Some(
@@ -454,7 +473,7 @@ where
                 );
                 baseline
                     .durable_stream_sessions
-                    .insert(attached.session_key.idempotency_key.clone(), status);
+                    .insert(attached.session_key.clone(), status);
             }
         }
     }
@@ -567,10 +586,16 @@ fn update_status_with_precomputed_regions(
         calculate_pending_card_events(last_known.pending_card_events, &new_entries);
     let received_card_transfers =
         calculate_received_card_transfers(last_known.received_card_transfers, &new_entries);
-    let durable_stream_sessions =
-        calculate_durable_stream_sessions(last_known.durable_stream_sessions, &new_entries)?;
+    let durable_stream_sessions = calculate_durable_stream_sessions(
+        last_known.durable_stream_sessions,
+        &deleted_regions,
+        &new_entries,
+    )?;
     let mut pending_durable_stream_cancellations = last_known.pending_durable_stream_cancellations;
-    for entry in new_entries.values() {
+    for (index, entry) in &new_entries {
+        if deleted_regions.is_in_deleted_region(*index) {
+            continue;
+        }
         if let OplogEntry::StreamSession {
             record: OplogPayload::Inline(record),
             ..
@@ -580,7 +605,7 @@ fn update_status_with_precomputed_regions(
                 StreamSessionRecord::ConsumerCancelIntent(intent) => {
                     if !pending_durable_stream_cancellations.iter().any(|existing| {
                         existing.session_key == intent.session_key
-                            && existing.stream_id == intent.stream_id
+                            && existing.source == intent.source
                     }) {
                         pending_durable_stream_cancellations.insert(intent.clone());
                     }
@@ -952,6 +977,63 @@ fn calculate_revoked_cards(
     }
 
     revoked_cards
+}
+
+/// Resolve replay exclusions from a fixed committed horizon, independent of later reverts.
+pub(crate) async fn skipped_regions_at(
+    this: &(impl HasOplogService + Sync),
+    owned_agent_id: &OwnedAgentId,
+    horizon: OplogIndex,
+) -> Result<DeletedRegions, String> {
+    let entries = read_region_entries(
+        this,
+        owned_agent_id,
+        AgentMode::Durable,
+        OplogIndex::INITIAL,
+        horizon,
+        1024,
+    )
+    .await
+    .ok_or("Missing fork source history")?;
+    let deleted = calculate_deleted_regions(DeletedRegions::default(), &entries);
+    Ok(calculate_skipped_regions(
+        DeletedRegions::default(),
+        &deleted,
+        &entries,
+    ))
+}
+
+async fn read_region_entries(
+    this: &(impl HasOplogService + Sync),
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    mut first: OplogIndex,
+    horizon: OplogIndex,
+    chunk_size: u64,
+) -> Option<BTreeMap<OplogIndex, OplogEntry>> {
+    let mut regions = BTreeMap::new();
+    while first <= horizon {
+        let count = (horizon.as_u64() - first.as_u64() + 1).min(chunk_size);
+        let entries = this
+            .oplog_service()
+            .read_exact(owned_agent_id, agent_mode, first, count)
+            .await;
+        first = entries.keys().next_back()?.next();
+        regions.extend(entries.into_iter().filter(|(_, entry)| {
+            matches!(
+                entry,
+                OplogEntry::Jump { .. }
+                    | OplogEntry::Revert { .. }
+                    | OplogEntry::PendingUpdate {
+                        description: UpdateDescription::SnapshotBased { .. },
+                        ..
+                    }
+                    | OplogEntry::SuccessfulUpdate { .. }
+                    | OplogEntry::FailedUpdate { .. }
+            )
+        }));
+    }
+    Some(regions)
 }
 
 fn calculate_deleted_regions(
@@ -1346,15 +1428,16 @@ fn calculate_received_card_transfers(
     transfers
 }
 
-// Session lifecycle follows raw durable stream history, including entries inside guest jumps.
-// Unlike invocation results, external stream effects cannot be undone by a logical oplog deletion;
-// worker revert rejects any worker with durable stream history.
+// Atomic jumps retain external stream effects; explicit reverts discard the removed history.
 fn calculate_durable_stream_sessions(
     mut sessions: DurableStreamSessionIndex,
+    deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Result<DurableStreamSessionIndex, String> {
     for (oplog_idx, entry) in entries {
-        sessions.apply_oplog_entry(*oplog_idx, entry)?;
+        if !deleted_regions.is_in_deleted_region(*oplog_idx) {
+            sessions.apply_oplog_entry(*oplog_idx, entry)?;
+        }
     }
     Ok(sessions)
 }

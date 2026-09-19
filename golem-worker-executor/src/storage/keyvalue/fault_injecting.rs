@@ -333,6 +333,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError> {
         self.run(
@@ -344,6 +345,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
                 namespace,
                 key,
                 expected,
+                deletes,
                 pairs,
             ),
         )

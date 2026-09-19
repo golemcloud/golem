@@ -21,6 +21,7 @@ use crate::model::agent::AgentTypeName;
 use crate::model::card::PermissionTarget;
 use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
+use crate::model::durable_stream::StreamInvocationId;
 use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::payload::types::{
@@ -145,6 +146,8 @@ oplog_payload! {
             idempotency_key: IdempotencyKey,
             method_name: String,
             input: SchemaValue,
+            #[schema(skip)]
+            logical_streaming_origin: Option<StreamInvocationId>,
             #[schema(skip)]
             #[transient(None::<AgentTypeName>)]
             remote_agent_type: Option<AgentTypeName>, // enriched field, only filled when exposed as public oplog entry

@@ -266,6 +266,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 self.stop_unloaded(None).await;
                 break;
             }
+            let retiring = self.parent.owner_retirement_requested.clone();
+            if retiring.is_cancelled() {
+                self.parent.complete_startup(
+                    self.start_attempt,
+                    Err(WorkerExecutorError::runtime("Worker owner is retiring")),
+                );
+                self.release_concurrent_agent_permit();
+                self.stop_unloaded(None).await;
+                break;
+            }
             if self.permit_state.is_none() {
                 let parent = self.parent.clone();
                 let permit_agent_id = self.owned_agent_id.agent_id().clone();
@@ -283,6 +293,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         break 'outer;
                     }
                     tokio::select! {
+                        biased;
+                        () = retiring.cancelled() => {
+                            self.parent.complete_startup(self.start_attempt, Err(WorkerExecutorError::runtime("Worker owner is retiring")));
+                            self.stop_unloaded(None).await;
+                            break 'outer;
+                        }
                         permit = &mut permit => {
                             self.permit_state.install_tracked(permit);
                             break;

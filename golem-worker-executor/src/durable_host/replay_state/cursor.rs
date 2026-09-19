@@ -1077,17 +1077,15 @@ impl CursorTx<'_> {
 
     /// Returns the guest-delivery marker for the durable call starting at `start_index`, if one
     /// exists and lies outside any deleted region. A marker in a reverted/jumped-away region
-    /// belongs to an abandoned timeline, so a still-visible `End` uses the legacy immediate
-    /// delivery behavior.
+    /// belongs to an abandoned timeline; without a replacement marker, a still-visible accessor
+    /// `End` uses replay-tail delivery.
     ///
-    /// The `discarded_completions` map is populated only from entries at or before the replay
+    /// The `completion_markers` map is populated only from entries at or before the replay
     /// target (the construction scan is bounded by the initial target and target growth rescans
     /// exactly the newly visible range, see [`ReplayState::set_replay_target`]), so a returned
-    /// marker never encodes knowledge of oplog entries beyond the target. A target that falls
-    /// *between* an `End` and its marker is an invalid replay configuration — the delivery
-    /// status of that `End` is not decidable from the visible prefix — and is rejected at
-    /// delivery time ([`ReplayState::await_resolution_outcome`]) as well as up front by debug
-    /// target validation and cut-point (fork/revert) validation.
+    /// marker never encodes knowledge beyond the target. Debug targets still validate delivery
+    /// boundaries, whereas fork/revert remove the future marker and recover from the retained
+    /// prefix.
     pub(super) fn completion_marker(&self, start_index: OplogIndex) -> Option<CompletionMarker> {
         let marker = *self
             .cursor
@@ -1702,8 +1700,13 @@ impl ReplayState {
     ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let last_oplog_index = oplog.current_oplog_index().await;
-        let completion_markers =
-            Self::scan_completion_markers(&oplog, OplogIndex::INITIAL, last_oplog_index).await?;
+        let completion_markers = Self::scan_completion_markers(
+            &oplog,
+            OplogIndex::INITIAL,
+            last_oplog_index,
+            &skipped_regions,
+        )
+        .await?;
         let concurrent_resolver = ConcurrentReplayResolver::default();
         let reconstruction_claims = concurrent_resolver.reconstruction_claims();
         let cursor = ReplayCursor {
@@ -1754,13 +1757,14 @@ impl ReplayState {
         })
     }
 
-    /// Scans `[from, to]` for successful-completion delivery markers. Exactly one of
-    /// `CompletionDelivered` or `CompletionDiscarded` may reference a `Start`; duplicates or a
-    /// conflicting pair are oplog corruption.
+    /// Scans the non-deleted entries of `[from, to]` for successful-completion delivery markers.
+    /// Exactly one visible `CompletionDelivered` or `CompletionDiscarded` may reference a
+    /// `Start`; duplicates or a conflicting pair are oplog corruption.
     pub(super) async fn scan_completion_markers(
         oplog: &Arc<dyn Oplog>,
         from: OplogIndex,
         to: OplogIndex,
+        skipped_regions: &DeletedRegions,
     ) -> Result<HashMap<OplogIndex, CompletionMarker>, WorkerExecutorError> {
         const CHUNK_SIZE: u64 = 1024;
         let mut markers = HashMap::new();
@@ -1772,6 +1776,9 @@ impl ReplayState {
             for (marker_idx, entry) in entries {
                 if marker_idx > to {
                     break;
+                }
+                if skipped_regions.is_in_deleted_region(marker_idx) {
+                    continue;
                 }
                 let marker = match entry {
                     OplogEntry::CompletionDelivered { start_index, .. } => {
@@ -2528,6 +2535,7 @@ impl ReplayState {
                         &cursor.oplog,
                         old_target.next(),
                         new_target,
+                        &tx.st.skipped_regions,
                     )
                     .await?;
                     if !additions.is_empty() {

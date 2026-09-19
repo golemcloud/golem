@@ -16,9 +16,11 @@ use super::*;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use golem_common::model::durable_stream::StreamForkCutRecord;
 use golem_common::serialization::serialize;
 
 const ATTACHMENT_PAGE_SIZE: u64 = 128;
+const SESSION_PAGE_SIZE: u64 = 128;
 
 pub(super) struct IndexedAttachmentCandidate {
     pub(super) attachment: IndexedStreamAttachment,
@@ -34,14 +36,15 @@ pub(super) struct IndexedAttachmentCandidateBatch {
 /// Stable metadata projection key derived from producer oplog records.
 pub enum ProducerMetadataKey {
     Global,
+    Lineage,
     Stream(StreamId),
     Coordinate(StreamRegistrationCoordinate),
-    Reference(StreamId),
     Session(StreamSessionKey),
+    SessionPage(u64),
     Batch(StreamId, u64),
     Attachment(AttachmentId, StreamId, EnvironmentId, AgentId),
     ActiveAttachmentCount(StreamSessionKey, StreamId),
-    ConsumerHead(StreamSessionKey, StreamId),
+    ConsumerHead(StreamSessionKey, LocalStreamReaderId),
     Cascade(Box<StreamAttachmentKey>),
     AttachmentPage(u64),
     AttachmentPosition(AttachmentId, StreamId, EnvironmentId, AgentId),
@@ -74,22 +77,21 @@ impl ProducerMetadataKey {
         keys
     }
 
-    pub(super) fn session_record(record: &StreamSessionRecord) -> Vec<Self> {
+    pub(super) fn session_record(
+        record: &StreamSessionRecord,
+        owner_environment_id: EnvironmentId,
+        owner: &AgentId,
+        owner_fingerprint: AgentFingerprint,
+    ) -> Vec<Self> {
         let mut keys = Vec::new();
-        if let Some(key) = crate::worker::stream_session_record_key(record) {
-            keys.push(Self::Session(key.clone()));
+        if let Some(key) = crate::worker::stream_session_record_key(
+            record,
+            owner_environment_id,
+            owner,
+            owner_fingerprint,
+        ) {
+            keys.push(Self::Session(key));
         }
-        let mappings = match record {
-            StreamSessionRecord::Prepared(record) => record.stream_mappings.as_slice(),
-            StreamSessionRecord::InvocationResult(record) => record.stream_mappings.as_slice(),
-            StreamSessionRecord::Mapping(record) => std::slice::from_ref(&record.mapping),
-            _ => &[],
-        };
-        keys.extend(
-            mappings
-                .iter()
-                .map(|mapping| Self::Reference(mapping.handle.stream_id)),
-        );
         let attachment = match record {
             StreamSessionRecord::AttachmentPrepared(record) => Some(&record.key),
             StreamSessionRecord::AttachmentActivated(record) => Some(&record.key),
@@ -115,19 +117,28 @@ impl ProducerMetadataKey {
             keys.push(Self::Stream(key.stream_id));
         }
         let head = match record {
-            StreamSessionRecord::ConsumerItemValue(record) => {
-                Some((&record.session_key, record.stream_id))
-            }
-            StreamSessionRecord::ConsumerTerminal(record) => {
-                Some((&record.session_key, record.stream_id))
-            }
-            StreamSessionRecord::SourceUnavailable(record) => {
-                Some((&record.key.session_key, record.key.stream_id))
-            }
+            StreamSessionRecord::ConsumerItemValue(record) => Some((
+                record
+                    .session_key
+                    .qualify(owner_environment_id, owner, owner_fingerprint),
+                record.reader_id,
+            )),
+            StreamSessionRecord::ConsumerTerminal(record) => Some((
+                record
+                    .session_key
+                    .qualify(owner_environment_id, owner, owner_fingerprint),
+                record.reader_id,
+            )),
+            StreamSessionRecord::SourceUnavailable(record) => Some((
+                record
+                    .session_key
+                    .qualify(owner_environment_id, owner, owner_fingerprint),
+                record.reader_id,
+            )),
             _ => None,
         };
-        if let Some((session, stream)) = head {
-            keys.push(Self::ConsumerHead(session.clone(), stream));
+        if let Some((session, reader)) = head {
+            keys.push(Self::ConsumerHead(session, reader));
         }
         if let StreamSessionRecord::ExternalProducerState(record) = record {
             keys.push(Self::ExternalProducerHead(
@@ -150,22 +161,23 @@ impl ProducerMetadataKey {
 #[derive(Clone, desert_rust::BinaryCodec)]
 /// Projected registration and terminal metadata for one producer stream.
 pub struct ProducerStreamMetadata {
-    registration: StreamRegisteredRecord,
+    registration: RegisteredStream,
     session_key: StreamSessionKey,
     role: SessionStreamRole,
     entity_parent_start_index: Option<OplogIndex>,
     first_sequence: Option<u64>,
     next_sequence: u64,
     last_offset: Option<StreamOffset>,
+    last_item_offset: Option<StreamOffset>,
     terminal: bool,
 }
 
 #[derive(Clone, desert_rust::BinaryCodec)]
 /// Projected durable state for one stream session.
 pub struct ProducerSessionMetadata {
-    mappings: HashSet<(DurableStreamHandle, SessionStreamRole)>,
-    references: HashSet<StreamId>,
+    mappings: HashSet<(StreamRecordReference, SessionStreamRole)>,
     open_streams: HashSet<StreamId>,
+    consumer_streams: HashSet<LocalStreamReaderId>,
     entity_parent_start_index: Option<OplogIndex>,
     invocation_result: Option<OplogIndex>,
     finished: bool,
@@ -174,18 +186,21 @@ pub struct ProducerSessionMetadata {
 #[derive(Clone, desert_rust::BinaryCodec)]
 /// Typed row persisted in the producer metadata projection.
 pub enum ProducerMetadataRow {
+    Retired,
+    Lineage(StreamForkLineage),
     Global {
         open_streams: usize,
         active_attachments: u64,
+        session_count: u64,
         deleting: bool,
         consumer_deleting: bool,
     },
     Stream(Box<ProducerStreamMetadata>),
     Coordinate(StreamId),
-    Reference(DurableStreamHandle),
     Session(ProducerSessionMetadata),
+    SessionPage(Vec<StreamSessionKey>),
     Batch(OplogIndex),
-    Attachment(IndexedStreamAttachment),
+    Attachment(Box<IndexedStreamAttachment>),
     ActiveAttachmentCount(u64),
     ConsumerHead(IndexedConsumerJournal),
     Cascade(StreamCascadeDependentResult),
@@ -199,9 +214,11 @@ pub enum ProducerMetadataRow {
 impl ProducerStreamIndex {
     pub(super) fn metadata_row(&self, key: &ProducerMetadataKey) -> Option<ProducerMetadataRow> {
         Some(match key {
+            ProducerMetadataKey::Lineage => ProducerMetadataRow::Lineage(self.fork_lineage.clone()),
             ProducerMetadataKey::Global => ProducerMetadataRow::Global {
                 open_streams: self.open_streams,
                 active_attachments: self.active_attachment_count,
+                session_count: self.session_count,
                 deleting: self.deleting,
                 consumer_deleting: self.consumer_deleting,
             },
@@ -219,37 +236,36 @@ impl ProducerStreamIndex {
                     first_sequence: stream.first_sequence,
                     next_sequence: stream.next_sequence,
                     last_offset: stream.last_offset,
+                    last_item_offset: stream.last_item_offset,
                     terminal: stream.terminal,
                 }))
             }
             ProducerMetadataKey::Coordinate(coordinate) => {
                 ProducerMetadataRow::Coordinate(*self.coordinates.get(coordinate)?)
             }
-            ProducerMetadataKey::Reference(id) => {
-                ProducerMetadataRow::Reference(self.referenced_handles.get(id)?.0.clone())
+            ProducerMetadataKey::SessionPage(page) => {
+                ProducerMetadataRow::SessionPage(self.session_pages.get(page)?.clone())
             }
             ProducerMetadataKey::Session(key) => {
                 ProducerMetadataRow::Session(ProducerSessionMetadata {
+                    consumer_streams: self
+                        .session_consumer_streams
+                        .get(key)
+                        .cloned()
+                        .unwrap_or_default(),
                     mappings: self
                         .session_stream_mappings
                         .get(key)
                         .cloned()
                         .unwrap_or_default(),
-                    references: self
-                        .referenced_handles
-                        .iter()
-                        .filter_map(|(id, (_, sessions))| sessions.contains(key).then_some(*id))
-                        .collect(),
                     open_streams: self
                         .open_session_streams
                         .get(key)
                         .cloned()
                         .unwrap_or_default(),
-                    entity_parent_start_index: self
+                    entity_parent_start_index: *self
                         .session_entity_parent_start_indices
-                        .get(key)
-                        .copied()
-                        .flatten(),
+                        .get(key)?,
                     invocation_result: self.invocation_results.get(key).copied(),
                     finished: self.finished_sessions.contains(key),
                 })
@@ -262,11 +278,11 @@ impl ProducerStreamIndex {
                 ProducerMetadataRow::Position(*first, *count)
             }
             ProducerMetadataKey::Attachment(attachment, stream, environment, consumer) => {
-                ProducerMetadataRow::Attachment(
+                ProducerMetadataRow::Attachment(Box::new(
                     self.attachments
                         .get(&(*attachment, *stream, *environment, consumer.clone()))?
                         .clone(),
-                )
+                ))
             }
             ProducerMetadataKey::ActiveAttachmentCount(session, stream) => {
                 ProducerMetadataRow::ActiveAttachmentCount(
@@ -328,17 +344,23 @@ impl ProducerStreamIndex {
         row: ProducerMetadataRow,
     ) -> Result<(), String> {
         match (key, row) {
+            (_, ProducerMetadataRow::Retired) => {}
+            (ProducerMetadataKey::Lineage, ProducerMetadataRow::Lineage(lineage)) => {
+                self.fork_lineage = lineage;
+            }
             (
                 ProducerMetadataKey::Global,
                 ProducerMetadataRow::Global {
                     open_streams,
                     active_attachments,
+                    session_count,
                     deleting,
                     consumer_deleting,
                 },
             ) => {
                 self.open_streams = open_streams;
                 self.active_attachment_count = active_attachments;
+                self.session_count = session_count;
                 self.deleting = deleting;
                 self.consumer_deleting = consumer_deleting;
             }
@@ -346,6 +368,10 @@ impl ProducerStreamIndex {
                 if id != value.registration.handle.stream_id {
                     return Err("producer metadata stream identity mismatch".into());
                 }
+                self.local_stream_ids.insert(
+                    LocalStreamId(value.registration.registration_oplog_index),
+                    id,
+                );
                 self.coordinates
                     .insert(value.registration.coordinate.clone(), id);
                 self.registrations.insert(id, value.registration);
@@ -359,6 +385,7 @@ impl ProducerStreamIndex {
                         first_sequence: value.first_sequence,
                         next_sequence: value.next_sequence,
                         last_offset: value.last_offset,
+                        last_item_offset: value.last_item_offset,
                         terminal: value.terminal,
                         ..Default::default()
                     },
@@ -370,27 +397,21 @@ impl ProducerStreamIndex {
             ) => {
                 self.coordinates.insert(coordinate, stream);
             }
-            (ProducerMetadataKey::Reference(stream), ProducerMetadataRow::Reference(handle)) => {
-                self.referenced_handles
-                    .entry(stream)
-                    .or_insert_with(|| (handle, HashSet::new()));
+            (
+                ProducerMetadataKey::SessionPage(page),
+                ProducerMetadataRow::SessionPage(sessions),
+            ) => {
+                self.session_pages.insert(page, sessions);
             }
             (ProducerMetadataKey::Session(key), ProducerMetadataRow::Session(value)) => {
-                for (handle, _) in &value.mappings {
-                    if value.references.contains(&handle.stream_id) {
-                        self.referenced_handles
-                            .entry(handle.stream_id)
-                            .or_insert_with(|| (handle.clone(), HashSet::new()))
-                            .1
-                            .insert(key.clone());
-                    }
-                }
                 self.session_stream_counts
                     .insert(key.clone(), value.mappings.len());
                 self.session_stream_mappings
                     .insert(key.clone(), value.mappings);
                 self.open_session_streams
                     .insert(key.clone(), value.open_streams);
+                self.session_consumer_streams
+                    .insert(key.clone(), value.consumer_streams);
                 self.session_entity_parent_start_indices
                     .insert(key.clone(), value.entity_parent_start_index);
                 if let Some(offset) = value.invocation_result {
@@ -419,7 +440,7 @@ impl ProducerStreamIndex {
                     return Err("producer metadata attachment identity mismatch".into());
                 }
                 self.attachments
-                    .insert((attachment, stream, environment, consumer), value);
+                    .insert((attachment, stream, environment, consumer), *value);
             }
             (
                 ProducerMetadataKey::ConsumerHead(session, stream),
@@ -486,8 +507,20 @@ impl ProducerStreamIndex {
 struct Projection<'a> {
     index: ProducerStreamIndex,
     loaded: HashSet<ProducerMetadataKey>,
+    new_sessions: HashSet<StreamSessionKey>,
+    replacements: HashMap<ProducerMetadataKey, ProducerMetadataRow>,
     storage: &'a (dyn KeyValueStorage + Send + Sync),
     namespace: KeyValueStorageNamespace,
+}
+
+pub(crate) struct ForkControlProjection {
+    pub(crate) sessions: HashSet<StreamSessionKey>,
+}
+
+#[derive(Default)]
+pub(crate) struct ProducerMetadataProjection {
+    pub(crate) rows: Vec<(String, Vec<u8>)>,
+    pub(crate) fork: Option<ForkControlProjection>,
 }
 
 impl Projection<'_> {
@@ -500,7 +533,173 @@ impl Projection<'_> {
                 .await?;
             if let Some(row) = row {
                 self.index.hydrate_metadata_row(key, row)?;
+            } else if let ProducerMetadataKey::Session(session) = key {
+                self.new_sessions.insert(session);
             }
+        }
+        Ok(())
+    }
+
+    async fn fork_cut(
+        &mut self,
+        cut: &StreamForkCutRecord,
+        owner: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<ForkControlProjection, String> {
+        for page in 0..self.index.session_count.div_ceil(SESSION_PAGE_SIZE) {
+            self.load(ProducerMetadataKey::SessionPage(page)).await?;
+            let sessions = self
+                .index
+                .session_pages
+                .get(&page)
+                .ok_or("producer session catalogue page is missing")?
+                .clone();
+            for session in sessions {
+                self.load(ProducerMetadataKey::Session(session.clone()))
+                    .await?;
+                let streams = self
+                    .index
+                    .session_consumer_streams
+                    .get(&session)
+                    .cloned()
+                    .unwrap_or_default();
+                for stream in streams {
+                    self.load(ProducerMetadataKey::ConsumerHead(session.clone(), stream))
+                        .await?;
+                }
+            }
+        }
+        let local_ids = self
+            .index
+            .session_stream_mappings
+            .values()
+            .flatten()
+            .filter_map(|(reference, _)| match reference {
+                StreamRecordReference::Local(id) => Some(*id),
+                StreamRecordReference::Foreign(_) => None,
+            })
+            .collect::<HashSet<_>>();
+        for local_id in local_ids {
+            let stream =
+                qualify_local_stream(local_id, owner.environment_id, &owner.agent_id, fingerprint)
+                    .map_err(|error| error.to_string())?;
+            self.stream(stream).await?;
+        }
+        for page in 0..self
+            .index
+            .active_attachment_count
+            .div_ceil(ATTACHMENT_PAGE_SIZE)
+        {
+            let key = ProducerMetadataKey::AttachmentPage(page);
+            self.loaded.insert(key.clone());
+            self.replacements
+                .insert(key, ProducerMetadataRow::AttachmentPage(Vec::new()));
+        }
+        for coordinate in self.index.coordinates.keys() {
+            self.loaded
+                .insert(ProducerMetadataKey::Coordinate(coordinate.clone()));
+        }
+        let retained = match (cut.selected_stream_id, cut.retained_through) {
+            (None, None) => None,
+            (None, Some(_)) => return Err("fork retained offset has no selected stream".into()),
+            (Some(_), None) => Some(0),
+            (Some(stream), Some(offset)) => {
+                let stream = *self
+                    .index
+                    .local_stream_ids
+                    .get(&stream)
+                    .ok_or("fork selected stream is not registered")?;
+                let key = ProducerMetadataKey::Position(stream, offset.producer_oplog_index());
+                let row = self
+                    .storage
+                    .with_entity("worker", "producer_projection_read", "position")
+                    .get(self.namespace.clone(), &key.field()?)
+                    .await?;
+                let Some(ProducerMetadataRow::Position(first, count)) = row else {
+                    return Err("fork retained offset is not an item of the selected stream".into());
+                };
+                let sub = u64::from(offset.sub_index());
+                if sub >= count {
+                    return Err("fork retained sub-offset exceeds its item batch".into());
+                }
+                Some(
+                    first
+                        .checked_add(sub)
+                        .and_then(|n| n.checked_add(1))
+                        .ok_or("fork retained item count overflow")?,
+                )
+            }
+        };
+        self.index
+            .apply_fork_cut(cut, retained)
+            .map_err(|error| error.to_string())?;
+        // Locator rows are immutable history. Missing authority rows, unlike locators, must be
+        // explicitly retired because the surrounding CAS only overwrites emitted fields.
+        for key in &self.loaded {
+            if matches!(
+                key,
+                ProducerMetadataKey::Stream(_)
+                    | ProducerMetadataKey::Coordinate(_)
+                    | ProducerMetadataKey::Session(_)
+                    | ProducerMetadataKey::ConsumerHead(_, _)
+            ) && self.index.metadata_row(key).is_none()
+            {
+                self.replacements
+                    .insert(key.clone(), ProducerMetadataRow::Retired);
+            }
+        }
+        for stream in self.index.streams.keys() {
+            self.loaded.insert(ProducerMetadataKey::Stream(*stream));
+        }
+        for coordinate in self.index.coordinates.keys() {
+            self.loaded
+                .insert(ProducerMetadataKey::Coordinate(coordinate.clone()));
+        }
+        for (session, stream) in self.index.consumer_journals.keys() {
+            self.loaded
+                .insert(ProducerMetadataKey::ConsumerHead(session.clone(), *stream));
+        }
+        for session in self.index.session_entity_parent_start_indices.keys() {
+            self.loaded
+                .insert(ProducerMetadataKey::Session(session.clone()));
+            self.new_sessions.insert(session.clone());
+        }
+        // Empty old page tails too: appending beyond a shortened catalogue must not reload them.
+        for sessions in self.index.session_pages.values_mut() {
+            sessions.clear();
+        }
+        self.index.session_count = 0;
+        Ok(ForkControlProjection {
+            sessions: self
+                .index
+                .session_entity_parent_start_indices
+                .keys()
+                .cloned()
+                .collect(),
+        })
+    }
+
+    async fn catalogue_new_sessions(&mut self) -> Result<(), String> {
+        for session in std::mem::take(&mut self.new_sessions) {
+            if !self
+                .index
+                .session_entity_parent_start_indices
+                .contains_key(&session)
+            {
+                continue;
+            }
+            let page = self.index.session_count / SESSION_PAGE_SIZE;
+            self.load(ProducerMetadataKey::SessionPage(page)).await?;
+            self.index
+                .session_pages
+                .entry(page)
+                .or_default()
+                .push(session);
+            self.index.session_count = self
+                .index
+                .session_count
+                .checked_add(1)
+                .ok_or("producer session catalogue overflow")?;
         }
         Ok(())
     }
@@ -595,42 +794,64 @@ impl Projection<'_> {
         Ok(())
     }
 
-    async fn registration(&mut self, record: &StreamRegisteredRecord) -> Result<(), String> {
+    async fn registration(
+        &mut self,
+        oplog_index: OplogIndex,
+        author: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+        record: &StreamRegisteredRecord,
+    ) -> Result<(), String> {
+        let registered = RegisteredStream::resolve(
+            record.clone(),
+            oplog_index,
+            author.environment_id,
+            &author.agent_id,
+            fingerprint,
+        )
+        .map_err(|error| error.to_string())?;
         if let StreamRegistrationCoordinate::Nested {
             parent_stream_id, ..
-        } = &record.coordinate
+        } = &registered.coordinate
         {
             self.stream(*parent_stream_id).await?;
         }
-        self.load(ProducerMetadataKey::Coordinate(record.coordinate.clone()))
-            .await?;
-        if let Some(existing) = self.index.coordinates.get(&record.coordinate).copied() {
+        self.load(ProducerMetadataKey::Coordinate(
+            registered.coordinate.clone(),
+        ))
+        .await?;
+        if let Some(existing) = self.index.coordinates.get(&registered.coordinate).copied() {
             self.stream(existing).await?;
         }
-        self.stream(record.handle.stream_id).await?;
+        let stream_id = StreamId::derive(
+            author.environment_id,
+            &author.agent_id,
+            fingerprint,
+            oplog_index,
+        )
+        .map_err(|error| error.to_string())?;
+        self.stream(stream_id).await?;
         if let Some(session) = self
             .index
-            .registration_session_key(&record.coordinate, &record.session_mapping)
+            .registration_session_key(&registered.coordinate, &registered.session_mapping)
         {
             self.load(ProducerMetadataKey::Session(session)).await?;
         }
         Ok(())
     }
 
-    async fn session(&mut self, record: &StreamSessionRecord) -> Result<(), String> {
-        if let Some(session) = crate::worker::stream_session_record_key(record) {
-            self.load(ProducerMetadataKey::Session(session.clone()))
-                .await?;
-        }
-        let mappings = match record {
-            StreamSessionRecord::Prepared(record) => record.stream_mappings.as_slice(),
-            StreamSessionRecord::InvocationResult(record) => record.stream_mappings.as_slice(),
-            StreamSessionRecord::Mapping(record) => std::slice::from_ref(&record.mapping),
-            _ => &[],
-        };
-        for mapping in mappings {
-            self.load(ProducerMetadataKey::Reference(mapping.handle.stream_id))
-                .await?;
+    async fn session(
+        &mut self,
+        record: &StreamSessionRecord,
+        author: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<(), String> {
+        if let Some(session) = crate::worker::stream_session_record_key(
+            record,
+            author.environment_id,
+            &author.agent_id,
+            fingerprint,
+        ) {
+            self.load(ProducerMetadataKey::Session(session)).await?;
         }
         let attachment = match record {
             StreamSessionRecord::AttachmentPrepared(record) => Some(&record.key),
@@ -660,19 +881,28 @@ impl Projection<'_> {
             .await?;
         }
         let head = match record {
-            StreamSessionRecord::ConsumerItemValue(record) => {
-                Some((&record.session_key, record.stream_id))
-            }
-            StreamSessionRecord::ConsumerTerminal(record) => {
-                Some((&record.session_key, record.stream_id))
-            }
-            StreamSessionRecord::SourceUnavailable(record) => {
-                Some((&record.key.session_key, record.key.stream_id))
-            }
+            StreamSessionRecord::ConsumerItemValue(record) => Some((
+                record
+                    .session_key
+                    .qualify(author.environment_id, &author.agent_id, fingerprint),
+                record.reader_id,
+            )),
+            StreamSessionRecord::ConsumerTerminal(record) => Some((
+                record
+                    .session_key
+                    .qualify(author.environment_id, &author.agent_id, fingerprint),
+                record.reader_id,
+            )),
+            StreamSessionRecord::SourceUnavailable(record) => Some((
+                record
+                    .session_key
+                    .qualify(author.environment_id, &author.agent_id, fingerprint),
+                record.reader_id,
+            )),
             _ => None,
         };
-        if let Some((session, stream)) = head {
-            self.load(ProducerMetadataKey::ConsumerHead(session.clone(), stream))
+        if let Some((session, reader)) = head {
+            self.load(ProducerMetadataKey::ConsumerHead(session, reader))
                 .await?;
         }
         if let StreamSessionRecord::ExternalProducerState(record) = record {
@@ -696,7 +926,7 @@ impl Projection<'_> {
 }
 
 /// Rebuilds metadata rows from committed producer history without changing that history.
-pub async fn project_producer_metadata(
+pub(crate) async fn project_producer_metadata(
     storage: &(dyn KeyValueStorage + Send + Sync),
     namespace: KeyValueStorageNamespace,
     oplog: &dyn OplogService,
@@ -704,15 +934,19 @@ pub async fn project_producer_metadata(
     mode: AgentMode,
     fingerprint: AgentFingerprint,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> Result<Vec<(String, Vec<u8>)>, String> {
+    lineage: &StreamForkLineage,
+) -> Result<ProducerMetadataProjection, String> {
     let mut projection = Projection {
         index: ProducerStreamIndex::default(),
         loaded: HashSet::new(),
+        new_sessions: HashSet::new(),
+        replacements: HashMap::new(),
         storage,
         namespace,
     };
     projection.load(ProducerMetadataKey::Global).await?;
     let mut pending = Vec::new();
+    let mut fork = None;
     for (index, entry) in entries {
         if !pending.is_empty()
             && !matches!(
@@ -729,10 +963,12 @@ pub async fn project_producer_metadata(
                 ..
             } => {
                 let record = oplog.download_payload(owner, mode, record.clone()).await?;
-                projection.registration(&record).await?;
+                projection
+                    .registration(*index, owner, fingerprint, &record)
+                    .await?;
                 if matches!(
                     record.coordinate,
-                    StreamRegistrationCoordinate::Nested { .. }
+                    StreamRegistrationRecordCoordinate::Nested { .. }
                 ) {
                     pending.push((*index, *entity_parent_start_index, record));
                 } else {
@@ -759,23 +995,32 @@ pub async fn project_producer_metadata(
                 record,
                 ..
             } => {
-                let record = oplog.download_payload(owner, mode, record.clone()).await?;
-                projection.stream(record.stream_id).await?;
-                for stream in &record.nested_stream_ids {
-                    projection
-                        .load(ProducerMetadataKey::Stream(*stream))
-                        .await?;
-                    projection
-                        .load(ProducerMetadataKey::Reference(*stream))
-                        .await?;
-                }
-                projection.loaded.insert(ProducerMetadataKey::Batch(
+                let mut record = oplog.download_payload(owner, mode, record.clone()).await?;
+                lineage.project_item_batch(*index, &mut record)?;
+                let stream_id = qualify_local_stream(
                     record.stream_id,
-                    record.first_sequence,
-                ));
+                    owner.environment_id,
+                    &owner.agent_id,
+                    fingerprint,
+                )
+                .map_err(|error| error.to_string())?;
+                projection.stream(stream_id).await?;
+                for reference in &record.nested_stream_ids {
+                    let stream = materialize_stream_reference(
+                        reference,
+                        owner.environment_id,
+                        &owner.agent_id,
+                        fingerprint,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    projection.load(ProducerMetadataKey::Stream(stream)).await?;
+                }
                 projection
                     .loaded
-                    .insert(ProducerMetadataKey::Position(record.stream_id, *index));
+                    .insert(ProducerMetadataKey::Batch(stream_id, record.first_sequence));
+                projection
+                    .loaded
+                    .insert(ProducerMetadataKey::Position(stream_id, *index));
                 projection
                     .index
                     .apply_item_batch(
@@ -786,6 +1031,12 @@ pub async fn project_producer_metadata(
                         owner.environment_id,
                         &owner.agent_id,
                         fingerprint,
+                        lineage
+                            .cuts()
+                            .iter()
+                            .rev()
+                            .find_map(|(marker, cut)| cut.revert.is_some().then_some(*marker))
+                            .unwrap_or(OplogIndex::NONE),
                     )
                     .map_err(|error| error.to_string())?;
             }
@@ -795,7 +1046,14 @@ pub async fn project_producer_metadata(
                 ..
             } => {
                 let record = oplog.download_payload(owner, mode, record.clone()).await?;
-                projection.stream(record.stream_id).await?;
+                let stream_id = qualify_local_stream(
+                    record.stream_id,
+                    owner.environment_id,
+                    &owner.agent_id,
+                    fingerprint,
+                )
+                .map_err(|error| error.to_string())?;
+                projection.stream(stream_id).await?;
                 projection
                     .index
                     .apply_end(*index, *entity_parent_start_index, record, fingerprint)
@@ -807,7 +1065,14 @@ pub async fn project_producer_metadata(
                 ..
             } => {
                 let record = oplog.download_payload(owner, mode, record.clone()).await?;
-                projection.stream(record.stream_id).await?;
+                let stream_id = qualify_local_stream(
+                    record.stream_id,
+                    owner.environment_id,
+                    &owner.agent_id,
+                    fingerprint,
+                )
+                .map_err(|error| error.to_string())?;
+                projection.stream(stream_id).await?;
                 projection
                     .index
                     .apply_cancel(*index, *entity_parent_start_index, record, fingerprint)
@@ -819,12 +1084,43 @@ pub async fn project_producer_metadata(
                 ..
             } => {
                 let record = oplog.download_payload(owner, mode, record.clone()).await?;
-                projection.session(&record).await?;
+                if let StreamSessionRecord::ForkCut(cut) = &record {
+                    if entries.len() != 1 {
+                        return Err("fork marker must occupy its own projection transaction".into());
+                    }
+                    if lineage
+                        .cuts()
+                        .iter()
+                        .find(|(position, _)| position == index)
+                        .map(|(_, record)| record)
+                        != Some(cut)
+                    {
+                        return Err("fork marker differs from the validated lineage".into());
+                    }
+                    fork = Some(projection.fork_cut(cut, owner, fingerprint).await?);
+                    continue;
+                }
+                if lineage.resets_control(*index, &record) {
+                    continue;
+                }
+                projection.session(&record, owner, fingerprint).await?;
                 projection
                     .index
-                    .apply_session_references(*entity_parent_start_index, &record)
+                    .apply_session_references(
+                        *entity_parent_start_index,
+                        &record,
+                        owner.environment_id,
+                        &owner.agent_id,
+                        fingerprint,
+                    )
                     .map_err(|error| error.to_string())?;
-                projection.index.apply_result_offset(*index, &record);
+                projection.index.apply_result_offset(
+                    *index,
+                    &record,
+                    owner.environment_id,
+                    &owner.agent_id,
+                    fingerprint,
+                );
                 if let StreamSessionRecord::ExternalProducerState(value) = &record {
                     projection.index.apply_external_producer_state(value);
                 }
@@ -846,7 +1142,12 @@ pub async fn project_producer_metadata(
                         fingerprint,
                     )
                     .map_err(|error| error.to_string())?;
-                for key in ProducerMetadataKey::session_record(&record) {
+                for key in ProducerMetadataKey::session_record(
+                    &record,
+                    owner.environment_id,
+                    &owner.agent_id,
+                    fingerprint,
+                ) {
                     if let ProducerMetadataKey::Attachment(
                         attachment,
                         stream,
@@ -862,7 +1163,7 @@ pub async fn project_producer_metadata(
                 if let StreamSessionRecord::Finished(record) = &record {
                     projection
                         .index
-                        .apply_finished(record)
+                        .apply_finished(record, owner.environment_id, &owner.agent_id, fingerprint)
                         .map_err(|error| error.to_string())?;
                 }
             }
@@ -872,12 +1173,20 @@ pub async fn project_producer_metadata(
     if !pending.is_empty() {
         return Err("producer projection chunk splits a nested registration batch".into());
     }
-    projection
+    projection.catalogue_new_sessions().await?;
+    let rows = projection
         .loaded
         .into_iter()
-        .filter_map(|key| projection.index.metadata_row(&key).map(|row| (key, row)))
+        .filter_map(|key| {
+            projection
+                .replacements
+                .remove(&key)
+                .or_else(|| projection.index.metadata_row(&key))
+                .map(|row| (key, row))
+        })
         .map(|(key, row)| Ok((key.field()?, serialize(&row)?)))
-        .collect()
+        .collect::<Result<_, String>>()?;
+    Ok(ProducerMetadataProjection { rows, fork })
 }
 
 impl DurableStreamStore {
@@ -897,16 +1206,22 @@ impl DurableStreamStore {
             .lookup_durable_stream_producer_metadata(
                 &owner,
                 mode,
-                vec![ProducerMetadataKey::Global],
+                vec![ProducerMetadataKey::Global, ProducerMetadataKey::Lineage],
             )
             .await
             .map_err(StreamStoreError::Oplog)?;
-        if rows.len() != 1 {
+        if rows.len() != 2 {
             return Err(StreamStoreError::CorruptHistory(
                 "producer metadata lookup returned an incorrect row count".into(),
             ));
         }
         let mut index = ProducerStreamIndex::default();
+        let Some(ProducerMetadataRow::Lineage(lineage)) = rows.pop().flatten() else {
+            return Err(StreamStoreError::CorruptHistory(
+                "producer metadata lookup did not return fork lineage".into(),
+            ));
+        };
+        index.fork_lineage = lineage;
         if let Some(row) = rows.pop().flatten() {
             index
                 .hydrate_metadata_row(ProducerMetadataKey::Global, row)
@@ -971,8 +1286,17 @@ impl DurableStreamStore {
                     .get(session)
                     .into_iter()
                     .flatten()
-                    .filter(|(handle, _)| self.owns_handle_identity(handle))
-                    .map(|(handle, _)| ProducerMetadataKey::Stream(handle.stream_id)),
+                    .filter_map(|(source, _)| match source {
+                        StreamRecordReference::Local(local_id) => qualify_local_stream(
+                            *local_id,
+                            self.environment_id,
+                            &self.producer,
+                            self.producer_fingerprint,
+                        )
+                        .ok()
+                        .map(ProducerMetadataKey::Stream),
+                        StreamRecordReference::Foreign(_) => None,
+                    }),
             );
             pending.extend(
                 index
@@ -1149,6 +1473,7 @@ impl DurableStreamStore {
                 self.environment_id,
                 &self.producer,
                 self.producer_fingerprint,
+                self.oplog.current_oplog_index().await,
             )
             .await?;
             complete.complete_for_deletion = complete.deleting;
@@ -1412,7 +1737,7 @@ impl DurableStreamStore {
                 ));
             };
             candidates.push(IndexedAttachmentCandidate {
-                attachment: attachment.clone(),
+                attachment: attachment.as_ref().clone(),
                 journal_summary: ProducerJournalSummary {
                     event_count: stream.next_sequence + u64::from(stream.terminal),
                     last_offset: stream.last_offset,
@@ -1433,13 +1758,17 @@ impl DurableStreamStore {
         after: Option<StreamOffset>,
     ) -> Result<usize, StreamStoreError> {
         let mut keys = vec![ProducerMetadataKey::Stream(handle.stream_id)];
+        let owns_handle = self.owns_handle_identity(handle);
+        if !owns_handle {
+            keys.push(ProducerMetadataKey::Lineage);
+        }
         if let Some(after) = after {
             keys.push(ProducerMetadataKey::Position(
                 handle.stream_id,
                 after.producer_oplog_index(),
             ));
         }
-        let (stream, position) = if self.owns_handle_identity(handle) {
+        let (stream, producer_generation, position) = if owns_handle {
             let index = self.index_for(keys).await?;
             let Some(ProducerMetadataRow::Stream(stream)) =
                 index.metadata_row(&ProducerMetadataKey::Stream(handle.stream_id))
@@ -1452,7 +1781,7 @@ impl DurableStreamStore {
                     .get(&(handle.stream_id, after.producer_oplog_index()))
                     .copied()
             });
-            (stream, position)
+            (stream, self.generation(), position)
         } else {
             let (service, _) = self.control_metadata_provider.get().ok_or_else(|| {
                 StreamStoreError::Oplog("producer metadata service is unavailable".into())
@@ -1471,13 +1800,22 @@ impl DurableStreamStore {
             let Some(Some(ProducerMetadataRow::Stream(stream))) = rows.next() else {
                 return Err(StreamStoreError::InvalidHandle);
             };
+            let Some(Some(ProducerMetadataRow::Lineage(lineage))) = rows.next() else {
+                return Err(StreamStoreError::InvalidHandle);
+            };
+            let producer_generation = lineage
+                .cuts()
+                .iter()
+                .rev()
+                .find_map(|(marker, cut)| cut.revert.is_some().then_some(*marker))
+                .unwrap_or(OplogIndex::NONE);
             let position = match rows.next().flatten() {
                 Some(ProducerMetadataRow::Position(first, count)) => Some((first, count)),
                 _ => None,
             };
-            (stream, position)
+            (stream, producer_generation, position)
         };
-        if stream.registration.handle != *handle {
+        if !stream.registration.accepts(handle, producer_generation) {
             return Err(StreamStoreError::InvalidHandle);
         }
         let total = stream
@@ -1529,7 +1867,16 @@ impl DurableStreamStore {
                 "terminal stream metadata has no durable offset".into(),
             )
         })?;
-        let event = read_terminal_event(self.oplog.as_ref(), stream_id, offset).await?;
+        let owner = OwnedAgentId::new(self.environment_id, &self.producer);
+        let event = read_terminal_event(
+            self.oplog.as_ref(),
+            &self.fork_lineage,
+            &owner,
+            self.producer_fingerprint,
+            stream_id,
+            offset,
+        )
+        .await?;
         if event.producer_sequence != stream.next_sequence {
             return Err(StreamStoreError::CorruptHistory(
                 "terminal metadata does not match its durable record".into(),
@@ -1542,10 +1889,13 @@ impl DurableStreamStore {
 
 pub(super) async fn read_terminal_event(
     oplog: &dyn Oplog,
+    _lineage: &StreamForkLineage,
+    owner: &OwnedAgentId,
+    owner_fingerprint: AgentFingerprint,
     stream_id: StreamId,
     offset: StreamOffset,
 ) -> Result<CommittedProducerStreamEvent, StreamStoreError> {
-    let (id, sequence, recorded_offset, author, payload) =
+    let (id, sequence, recorded_offset, terminal_author, payload) =
         match oplog.read(offset.producer_oplog_index()).await {
             OplogEntry::StreamEnd { record, .. } => {
                 let record = oplog
@@ -1583,6 +1933,7 @@ pub(super) async fn read_terminal_event(
                 ));
             }
         };
+    let id = qualify_local_stream(id, owner.environment_id, &owner.agent_id, owner_fingerprint)?;
     if id != stream_id || recorded_offset != offset {
         return Err(StreamStoreError::CorruptHistory(
             "terminal metadata does not match its durable record".into(),
@@ -1593,8 +1944,9 @@ pub(super) async fn read_terminal_event(
         producer_sequence: sequence,
         offset,
         packed_u8_batch_end: None,
-        terminal_author: Some(author),
+        terminal_author: Some(terminal_author),
         nested_handles: Vec::new(),
+        nested_references: Vec::new(),
         payload,
     })
 }
@@ -1602,6 +1954,7 @@ pub(super) async fn read_terminal_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::durable_host::durable_stream::registration::registered_stream;
     use crate::durable_host::durable_stream::tests::{TestIdentity, identity, registration};
     use crate::model::ExecutionStatus;
     use crate::services::golem_config::GolemConfig;
@@ -1615,10 +1968,17 @@ mod tests {
     use crate::services::worker::session_index_tests::UnusedComponentService;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::durable_stream::StreamRootKind;
+    use golem_common::model::durable_stream::{StreamRegistrationInvocation, StreamRootKind};
     use golem_common::model::{AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp};
     use golem_common::read_only_lock;
     use test_r::{test, timeout};
+
+    fn local_reader(introducing_oplog_index: u64, binding_slot: u32) -> LocalStreamReaderId {
+        LocalStreamReaderId {
+            introducing_oplog_index: OplogIndex::from_u64(introducing_oplog_index),
+            binding_slot,
+        }
+    }
 
     struct Fixture {
         identity: TestIdentity,
@@ -1634,6 +1994,21 @@ mod tests {
         }
 
         async fn with_archive(archive: bool) -> Self {
+            Self::with_storage(archive, Arc::new(InMemoryKeyValueStorage::new())).await
+        }
+
+        async fn with_storage(
+            archive: bool,
+            storage: Arc<dyn KeyValueStorage + Send + Sync>,
+        ) -> Self {
+            Self::with_buffer(archive, storage, 1).await
+        }
+
+        async fn with_buffer(
+            archive: bool,
+            storage: Arc<dyn KeyValueStorage + Send + Sync>,
+            max_operations_before_commit: u64,
+        ) -> Self {
             let identity = identity();
             let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
             let indexed = Arc::new(ReadCountingIndexedStorage::new());
@@ -1642,7 +2017,7 @@ mod tests {
                 PrimaryOplogService::new(
                     indexed.clone(),
                     blobs.clone(),
-                    1,
+                    max_operations_before_commit,
                     1,
                     100,
                     RetryConfig::default(),
@@ -1696,6 +2071,13 @@ mod tests {
                 None,
                 identity.fingerprint.0,
             );
+            let service = Arc::new(DefaultWorkerService::new(
+                storage,
+                Arc::new(ShardServiceDefault::new()),
+                primary.clone(),
+                Arc::new(UnusedComponentService),
+                Arc::new(GolemConfig::default()),
+            ));
             let oplog = primary
                 .create_fresh(
                     &mut primary.lock_lifecycle(&owner.agent_id).await,
@@ -1714,13 +2096,6 @@ mod tests {
                     ))),
                 )
                 .await;
-            let service = Arc::new(DefaultWorkerService::new(
-                Arc::new(InMemoryKeyValueStorage::new()),
-                Arc::new(ShardServiceDefault::new()),
-                primary,
-                Arc::new(UnusedComponentService),
-                Arc::new(GolemConfig::default()),
-            ));
             Self {
                 identity,
                 service,
@@ -2298,7 +2673,7 @@ mod tests {
         assert_eq!(
             fixture.indexed.reads(),
             1,
-            "cold load only asks for the committed tip"
+            "cold load reads the owner's Create entry without scanning stream history"
         );
         assert_eq!(
             fixture.blobs.reads(),
@@ -2714,14 +3089,15 @@ mod tests {
         .unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0].nested_handles.len(), 64);
-        let ids = page[0]
-            .nested_handles
-            .iter()
-            .map(|handle| handle.stream_id)
-            .collect::<Vec<_>>();
+        let record = cold
+            .read_item_batch(page[0].offset.producer_oplog_index())
+            .await
+            .unwrap();
         let reads = fixture.indexed.reads();
         assert_eq!(
-            cold.resolve_nested_handles(&ids).await.unwrap(),
+            cold.resolve_nested_handles(&record.nested_stream_ids)
+                .await
+                .unwrap(),
             page[0].nested_handles
         );
         assert_eq!(
@@ -2819,10 +3195,914 @@ mod tests {
 
     #[test]
     #[timeout("60s")]
+    async fn persisted_fork_projection_keeps_prefix_locators_and_post_marker_appends() {
+        let fixture = Fixture::new().await;
+        let mut source = identity();
+        source.agent_id.agent_id = "source".into();
+        source.fingerprint = AgentFingerprint(uuid::Uuid::from_u128(90));
+        source.invocation.callee = source.agent_id.clone();
+        source.invocation.callee_fingerprint = source.fingerprint;
+        let registration = registered_stream(
+            OplogIndex::from_u64(3),
+            source.environment_id,
+            source.agent_id.clone(),
+            source.fingerprint,
+            registration(
+                &source,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: source.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: vec![],
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        );
+        let old = registration.handle.clone();
+        let attachment =
+            crate::durable_host::durable_stream::tests::attachment_key(&source, old.stream_id);
+        let cut = StreamForkCutRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            request_hash: vec![0; 32],
+            creation_fingerprint: fixture.identity.fingerprint,
+            export: None,
+            cut_index: OplogIndex::from_u64(5),
+            revert: None,
+            epoch_floor: 1,
+            selected_stream_id: Some(LocalStreamId(OplogIndex::from_u64(3))),
+            retained_through: Some(StreamOffset::new(OplogIndex::from_u64(4), 1)),
+        };
+        let mut next = old.clone();
+        next.stream_id = StreamId::derive(
+            fixture.identity.environment_id,
+            &fixture.identity.agent_id,
+            fixture.identity.fingerprint,
+            OplogIndex::from_u64(3),
+        )
+        .unwrap();
+        next.producer = fixture.identity.agent_id.clone();
+        next.expected_producer_fingerprint = fixture.identity.fingerprint;
+        next.source_invocation = fixture.identity.invocation.clone();
+        let items =
+            |position, _stream_id, _producer_fingerprint, first_sequence, bytes: Vec<u8>| {
+                OplogEntry::StreamItems {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                    record: OplogPayload::Inline(Box::new(StreamItemsRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        stream_id: golem_common::base_model::durable_stream::LocalStreamId(
+                            OplogIndex::from_u64(3),
+                        ),
+                        first_sequence,
+                        offsets: (0..bytes.len())
+                            .map(|sub| {
+                                StreamOffset::new(OplogIndex::from_u64(position), sub as u32)
+                            })
+                            .collect(),
+                        nested_stream_ids: vec![],
+                        newly_registered_stream_ids: vec![],
+                        payload: StreamItemsPayload::PackedU8(bytes),
+                    })),
+                }
+            };
+        for entry in [
+            OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record: OplogPayload::Inline(Box::new(StreamSessionRecord::Prepared(
+                    crate::services::worker_fork::lineage::tests::prepared(&source.invocation),
+                ))),
+            },
+            OplogEntry::StreamRegistered {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record: OplogPayload::Inline(Box::new(registration.record)),
+            },
+            items(
+                4,
+                old.stream_id,
+                source.fingerprint,
+                0,
+                vec![10, 11, 12, 13, 14],
+            ),
+            OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record: OplogPayload::Inline(Box::new(StreamSessionRecord::AttachmentPrepared(
+                    golem_common::model::durable_stream::StreamAttachmentPreparedRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        key: attachment.clone(),
+                        prepared_at_millis: 100,
+                        lease_expires_at_millis: 1000,
+                    },
+                ))),
+            },
+            OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+            },
+            items(
+                7,
+                next.stream_id,
+                fixture.identity.fingerprint,
+                2,
+                vec![40, 41],
+            ),
+        ] {
+            fixture.oplog.add(entry).await;
+        }
+        fixture.persist().await;
+        let owner = OwnedAgentId::new(fixture.identity.environment_id, &fixture.identity.agent_id);
+        let (_, rows) = fixture
+            .service
+            .lookup_durable_stream_producer_metadata(
+                &owner,
+                AgentMode::Durable,
+                vec![
+                    ProducerMetadataKey::Stream(old.stream_id),
+                    ProducerMetadataKey::Stream(next.stream_id),
+                    ProducerMetadataKey::Batch(next.stream_id, 0),
+                    ProducerMetadataKey::Position(next.stream_id, OplogIndex::from_u64(4)),
+                    ProducerMetadataKey::Batch(next.stream_id, 2),
+                    ProducerMetadataKey::SessionPage(0),
+                    ProducerMetadataKey::Session(source.invocation),
+                    ProducerMetadataKey::Attachment(
+                        attachment.attachment_id,
+                        old.stream_id,
+                        attachment.consumer_environment_id,
+                        attachment.consumer.clone(),
+                    ),
+                    ProducerMetadataKey::AttachmentPage(0),
+                    ProducerMetadataKey::Global,
+                ],
+            )
+            .await
+            .unwrap();
+        assert!(rows[0].is_none());
+        assert!(
+            matches!(&rows[1], Some(ProducerMetadataRow::Stream(state)) if state.next_sequence == 4 && !state.terminal)
+        );
+        assert!(
+            matches!(rows[2], Some(ProducerMetadataRow::Batch(position)) if position == OplogIndex::from_u64(4))
+        );
+        assert!(matches!(rows[3], Some(ProducerMetadataRow::Position(0, 2))));
+        assert!(
+            matches!(rows[4], Some(ProducerMetadataRow::Batch(position)) if position == OplogIndex::from_u64(7))
+        );
+        assert!(
+            matches!(&rows[5], Some(ProducerMetadataRow::SessionPage(sessions)) if sessions == std::slice::from_ref(&fixture.identity.invocation))
+        );
+        assert!(rows[6].is_none());
+        assert!(rows[7].is_none());
+        assert!(rows[8].is_none());
+        assert!(matches!(
+            &rows[9],
+            Some(ProducerMetadataRow::Global {
+                active_attachments: 0,
+                ..
+            })
+        ));
+        let mut fresh = attachment.clone();
+        fresh.stream_id = next.stream_id;
+        fresh.producer = next.producer.clone();
+        fresh.expected_producer_fingerprint = next.expected_producer_fingerprint;
+        let producer = fixture.producer().await;
+        let prefix = producer.read_segment(&next, None, None).await.unwrap();
+        assert_eq!(
+            prefix
+                .iter()
+                .map(|event| event.payload.clone())
+                .collect::<Vec<_>>(),
+            [10, 11, 40, 41]
+                .into_iter()
+                .map(CommittedProducerStreamEventPayload::PackedU8)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            prefix.iter().map(|event| event.offset).collect::<Vec<_>>(),
+            vec![
+                StreamOffset::new(OplogIndex::from_u64(4), 0),
+                StreamOffset::new(OplogIndex::from_u64(4), 1),
+                StreamOffset::new(OplogIndex::from_u64(7), 0),
+                StreamOffset::new(OplogIndex::from_u64(7), 1),
+            ]
+        );
+        assert!(prefix.iter().all(|event| event.stream_id == next.stream_id));
+        assert_eq!(prefix[0].packed_u8_batch_end, Some(prefix[1].offset));
+        assert_eq!(prefix[2].packed_u8_batch_end, Some(prefix[3].offset));
+        producer
+            .prepare_attachment(fresh.clone(), 200)
+            .await
+            .unwrap();
+        producer
+            .activate_attachment(fresh.clone(), 210)
+            .await
+            .unwrap();
+        fixture.persist().await;
+        let (_, rows) = fixture
+            .service
+            .lookup_durable_stream_producer_metadata(
+                &owner,
+                AgentMode::Durable,
+                vec![
+                    ProducerMetadataKey::AttachmentPage(0),
+                    ProducerMetadataKey::AttachmentPosition(
+                        fresh.attachment_id,
+                        fresh.stream_id,
+                        fresh.consumer_environment_id,
+                        fresh.consumer.clone(),
+                    ),
+                    ProducerMetadataKey::Global,
+                ],
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(&rows[0], Some(ProducerMetadataRow::AttachmentPage(page)) if page == &vec![(fresh.attachment_id, fresh.stream_id, fresh.consumer_environment_id, fresh.consumer.clone())])
+        );
+        assert!(matches!(
+            &rows[1],
+            Some(ProducerMetadataRow::AttachmentPosition(Some(0)))
+        ));
+        assert!(matches!(
+            &rows[2],
+            Some(ProducerMetadataRow::Global {
+                active_attachments: 1,
+                ..
+            })
+        ));
+        producer
+            .finalize_attachment(
+                fresh.clone(),
+                StreamAttachmentFinalizationReason::ConsumerFinalized,
+                220,
+            )
+            .await
+            .unwrap();
+        fixture.persist().await;
+        let (_, rows) = fixture
+            .service
+            .lookup_durable_stream_producer_metadata(
+                &owner,
+                AgentMode::Durable,
+                vec![
+                    ProducerMetadataKey::AttachmentPage(0),
+                    ProducerMetadataKey::Global,
+                ],
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(&rows[0], Some(ProducerMetadataRow::AttachmentPage(page)) if page.is_empty())
+        );
+        assert!(matches!(
+            &rows[1],
+            Some(ProducerMetadataRow::Global {
+                active_attachments: 0,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    #[timeout("60s")]
+    async fn cold_fork_terminal_reads_use_owner_relative_identity() {
+        let fixture = Fixture::new().await;
+        fixture
+            .oplog
+            .add(OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record: OplogPayload::Inline(Box::new(StreamSessionRecord::Prepared(
+                    crate::services::worker_fork::lineage::tests::prepared(
+                        &fixture.identity.invocation,
+                    ),
+                ))),
+            })
+            .await;
+        let producer = fixture.producer().await;
+        let original = producer
+            .register(None, fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        let terminal = producer
+            .end(None, original.stream_id, 0, StreamEndResult::Ok)
+            .await
+            .unwrap()
+            .value;
+        fixture.persist().await;
+        drop(producer);
+        let cut = StreamForkCutRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            request_hash: vec![0; 32],
+            creation_fingerprint: fixture.identity.fingerprint,
+            export: None,
+            cut_index: fixture.oplog.current_oplog_index().await,
+            revert: None,
+            epoch_floor: 1,
+            selected_stream_id: None,
+            retained_through: None,
+        };
+        let continuation = original;
+        fixture
+            .oplog
+            .add(OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+            })
+            .await;
+        fixture.persist().await;
+        let cold = fixture.producer().await;
+        let events = cold.read_segment(&continuation, None, None).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].stream_id, continuation.stream_id);
+        assert_eq!(events[0].offset, terminal);
+        assert_eq!(
+            events[0].payload,
+            CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+        );
+    }
+
+    #[test]
+    #[timeout("60s")]
+    async fn raw_and_indexed_controls_discard_nested_descendants_at_a_fork() {
+        use crate::durable_host::durable_session::StreamSession;
+        use crate::durable_host::durable_stream::tests::TestOplog;
+        use crate::services::worker_fork::lineage::tests::{fork, prepared};
+        use golem_common::model::durable_stream::{
+            StreamConsumerItemValueRecord, StreamSessionMappingUpdateRecord,
+        };
+
+        let fixture =
+            Fixture::with_buffer(false, Arc::new(InMemoryKeyValueStorage::new()), 100).await;
+        let target = &fixture.identity;
+        let owner = OwnedAgentId::new(target.environment_id, &target.agent_id);
+        let mut source = identity();
+        source.agent_id.agent_id = "source".into();
+        source.invocation.callee = source.agent_id.clone();
+        let oplog = Arc::new(TestOplog::default());
+        oplog
+            .add(fixture.oplog.read(OplogIndex::INITIAL).await)
+            .await;
+        let producer = DurableStreamStore::load(
+            oplog.clone(),
+            source.environment_id,
+            source.agent_id.clone(),
+            source.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        producer
+            .append_session_record(
+                None,
+                StreamSessionRecord::Prepared(prepared(&source.invocation)),
+            )
+            .await
+            .unwrap();
+        let root = producer
+            .register(
+                None,
+                registration(
+                    &source,
+                    StreamRegistrationCoordinate::Root {
+                        invocation_id: source.invocation.clone(),
+                        root_kind: StreamRootKind::MethodResult,
+                        recursive_value_path: vec![],
+                    },
+                    StreamSourceKind::InvocationOutput,
+                ),
+            )
+            .await
+            .unwrap()
+            .value;
+        let root_local_id = LocalStreamId(oplog.current_oplog_index().await);
+        let retained = producer
+            .write_items(
+                None,
+                root.stream_id,
+                0,
+                StreamItemsPayload::PackedU8(vec![7, 9]),
+            )
+            .await
+            .unwrap()
+            .value[0];
+        let mut handles = vec![root.clone()];
+        for (parent, sequence) in [(0, 2), (1, 0)] {
+            let parent = handles[parent].stream_id;
+            producer
+                .write_items_with_nested(
+                    None,
+                    parent,
+                    sequence,
+                    StreamItemsPayload::Values(vec![vec![1]]),
+                    vec![registration(
+                        &source,
+                        StreamRegistrationCoordinate::Nested {
+                            parent_stream_id: parent,
+                            parent_producer_sequence: sequence,
+                            recursive_value_path: vec![],
+                        },
+                        StreamSourceKind::Nested,
+                    )],
+                )
+                .await
+                .unwrap();
+            handles.push(producer.nested_handles(parent, sequence).await.unwrap()[0].clone());
+        }
+        for (number, handle) in handles.iter().enumerate() {
+            producer
+                .append_session_record(
+                    None,
+                    StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                        format_version: 1,
+                        session_key: StreamRegistrationInvocation::Remote(
+                            source.invocation.clone(),
+                        ),
+                        mapping: StreamBindingRecord {
+                            transport_stream_id: number as u64,
+                            source: StreamRecordReference::Foreign(handle.clone()),
+                            role: SessionStreamRole::Output,
+                        },
+                    }),
+                )
+                .await
+                .unwrap();
+            let reader_id = LocalStreamReaderId {
+                introducing_oplog_index: oplog.current_oplog_index().await,
+                binding_slot: 0,
+            };
+            producer
+                .append_session_record(
+                    None,
+                    StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
+                        format_version: 1,
+                        session_key: StreamRegistrationInvocation::Remote(
+                            source.invocation.clone(),
+                        ),
+                        reader_id,
+                        source_offset: retained,
+                        consumer_read_ordinal: 0,
+                        value: vec![7],
+                        packed_u8: true,
+                        recursive_mappings: vec![],
+                    }),
+                )
+                .await
+                .unwrap();
+        }
+        let copied = Arc::new(TestOplog::default());
+        for (_, entry) in oplog
+            .read_exact(
+                OplogIndex::INITIAL,
+                retained.producer_oplog_index().as_u64(),
+            )
+            .await
+        {
+            copied.add(entry).await;
+        }
+        let mut cut = fork(Some(root_local_id), copied.current_oplog_index().await);
+        cut.creation_fingerprint = target.fingerprint;
+        cut.retained_through = Some(retained);
+        copied
+            .add(OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+            })
+            .await;
+        let oplog = copied;
+        for (_, entry) in oplog
+            .read_exact(
+                OplogIndex::INITIAL.next(),
+                oplog.current_oplog_index().await.as_u64() - 1,
+            )
+            .await
+        {
+            fixture.oplog.add(entry).await;
+        }
+        fixture.persist().await;
+        let raw_producer = DurableStreamStore::load(
+            oplog.clone(),
+            owner.environment_id,
+            owner.agent_id.clone(),
+            target.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let raw = StreamSession::new(
+            raw_producer.clone(),
+            oplog,
+            StreamRegistrationInvocation::Local(target.invocation.idempotency_key.clone()),
+            [],
+        );
+        let raw = raw.current_control_metadata().await.unwrap();
+        let mut indexed = fixture
+            .service
+            .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &target.invocation)
+            .await
+            .unwrap();
+        indexed.assign_recovery_slot(None);
+        assert_eq!(*raw, indexed);
+        assert!(raw.acceptance_mappings().unwrap().is_empty());
+        assert!(raw.consumer_record_counts().is_empty());
+        let root = raw_producer
+            .materialize_binding(&StreamBindingRecord {
+                transport_stream_id: 0,
+                source: StreamRecordReference::Local(root_local_id),
+                role: SessionStreamRole::Output,
+            })
+            .await
+            .unwrap()
+            .handle;
+        let events = raw_producer.read_segment(&root, None, None).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].payload,
+            CommittedProducerStreamEventPayload::PackedU8(7)
+        );
+        assert!(matches!(
+            raw_producer.nested_handles(root.stream_id, 2).await,
+            Err(StreamStoreError::EventConflict)
+        ));
+    }
+
+    #[test]
+    #[timeout("60s")]
+    async fn persisted_fork_chain_preserves_consumer_only_heads() {
+        use golem_common::model::durable_stream::{
+            StreamConsumerItemValueRecord, StreamConsumerTerminal, StreamConsumerTerminalRecord,
+        };
+        for terminal_record in [false, true] {
+            let fixture =
+                Fixture::with_buffer(false, Arc::new(InMemoryKeyValueStorage::new()), 100).await;
+            let target = fixture.identity.invocation.clone();
+            let mut source = target.clone();
+            source.callee.agent_id = "source".into();
+            source.callee_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(91));
+            let mut middle = target.clone();
+            middle.callee.agent_id = "middle".into();
+            middle.callee_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(92));
+            let handle = super::super::registration::registered_stream(
+                OplogIndex::from_u64(123),
+                fixture.identity.environment_id,
+                fixture.identity.agent_id.clone(),
+                fixture.identity.fingerprint,
+                fixture.registration(0),
+            )
+            .handle;
+            let mut prepared = crate::services::worker_fork::lineage::tests::prepared(&source);
+            prepared
+                .attempt
+                .invocation
+                .stream_handles
+                .push(handle.clone());
+            prepared.stream_mappings.push(StreamBindingRecord {
+                transport_stream_id: 0,
+                source: StreamRecordReference::Foreign(handle.clone()),
+                role: SessionStreamRole::Input,
+            });
+            let reader = local_reader(2, 0);
+            let terminal = StreamOffset::new(OplogIndex::from_u64(91), 0);
+            let cut = |_from: &StreamSessionKey, to: &StreamSessionKey, index| {
+                StreamSessionRecord::ForkCut(StreamForkCutRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    request_hash: vec![0; 32],
+                    creation_fingerprint: to.callee_fingerprint,
+                    export: None,
+                    cut_index: OplogIndex::from_u64(index),
+                    revert: None,
+                    epoch_floor: 1,
+                    selected_stream_id: None,
+                    retained_through: None,
+                })
+            };
+            for record in [
+                StreamSessionRecord::Prepared(prepared),
+                StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: StreamRegistrationInvocation::Local(
+                        source.idempotency_key.clone(),
+                    ),
+                    reader_id: reader,
+                    source_offset: StreamOffset::new(OplogIndex::from_u64(90), 3),
+                    consumer_read_ordinal: 0,
+                    value: vec![3, 5],
+                    packed_u8: true,
+                    recursive_mappings: vec![],
+                }),
+                if terminal_record {
+                    StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: StreamRegistrationInvocation::Local(
+                            source.idempotency_key.clone(),
+                        ),
+                        reader_id: reader,
+                        source_offset: terminal,
+                        consumer_read_ordinal: 2,
+                        terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
+                    })
+                } else {
+                    StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: StreamRegistrationInvocation::Local(
+                            source.idempotency_key.clone(),
+                        ),
+                        reader_id: reader,
+                        source_offset: terminal,
+                        consumer_read_ordinal: 2,
+                        value: vec![7],
+                        packed_u8: true,
+                        recursive_mappings: vec![],
+                    })
+                },
+                cut(&source, &middle, 4),
+                cut(&middle, &target, 5),
+            ] {
+                let prepared = matches!(&record, StreamSessionRecord::Prepared(_));
+                fixture
+                    .oplog
+                    .add(OplogEntry::StreamSession {
+                        timestamp: Timestamp::now_utc(),
+                        entity_parent_start_index: None,
+                        record: OplogPayload::Inline(Box::new(record)),
+                    })
+                    .await;
+                if prepared {
+                    assert!(
+                        fixture
+                            .oplog
+                            .raw_durable_stream_session_status(&target)
+                            .await
+                            .status
+                            .unwrap()
+                            .is_some()
+                    );
+                    assert!(
+                        fixture
+                            .oplog
+                            .raw_durable_stream_session_status(&source)
+                            .await
+                            .status
+                            .unwrap()
+                            .is_none()
+                    );
+                }
+            }
+            let buffered = fixture
+                .oplog
+                .raw_durable_stream_session_status(&target)
+                .await
+                .status
+                .unwrap()
+                .unwrap();
+            assert_eq!(buffered.session_key.as_ref(), Some(&target.idempotency_key));
+            assert_eq!(buffered.attachment_epoch, Some(1));
+            assert_eq!(buffered.attachment_attached, Some(false));
+            assert!(
+                fixture
+                    .oplog
+                    .raw_durable_stream_session_status(&source)
+                    .await
+                    .status
+                    .unwrap()
+                    .is_none()
+            );
+            fixture.persist().await;
+            use crate::services::HasOplogService;
+            let owner =
+                OwnedAgentId::new(fixture.identity.environment_id, &fixture.identity.agent_id);
+            let persisted = fixture
+                .service
+                .oplog_service()
+                .stream_session_index()
+                .unwrap()
+                .lookup_latest(&owner, AgentMode::Durable, &target.idempotency_key)
+                .await
+                .unwrap();
+            assert_eq!(persisted, Some(buffered.clone()));
+            assert_eq!(
+                fixture
+                    .oplog
+                    .raw_durable_stream_session_status(&target)
+                    .await
+                    .status
+                    .unwrap(),
+                Some(buffered)
+            );
+            let owner =
+                OwnedAgentId::new(fixture.identity.environment_id, &fixture.identity.agent_id);
+            let (_, rows) = fixture
+                .service
+                .lookup_durable_stream_producer_metadata(
+                    &owner,
+                    AgentMode::Durable,
+                    vec![
+                        ProducerMetadataKey::ConsumerHead(source.clone(), reader),
+                        ProducerMetadataKey::ConsumerHead(middle.clone(), reader),
+                        ProducerMetadataKey::ConsumerHead(target.clone(), reader),
+                    ],
+                )
+                .await
+                .unwrap();
+            assert!(rows[0].is_none());
+            assert!(rows[1].is_none());
+            assert!(
+                matches!(&rows[2], Some(ProducerMetadataRow::ConsumerHead(head)) if head.terminal == terminal_record && head.next_read_ordinal == 3 && head.last_source_offset == Some(terminal))
+            );
+            let control = fixture
+                .service
+                .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &target)
+                .await
+                .unwrap();
+            assert_eq!(control.prepared_position(), Some(OplogIndex::from_u64(2)));
+            assert_eq!(
+                control.consumer_record_counts(),
+                &HashMap::from([(reader, 2)])
+            );
+            let raw_producer = DurableStreamStore::load(
+                fixture.oplog.clone(),
+                owner.environment_id,
+                owner.agent_id.clone(),
+                fixture.identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let raw = crate::durable_host::durable_session::StreamSession::new(
+                raw_producer.clone(),
+                fixture.oplog.clone(),
+                StreamRegistrationInvocation::Local(target.idempotency_key.clone()),
+                [],
+            );
+            let raw_control = raw.current_control_metadata().await.unwrap();
+            let mut expected = control.clone();
+            expected.assign_recovery_slot(None);
+            assert_eq!(*raw_control, expected);
+            assert_eq!(
+                fixture
+                    .service
+                    .read_durable_stream_consumer_page(&owner, &target, reader, 0)
+                    .await
+                    .unwrap(),
+                vec![OplogIndex::from_u64(3), OplogIndex::from_u64(4)]
+            );
+            for retired in [&source, &middle] {
+                let raw = crate::durable_host::durable_session::StreamSession::new(
+                    raw_producer.clone(),
+                    fixture.oplog.clone(),
+                    StreamRegistrationInvocation::Remote(retired.clone()),
+                    [],
+                );
+                let raw_control = raw.current_control_metadata().await.unwrap();
+                assert!(raw_control.prepared_position().is_none());
+                assert!(raw_control.consumer_record_counts().is_empty());
+                let control = fixture
+                    .service
+                    .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, retired)
+                    .await
+                    .unwrap();
+                assert!(control.prepared_position().is_none());
+                assert!(control.consumer_record_counts().is_empty());
+            }
+            let recovery = fixture
+                .service
+                .lookup_durable_stream_recovery_metadata(&owner, AgentMode::Durable)
+                .await
+                .unwrap();
+            assert_eq!(
+                recovery
+                    .sessions
+                    .iter()
+                    .map(|(key, _)| key.clone())
+                    .collect::<Vec<_>>(),
+                vec![target.clone()]
+            );
+            if !terminal_record {
+                fixture
+                    .oplog
+                    .add(OplogEntry::StreamSession {
+                        timestamp: Timestamp::now_utc(),
+                        entity_parent_start_index: None,
+                        record: OplogPayload::Inline(Box::new(
+                            StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
+                                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: StreamRegistrationInvocation::Local(
+                                    target.idempotency_key.clone(),
+                                ),
+                                reader_id: reader,
+                                source_offset: StreamOffset::new(OplogIndex::from_u64(92), 4),
+                                consumer_read_ordinal: 3,
+                                value: vec![11, 13],
+                                packed_u8: true,
+                                recursive_mappings: vec![],
+                            }),
+                        )),
+                    })
+                    .await;
+                fixture.persist().await;
+                assert_eq!(
+                    fixture
+                        .service
+                        .read_durable_stream_consumer_page(&owner, &target, reader, 0)
+                        .await
+                        .unwrap(),
+                    vec![
+                        OplogIndex::from_u64(3),
+                        OplogIndex::from_u64(4),
+                        OplogIndex::from_u64(7)
+                    ]
+                );
+                let control = fixture
+                    .service
+                    .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &target)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    control.consumer_record_counts(),
+                    &HashMap::from([(reader, 3)])
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[timeout("60s")]
+    async fn persisted_session_catalogue_includes_mapping_free_foreign_sessions_once() {
+        let fixture = Fixture::new().await;
+        let mut expected = HashSet::new();
+        for range in [0..127, 127..130, 0..130] {
+            let producer = fixture.producer().await;
+            for ordinal in range {
+                let mut session = fixture.identity.invocation.clone();
+                session.idempotency_key =
+                    golem_common::model::IdempotencyKey::new(format!("outbound-{ordinal}"));
+                session.callee.agent_id = "foreign()".into();
+                let repeated = !expected.insert(session.clone());
+                let reader_id = local_reader(1, 0);
+                producer
+                    .append_session_record(None, StreamSessionRecord::ConsumerItemValue(
+                        golem_common::base_model::durable_stream::StreamConsumerItemValueRecord {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            session_key: StreamRegistrationInvocation::Remote(session),
+                            reader_id,
+                            source_offset: StreamOffset::new(
+                                OplogIndex::from_u64(if repeated { 2 } else { 1 }),
+                                0,
+                            ),
+                            consumer_read_ordinal: u64::from(repeated),
+                            value: vec![7],
+                            packed_u8: false,
+                            recursive_mappings: Vec::new(),
+                        },
+                    ))
+                    .await
+                    .unwrap();
+            }
+            fixture.persist().await;
+            drop(producer);
+            let owner =
+                OwnedAgentId::new(fixture.identity.environment_id, &fixture.identity.agent_id);
+            let (_, rows) = fixture
+                .service
+                .lookup_durable_stream_producer_metadata(
+                    &owner,
+                    AgentMode::Durable,
+                    vec![
+                        ProducerMetadataKey::Global,
+                        ProducerMetadataKey::SessionPage(0),
+                        ProducerMetadataKey::SessionPage(1),
+                    ],
+                )
+                .await
+                .unwrap();
+            assert!(
+                matches!(rows[0], Some(ProducerMetadataRow::Global { session_count, .. }) if session_count == expected.len() as u64)
+            );
+            let mut actual = Vec::new();
+            for (page, row) in rows.into_iter().skip(1).enumerate() {
+                if let Some(ProducerMetadataRow::SessionPage(sessions)) = row {
+                    assert_eq!(
+                        sessions.len(),
+                        (expected.len().saturating_sub(page * 128)).min(128)
+                    );
+                    actual.extend(sessions);
+                }
+            }
+            assert_eq!(actual.len(), expected.len());
+            assert_eq!(actual.into_iter().collect::<HashSet<_>>(), expected);
+        }
+    }
+
+    #[test]
+    #[timeout("60s")]
     async fn persisted_consumer_head_summarizes_long_journal_without_history_reads() {
         let fixture = Fixture::new().await;
         let consumer = fixture.producer().await;
-        let stream_id = StreamId(uuid::Uuid::from_u128(91));
+        let reader_id = local_reader(2, 0);
         let session_key = fixture.identity.invocation.clone();
         for ordinal in 0..512 {
             consumer
@@ -2831,13 +4111,14 @@ mod tests {
                     StreamSessionRecord::ConsumerItemValue(
                         golem_common::base_model::durable_stream::StreamConsumerItemValueRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
-                            session_key: session_key.clone(),
-                            stream_id,
+                            session_key: StreamRegistrationInvocation::Local(
+                                session_key.idempotency_key.clone(),
+                            ),
+                            reader_id,
                             source_offset: StreamOffset::new(OplogIndex::from_u64(ordinal + 1), 0),
                             consumer_read_ordinal: ordinal,
                             value: vec![ordinal as u8],
                             packed_u8: false,
-                            recursive_handles: Vec::new(),
                             recursive_mappings: Vec::new(),
                         },
                     ),
@@ -2852,8 +4133,10 @@ mod tests {
                 StreamSessionRecord::ConsumerTerminal(
                     golem_common::model::durable_stream::StreamConsumerTerminalRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        session_key: session_key.clone(),
-                        stream_id,
+                        session_key: StreamRegistrationInvocation::Local(
+                            session_key.idempotency_key.clone(),
+                        ),
+                        reader_id,
                         source_offset: terminal_offset,
                         consumer_read_ordinal: 512,
                         terminal: golem_common::model::durable_stream::StreamConsumerTerminal::End(
@@ -2874,7 +4157,7 @@ mod tests {
             .lookup_durable_stream_producer_metadata(
                 &owner,
                 AgentMode::Durable,
-                vec![ProducerMetadataKey::ConsumerHead(session_key, stream_id)],
+                vec![ProducerMetadataKey::ConsumerHead(session_key, reader_id)],
             )
             .await
             .unwrap();
@@ -2895,19 +4178,20 @@ mod tests {
         let fixture = Fixture::new().await;
         let producer = fixture.producer().await;
         let session = fixture.identity.invocation.clone();
-        let stream = StreamId(uuid::Uuid::from_u128(93));
+        let reader = local_reader(2, 0);
         let record = fixture
             .oplog
             .upload_payload(&StreamSessionRecord::ConsumerItemValue(
                 golem_common::base_model::durable_stream::StreamConsumerItemValueRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: session.clone(),
-                    stream_id: stream,
+                    session_key: StreamRegistrationInvocation::Local(
+                        session.idempotency_key.clone(),
+                    ),
+                    reader_id: reader,
                     source_offset: StreamOffset::new(OplogIndex::from_u64(17), 0),
                     consumer_read_ordinal: 0,
                     value: vec![9; 256],
                     packed_u8: false,
-                    recursive_handles: Vec::new(),
                     recursive_mappings: Vec::new(),
                 },
             ))
@@ -2940,7 +4224,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(metadata.covered_through(), horizon);
-        assert_eq!(metadata.consumer_record_count(stream), 1);
+        assert_eq!(metadata.consumer_record_count(reader), 1);
         assert_eq!(
             fixture.indexed.reads(),
             reads + 1,
@@ -3125,7 +4409,9 @@ mod tests {
                 StreamSessionRecord::CallerAttempt(
                     golem_common::model::durable_stream::StreamCallerAttemptRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        session_key: fixture.identity.invocation.clone(),
+                        session_key: StreamRegistrationInvocation::Local(
+                            fixture.identity.invocation.idempotency_key.clone(),
+                        ),
                         attempt_id,
                     },
                 ),
@@ -3207,7 +4493,9 @@ mod tests {
                                     crate::durable_host::durable_session::StreamSession::new(
                                         producer.clone(),
                                         fixture.oplog.clone(),
-                                        fixture.identity.invocation.clone(),
+                                        StreamRegistrationInvocation::Local(
+                                            fixture.identity.invocation.idempotency_key.clone(),
+                                        ),
                                         [],
                                     );
                                 let scope = crate::worker::tasks::TaskScope::default();

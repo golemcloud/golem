@@ -50,7 +50,8 @@ or move admission into the slot.
 
 ## Cut points
 
-Revert and fork split the oplog at a cut point. `cut_point.rs` rejects cuts that separate a
-`Start` from its terminal, an `End` from its `CompletionDelivered`/`CompletionDiscarded` marker,
-or split an atomic region or remote transaction. Any new paired durable construct must be added
-to that validation.
+Revert and fork retain the exact inclusive oplog prefix at the cut point. A retained `Start`
+without its terminal uses ordinary incomplete-call recovery. A retained accessor `End` without
+its `CompletionDelivered`/`CompletionDiscarded` marker uses replay-tail delivery. Outcomes beyond
+the cut do not constrain these calls. `cut_point.rs` still rejects cuts splitting an atomic-region
+or remote-transaction outcome; audit new paired constructs against that validation.

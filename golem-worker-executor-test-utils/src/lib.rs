@@ -830,6 +830,32 @@ impl TestWorkerExecutor {
         );
     }
 
+    /// Pauses one `Oplog::read` or `read_exact` starting at the given index before accessing storage.
+    /// Dropping the release sender also unblocks it; `OplogService::read` is not intercepted.
+    pub fn gate_next_oplog_read(
+        &self,
+        agent_id: &AgentId,
+        oplog_index: OplogIndex,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .oplog_read_gates
+            .lock()
+            .unwrap()
+            .insert(
+                (agent_id.clone(), oplog_index),
+                OplogReadGate {
+                    entered_tx,
+                    release_rx,
+                },
+            );
+        (entered_rx, release_tx)
+    }
+
     pub async fn commit_oplog(&self, agent_id: &AgentId) -> anyhow::Result<()> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
         let worker = self
@@ -4383,6 +4409,16 @@ impl Oplog for TestOplog {
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+        let gate = self
+            .additional_test_deps
+            .oplog_read_gates
+            .lock()
+            .unwrap()
+            .remove(&(self.owned_agent_id.agent_id.clone(), oplog_index));
+        if let Some(gate) = gate {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+        }
         if self
             .additional_test_deps
             .take_no_op_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
@@ -4431,6 +4467,16 @@ impl Oplog for TestOplog {
         oplog_index: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
+        let gate = self
+            .additional_test_deps
+            .oplog_read_gates
+            .lock()
+            .unwrap()
+            .remove(&(self.owned_agent_id.agent_id.clone(), oplog_index));
+        if let Some(gate) = gate {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+        }
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "read_exact");
         self.oplog.read_exact(oplog_index, n).await
@@ -4783,6 +4829,11 @@ impl RpcMemoryFailure {
     }
 }
 
+struct OplogReadGate {
+    entered_tx: tokio::sync::oneshot::Sender<()>,
+    release_rx: tokio::sync::oneshot::Receiver<()>,
+}
+
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
     rpc_memory_failures: Arc<std::sync::Mutex<HashMap<AgentId, RpcMemoryFailure>>>,
@@ -4794,6 +4845,7 @@ pub struct AdditionalTestDeps {
     snapshot_download_failures: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), PayloadId>>>,
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
+    oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
     /// agent inside the [`TestOplog`] wrapper — after the entry is durable in
@@ -4845,6 +4897,7 @@ impl AdditionalTestDeps {
             snapshot_download_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
             no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_read_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
             agent_initialization_enqueue_gates: Arc::new(scc::HashMap::new()),

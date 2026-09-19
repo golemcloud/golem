@@ -373,6 +373,7 @@ where
                     durable_streams: Some(acceptance.streams),
                     prepared: Some(acceptance.prepared),
                     durable_replayed: acceptance.replayed,
+                    joined_origin_observer: acceptance.joined_origin_observer,
                 })
                 .map_err(|_| {
                     WorkerExecutorError::runtime(

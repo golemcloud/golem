@@ -18,6 +18,7 @@ use super::{HostRequestGolemApiRevertAgent, HostRequestGolemRpcInvoke};
 use crate::model::Timestamp;
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::{ComponentId, ComponentRevision};
+use crate::model::durable_stream::StreamInvocationId;
 use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, SpanId};
@@ -134,7 +135,7 @@ fn card_transfer_has_a_distinct_host_function_name() {
 }
 
 #[test]
-fn rpc_durable_request_captures_scope_card_payload_deterministically() {
+fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_deterministically() {
     let scope_card = ScopeCard {
         scope_card_id: CardId(uuid::Uuid::from_u128(1)),
         root_card_ids: vec![CardId(uuid::Uuid::from_u128(2))],
@@ -153,6 +154,15 @@ fn rpc_durable_request_captures_scope_card_payload_deterministically() {
         input: SchemaValue::Tuple {
             elements: Vec::new(),
         },
+        logical_streaming_origin: Some(StreamInvocationId {
+            callee_environment_id: EnvironmentId::new(),
+            callee: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "original-caller".to_string(),
+            },
+            callee_fingerprint: AgentFingerprint(uuid::Uuid::from_u128(3)),
+            idempotency_key: IdempotencyKey::new("source-invocation".to_string()),
+        }),
         remote_agent_type: None,
         remote_agent_parameters: None,
         scope_card: Some(scope_card),

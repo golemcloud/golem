@@ -16,6 +16,41 @@ use super::index::{resource_exhausted_error_context, validate_terminal_sequence}
 use super::*;
 
 impl DurableStreamStore {
+    pub(crate) async fn cancel_unbound_rpc_input(
+        self: &Arc<Self>,
+        session: &StreamSessionKey,
+        handle: &DurableStreamHandle,
+    ) -> Result<(), StreamStoreError> {
+        if !self.owns_handle_identity(handle) {
+            return Ok(());
+        }
+        let index = self
+            .index_for([ProducerMetadataKey::Stream(handle.stream_id)])
+            .await?;
+        let registration = index
+            .registrations
+            .get(&handle.stream_id)
+            .ok_or(StreamStoreError::UnknownStream(handle.stream_id))?;
+        if !registration.accepts(handle, self.generation()) {
+            return Err(StreamStoreError::InvalidHandle);
+        }
+        let owned_input = registration.source_kind == StreamSourceKind::AgentHostedInput
+            && registration.handle.source_invocation == *session;
+        drop(index);
+        if owned_input {
+            self.cancel_open(
+                None,
+                handle.stream_id,
+                StreamCancelRole::InputProducer,
+                StreamCancelReason::Cancelled,
+                None,
+            )
+            .await?;
+            self.notify_session_records_changed(None);
+        }
+        Ok(())
+    }
+
     pub(super) async fn commit_resource_exhausted_terminal(
         &self,
         context: &StreamWriteContext,
@@ -25,7 +60,7 @@ impl DurableStreamStore {
     ) -> Result<(), StreamStoreError> {
         let result = StreamEndResult::ErrorContext(resource_exhausted_error_context()?);
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
-        let producer_fingerprint = self.producer_fingerprint;
+        let local_stream_id = index.local_stream_id(stream_id)?;
         context.begin_durable_effect();
         let mut entries = self
             .oplog
@@ -34,8 +69,7 @@ impl DurableStreamStore {
                     entity_parent_start_index,
                     StreamEndRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        stream_id,
-                        producer_fingerprint,
+                        stream_id: local_stream_id,
                         sequence,
                         offset: StreamOffset::new(oplog_index, 0),
                         authored_by: StreamTerminalAuthor::Protocol,
@@ -183,7 +217,7 @@ impl DurableStreamStore {
         }
         validate_new_terminal(&index, stream_id, sequence)?;
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
-        let producer_fingerprint = self.producer_fingerprint;
+        let local_stream_id = index.local_stream_id(stream_id)?;
         context.begin_durable_effect();
         let mut entries = self
             .oplog
@@ -192,8 +226,7 @@ impl DurableStreamStore {
                     entity_parent_start_index,
                     StreamEndRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        stream_id,
-                        producer_fingerprint,
+                        stream_id: local_stream_id,
                         sequence,
                         offset: StreamOffset::new(oplog_index, 0),
                         authored_by,
@@ -313,7 +346,7 @@ impl DurableStreamStore {
         index.ensure_producer_write_allowed()?;
         validate_new_terminal(&index, stream_id, sequence)?;
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
-        let producer_fingerprint = self.producer_fingerprint;
+        let local_stream_id = index.local_stream_id(stream_id)?;
         context.begin_durable_effect();
         let mut entries = self
             .oplog
@@ -322,8 +355,7 @@ impl DurableStreamStore {
                     entity_parent_start_index,
                     StreamCancelRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        stream_id,
-                        producer_fingerprint,
+                        stream_id: local_stream_id,
                         sequence,
                         offset: StreamOffset::new(oplog_index, 0),
                         authored_by: StreamTerminalAuthor::Protocol,

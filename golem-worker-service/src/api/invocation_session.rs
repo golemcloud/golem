@@ -3049,6 +3049,7 @@ mod tests {
                 }),
                 producer: Some(proto_agent_id()),
                 expected_producer_fingerprint: Some(proto_uuid(4)),
+                producer_generation: 0,
                 source_invocation: Some(StreamInvocationIdentity {
                     callee_environment_id: Some(EnvironmentId {
                         value: Some(proto_uuid(3)),

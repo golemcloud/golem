@@ -28,6 +28,7 @@ pub enum ConsumerAttachmentStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Consumer terminal and progress facts recovered from its journal.
 pub struct ConsumerJournalInspection {
+    pub reader_id: LocalStreamReaderId,
     pub source_offsets: Vec<StreamOffset>,
     pub source_unavailable: Option<StreamOffset>,
 }
@@ -54,7 +55,7 @@ pub trait StreamAttachmentConsumerProbe: Send + Sync {
     async fn journal_inspection(
         &self,
         _key: &StreamAttachmentKey,
-    ) -> Result<Option<ConsumerJournalInspection>, StreamStoreError> {
+    ) -> Result<Option<Vec<ConsumerJournalInspection>>, StreamStoreError> {
         Ok(None)
     }
 
@@ -70,6 +71,7 @@ pub trait StreamAttachmentConsumerProbe: Send + Sync {
     async fn commit_source_unavailable(
         &self,
         _key: &StreamAttachmentKey,
+        _reader_id: LocalStreamReaderId,
         _source_offset: StreamOffset,
         _consumer_read_ordinal: u64,
     ) -> Result<(), StreamStoreError> {
@@ -167,7 +169,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
         else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
-        if status.session_key.as_ref() != Some(&key.session_key) {
+        if status.session_key.as_ref() != Some(&key.session_key.idempotency_key) {
             return Ok(ConsumerAttachmentStatus::Missing);
         }
         if let Some(error) = status.lifecycle_error {
@@ -213,6 +215,9 @@ impl DbDirectStreamAttachmentConsumerProbe {
             .zip(status.attachment_attached)
             .map(|((epoch, attempt_id), attached)| (epoch, attempt_id, attached));
         if expected_cancel.is_none()
+            && key.consumer_environment_id == key.session_key.callee_environment_id
+            && key.consumer == key.session_key.callee
+            && key.expected_consumer_fingerprint == key.session_key.callee_fingerprint
             && attachment_authority.is_some_and(|(epoch, _, _)| epoch != key.epoch)
         {
             return Ok(ConsumerAttachmentStatus::EpochMismatch);
@@ -316,7 +321,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
     async fn journal_inspection(
         &self,
         key: &StreamAttachmentKey,
-    ) -> Result<Option<ConsumerJournalInspection>, StreamStoreError> {
+    ) -> Result<Option<Vec<ConsumerJournalInspection>>, StreamStoreError> {
         let consumer = OwnedAgentId::new(key.consumer_environment_id, &key.consumer);
         let Some(metadata) = self
             .worker_service
@@ -331,6 +336,15 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         {
             return Ok(None);
         }
+        let control = self
+            .worker_service
+            .lookup_durable_stream_control_metadata(&consumer, AgentMode::Durable, &key.session_key)
+            .await
+            .map_err(StreamStoreError::Oplog)?;
+        let readers = control.readers_for_attachment(key);
+        if readers.is_empty() {
+            return Ok(None);
+        }
         let current = self
             .oplog_service
             .get_last_index(&consumer, AgentMode::Durable)
@@ -338,9 +352,29 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         if !current.is_defined() {
             return Ok(None);
         }
-        let mut offsets = Vec::new();
-        let mut overlay = None;
-        for (_, entry) in self
+        let lineage = StreamForkLineage::load_from_service(
+            self.oplog_service.as_ref(),
+            &consumer,
+            AgentMode::Durable,
+            key.expected_consumer_fingerprint,
+            current,
+        )
+        .await
+        .map_err(StreamStoreError::CorruptHistory)?;
+        let mut inspections = readers
+            .into_iter()
+            .map(|reader_id| {
+                (
+                    reader_id,
+                    ConsumerJournalInspection {
+                        reader_id,
+                        source_offsets: Vec::new(),
+                        source_unavailable: None,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for (index, entry) in self
             .oplog_service
             .read_exact(
                 &consumer,
@@ -350,6 +384,9 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             )
             .await
         {
+            if lineage.deleted_regions().is_in_deleted_region(index) {
+                continue;
+            }
             let OplogEntry::StreamSession { record, .. } = entry else {
                 continue;
             };
@@ -358,10 +395,49 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 .download_payload(&consumer, AgentMode::Durable, record)
                 .await
                 .map_err(StreamStoreError::Oplog)?;
+            let reader_id = match &record {
+                StreamSessionRecord::ConsumerItemValue(record)
+                    if record.session_key.qualify(
+                        key.consumer_environment_id,
+                        &key.consumer,
+                        key.expected_consumer_fingerprint,
+                    ) == key.session_key =>
+                {
+                    record.reader_id
+                }
+                StreamSessionRecord::ConsumerTerminal(record)
+                    if record.session_key.qualify(
+                        key.consumer_environment_id,
+                        &key.consumer,
+                        key.expected_consumer_fingerprint,
+                    ) == key.session_key =>
+                {
+                    record.reader_id
+                }
+                StreamSessionRecord::SourceUnavailable(record)
+                    if record.session_key.qualify(
+                        key.consumer_environment_id,
+                        &key.consumer,
+                        key.expected_consumer_fingerprint,
+                    ) == key.session_key =>
+                {
+                    record.reader_id
+                }
+                _ => continue,
+            };
+            let Some(inspection) = inspections.get_mut(&reader_id) else {
+                continue;
+            };
+            let offsets = &mut inspection.source_offsets;
+            let overlay = &mut inspection.source_unavailable;
             match record {
                 StreamSessionRecord::ConsumerItemValue(record)
-                    if record.session_key == key.session_key
-                        && record.stream_id == key.stream_id =>
+                    if record.session_key.qualify(
+                        key.consumer_environment_id,
+                        &key.consumer,
+                        key.expected_consumer_fingerprint,
+                    ) == key.session_key
+                        && record.reader_id == reader_id =>
                 {
                     if record.consumer_read_ordinal != offsets.len() as u64 {
                         return Err(StreamStoreError::CorruptHistory(
@@ -377,8 +453,12 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                     }
                 }
                 StreamSessionRecord::ConsumerTerminal(record)
-                    if record.session_key == key.session_key
-                        && record.stream_id == key.stream_id =>
+                    if record.session_key.qualify(
+                        key.consumer_environment_id,
+                        &key.consumer,
+                        key.expected_consumer_fingerprint,
+                    ) == key.session_key
+                        && record.reader_id == reader_id =>
                 {
                     if record.consumer_read_ordinal != offsets.len() as u64 {
                         return Err(StreamStoreError::CorruptHistory(
@@ -388,31 +468,39 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                     offsets.push(record.source_offset);
                 }
                 StreamSessionRecord::SourceUnavailable(record)
-                    if record.key.session_key == key.session_key
-                        && record.key.stream_id == key.stream_id =>
+                    if record.session_key.qualify(
+                        key.consumer_environment_id,
+                        &key.consumer,
+                        key.expected_consumer_fingerprint,
+                    ) == key.session_key
+                        && record.reader_id == reader_id =>
                 {
                     if record.consumer_read_ordinal != offsets.len() as u64 {
                         return Err(StreamStoreError::CorruptHistory(
                             "source-unavailable overlay contains a read-ordinal gap".to_string(),
                         ));
                     }
-                    match overlay {
+                    match *overlay {
                         Some(existing) if existing != record.source_offset => {
                             return Err(StreamStoreError::CorruptHistory(
                                 "conflicting source-unavailable overlays".to_string(),
                             ));
                         }
                         Some(_) => {}
-                        None => overlay = Some(record.source_offset),
+                        None => *overlay = Some(record.source_offset),
                     }
                 }
                 _ => {}
             }
         }
-        Ok(Some(ConsumerJournalInspection {
-            source_offsets: offsets,
-            source_unavailable: overlay,
-        }))
+        let mut inspections = inspections.into_values().collect::<Vec<_>>();
+        inspections.sort_by_key(|inspection| {
+            (
+                inspection.reader_id.introducing_oplog_index,
+                inspection.reader_id.binding_slot,
+            )
+        });
+        Ok(Some(inspections))
     }
 
     async fn journal_summary(
@@ -433,32 +521,63 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         {
             return Ok(None);
         }
-        let (_, mut rows) = self
+        let control = self
+            .worker_service
+            .lookup_durable_stream_control_metadata(&consumer, AgentMode::Durable, &key.session_key)
+            .await
+            .map_err(StreamStoreError::Oplog)?;
+        let readers = control.readers_for_attachment(key);
+        if readers.is_empty() {
+            return Ok(None);
+        }
+        let (_, rows) = self
             .worker_service
             .lookup_durable_stream_producer_metadata(
                 &consumer,
                 AgentMode::Durable,
-                vec![ProducerMetadataKey::ConsumerHead(
-                    key.session_key.clone(),
-                    key.stream_id,
-                )],
+                readers
+                    .iter()
+                    .map(|reader| {
+                        ProducerMetadataKey::ConsumerHead(key.session_key.clone(), *reader)
+                    })
+                    .collect(),
             )
             .await
             .map_err(StreamStoreError::Oplog)?;
-        let Some(ProducerMetadataRow::ConsumerHead(head)) = rows.pop().flatten() else {
+        let heads = rows
+            .into_iter()
+            .map(|row| match row {
+                Some(ProducerMetadataRow::ConsumerHead(head)) => Ok(head),
+                None => Ok(IndexedConsumerJournal::default()),
+                _ => Err(StreamStoreError::CorruptHistory(
+                    "consumer head has an unexpected metadata row".into(),
+                )),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if heads.len() != readers.len() {
             return Ok(None);
-        };
+        }
+        let terminal = heads.iter().all(|head| head.terminal);
+        let source_unavailable = !terminal
+            && heads
+                .iter()
+                .all(|head| head.terminal || head.source_unavailable.is_some());
+        let head = heads
+            .iter()
+            .min_by_key(|head| head.next_read_ordinal)
+            .unwrap();
         Ok(Some(ConsumerJournalSummary {
             event_count: head.next_read_ordinal,
             last_offset: head.last_source_offset,
-            terminal: head.terminal,
-            source_unavailable: head.source_unavailable.is_some(),
+            terminal,
+            source_unavailable,
         }))
     }
 
     async fn commit_source_unavailable(
         &self,
         key: &StreamAttachmentKey,
+        reader_id: LocalStreamReaderId,
         source_offset: StreamOffset,
         consumer_read_ordinal: u64,
     ) -> Result<(), StreamStoreError> {
@@ -473,6 +592,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                 mapping: None,
                 operation: StreamAttachmentControlOperation::SourceUnavailable {
                     key: key.clone(),
+                    reader_id,
                     source_offset,
                     consumer_read_ordinal,
                 },

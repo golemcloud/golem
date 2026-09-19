@@ -4517,6 +4517,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bigdecimal",
+ "blake3",
  "bytes",
  "chrono",
  "cookie",

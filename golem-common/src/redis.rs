@@ -381,6 +381,7 @@ impl RedisLabelledApi<'_> {
         key: K,
         field: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> RedisResult<bool>
     where
@@ -392,7 +393,11 @@ local expected_present = ARGV[2] == '1'
 if (current == false and expected_present) or (current ~= false and (not expected_present or current ~= ARGV[3])) then
   return 0
 end
-for i = 4, #ARGV, 2 do
+local delete_count = tonumber(ARGV[4])
+for i = 5, 4 + delete_count do
+  redis.call('HDEL', KEYS[1], ARGV[i])
+end
+for i = 5 + delete_count, #ARGV, 2 do
   redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
 end
 return 1
@@ -406,7 +411,11 @@ return 1
             field.into(),
             (if expected.is_some() { "1" } else { "0" }).into(),
             expected.unwrap_or_default().into(),
+            (deletes.len() as i64).into(),
         ];
+        for field in deletes {
+            args.push((*field).into());
+        }
         for (field, value) in pairs {
             args.push((*field).into());
             args.push((*value).into());

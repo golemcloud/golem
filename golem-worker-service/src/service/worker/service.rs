@@ -1912,6 +1912,25 @@ impl WorkerService {
         self.worker_client.read_stream_slot(agent_id, request).await
     }
 
+    pub async fn fork_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::ForkStreamSlotRequest,
+    ) -> WorkerResult<
+        golem_api_grpc::proto::golem::workerexecutor::v1::fork_stream_slot_response::Result,
+    > {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("create authorized Durable Streams fork")
+            .map_err(AuthServiceError::Unauthorized)?;
+        self.worker_client.fork_stream_slot(agent_id, request).await
+    }
+
     pub async fn append_to_stream_slot(
         &self,
         agent_id: &AgentId,
@@ -2139,6 +2158,7 @@ impl WorkerService {
             expected_callee_fingerprint,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
             external_tool: None,
         };
         let initial_request = InvocationRequest {
@@ -2429,6 +2449,7 @@ impl WorkerService {
             expected_callee_fingerprint,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
             external_tool: Some(ExternalToolInvocation {
                 tool_name: start.tool_name,
                 command_path: start.command_path,
@@ -3003,6 +3024,7 @@ impl WorkerService {
             expected_callee_fingerprint,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
             external_tool: Some(ExternalToolInvocation {
                 tool_name: request.tool_name,
                 command_path: request.command_path,
@@ -6198,6 +6220,7 @@ mod tests {
             durable_input_mappings: Vec::new(),
             scope_card: None,
             external_tool: None,
+            origin_invocation: None,
         };
 
         let _responses = harness

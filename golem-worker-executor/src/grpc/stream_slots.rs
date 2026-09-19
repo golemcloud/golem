@@ -91,6 +91,7 @@ impl From<worker::ReadStreamSlotResult> for proto::ReadStreamSlotSuccess {
             slots: value.slots,
             tombstoned: value.tombstoned,
             writable: value.writable,
+            fork: value.fork,
         }
     }
 }
@@ -184,6 +185,13 @@ mod tests {
         let head = StreamOffset::new(OplogIndex::from_u64(31), 0);
         let schema = golem_common::schema::SchemaGraph::empty();
         let expected_schema = schema.clone().into();
+        let fork = proto::ForkStreamSlotSuccess {
+            replayed: true,
+            source_path: "/streams/source/input".into(),
+            fork_offset: first.0.to_vec(),
+            sub_offset: 2,
+            oplog_index: 23,
+        };
         let result = proto::ReadStreamSlotSuccess::from(worker::ReadStreamSlotResult {
             items: vec![
                 worker::StreamSlotItem {
@@ -206,6 +214,7 @@ mod tests {
             slots: vec!["a".into(), "b".into()],
             tombstoned: false,
             writable: true,
+            fork: Some(fork.clone()),
         });
         assert_eq!(
             result.items,
@@ -231,6 +240,7 @@ mod tests {
         assert_eq!(result.content_type, "application/octet-stream");
         assert_eq!(result.stream_identity, "identity");
         assert_eq!(result.slots, vec!["a", "b"]);
+        assert_eq!(result.fork, Some(fork));
     }
 
     #[test]

@@ -158,6 +158,7 @@ async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<Durab
         producer_environment_id: metadata.environment_id,
         producer: metadata.agent_id,
         expected_producer_fingerprint: metadata.fingerprint,
+        producer_generation: OplogIndex::NONE,
         source_invocation: source_invocation.clone(),
         component_revision: metadata.last_known_status.component_revision,
         element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
@@ -169,15 +170,20 @@ async fn register_stream(worker: &Worker<TestWorkerCtx>) -> anyhow::Result<Durab
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamRegisteredRecord {
                     format_version: 1,
-                    coordinate: StreamRegistrationCoordinate::Root {
-                        invocation_id: source_invocation,
+                    coordinate: StreamRegistrationRecordCoordinate::Root {
+                        invocation: StreamRegistrationInvocation::Local(
+                            source_invocation.idempotency_key,
+                        ),
                         root_kind: StreamRootKind::MethodResult,
                         recursive_value_path: vec![],
                     },
-                    registration_oplog_index: index,
-                    handle: handle.clone(),
+                    source_invocation: StreamRegistrationInvocation::Local(
+                        handle.source_invocation.idempotency_key.clone(),
+                    ),
+                    component_revision: handle.component_revision,
+                    element_schema_fingerprint: handle.element_schema_fingerprint,
                     source_kind: StreamSourceKind::InvocationOutput,
-                    session_mapping: None,
+                    session_role: None,
                 })),
             })
             .await,
@@ -618,6 +624,7 @@ async fn prepare_session(
     for record in [
         StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
+            session_key: idempotency_key.clone(),
             attempt: StartAttemptDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),
@@ -643,7 +650,7 @@ async fn prepare_session(
         }),
         StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: session_key.clone(),
+            session_key: idempotency_key.clone(),
             attachment_id,
             attempt_id,
             epoch: 1,
@@ -774,7 +781,7 @@ async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
             let b_records = session_records(&b).await?;
             let a_activated = a_records.iter().filter(|record| matches!(record, StreamSessionRecord::TopologyActivated(record) if record.attachment == a_attachment)).count();
             let b_activated = b_records.iter().filter(|record| matches!(record, StreamSessionRecord::TopologyActivated(record) if record.attachment == b_attachment)).count();
-            let finished = a_records.iter().filter(|record| matches!(record, StreamSessionRecord::Finished(record) if record.session_key == completed_session)).count();
+            let finished = a_records.iter().filter(|record| matches!(record, StreamSessionRecord::Finished(record) if record.session_key == StreamRegistrationInvocation::Local(completed_session.idempotency_key.clone()))).count();
             if a_activated != 0 && b_activated != 0 && finished != 0 {
                 assert_eq!(a_activated, 1);
                 assert_eq!(b_activated, 1);
