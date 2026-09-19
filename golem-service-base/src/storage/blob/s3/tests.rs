@@ -142,7 +142,8 @@ impl Answer {
         }
     }
 
-    /// Gives the HTTP response, or the error of the transport.
+    /// Gives the HTTP response. When the script gave an error of the transport in place of a
+    /// response, gives that error and no response.
     fn into_response(mut self) -> Result<HttpResponse, ConnectorError> {
         match self.transport_error.take() {
             Some(error) => Err(error),
