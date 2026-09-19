@@ -502,7 +502,7 @@ fn public_entity_invocation(
         EntityCallMode::Asynchronous => PublicEntityCallMode::Asynchronous,
         EntityCallMode::FireAndForget => PublicEntityCallMode::FireAndForget,
     };
-    let operation = request.operation.map(|operation| match operation {
+    let operation = Some(match request.operation {
         EntityInvocationDescriptor::Tool(tool) => {
             PublicEntityInvocationOperation::Tool(PublicToolInvocationOperation {
                 command_path: tool.command_path,

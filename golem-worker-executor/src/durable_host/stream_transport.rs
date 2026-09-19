@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durability::ClassifiedHostError;
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{
     LiveStreamEventPayload, LiveStreamPublishError, LiveStreamPublisher, LiveStreamReceiveError,
@@ -44,7 +45,7 @@ impl SourceLifecycle {
         }
     }
 
-    fn abort(&self) {
+    pub(crate) fn abort(&self) {
         self.cancelled.cancel();
         self.finish();
     }
@@ -160,14 +161,13 @@ impl<D> StreamConsumer<D> for LiveByteOutputConsumer {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn test_output_stream_pair(
+pub(crate) fn relay_stream_pair(
     capacity: usize,
 ) -> Result<(LiveStreamPublisher<SchemaValue>, LiveStreamEndpoint), String> {
     let cancellation = CancellationToken::new();
     let lifecycle = Arc::new(SourceLifecycle::new(cancellation.clone()));
     let (publisher, primary) = live_output_stream_bus(capacity, cancellation)
-        .map_err(|error| format!("failed to create test output stream bus: {error:?}"))?;
+        .map_err(|error| format!("failed to create relay stream bus: {error:?}"))?;
     Ok((
         publisher,
         LiveStreamEndpoint {
@@ -175,6 +175,13 @@ pub(crate) fn test_output_stream_pair(
             lifecycle,
         },
     ))
+}
+
+#[cfg(test)]
+pub(crate) fn test_output_stream_pair(
+    capacity: usize,
+) -> Result<(LiveStreamPublisher<SchemaValue>, LiveStreamEndpoint), String> {
+    relay_stream_pair(capacity)
 }
 
 type PublicationFuture =
@@ -420,6 +427,13 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for LiveInputProducer {
                     self.finished = true;
                     self.lifecycle.finish();
                     Poll::Ready(Err(wasmtime::Error::msg(error)))
+                }
+                LiveStreamEventPayload::ClassifiedError { kind, message } => {
+                    self.finished = true;
+                    self.lifecycle.finish();
+                    Poll::Ready(Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                        ClassifiedHostError { kind, message },
+                    ))))
                 }
             },
             Some(Err(LiveStreamReceiveError::Closed)) => {

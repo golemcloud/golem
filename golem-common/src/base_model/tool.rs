@@ -24,7 +24,8 @@ use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 #[cfg(feature = "full")]
 use crate::model::entity::{
-    EntityActivation, EntityActivationPolicy, ExecutableTarget, FilesystemCapability,
+    EntityActivation, EntityActivationPolicy, EntityInvocationPlan, EntityInvocationPlanLayer,
+    ExecutableTarget, FilesystemCapability, ToolMiddlewareName,
 };
 use crate::model::tool_release::{ToolReleaseId, ToolReleaseReference};
 use crate::schema::tool::Tool;
@@ -459,6 +460,73 @@ impl ToolActivationSnapshot {
             .unwrap_or(&self.registered_tool.definition)
     }
 
+    /// Materializes the deployment-selected chain into the durable invocation plan.
+    pub fn runtime_plan(&self) -> Result<EntityInvocationPlan, String> {
+        let mut layers = Vec::new();
+        if let Some(chain) = &self.middleware_chain {
+            for occurrence in &chain.occurrences {
+                let crate::model::tool_middleware::ToolMiddlewareSource::Component {
+                    component_id,
+                    component_revision,
+                    ..
+                } = &occurrence.middleware.source;
+                let filesystem =
+                    filesystem_capability(occurrence.filesystem_access, &occurrence.provision)?;
+                let activation = EntityActivation::new(
+                    ExecutableTarget::new(*component_id, *component_revision),
+                    occurrence.middleware.deployment_revision,
+                    EntityActivationPolicy::ToolMiddleware {
+                        middleware_name: ToolMiddlewareName::try_from(
+                            occurrence.middleware.definition.name.as_str(),
+                        )?,
+                        provision: occurrence.provision.clone(),
+                        config_keys_readable: occurrence.config_keys_readable.clone(),
+                        secret_keys_readable: occurrence.secret_keys_readable.clone(),
+                        secret_keys_revealable: occurrence.secret_keys_revealable.clone(),
+                        filesystem_access: occurrence.filesystem_access,
+                    },
+                    filesystem,
+                )?;
+                layers.push(EntityInvocationPlanLayer::Middleware {
+                    activation,
+                    parameters: occurrence.parameters.clone(),
+                    expected_definition: occurrence.expected_definition.clone(),
+                    presented_definition: occurrence.presented_definition.clone(),
+                    next_effective_definition: occurrence.next_effective_definition.clone(),
+                    compatibility: occurrence.compatibility.clone(),
+                });
+            }
+        }
+        let policy = EntityActivationPolicy::Tool {
+            provision: self.registered_tool.provision.clone(),
+            binding: Box::new(self.binding.clone()),
+        };
+        let leaf = match &self.registered_tool.source {
+            ToolSource::Component {
+                component_id,
+                component_revision,
+                ..
+            } => EntityActivation::new(
+                ExecutableTarget::new(*component_id, *component_revision),
+                self.registered_tool.deployment_revision,
+                policy,
+                self.filesystem,
+            ),
+            ToolSource::Host {
+                host_tool_id,
+                implementation_version,
+            } => EntityActivation::new_host(
+                host_tool_id.clone(),
+                implementation_version.clone(),
+                self.registered_tool.deployment_revision,
+                policy,
+                self.filesystem,
+            ),
+        }?;
+        layers.push(EntityInvocationPlanLayer::Tool { activation: leaf });
+        EntityInvocationPlan::new(layers)
+    }
+
     pub fn into_dispatch_target(self) -> Result<ToolDispatchTarget, String> {
         match self.registered_tool.source {
             ToolSource::Component {
@@ -486,6 +554,24 @@ impl ToolActivationSnapshot {
                 binding: Box::new(self.binding),
                 filesystem: self.filesystem,
             }),
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+fn filesystem_capability(
+    access: ToolFilesystemAccess,
+    provision: &ToolProvisionConfig,
+) -> Result<FilesystemCapability, String> {
+    match (access, provision.files.is_empty()) {
+        (ToolFilesystemAccess::Allowed, _) | (ToolFilesystemAccess::Unset, false) => {
+            Ok(FilesystemCapability::Capable)
+        }
+        (ToolFilesystemAccess::Denied, false) => {
+            Err("filesystem-denied middleware cannot provision files".to_string())
+        }
+        (ToolFilesystemAccess::Denied | ToolFilesystemAccess::Unset, true) => {
+            Ok(FilesystemCapability::Incapable)
         }
     }
 }

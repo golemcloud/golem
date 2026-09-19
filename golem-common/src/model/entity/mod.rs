@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::base_model::agent::Principal;
-use crate::model::OwnedAgentId;
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::oplog::OplogIndex;
@@ -21,12 +20,18 @@ use crate::model::tool::{
     CompiledToolBinding, HostToolId, SecretKeyScope, ToolFilesystemAccess, ToolName,
     ToolProvisionConfig,
 };
+use crate::model::{IdempotencyKey, OwnedAgentId};
 use crate::schema::TypedSchemaValue;
+use crate::schema::tool::Tool;
+use crate::schema::tool::compatibility::CompiledToolCompatibility;
 use desert_rust::BinaryCodec;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+
+#[cfg(test)]
+mod tests;
 
 #[derive(
     Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, BinaryCodec,
@@ -253,6 +258,7 @@ pub enum EntityActivationPolicy {
     ToolMiddleware {
         middleware_name: ToolMiddlewareName,
         provision: ToolProvisionConfig,
+        config_keys_readable: crate::model::tool::ConfigKeyScope,
         secret_keys_readable: SecretKeyScope,
         secret_keys_revealable: SecretKeyScope,
         filesystem_access: ToolFilesystemAccess,
@@ -288,11 +294,10 @@ impl EntityActivationPolicy {
     pub fn config_keys_readable(&self) -> &crate::model::tool::ConfigKeyScope {
         match self {
             Self::Tool { binding, .. } => &binding.config_keys_readable,
-            Self::ToolMiddleware { .. } => {
-                static ALL: crate::model::tool::ConfigKeyScope =
-                    crate::model::tool::ConfigKeyScope::All;
-                &ALL
-            }
+            Self::ToolMiddleware {
+                config_keys_readable,
+                ..
+            } => config_keys_readable,
         }
     }
 
@@ -644,11 +649,117 @@ pub enum EntityInvocationDescriptor {
     Tool(ToolInvocationDescriptor),
 }
 
+/// Immutable, outermost-to-innermost entity activations selected for one tool call. The complete
+/// plan is stored only on the root entity `Start`; child invocations identify a layer in that
+/// record with [`EntityInvocationPlanReference::Descendant`].
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct EntityInvocationPlan {
+    layers: Vec<EntityInvocationPlanLayer>,
+}
+
+impl EntityInvocationPlan {
+    pub fn new(layers: Vec<EntityInvocationPlanLayer>) -> Result<Self, String> {
+        Self::validate_layers(&layers)?;
+        Ok(Self { layers })
+    }
+
+    fn validate_layers(layers: &[EntityInvocationPlanLayer]) -> Result<(), String> {
+        if layers.is_empty() {
+            return Err("Entity invocation plan cannot be empty".to_string());
+        }
+        if !matches!(layers.last(), Some(EntityInvocationPlanLayer::Tool { .. })) {
+            return Err("Entity invocation plan must end in a tool activation".to_string());
+        }
+        if layers[..layers.len() - 1]
+            .iter()
+            .any(|layer| !matches!(layer, EntityInvocationPlanLayer::Middleware { .. }))
+        {
+            return Err("Only middleware activations may precede the tool leaf".to_string());
+        }
+        for layer in layers {
+            let valid = matches!(
+                (layer, layer.activation().policy()),
+                (
+                    EntityInvocationPlanLayer::Middleware { .. },
+                    EntityActivationPolicy::ToolMiddleware { .. }
+                ) | (
+                    EntityInvocationPlanLayer::Tool { .. },
+                    EntityActivationPolicy::Tool { .. }
+                )
+            );
+            if !valid {
+                return Err(
+                    "Entity invocation plan layer does not match its activation policy".to_string(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        Self::validate_layers(&self.layers)
+    }
+
+    pub fn layer(&self, position: u32) -> Result<&EntityInvocationPlanLayer, String> {
+        self.layers
+            .get(position as usize)
+            .ok_or_else(|| format!("Entity invocation plan position {position} is out of bounds"))
+    }
+
+    pub fn len(&self) -> usize {
+        self.layers.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.layers.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "A plan contains middleware layers followed by exactly one tool; boxing would add indirection to every middleware to save space for only the terminal tool"
+)]
+pub enum EntityInvocationPlanLayer {
+    Middleware {
+        activation: EntityActivation,
+        parameters: TypedSchemaValue,
+        expected_definition: Option<Tool>,
+        presented_definition: Option<Tool>,
+        next_effective_definition: Tool,
+        compatibility: Option<CompiledToolCompatibility>,
+    },
+    Tool {
+        activation: EntityActivation,
+    },
+}
+
+impl EntityInvocationPlanLayer {
+    pub fn activation(&self) -> &EntityActivation {
+        match self {
+            Self::Middleware { activation, .. } | Self::Tool { activation } => activation,
+        }
+    }
+}
+
+/// Durable location of an entity invocation in a pinned chain plan.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+pub enum EntityInvocationPlanReference {
+    Root {
+        plan: EntityInvocationPlan,
+    },
+    Descendant {
+        root_start_index: OplogIndex,
+        position: u32,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
 pub struct ToolInvocationDescriptor {
     pub attempt_ordinal: u64,
     pub command_path: Vec<String>,
-    pub args: Vec<String>,
+    pub args: Vec<crate::model::card::ToolArgPattern>,
     pub has_stdin: bool,
     pub has_stdout: bool,
     pub declares_stdout: bool,
@@ -675,8 +786,15 @@ pub struct EntityInvocationRequestIdentity {
     pub entity: AgentEntity,
     pub calling_principal: CallingAgentPrincipal,
     pub call_mode: EntityCallMode,
-    pub operation: Option<EntityInvocationDescriptorIdentity>,
+    pub operation: EntityInvocationDescriptorIdentity,
+    pub plan_position: Option<EntityInvocationPlanPositionIdentity>,
     pub input: TypedSchemaValue,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EntityInvocationPlanPositionIdentity {
+    pub root_start_index: OplogIndex,
+    pub position: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -732,7 +850,18 @@ impl EntityInvocationRequestIdentity {
         self.entity == request.entity
             && self.calling_principal == request.calling_principal
             && self.call_mode == request.call_mode
-            && self.operation == request.operation.as_ref().map(Into::into)
+            && self.operation == (&request.operation).into()
+            && self.plan_position
+                == match &request.plan {
+                    EntityInvocationPlanReference::Root { .. } => None,
+                    EntityInvocationPlanReference::Descendant {
+                        root_start_index,
+                        position,
+                    } => Some(EntityInvocationPlanPositionIdentity {
+                        root_start_index: *root_start_index,
+                        position: *position,
+                    }),
+                }
             && &self.input == input
     }
 }
@@ -758,18 +887,16 @@ impl From<&ToolInvocationDescriptor> for ToolInvocationDescriptorIdentity {
 
 /// Binary owner-oplog request metadata for one entity invocation. The host payload wraps this as
 /// opaque bytes because it is an executor control record rather than a guest-facing schema value.
-#[derive(Clone, Debug, Eq, PartialEq, BinaryCodec)]
-#[desert(evolution(
-    FieldAdded("operation", None::<EntityInvocationDescriptor>),
-    FieldAdded("principal", None::<Principal>)
-))]
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
 pub struct EntityInvocationRequest {
     pub entity: AgentEntity,
-    pub activation: EntityActivation,
     pub calling_principal: CallingAgentPrincipal,
     pub call_mode: EntityCallMode,
-    pub operation: Option<EntityInvocationDescriptor>,
-    pub principal: Option<Principal>,
+    pub operation: EntityInvocationDescriptor,
+    pub principal: Principal,
+    pub plan: EntityInvocationPlanReference,
+    pub assume_idempotence: bool,
 }
 
 pub type CallingAgentPrincipal = Principal;
@@ -782,6 +909,10 @@ pub struct EntityInvocationScope {
     activation: Arc<EntityActivation>,
     calling_principal: CallingAgentPrincipal,
     mode: InvocationExecutionMode,
+    idempotency_key: IdempotencyKey,
+    assume_idempotence: bool,
+    logical_key_positions: bool,
+    stream_session_idempotency_key: IdempotencyKey,
 }
 
 impl EntityInvocationScope {
@@ -791,6 +922,10 @@ impl EntityInvocationScope {
         activation: Arc<EntityActivation>,
         calling_principal: CallingAgentPrincipal,
         mode: InvocationExecutionMode,
+        idempotency_key: IdempotencyKey,
+        assume_idempotence: bool,
+        logical_key_positions: bool,
+        stream_session_idempotency_key: IdempotencyKey,
     ) -> Result<Self, String> {
         if parent_start_index == OplogIndex::NONE {
             return Err("Entity invocation parent Start index cannot be zero".to_string());
@@ -820,6 +955,10 @@ impl EntityInvocationScope {
             activation,
             calling_principal,
             mode,
+            idempotency_key,
+            assume_idempotence,
+            logical_key_positions,
+            stream_session_idempotency_key,
         })
     }
 
@@ -846,6 +985,22 @@ impl EntityInvocationScope {
     pub fn mode(&self) -> InvocationExecutionMode {
         self.mode
     }
+
+    pub fn idempotency_key(&self) -> &IdempotencyKey {
+        &self.idempotency_key
+    }
+
+    pub fn assume_idempotence(&self) -> bool {
+        self.assume_idempotence
+    }
+
+    pub fn logical_key_positions(&self) -> bool {
+        self.logical_key_positions
+    }
+
+    pub fn stream_session_idempotency_key(&self) -> &IdempotencyKey {
+        &self.stream_session_idempotency_key
+    }
 }
 
 #[derive(Deserialize)]
@@ -856,6 +1011,10 @@ struct EntityInvocationScopeWire {
     activation: Arc<EntityActivation>,
     calling_principal: CallingAgentPrincipal,
     mode: InvocationExecutionMode,
+    idempotency_key: IdempotencyKey,
+    assume_idempotence: bool,
+    logical_key_positions: bool,
+    stream_session_idempotency_key: IdempotencyKey,
 }
 
 impl<'de> Deserialize<'de> for EntityInvocationScope {
@@ -870,6 +1029,10 @@ impl<'de> Deserialize<'de> for EntityInvocationScope {
             wire.activation,
             wire.calling_principal,
             wire.mode,
+            wire.idempotency_key,
+            wire.assume_idempotence,
+            wire.logical_key_positions,
+            wire.stream_session_idempotency_key,
         )
         .map_err(D::Error::custom)
     }
@@ -1055,6 +1218,7 @@ impl From<EntityActivationPolicy> for golem_api_grpc::proto::golem::worker::Enti
             EntityActivationPolicy::ToolMiddleware {
                 middleware_name,
                 provision,
+                config_keys_readable,
                 secret_keys_readable,
                 secret_keys_revealable,
                 filesystem_access,
@@ -1062,6 +1226,7 @@ impl From<EntityActivationPolicy> for golem_api_grpc::proto::golem::worker::Enti
                 golem_api_grpc::proto::golem::worker::ToolMiddlewareEntityActivationPolicy {
                     middleware_name: middleware_name.into_inner(),
                     provision: Some(provision.into()),
+                    config_keys_readable: Some(config_keys_readable.into()),
                     secret_keys_readable: Some(secret_keys_readable.into()),
                     secret_keys_revealable: Some(secret_keys_revealable.into()),
                     filesystem_access:
@@ -1102,6 +1267,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityActivationPolicy>
                 provision: middleware
                     .provision
                     .ok_or("Missing ToolMiddlewareEntityActivationPolicy.provision")?
+                    .try_into()?,
+                config_keys_readable: middleware
+                    .config_keys_readable
+                    .ok_or("Missing ToolMiddlewareEntityActivationPolicy.config_keys_readable")?
                     .try_into()?,
                 secret_keys_readable: middleware
                     .secret_keys_readable
@@ -1258,6 +1427,10 @@ impl From<EntityInvocationScope> for golem_api_grpc::proto::golem::worker::Entit
             calling_principal: Some(value.calling_principal.into()),
             mode: golem_api_grpc::proto::golem::worker::InvocationExecutionMode::from(value.mode)
                 as i32,
+            idempotency_key: Some(value.idempotency_key.into()),
+            assume_idempotence: value.assume_idempotence,
+            logical_key_positions: value.logical_key_positions,
+            stream_session_idempotency_key: Some(value.stream_session_idempotency_key.into()),
         }
     }
 }
@@ -1291,622 +1464,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityInvocationScope>
                 .ok_or("Missing EntityInvocationScope.calling_principal")?
                 .try_into()?,
             mode,
+            value
+                .idempotency_key
+                .ok_or("Missing EntityInvocationScope.idempotency_key")?
+                .into(),
+            value.assume_idempotence,
+            value.logical_key_positions,
+            value
+                .stream_session_idempotency_key
+                .ok_or("Missing EntityInvocationScope.stream_session_idempotency_key")?
+                .into(),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::AgentId;
-    use crate::model::account::{AccountEmail, AccountId};
-    use crate::model::agent::{AgentPrincipal, AgentTypeName, GolemUserPrincipal};
-    use crate::model::component::ComponentName;
-    use crate::model::environment::EnvironmentId;
-    use crate::model::json::NormalizedJsonValue;
-    use crate::model::tool::{SecretKeyScope, ToolSource};
-    use test_r::test;
-
-    fn owner() -> OwnedAgentId {
-        OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: "Example(\"owner\")".to_string(),
-            },
-        )
-    }
-
-    fn activation() -> EntityActivation {
-        let component_id = ComponentId::new();
-        let component_revision = ComponentRevision::try_from(7_u64).unwrap();
-        let deployment_revision = DeploymentRevision::try_from(11_u64).unwrap();
-        let source = ToolSource::Component {
-            component_id,
-            component_revision,
-            component_name: ComponentName("tools:search".to_string()),
-        };
-        let binding = CompiledToolBinding {
-            deployment_revision,
-            release_id: None,
-            owner: crate::model::tool::ToolBindingOwner::AgentType {
-                agent_type_name: AgentTypeName("Example".to_string()),
-            },
-            tool_name: ToolName::try_from("search").unwrap(),
-            version: "1.0.0".to_string(),
-            metadata_version: "0.1.0".to_string(),
-            metadata_digest: Default::default(),
-            account_id: AccountId::new(),
-            account_email: AccountEmail::new("owner@example.com"),
-            parameters: NormalizedJsonValue::new(serde_json::json!({})),
-            config_keys_readable: crate::model::tool::ConfigKeyScope::All,
-            secret_keys_readable: SecretKeyScope::All,
-            secret_keys_revealable: SecretKeyScope::All,
-            filesystem_access: crate::model::tool::ToolFilesystemAccess::Unset,
-            source,
-        };
-
-        EntityActivation::new(
-            ExecutableTarget::new(component_id, component_revision),
-            deployment_revision,
-            EntityActivationPolicy::Tool {
-                provision: ToolProvisionConfig::default(),
-                binding: Box::new(binding),
-            },
-            FilesystemCapability::Incapable,
-        )
-        .unwrap()
-    }
-
-    fn middleware_activation() -> EntityActivation {
-        EntityActivation::new(
-            ExecutableTarget::new(
-                ComponentId::new(),
-                ComponentRevision::try_from(9_u64).unwrap(),
-            ),
-            DeploymentRevision::try_from(12_u64).unwrap(),
-            EntityActivationPolicy::ToolMiddleware {
-                middleware_name: ToolMiddlewareName::try_from("audit").unwrap(),
-                provision: ToolProvisionConfig::default(),
-                secret_keys_readable: SecretKeyScope::All,
-                secret_keys_revealable: SecretKeyScope::All,
-                filesystem_access: ToolFilesystemAccess::Unset,
-            },
-            FilesystemCapability::Incapable,
-        )
-        .unwrap()
-    }
-
-    fn host_activation() -> EntityActivation {
-        let component_activation = activation();
-        let deployment_revision = component_activation.deployment_revision;
-        let mut policy = component_activation.policy;
-        let host_tool_id = HostToolId::try_from("native-search".to_string()).unwrap();
-        let implementation_version = "1.2.3".to_string();
-        let EntityActivationPolicy::Tool { binding, .. } = &mut policy else {
-            unreachable!()
-        };
-        binding.source = ToolSource::Host {
-            host_tool_id: host_tool_id.clone(),
-            implementation_version: implementation_version.clone(),
-        };
-
-        EntityActivation::new_host(
-            host_tool_id,
-            implementation_version,
-            deployment_revision,
-            policy,
-            FilesystemCapability::Incapable,
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn equal_tool_and_middleware_names_are_distinct_selectors() {
-        let tool = AgentEntity::Tool(ToolName::try_from("search").unwrap());
-        let middleware =
-            AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("search").unwrap());
-
-        assert_ne!(tool, middleware);
-    }
-
-    #[test]
-    fn entity_ids_project_to_the_unchanged_owner() {
-        let owner = owner();
-        let entity_id = OwnedAgentEntityId {
-            owner: owner.clone(),
-            entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-        };
-        let invocation_id =
-            EntityInvocationId::new(entity_id.clone(), OplogIndex::from_u64(42)).unwrap();
-
-        assert_eq!(entity_id.owner_id(), &owner);
-        assert_eq!(invocation_id.owner_id(), &owner);
-        assert_eq!(invocation_id.start_index(), OplogIndex::from_u64(42));
-    }
-
-    #[test]
-    fn entity_invocation_id_json_roundtrip_is_structured() {
-        let invocation_id = EntityInvocationId::new(
-            OwnedAgentEntityId {
-                owner: owner(),
-                entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-            },
-            OplogIndex::from_u64(42),
-        )
-        .unwrap();
-
-        let json = serde_json::to_value(&invocation_id).unwrap();
-        let decoded: EntityInvocationId = serde_json::from_value(json.clone()).unwrap();
-
-        assert_eq!(decoded, invocation_id);
-        assert_eq!(json["entityId"]["entity"]["kind"], "tool");
-        assert_eq!(json["entityId"]["entity"]["name"], "search");
-        assert_eq!(json["startIndex"], 42);
-    }
-
-    #[test]
-    fn entity_invocation_id_protobuf_roundtrip_is_structured() {
-        let invocation_id = EntityInvocationId::new(
-            OwnedAgentEntityId {
-                owner: owner(),
-                entity: AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
-            },
-            OplogIndex::from_u64(84),
-        )
-        .unwrap();
-
-        let protobuf: golem_api_grpc::proto::golem::worker::EntityInvocationId =
-            invocation_id.clone().into();
-        let decoded: EntityInvocationId = protobuf.try_into().unwrap();
-
-        assert_eq!(decoded, invocation_id);
-    }
-
-    #[test]
-    fn entity_invocation_request_binary_roundtrip_preserves_activation() {
-        let owner = owner();
-        let request = EntityInvocationRequest {
-            entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-            activation: activation(),
-            calling_principal: Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id,
-            }),
-            call_mode: EntityCallMode::Asynchronous,
-            operation: Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
-                attempt_ordinal: 7,
-                command_path: vec!["files".to_string(), "search".to_string()],
-                args: vec!["--ignore-case".to_string(), "needle".to_string()],
-                has_stdin: true,
-                has_stdout: true,
-                declares_stdout: true,
-                output_contract: ToolOutputContract {
-                    result: None,
-                    errors: Vec::new(),
-                },
-            })),
-            principal: Some(Principal::GolemUser(GolemUserPrincipal {
-                account_id: AccountId::new(),
-            })),
-        };
-
-        let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
-        let decoded: EntityInvocationRequest = desert_rust::deserialize(&bytes).unwrap();
-
-        assert_eq!(decoded, request);
-    }
-
-    #[test]
-    fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
-        let owner = owner();
-        let input = TypedSchemaValue::new(
-            crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::tuple(Vec::new())),
-            crate::schema::SchemaValue::Tuple {
-                elements: Vec::new(),
-            },
-        );
-        let request = EntityInvocationRequest {
-            entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-            activation: activation(),
-            calling_principal: Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id,
-            }),
-            call_mode: EntityCallMode::Asynchronous,
-            operation: Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
-                attempt_ordinal: 7,
-                command_path: vec!["files".to_string(), "search".to_string()],
-                args: vec!["--recorded-rendering".to_string()],
-                has_stdin: true,
-                has_stdout: false,
-                declares_stdout: false,
-                output_contract: ToolOutputContract {
-                    result: None,
-                    errors: Vec::new(),
-                },
-            })),
-            principal: None,
-        };
-        let identity = EntityInvocationRequestIdentity {
-            entity: request.entity.clone(),
-            calling_principal: request.calling_principal.clone(),
-            call_mode: request.call_mode,
-            operation: request.operation.as_ref().map(Into::into),
-            input: input.clone(),
-        };
-        let mut differently_pinned = request.clone();
-        differently_pinned.activation = activation();
-        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
-            differently_pinned.operation.as_mut()
-        {
-            descriptor.args = vec!["--new-rendering".to_string()];
-            descriptor.declares_stdout = true;
-        }
-
-        assert!(identity.matches(&differently_pinned, &input));
-
-        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
-            differently_pinned.operation.as_mut()
-        {
-            descriptor.attempt_ordinal = 8;
-        }
-        assert!(!identity.matches(&differently_pinned, &input));
-        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
-            differently_pinned.operation.as_mut()
-        {
-            descriptor.attempt_ordinal = 7;
-        }
-
-        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
-            differently_pinned.operation.as_mut()
-        {
-            descriptor.command_path.push("other".to_string());
-        }
-        assert!(!identity.matches(&differently_pinned, &input));
-        if let Some(EntityInvocationDescriptor::Tool(descriptor)) =
-            differently_pinned.operation.as_mut()
-        {
-            descriptor.command_path.pop();
-            descriptor.has_stdout = true;
-        }
-        assert!(!identity.matches(&differently_pinned, &input));
-
-        let different_input = TypedSchemaValue::new(
-            crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::tuple(vec![
-                crate::schema::SchemaType::bool(),
-            ])),
-            crate::schema::SchemaValue::Tuple {
-                elements: vec![crate::schema::SchemaValue::Bool(true)],
-            },
-        );
-        assert!(!identity.matches(&request, &different_input));
-    }
-
-    #[test]
-    fn legacy_entity_invocation_request_decodes_without_operation_descriptor() {
-        #[derive(BinaryCodec)]
-        #[desert(evolution())]
-        struct LegacyEntityInvocationRequest {
-            entity: AgentEntity,
-            activation: EntityActivation,
-            calling_principal: CallingAgentPrincipal,
-            call_mode: EntityCallMode,
-        }
-
-        let owner = owner();
-        let legacy = LegacyEntityInvocationRequest {
-            entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-            activation: activation(),
-            calling_principal: Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id,
-            }),
-            call_mode: EntityCallMode::Synchronous,
-        };
-        let bytes = desert_rust::serialize_to_byte_vec(&legacy).unwrap();
-        let decoded: EntityInvocationRequest = desert_rust::deserialize(&bytes).unwrap();
-
-        assert_eq!(decoded.entity, legacy.entity);
-        assert_eq!(decoded.activation, legacy.activation);
-        assert_eq!(decoded.calling_principal, legacy.calling_principal);
-        assert_eq!(decoded.call_mode, legacy.call_mode);
-        assert_eq!(decoded.operation, None);
-        assert_eq!(decoded.principal, None);
-    }
-
-    #[test]
-    fn invocation_scope_protobuf_roundtrip_preserves_activation_fingerprint() {
-        let owner = owner();
-        let scope = EntityInvocationScope::new(
-            EntityInvocationId::new(
-                OwnedAgentEntityId {
-                    owner: owner.clone(),
-                    entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-                },
-                OplogIndex::from_u64(84),
-            )
-            .unwrap(),
-            OplogIndex::from_u64(81),
-            Arc::new(activation()),
-            Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id,
-            }),
-            InvocationExecutionMode::ReplayingCompleted,
-        )
-        .unwrap();
-
-        let protobuf: golem_api_grpc::proto::golem::worker::EntityInvocationScope =
-            scope.clone().into();
-        let decoded: EntityInvocationScope = protobuf.try_into().unwrap();
-
-        assert_eq!(decoded, scope);
-    }
-
-    #[test]
-    fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
-        let owner = owner();
-        let activation = Arc::new(middleware_activation());
-        let scope = EntityInvocationScope::new(
-            EntityInvocationId::new(
-                OwnedAgentEntityId {
-                    owner: owner.clone(),
-                    entity: AgentEntity::ToolMiddleware(
-                        ToolMiddlewareName::try_from("audit").unwrap(),
-                    ),
-                },
-                OplogIndex::from_u64(91),
-            )
-            .unwrap(),
-            OplogIndex::from_u64(84),
-            activation.clone(),
-            Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id.clone(),
-            }),
-            InvocationExecutionMode::ReplayingIncomplete,
-        )
-        .unwrap();
-        let request = EntityInvocationRequest {
-            entity: scope.invocation_id().entity().clone(),
-            activation: activation.as_ref().clone(),
-            calling_principal: scope.calling_principal().clone(),
-            call_mode: EntityCallMode::Synchronous,
-            operation: None,
-            principal: None,
-        };
-
-        let request_bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
-        assert_eq!(
-            desert_rust::deserialize::<EntityInvocationRequest>(&request_bytes).unwrap(),
-            request
-        );
-        let protobuf: golem_api_grpc::proto::golem::worker::EntityInvocationScope =
-            scope.clone().into();
-        assert_eq!(EntityInvocationScope::try_from(protobuf).unwrap(), scope);
-    }
-
-    #[test]
-    fn activation_protobuf_rejects_content_that_does_not_match_fingerprint() {
-        let activation = activation();
-        let mut protobuf: golem_api_grpc::proto::golem::worker::EntityActivation =
-            activation.into();
-        protobuf.fingerprint.as_mut().unwrap().value[0] ^= 1;
-
-        let result = EntityActivation::try_from(protobuf);
-
-        assert_eq!(
-            result.unwrap_err(),
-            "EntityActivation fingerprint does not match its contents"
-        );
-    }
-
-    #[test]
-    fn host_activation_roundtrips_through_binary_json_and_protobuf() {
-        let activation = host_activation();
-        assert!(activation.executable_opt().is_none());
-
-        let bytes = desert_rust::serialize_to_byte_vec(&activation).unwrap();
-        assert_eq!(
-            desert_rust::deserialize::<EntityActivation>(&bytes).unwrap(),
-            activation
-        );
-
-        let json = serde_json::to_string(&activation).unwrap();
-        assert_eq!(
-            serde_json::from_str::<EntityActivation>(&json).unwrap(),
-            activation
-        );
-
-        let protobuf: golem_api_grpc::proto::golem::worker::EntityActivation =
-            activation.clone().into();
-        assert!(matches!(
-            protobuf.source,
-            Some(golem_api_grpc::proto::golem::worker::entity_activation::Source::Host(_))
-        ));
-        assert_eq!(EntityActivation::try_from(protobuf).unwrap(), activation);
-    }
-
-    #[test]
-    fn host_activation_rejects_source_policy_identity_mismatches() {
-        let activation = host_activation();
-        let EntityActivationPolicy::Tool { provision, binding } = activation.policy else {
-            unreachable!()
-        };
-
-        for (host_tool_id, implementation_version) in [
-            (
-                HostToolId::try_from("other-host".to_string()).unwrap(),
-                "1.2.3".to_string(),
-            ),
-            (
-                HostToolId::try_from("native-search".to_string()).unwrap(),
-                "9.9.9".to_string(),
-            ),
-        ] {
-            let result = EntityActivation::new_host(
-                host_tool_id,
-                implementation_version,
-                activation.deployment_revision,
-                EntityActivationPolicy::Tool {
-                    provision: provision.clone(),
-                    binding: binding.clone(),
-                },
-                activation.filesystem,
-            );
-            assert_eq!(
-                result.unwrap_err(),
-                "Entity host source does not match the tool binding source"
-            );
-        }
-    }
-
-    #[test]
-    fn host_activation_rejects_invalid_source_contracts() {
-        let activation = host_activation();
-        let EntityActivationPolicy::Tool { provision, binding } = activation.policy else {
-            unreachable!()
-        };
-        let host_tool_id = HostToolId::try_from("native-search".to_string()).unwrap();
-
-        assert_eq!(
-            EntityActivation::new_host(
-                host_tool_id.clone(),
-                "  ".to_string(),
-                activation.deployment_revision,
-                EntityActivationPolicy::Tool { provision, binding },
-                activation.filesystem,
-            )
-            .unwrap_err(),
-            "Entity host source implementation version cannot be empty"
-        );
-
-        assert_eq!(
-            EntityActivation::new_host(
-                host_tool_id,
-                "1.2.3".to_string(),
-                DeploymentRevision::try_from(12_u64).unwrap(),
-                middleware_activation().policy,
-                FilesystemCapability::Incapable,
-            )
-            .unwrap_err(),
-            "Host entity activation is not supported for tool middleware"
-        );
-    }
-
-    #[test]
-    fn host_activation_protobuf_rejects_empty_host_tool_id() {
-        let mut protobuf: golem_api_grpc::proto::golem::worker::EntityActivation =
-            host_activation().into();
-        let Some(golem_api_grpc::proto::golem::worker::entity_activation::Source::Host(host)) =
-            protobuf.source.as_mut()
-        else {
-            unreachable!()
-        };
-        host.host_tool_id.clear();
-
-        assert!(EntityActivation::try_from(protobuf).is_err());
-    }
-
-    #[test]
-    fn activation_json_rejects_content_that_does_not_match_fingerprint() {
-        let mut json = serde_json::to_value(activation()).unwrap();
-        json["fingerprint"][0] = serde_json::json!(json["fingerprint"][0].as_u64().unwrap() ^ 1);
-
-        let result = serde_json::from_value::<EntityActivation>(json);
-
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("fingerprint does not match")
-        );
-    }
-
-    #[test]
-    fn malformed_tool_middleware_name_is_rejected_by_json() {
-        let result = serde_json::from_str::<AgentEntity>(
-            r#"{"kind":"toolMiddleware","name":"Not Kebab Case"}"#,
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn zero_entity_invocation_start_index_is_rejected_by_protobuf() {
-        let entity_id = OwnedAgentEntityId {
-            owner: owner(),
-            entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-        };
-        let protobuf = golem_api_grpc::proto::golem::worker::EntityInvocationId {
-            entity_id: Some(entity_id.into()),
-            start_index: 0,
-        };
-
-        let result = EntityInvocationId::try_from(protobuf);
-
-        assert_eq!(
-            result.unwrap_err(),
-            "Entity invocation Start index cannot be zero"
-        );
-    }
-
-    #[test]
-    fn invocation_scope_rejects_parent_that_does_not_precede_invocation_start() {
-        let owner = owner();
-        let activation = Arc::new(activation());
-        let entity_id = OwnedAgentEntityId {
-            owner: owner.clone(),
-            entity: AgentEntity::Tool(ToolName::try_from("search").unwrap()),
-        };
-        let principal = Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id,
-        });
-
-        for parent_start_index in [OplogIndex::from_u64(42), OplogIndex::from_u64(43)] {
-            let scope = EntityInvocationScope::new(
-                EntityInvocationId::new(entity_id.clone(), OplogIndex::from_u64(42)).unwrap(),
-                parent_start_index,
-                activation.clone(),
-                principal.clone(),
-                InvocationExecutionMode::Live,
-            );
-
-            assert!(
-                scope.is_err(),
-                "a durable parent Start must precede its nested entity invocation Start"
-            );
-        }
-    }
-
-    #[test]
-    fn missing_owner_component_id_is_rejected_by_protobuf() {
-        let protobuf = golem_api_grpc::proto::golem::worker::OwnedAgentEntityId {
-            environment_id: Some(EnvironmentId::new().into()),
-            owner_agent_id: Some(golem_api_grpc::proto::golem::worker::AgentId {
-                component_id: None,
-                name: "Example(\"owner\")".to_string(),
-            }),
-            entity: Some(AgentEntity::Tool(ToolName::try_from("search").unwrap()).into()),
-        };
-
-        let result = OwnedAgentEntityId::try_from(protobuf);
-
-        assert_eq!(result.unwrap_err(), "Missing AgentId.component_id");
-    }
-
-    #[test]
-    fn activation_rejects_executable_that_differs_from_binding_source() {
-        let activation = activation();
-        let result = EntityActivation::new(
-            ExecutableTarget::new(
-                ComponentId::new(),
-                activation.executable_opt().unwrap().component_revision,
-            ),
-            activation.deployment_revision,
-            activation.policy,
-            activation.filesystem,
-        );
-
-        assert_eq!(
-            result.unwrap_err(),
-            "Entity executable does not match the tool binding source"
-        );
     }
 }

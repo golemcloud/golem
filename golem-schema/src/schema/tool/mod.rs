@@ -51,13 +51,6 @@ pub mod validation;
 ))]
 pub mod wit;
 
-#[cfg(feature = "host")]
-#[derive(Clone, Debug)]
-pub struct UnderlyingToolHandleRep {
-    pub tool_name: String,
-    pub has_stdout: bool,
-}
-
 /// Index into [`CommandTree::nodes`].
 #[derive(
     Debug,
@@ -146,6 +139,7 @@ pub struct ToolMiddleware {
     pub aliases: Vec<String>,
     pub doc: Doc,
     pub scope: ToolMiddlewareScope,
+    pub parameter_schema: SchemaGraph,
 }
 
 #[derive(

@@ -32,18 +32,27 @@ use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::oplog::payload::types::{
     SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
 };
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{
+    OplogIndex, PublicAgentEntityKind, PublicOplogEntry, PublicOplogEntryAttribution,
+};
 use golem_common::model::tool::{
     CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingOwner,
     ToolDeploymentState, ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
+use golem_common::model::tool_middleware::{
+    CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
+    ToolMiddlewareName, ToolMiddlewareSource,
+};
+use golem_common::schema::tool::{ToolMiddleware, ToolMiddlewareScope};
 use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
     TypedSchemaValue, build_input_record,
 };
 use golem_common::{
     data_value,
-    model::{AgentInvocationResult, AgentStatus, IdempotencyKey, OwnedAgentId, RetryConfig},
+    model::{
+        AgentInvocationResult, AgentStatus, IdempotencyKey, OwnedAgentId, PromiseId, RetryConfig,
+    },
 };
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::tool::{
@@ -67,6 +76,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
 
+mod middleware_acceptance;
 mod moonbit_exports;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -115,6 +125,18 @@ struct ClockedStreamEvidence {
     before_tool_nanos: u64,
     after_tool_nanos: u64,
     stream: StreamEvidence,
+}
+
+#[derive(Debug, PartialEq, Eq, FromSchema)]
+struct TypedOutputEvidence {
+    label: String,
+    ordinal: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, FromSchema)]
+struct TypedInputEvidence {
+    label: String,
+    ordinal: u32,
 }
 
 #[derive(Debug, FromSchema)]
@@ -229,6 +251,145 @@ fn deployment_state(
         registered_tool_middlewares: BTreeMap::new(),
         tool_middleware_chains: BTreeMap::new(),
     }
+}
+
+fn install_middleware_chain(
+    deployment: &mut ToolDeploymentState,
+    agent_type: &AgentTypeName,
+    tool_name: &ToolName,
+    middleware_component_id: golem_common::model::component::ComponentId,
+    middleware_component_revision: ComponentRevision,
+    middleware_component_name: &str,
+    middleware_definitions: &[ToolMiddleware],
+    occurrences: Vec<(&str, TypedSchemaValue)>,
+) {
+    let mut effective_definition = deployment.registered_tools[tool_name].definition.clone();
+    let owner_account_id = deployment.registered_tools[tool_name].owner_account_id;
+    let account_email = AccountEmail::new("middleware@golem");
+    let registrations = middleware_definitions
+        .iter()
+        .map(|definition| {
+            let name = ToolMiddlewareName::try_from(definition.name.as_str()).unwrap();
+            let registration = RegisteredToolMiddleware {
+                deployment_revision: deployment.deployment_revision,
+                release_id: None,
+                definition: definition.clone(),
+                provision: ToolProvisionConfig::default(),
+                source: ToolMiddlewareSource::Component {
+                    component_id: middleware_component_id,
+                    component_revision: middleware_component_revision,
+                    component_name: ComponentName(middleware_component_name.to_string()),
+                },
+                owner_account_id,
+                owner_account_email: account_email.clone(),
+                metadata_version: "0.1.0".to_string(),
+                metadata_digest: Default::default(),
+            };
+            (name, registration)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut compiled_occurrences = occurrences
+        .into_iter()
+        .rev()
+        .map(|(name, parameters)| {
+            let name = ToolMiddlewareName::try_from(name).unwrap();
+            let middleware = registrations[&name].clone();
+            let (expected_definition, presented_definition) = match &middleware.definition.scope {
+                ToolMiddlewareScope::Universal => (None, None),
+                ToolMiddlewareScope::Monomorphic(scope) => {
+                    (scope.expected.clone(), Some(scope.presented.clone()))
+                }
+            };
+            let next_effective_definition = effective_definition.clone();
+            let compatibility = expected_definition.as_ref().map(|expected| {
+                golem_common::schema::tool::compatibility::compile_tool_compatibility(
+                    expected,
+                    &next_effective_definition,
+                    golem_common::schema::tool::compatibility::ToolCompatibilityMode::StructuralSubtype,
+                )
+                .expect("fixture contracts must be compatible")
+            });
+            if let Some(presented) = &presented_definition {
+                assert!(next_effective_definition.commands.nodes.iter().all(|node| {
+                    node.body.as_ref().is_none_or(|body| body.errors.is_empty())
+                }), "this fixture helper requires an inner surface with no inherited errors");
+                effective_definition = presented.clone();
+            }
+            CompiledToolMiddlewareOccurrence {
+                middleware,
+                parameters,
+                provision: ToolProvisionConfig::default(),
+                config_keys_readable: Default::default(),
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                filesystem_access: ToolFilesystemAccess::Unset,
+                expected_definition,
+                presented_definition,
+                next_effective_definition,
+                compatibility,
+            }
+        })
+        .collect::<Vec<_>>();
+    compiled_occurrences.reverse();
+    deployment.registered_tool_middlewares.extend(registrations);
+    deployment
+        .tool_middleware_chains
+        .entry(ToolBindingOwner::AgentType {
+            agent_type_name: agent_type.clone(),
+        })
+        .or_default()
+        .insert(
+            tool_name.clone(),
+            CompiledToolMiddlewareChain {
+                deployment_revision: deployment.deployment_revision,
+                owner: ToolBindingOwner::AgentType {
+                    agent_type_name: agent_type.clone(),
+                },
+                tool_name: tool_name.clone(),
+                effective_definition,
+                occurrences: compiled_occurrences,
+            },
+        );
+}
+
+fn empty_middleware_parameters(definition: &ToolMiddleware) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        definition.parameter_schema.clone(),
+        SchemaValue::Record { fields: vec![] },
+    )
+}
+
+fn parameterized_middleware_parameters(definition: &ToolMiddleware) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        definition.parameter_schema.clone(),
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("typed-prefix".to_string()),
+                SchemaValue::List {
+                    elements: vec![
+                        SchemaValue::Record {
+                            fields: vec![
+                                SchemaValue::String("first".to_string()),
+                                SchemaValue::Bool(true),
+                            ],
+                        },
+                        SchemaValue::Record {
+                            fields: vec![
+                                SchemaValue::String("ignored".to_string()),
+                                SchemaValue::Bool(false),
+                            ],
+                        },
+                        SchemaValue::Record {
+                            fields: vec![
+                                SchemaValue::String("second".to_string()),
+                                SchemaValue::Bool(true),
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    )
 }
 
 fn native_deployment_state(
@@ -552,6 +713,72 @@ async fn start_gated_http_server() -> (
     (port, task, first_rx, complete_rx)
 }
 
+#[derive(Clone)]
+struct IdempotencyEffectState {
+    keys: Arc<tokio::sync::Mutex<Vec<String>>>,
+    effects: Arc<tokio::sync::Mutex<std::collections::BTreeSet<String>>>,
+    attempts: tokio::sync::mpsc::UnboundedSender<String>,
+}
+
+async fn idempotency_effect(
+    State(state): State<IdempotencyEffectState>,
+    request: Request,
+) -> Response<Body> {
+    let key = request
+        .headers()
+        .get("idempotency-key")
+        .expect("outgoing effect has an idempotency key")
+        .to_str()
+        .expect("idempotency key is text")
+        .to_string();
+    let attempt = {
+        let mut keys = state.keys.lock().await;
+        keys.push(key.clone());
+        keys.len()
+    };
+    state.effects.lock().await.insert(key.clone());
+    state
+        .attempts
+        .send(key)
+        .expect("record idempotent effect attempt");
+    if attempt == 1 {
+        std::future::pending::<()>().await;
+    }
+    Response::builder()
+        .status(200)
+        .body(Body::empty())
+        .expect("build idempotent effect response")
+}
+
+async fn start_idempotency_effect_server() -> (
+    u16,
+    tokio::task::JoinHandle<()>,
+    tokio::sync::mpsc::UnboundedReceiver<String>,
+    Arc<tokio::sync::Mutex<Vec<String>>>,
+    Arc<tokio::sync::Mutex<std::collections::BTreeSet<String>>>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind idempotency effect server");
+    let port = listener.local_addr().expect("effect server address").port();
+    let (attempts, attempt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let keys = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let effects = Arc::new(tokio::sync::Mutex::new(std::collections::BTreeSet::new()));
+    let app = Router::new()
+        .route("/effect", post(idempotency_effect))
+        .with_state(IdempotencyEffectState {
+            keys: keys.clone(),
+            effects: effects.clone(),
+            attempts,
+        });
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve idempotency effects");
+    });
+    (port, task, attempt_rx, keys, effects)
+}
+
 async fn start_native_order_http_server() -> (u16, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -688,6 +915,64 @@ async fn start_crash_checkpoint_server() -> (
     (announcement_port, gate_port, task, received)
 }
 
+struct PromiseCheckpointArrival {
+    name: String,
+    oplog_idx: OplogIndex,
+}
+
+async fn announce_promise_checkpoint(
+    Path(name): Path<String>,
+    State(arrivals): State<tokio::sync::mpsc::UnboundedSender<PromiseCheckpointArrival>>,
+    body: Bytes,
+) -> axum::http::StatusCode {
+    let oplog_idx = OplogIndex::from_u64(
+        std::str::from_utf8(&body)
+            .expect("promise checkpoint body is UTF-8")
+            .parse()
+            .expect("promise checkpoint body is an oplog index"),
+    );
+    arrivals
+        .send(PromiseCheckpointArrival { name, oplog_idx })
+        .expect("record promise checkpoint arrival");
+    axum::http::StatusCode::NO_CONTENT
+}
+
+async fn start_promise_checkpoint_server() -> (
+    u16,
+    tokio::task::JoinHandle<()>,
+    tokio::sync::mpsc::UnboundedReceiver<PromiseCheckpointArrival>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind promise checkpoint server");
+    let port = listener
+        .local_addr()
+        .expect("promise checkpoint address")
+        .port();
+    let (arrivals, received) = tokio::sync::mpsc::unbounded_channel();
+    let app = Router::new()
+        .route("/{name}", post(announce_promise_checkpoint))
+        .with_state(arrivals);
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve promise checkpoint announcements");
+    });
+    (port, task, received)
+}
+
+async fn next_promise_checkpoint(
+    arrivals: &mut tokio::sync::mpsc::UnboundedReceiver<PromiseCheckpointArrival>,
+    expected: &str,
+) -> anyhow::Result<PromiseCheckpointArrival> {
+    let arrival = tokio::time::timeout(std::time::Duration::from_secs(30), arrivals.recv())
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for `{expected}` promise checkpoint"))?
+        .ok_or_else(|| anyhow::anyhow!("promise checkpoint server stopped before `{expected}`"))?;
+    assert_eq!(arrival.name, expected);
+    Ok(arrival)
+}
+
 async fn wait_for_active_tool_operations(
     executor: &TestWorkerExecutor,
     agent_id: &OwnedAgentId,
@@ -768,6 +1053,1475 @@ async fn next_crash_checkpoint(
         .ok_or_else(|| anyhow::anyhow!("checkpoint server stopped before `{expected}`"))?;
     assert_eq!(arrival.name, expected);
     Ok(arrival)
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_in_all_modes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_tool_streaming_rust_middleware_release",
+        )
+        .name("golem-it:tool-streaming-rust-middleware")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_it_tool_streaming_rust_middleware_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let definition = |name: &str| {
+        middleware_metadata
+            .tool_middlewares
+            .iter()
+            .find(|definition| definition.name == name)
+            .unwrap()
+    };
+    let universal = definition("streaming-universal-pass-through");
+    let transform = definition("streaming-transform");
+    let parameterized = definition("streaming-parameterized");
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools.clone(),
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![
+            (
+                universal.name.as_str(),
+                empty_middleware_parameters(universal),
+            ),
+            (
+                transform.name.as_str(),
+                empty_middleware_parameters(transform),
+            ),
+            (
+                parameterized.name.as_str(),
+                parameterized_middleware_parameters(parameterized),
+            ),
+        ],
+    );
+    let streaming_tool_name = ToolName::try_from("streaming").unwrap();
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &streaming_tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![(
+            universal.name.as_str(),
+            empty_middleware_parameters(universal),
+        )],
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let agent_id = agent_id!("ToolStreamingCaller", "middleware-chain-dispatch");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+
+    let results: Vec<String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "middleware_probe_modes",
+            data_value!("dispatch"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        results,
+        [
+            "transform-out(leaf(typed-prefix[first,second](transform-in(sync-dispatch))))",
+            "fire-and-forget-admitted",
+            "transform-out(leaf(typed-prefix[first,second](transform-in(async-dispatch))))",
+        ]
+    );
+    let stream_input = b"middleware-byte-stream-parity".to_vec();
+    let streamed: StreamEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "collect",
+            data_value!("marker-echo", stream_input.clone(), 5_u32),
+        )
+        .await?
+        .into_typed()?;
+    let mut expected_output = b"marker:".to_vec();
+    expected_output.extend_from_slice(&stream_input);
+    assert_eq!(streamed.output, expected_output);
+    assert_eq!(streamed.chunks_read, stream_input.len().div_ceil(5) as u32);
+    assert_eq!(streamed.bytes_read, stream_input.len() as u64);
+    assert!(!streamed.output_closed);
+    assert_eq!(streamed.completion, "ok");
+
+    let short_circuit = definition("streaming-short-circuit");
+    let mut redeployed = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools,
+    );
+    install_middleware_chain(
+        &mut redeployed,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![(
+            short_circuit.name.as_str(),
+            empty_middleware_parameters(short_circuit),
+        )],
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(redeployed),
+    );
+    executor.simulated_crash(&worker_id).await?;
+    let after_redeployment: Vec<String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "middleware_probe_modes",
+            data_value!("redeployed"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        after_redeployment,
+        [
+            "short(sync-redeployed)",
+            "fire-and-forget-admitted",
+            "short(async-redeployed)",
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn overlapping_middleware_exposes_public_ancestry_across_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_tool_streaming_rust_middleware_release",
+        )
+        .name("golem-it:tool-streaming-rust-middleware-overlap")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_it_tool_streaming_rust_middleware_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let overlapping = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-overlapping")
+        .unwrap();
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools.clone(),
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![(
+            overlapping.name.as_str(),
+            empty_middleware_parameters(overlapping),
+        )],
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let agent_id = agent_id!("ToolStreamingCaller", "middleware-overlap");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let results: Vec<String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "middleware_probe_modes",
+            data_value!("overlap"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        results,
+        [
+            "overlapping[leaf(overlap-left(sync-overlap))|leaf(overlap-right(sync-overlap))]",
+            "fire-and-forget-admitted",
+            "overlapping[leaf(overlap-left(async-overlap))|leaf(overlap-right(async-overlap))]",
+        ]
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let starts = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(parameters)
+                if parameters.function_name == "golem::entity::invoke" =>
+            {
+                Some((
+                    entry.oplog_index,
+                    parameters.parent_start_index,
+                    &entry.attribution,
+                ))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let roots = starts
+        .iter()
+        .filter(|(_, _, attribution)| {
+            matches!(
+                attribution,
+                PublicOplogEntryAttribution::Entity(context)
+                    if context.invocation.entity.kind == PublicAgentEntityKind::ToolMiddleware
+                        && context.invocation.entity.name == "streaming-overlapping"
+                        && context.ancestors.is_empty()
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(roots.len(), 3, "one root plan per outer call mode");
+    for (root, parent, _) in roots {
+        assert!(
+            parent.is_some(),
+            "root entity invocations are parented to AgentInvocationStarted"
+        );
+        let children = starts
+            .iter()
+            .filter(|(_, parent, _)| *parent == Some(*root))
+            .collect::<Vec<_>>();
+        assert_eq!(children.len(), 2, "overlap must invoke the leaf twice");
+        assert!(children.iter().all(|(_, _, attribution)| {
+            matches!(
+                attribution,
+                PublicOplogEntryAttribution::Entity(context)
+                    if context.invocation.entity.kind == PublicAgentEntityKind::Tool
+                        && context.invocation.entity.name == "middleware-probe"
+                        && context.ancestors.len() == 1
+                        && context.ancestors[0].entity.kind
+                            == PublicAgentEntityKind::ToolMiddleware
+                        && context.ancestors[0].entity.name == "streaming-overlapping"
+                        && context.ancestors[0].start_index == *root
+            )
+        }));
+    }
+
+    let short_circuit = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-short-circuit")
+        .unwrap();
+    let mut redeployed = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools,
+    );
+    install_middleware_chain(
+        &mut redeployed,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![(
+            short_circuit.name.as_str(),
+            empty_middleware_parameters(short_circuit),
+        )],
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(redeployed),
+    );
+    executor.simulated_crash(&worker_id).await?;
+    let after_redeployment: Vec<String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "middleware_probe_modes",
+            data_value!("redeployed"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        after_redeployment,
+        [
+            "short(sync-redeployed)",
+            "fire-and-forget-admitted",
+            "short(async-redeployed)",
+        ]
+    );
+    let replayed_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let replayed_overlap_roots = replayed_oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.attribution,
+                PublicOplogEntryAttribution::Entity(context)
+                    if context.invocation.entity.kind == PublicAgentEntityKind::ToolMiddleware
+                        && context.invocation.entity.name == "streaming-overlapping"
+                        && context.ancestors.is_empty()
+            ) && matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(parameters)
+                    if parameters.function_name == "golem::entity::invoke"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(replayed_overlap_roots.len(), 3);
+    for root in replayed_overlap_roots {
+        let descendants = replayed_oplog
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.attribution,
+                    PublicOplogEntryAttribution::Entity(context)
+                        if context.invocation.entity.kind == PublicAgentEntityKind::Tool
+                            && context.invocation.entity.name == "middleware-probe"
+                            && context.ancestors.len() == 1
+                            && context.ancestors[0].start_index == root.oplog_index
+                ) && matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(parameters)
+                        if parameters.function_name == "golem::entity::invoke"
+                )
+            })
+            .count();
+        assert_eq!(descendants, 2);
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn successful_middleware_parent_waits_for_admitted_dropped_child_observer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (checkpoint_port, checkpoint_gate_port, checkpoint_server, mut checkpoint_arrivals) =
+        start_crash_checkpoint_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_tool_streaming_rust_middleware_release",
+        )
+        .name("golem-it:tool-streaming-rust-middleware-early-return")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_it_tool_streaming_rust_middleware_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let early = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-early-return")
+        .unwrap();
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools,
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![(early.name.as_str(), empty_middleware_parameters(early))],
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let agent_id = agent_id!("ToolStreamingCaller", "middleware-early-return");
+    executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "CRASH_CHECKPOINT_PORT".to_string(),
+                    checkpoint_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+
+    let invocation = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "middleware_probe_once",
+        data_value!("parent"),
+    );
+    tokio::pin!(invocation);
+    let child = tokio::select! {
+        result = invocation.as_mut() => {
+            panic!("successful parent completed before child admission: {result:?}")
+        }
+        child = next_crash_checkpoint(&mut checkpoint_arrivals, "middleware-early-child") => {
+            child?
+        }
+    };
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), invocation.as_mut())
+            .await
+            .is_err(),
+        "successful parent completed while its admitted child effect was still blocked"
+    );
+    child
+        .release
+        .send(())
+        .expect("release admitted middleware child");
+    let result: String = invocation.await?.into_typed()?;
+    assert_eq!(result, "early-return(parent)");
+
+    checkpoint_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn typed_tool_output_stream_waits_for_producer_and_is_durable_through_nonidentity_middleware(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let (provider_checkpoint_port, provider_checkpoint_server, mut provider_checkpoints) =
+        start_promise_checkpoint_server().await;
+    let (caller_checkpoint_port, caller_checkpoint_server, mut caller_checkpoints) =
+        start_promise_checkpoint_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_tool_streaming_rust_middleware_release",
+        )
+        .name("golem-it:tool-streaming-rust-middleware-typed-output")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_it_tool_streaming_rust_middleware_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("typed-output-stream").unwrap();
+    let plain_deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools.clone(),
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(plain_deployment.clone()),
+    );
+    let env = HashMap::from([
+        (
+            "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
+            provider_checkpoint_port.to_string(),
+        ),
+        (
+            "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+            caller_checkpoint_port.to_string(),
+        ),
+    ]);
+    let direct_id = agent_id!("ToolStreamingCaller", "typed-output-direct");
+    let direct_worker = executor
+        .start_agent_with(
+            &caller_component.id,
+            direct_id.clone(),
+            env.clone(),
+            Vec::new(),
+        )
+        .await?;
+    let _output = executor.capture_output(&direct_worker).await?;
+    let direct_executor = executor.clone();
+    let direct_component = caller_component.clone();
+    let direct_invocation_id = direct_id.clone();
+    let direct_call = tokio::spawn(async move {
+        direct_executor
+            .invoke_and_await_agent(
+                &direct_component,
+                &direct_invocation_id,
+                "consume_typed_output",
+                data_value!(false, "direct"),
+            )
+            .await
+    });
+    let provider =
+        next_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            caller_checkpoints.recv()
+        )
+        .await
+        .is_err(),
+        "the caller must not receive the typed stream before its producer completes"
+    );
+    assert!(
+        !direct_call.is_finished(),
+        "the invocation result must remain hidden while the producer is gated"
+    );
+    {
+        let oplog = executor
+            .get_oplog(&direct_worker, OplogIndex::INITIAL)
+            .await?;
+        let entity_starts = oplog
+            .iter()
+            .filter_map(|entry| matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::entity::invoke").then_some(entry.oplog_index))
+            .collect::<Vec<_>>();
+        assert!(
+            !entity_starts.is_empty()
+                && oplog.iter().all(|entry| !matches!(&entry.entry, PublicOplogEntry::End(parameters) if entity_starts.contains(&parameters.start_index))),
+            "the tool entity must remain unterminated while its producer gate is blocked"
+        );
+    }
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: direct_worker.clone(),
+                oplog_idx: provider.oplog_idx,
+            },
+            Vec::new(),
+        )
+        .await?;
+    let caller = next_promise_checkpoint(
+        &mut caller_checkpoints,
+        "caller-consumed-first-typed-output",
+    )
+    .await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: direct_worker.clone(),
+                oplog_idx: caller.oplog_idx,
+            },
+            Vec::new(),
+        )
+        .await?;
+    let direct = direct_call.await??;
+    let direct: Vec<TypedOutputEvidence> = direct.into_typed()?;
+    let expected = vec![
+        TypedOutputEvidence {
+            label: "direct-first".to_string(),
+            ordinal: 11,
+        },
+        TypedOutputEvidence {
+            label: "direct-second".to_string(),
+            ordinal: 29,
+        },
+        TypedOutputEvidence {
+            label: "direct-third".to_string(),
+            ordinal: 47,
+        },
+    ];
+    assert_eq!(direct, expected);
+
+    let universal = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-universal-pass-through")
+        .unwrap();
+    let projection = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-typed-output-projection")
+        .unwrap();
+    let mut decorated_deployment = plain_deployment;
+    install_middleware_chain(
+        &mut decorated_deployment,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![
+            (
+                universal.name.as_str(),
+                empty_middleware_parameters(universal),
+            ),
+            (
+                projection.name.as_str(),
+                empty_middleware_parameters(projection),
+            ),
+        ],
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(decorated_deployment),
+    );
+    let decorated_id = agent_id!("ToolStreamingCaller", "typed-output-decorated");
+    let decorated_worker = executor
+        .start_agent_with(&caller_component.id, decorated_id.clone(), env, Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let invocation_executor = executor.clone();
+    let invocation_component = caller_component.clone();
+    let invocation_id = decorated_id.clone();
+    let invocation_key = key.clone();
+    let invocation = tokio::spawn(async move {
+        invocation_executor
+            .invoke_and_await_agent_with_key(
+                &invocation_component,
+                &invocation_id,
+                &invocation_key,
+                "consume_typed_output",
+                data_value!(true, "decorated"),
+            )
+            .await
+    });
+    let provider_promise =
+        next_promise_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            caller_checkpoints.recv()
+        )
+        .await
+        .is_err(),
+        "projected output must remain hidden until the inner producer completes"
+    );
+    assert!(!invocation.is_finished());
+    let blocked_oplog = executor
+        .get_oplog(&decorated_worker, OplogIndex::INITIAL)
+        .await?;
+    let blocked_entity_starts = blocked_oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(parameters)
+                if parameters.function_name == "golem::entity::invoke" =>
+            {
+                Some((entry.oplog_index, parameters.parent_start_index))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(blocked_entity_starts.len(), 3);
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &decorated_worker);
+    let active = executor
+        .active_entity_metadata(&owned_agent_id)
+        .await
+        .expect("streaming caller is active");
+    for (start, parent) in &blocked_entity_starts {
+        if parent.is_some_and(|parent| {
+            blocked_entity_starts
+                .iter()
+                .any(|(start, _)| *start == parent)
+        }) {
+            assert!(
+                blocked_oplog.iter().all(|entry| {
+                    !matches!(&entry.entry, PublicOplogEntry::End(parameters) if parameters.start_index == *start)
+                        && !matches!(&entry.entry, PublicOplogEntry::Cancelled(parameters) if parameters.start_index == *start)
+                }),
+                "entities still producing output must have no terminal after only their first item"
+            );
+        }
+        assert!(
+            active
+                .tool_operations
+                .operations
+                .iter()
+                .any(|operation| operation.start_index == Some(*start)),
+            "every accepted operation must remain registered until its children settle"
+        );
+    }
+    invocation.abort();
+    let _ = invocation.await;
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let resumed_executor = executor.clone();
+    let resumed_component = caller_component.clone();
+    let resumed_id = decorated_id.clone();
+    let resumed_key = key.clone();
+    let resumed_call = tokio::spawn(async move {
+        resumed_executor
+            .invoke_and_await_agent_with_key(
+                &resumed_component,
+                &resumed_id,
+                &resumed_key,
+                "consume_typed_output",
+                data_value!(true, "decorated"),
+            )
+            .await
+    });
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: decorated_worker.clone(),
+                oplog_idx: provider_promise.oplog_idx,
+            },
+            Vec::new(),
+        )
+        .await?;
+    let caller_promise = next_promise_checkpoint(
+        &mut caller_checkpoints,
+        "caller-consumed-first-typed-output",
+    )
+    .await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: decorated_worker.clone(),
+                oplog_idx: caller_promise.oplog_idx,
+            },
+            Vec::new(),
+        )
+        .await?;
+    let resumed = resumed_call.await??;
+    let decorated: Vec<TypedOutputEvidence> = resumed.into_typed()?;
+    assert_eq!(
+        decorated,
+        expected
+            .into_iter()
+            .map(|item| TypedOutputEvidence {
+                label: item.label.replace("direct", "decorated"),
+                ordinal: item.ordinal,
+            })
+            .collect::<Vec<_>>()
+    );
+    let oplog = executor
+        .get_oplog(&decorated_worker, OplogIndex::INITIAL)
+        .await?;
+    let entity_start_indices = oplog
+        .iter()
+        .filter_map(|entry| matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::entity::invoke").then_some(entry.oplog_index))
+        .collect::<Vec<_>>();
+    let entity_ends = oplog
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(parameters) if entity_start_indices.contains(&parameters.start_index)))
+        .count();
+    assert_eq!(
+        entity_start_indices.len(),
+        3,
+        "universal middleware, typed middleware, and provider execute once each"
+    );
+    assert_eq!(
+        entity_ends, 3,
+        "universal middleware, typed middleware, and provider terminate once each"
+    );
+    assert!(provider_checkpoints.try_recv().is_err());
+    assert!(caller_checkpoints.try_recv().is_err());
+    provider_checkpoint_server.abort();
+    caller_checkpoint_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let (
+        provider_checkpoint_port,
+        provider_checkpoint_gate_port,
+        provider_checkpoint_server,
+        mut provider_checkpoints,
+    ) = start_crash_checkpoint_server().await;
+    let (
+        caller_checkpoint_port,
+        caller_checkpoint_gate_port,
+        caller_checkpoint_server,
+        mut caller_checkpoints,
+    ) = start_crash_checkpoint_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_tool_streaming_rust_middleware_release",
+        )
+        .name("golem-it:tool-streaming-rust-middleware-typed-output-tcp-restart")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_it_tool_streaming_rust_middleware_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let universal = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-universal-pass-through")
+        .unwrap();
+    let projection = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-typed-output-projection")
+        .unwrap();
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("typed-output-stream").unwrap();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools,
+    );
+    install_middleware_chain(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![
+            (
+                universal.name.as_str(),
+                empty_middleware_parameters(universal),
+            ),
+            (
+                projection.name.as_str(),
+                empty_middleware_parameters(projection),
+            ),
+        ],
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let agent_id = agent_id!("ToolStreamingCaller", "typed-output-tcp-restart");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
+                    provider_checkpoint_port.to_string(),
+                ),
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    provider_checkpoint_gate_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_PORT".to_string(),
+                    caller_checkpoint_port.to_string(),
+                ),
+                (
+                    "CALLER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    caller_checkpoint_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let invocation_executor = executor.clone();
+    let invocation_component = caller_component.clone();
+    let invocation_id = agent_id.clone();
+    let invocation_key = key.clone();
+    let invocation = tokio::spawn(async move {
+        invocation_executor
+            .invoke_and_await_agent_with_key(
+                &invocation_component,
+                &invocation_id,
+                &invocation_key,
+                "consume_typed_output",
+                data_value!(true, "tcp-restart"),
+            )
+            .await
+    });
+    let provider_gate =
+        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            caller_checkpoints.recv()
+        )
+        .await
+        .is_err(),
+        "the typed stream must not reach the caller before producer completion"
+    );
+    assert!(!invocation.is_finished());
+    let before_crash = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let entity_starts = before_crash
+        .iter()
+        .filter_map(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::entity::invoke")
+                .then_some(entry.oplog_index)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(entity_starts.len(), 3);
+    assert!(
+        before_crash.iter().all(|entry| {
+            !matches!(&entry.entry, PublicOplogEntry::End(parameters) if entity_starts.contains(&parameters.start_index))
+        }),
+        "no entity result may become visible before the producer finishes"
+    );
+    assert!(
+        before_crash.iter().all(|entry| {
+            !matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::tool::internal::observe-results")
+        }),
+        "typed stream reconstruction must not use a separate result-observation call"
+    );
+
+    invocation.abort();
+    let _ = invocation.await;
+    drop(provider_gate.release);
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let resumed_executor = executor.clone();
+    let resumed_component = caller_component.clone();
+    let resumed_id = agent_id.clone();
+    let resumed_key = key.clone();
+    let resumed = tokio::spawn(async move {
+        resumed_executor
+            .invoke_and_await_agent_with_key(
+                &resumed_component,
+                &resumed_id,
+                &resumed_key,
+                "consume_typed_output",
+                data_value!(true, "tcp-restart"),
+            )
+            .await
+    });
+    let replayed_provider_gate =
+        next_crash_checkpoint(&mut provider_checkpoints, "typed-output-after-first").await?;
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            caller_checkpoints.recv()
+        )
+        .await
+        .is_err(),
+        "the replayed typed stream must not reach the caller before producer completion"
+    );
+    replayed_provider_gate
+        .release
+        .send(())
+        .expect("release replayed provider TCP atomic gate");
+    let replayed_caller_gate = next_crash_checkpoint(
+        &mut caller_checkpoints,
+        "caller-consumed-first-typed-output",
+    )
+    .await?;
+    replayed_caller_gate
+        .release
+        .send(())
+        .expect("release replayed caller TCP atomic gate");
+    let result: Vec<TypedOutputEvidence> = resumed.await??.into_typed()?;
+    assert_eq!(
+        result,
+        vec![
+            TypedOutputEvidence {
+                label: "tcp-restart-first".to_string(),
+                ordinal: 11,
+            },
+            TypedOutputEvidence {
+                label: "tcp-restart-second".to_string(),
+                ordinal: 29,
+            },
+            TypedOutputEvidence {
+                label: "tcp-restart-third".to_string(),
+                ordinal: 47,
+            },
+        ]
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let entity_ends = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(parameters) if entity_starts.contains(&parameters.start_index))
+        })
+        .count();
+    assert_eq!(
+        entity_ends, 3,
+        "every middleware and provider layer settles once"
+    );
+    assert!(oplog.iter().all(|entry| {
+        !matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::tool::internal::observe-results")
+    }));
+    assert!(provider_checkpoints.try_recv().is_err());
+    assert!(caller_checkpoints.try_recv().is_err());
+    provider_checkpoint_server.abort();
+    caller_checkpoint_server.abort();
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_middleware(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let (provider_port, provider_server, mut provider_checkpoints) =
+        start_promise_checkpoint_server().await;
+    let (caller_port, caller_server, mut caller_checkpoints) =
+        start_promise_checkpoint_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let middleware_component = executor
+        .component(
+            &context.default_environment_id,
+            "golem_it_tool_streaming_rust_middleware_release",
+        )
+        .name("golem-it:tool-streaming-rust-middleware-typed-input")
+        .store()
+        .await?;
+    let provider_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let middleware_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join("golem_it_tool_streaming_rust_middleware_release.wasm"),
+        false,
+        true,
+    )
+    .await?;
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let tool_name = ToolName::try_from("typed-input-stream").unwrap();
+    let plain_deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools,
+    );
+    let universal = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-universal-pass-through")
+        .unwrap();
+    let projection = middleware_metadata
+        .tool_middlewares
+        .iter()
+        .find(|definition| definition.name == "streaming-typed-input-projection")
+        .unwrap();
+    let mut decorated_deployment = plain_deployment.clone();
+    install_middleware_chain(
+        &mut decorated_deployment,
+        &agent_type,
+        &tool_name,
+        middleware_component.id,
+        middleware_component.revision,
+        "golem-it:tool-streaming-rust-middleware",
+        &middleware_metadata.tool_middlewares,
+        vec![
+            (
+                universal.name.as_str(),
+                empty_middleware_parameters(universal),
+            ),
+            (
+                projection.name.as_str(),
+                empty_middleware_parameters(projection),
+            ),
+        ],
+    );
+    let env = HashMap::from([
+        (
+            "PROVIDER_PROMISE_CHECKPOINT_PORT".to_string(),
+            provider_port.to_string(),
+        ),
+        (
+            "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+            caller_port.to_string(),
+        ),
+    ]);
+    let mut invocations = Vec::new();
+    let mut promises = Vec::new();
+    let mut workers = Vec::new();
+    for (decorated, name, deployment) in [
+        (false, "typed-input-direct", plain_deployment),
+        (true, "typed-input-decorated", decorated_deployment),
+    ] {
+        environment_state.set_tool_deployment(
+            context.default_environment_id,
+            caller_component.id,
+            caller_component.revision,
+            Some(deployment),
+        );
+        let agent_id = agent_id!("ToolStreamingCaller", name);
+        let worker_id = executor
+            .start_agent_with(
+                &caller_component.id,
+                agent_id.clone(),
+                env.clone(),
+                Vec::new(),
+            )
+            .await?;
+        let key = IdempotencyKey::fresh();
+        let invocation_executor = executor.clone();
+        let invocation_component = caller_component.clone();
+        let invocation_id = agent_id.clone();
+        let invocation_key = key.clone();
+        let invocation = tokio::spawn(async move {
+            invocation_executor
+                .invoke_and_await_agent_with_key(
+                    &invocation_component,
+                    &invocation_id,
+                    &invocation_key,
+                    "produce_typed_input",
+                    data_value!(decorated),
+                )
+                .await
+        });
+        let caller_promise =
+            next_promise_checkpoint(&mut caller_checkpoints, "typed-input-caller-produced-first")
+                .await?;
+        let provider_promise = next_promise_checkpoint(
+            &mut provider_checkpoints,
+            "typed-input-provider-consumed-first",
+        )
+        .await?;
+        assert!(
+            !invocation.is_finished(),
+            "input drain completed before the caller producer was released"
+        );
+        invocations.push(invocation);
+        promises.push((worker_id.clone(), caller_promise, provider_promise));
+        workers.push((decorated, agent_id, worker_id, key));
+    }
+    for invocation in invocations {
+        invocation.abort();
+        let _ = invocation.await;
+    }
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    for (worker_id, caller_promise, provider_promise) in promises {
+        executor
+            .complete_promise(
+                &PromiseId {
+                    agent_id: worker_id.clone(),
+                    oplog_idx: caller_promise.oplog_idx,
+                },
+                Vec::new(),
+            )
+            .await?;
+        executor
+            .complete_promise(
+                &PromiseId {
+                    agent_id: worker_id,
+                    oplog_idx: provider_promise.oplog_idx,
+                },
+                Vec::new(),
+            )
+            .await?;
+    }
+    for (decorated, agent_id, worker_id, key) in workers {
+        let evidence: Vec<TypedInputEvidence> = executor
+            .invoke_and_await_agent_with_key(
+                &caller_component,
+                &agent_id,
+                &key,
+                "produce_typed_input",
+                data_value!(decorated),
+            )
+            .await?
+            .into_typed()?;
+        let expected = if decorated {
+            vec![
+                ("jade-first", 83),
+                ("jade-second", 131),
+                ("jade-third", 197),
+            ]
+        } else {
+            vec![
+                ("amber-first", 17),
+                ("amber-second", 43),
+                ("amber-third", 71),
+            ]
+        };
+        assert_eq!(
+            evidence,
+            expected
+                .into_iter()
+                .map(|(label, ordinal)| TypedInputEvidence {
+                    label: label.to_string(),
+                    ordinal,
+                })
+                .collect::<Vec<_>>()
+        );
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let starts = oplog
+            .iter()
+            .filter_map(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(parameters) if parameters.function_name == "golem::entity::invoke")
+                    .then_some(entry.oplog_index)
+            })
+            .collect::<Vec<_>>();
+        let ends = oplog
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::End(parameters) if starts.contains(&parameters.start_index))
+            })
+            .count();
+        assert_eq!(starts.len(), if decorated { 3 } else { 1 });
+        assert_eq!(ends, starts.len());
+    }
+    assert!(provider_checkpoints.try_recv().is_err());
+    assert!(caller_checkpoints.try_recv().is_err());
+    provider_server.abort();
+    caller_server.abort();
+    Ok(())
 }
 
 #[test]
@@ -2764,13 +4518,17 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
             _ => None,
         })
         .expect("incomplete atomic tail is jumped before the outer tool terminal");
-    assert_eq!(
-        jump.end, jump_index,
-        "the recovery Jump must delete itself with the abandoned atomic tail"
-    );
     assert!(
         jump.start > original_start,
         "the recovery Jump must preserve the outer tool Start"
+    );
+    assert!(
+        jump.end < jump_index,
+        "the recovery Jump must follow the abandoned atomic interval"
+    );
+    assert!(
+        jump.start <= jump.end,
+        "the recovery Jump must identify a non-empty abandoned atomic interval"
     );
     let terminal = SerializableToolOperationTerminal::from_value(terminal_response.value())?;
     assert_eq!(
@@ -5367,6 +7125,151 @@ async fn capable_terminal_lane_return_and_delayed_publication_survive_crash(
     executor.delete_worker(&worker_id).await?;
     checkpoint_server.abort();
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (effect_port, effect_server, mut attempts, keys, effects) =
+        start_idempotency_effect_server().await;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "entity-idempotency-recovery");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([(
+                "IDEMPOTENCY_EFFECT_PORT".to_string(),
+                effect_port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let input = b"entity-idempotency".to_vec();
+    let call = executor.invoke_and_await_agent(
+        &caller_component,
+        &agent_id,
+        "collect_capable",
+        data_value!("atomic-idempotency-parent", input.clone()),
+    );
+    let recover = async {
+        let first_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
+            .await
+            .map_err(|_| anyhow::anyhow!("initial idempotent HTTP effect timed out"))?
+            .ok_or_else(|| anyhow::anyhow!("idempotency effect server stopped"))?;
+
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let entity_starts = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::entity::invoke" =>
+                {
+                    Some((entry.oplog_index, params.parent_start_index))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let (child_start, Some(parent_start)) = entity_starts
+            .iter()
+            .find(|(_, parent)| parent.is_some())
+            .copied()
+            .expect("nested entity was admitted before its HTTP effect")
+        else {
+            unreachable!()
+        };
+        assert!(
+            oplog
+                .iter()
+                .any(|entry| matches!(&entry.entry, PublicOplogEntry::EndAtomicRegion(_))),
+            "the admitting atomic scope must close before the crash"
+        );
+
+        executor.simulated_crash(&worker_id).await?;
+        let retry_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
+            .await
+            .map_err(|_| anyhow::anyhow!("reconstructed HTTP retry timed out"))?
+            .ok_or_else(|| anyhow::anyhow!("idempotency effect server stopped before retry"))?;
+        assert_eq!(retry_key, first_key, "incomplete HTTP retry changed key");
+        Ok::<_, anyhow::Error>((parent_start, child_start))
+    };
+    let (result, (_parent_start, _child_start)) = tokio::try_join!(call, recover)?;
+    let result: StreamEvidence = result.into_typed()?;
+    assert_evidence(&result, &input, 1, input.len() as u64);
+    let recorded_keys = keys.lock().await;
+    assert_eq!(recorded_keys.len(), 2);
+    assert_eq!(recorded_keys[0], recorded_keys[1]);
+    drop(recorded_keys);
+    assert_eq!(
+        effects.lock().await.len(),
+        1,
+        "upstream effect was repeated"
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::EndAtomicRegion(_)))
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::api::generate_idempotency-key"
+            ))
+            .count(),
+        1,
+        "completed generated-key call must replay instead of running live"
+    );
+    executor.delete_worker(&worker_id).await?;
+    effect_server.abort();
     Ok(())
 }
 

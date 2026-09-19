@@ -36,7 +36,7 @@ use crate::durable_host::stream_session::{
 use crate::durable_host::stream_transport::{LiveStreamEndpoint, SourceLifecycle};
 use crate::durable_host::suspendable_wait::SuspendableWaitRegistration;
 use crate::durable_host::tail_work::TailActivity;
-use crate::durable_host::{BeginReplayToLive, DurableWorkerCtxView};
+use crate::durable_host::{BeginReplayToLive, DurableWorkerCtx, DurableWorkerCtxView};
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::rpc::Rpc;
 use crate::workerctx::WorkerCtx;
@@ -70,7 +70,7 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
-use golem_schema::schema::{SchemaValue, SchemaValueStream};
+use golem_schema::schema::{SchemaValue, SchemaValueStream, TypedSchemaValue};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
@@ -83,7 +83,9 @@ use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc, oneshot};
-use wasmtime::component::{Accessor, AccessorTask, Destination, StreamProducer, StreamResult};
+use wasmtime::component::{
+    Accessor, AccessorTask, Destination, HasSelf, StreamProducer, StreamResult,
+};
 use wasmtime::{AsContextMut, StoreContextMut};
 
 const PACKED_U8_OUTPUT_FLUSH_DELAY: Duration = Duration::from_millis(50);
@@ -3530,6 +3532,16 @@ impl StreamSession {
                 LiveStreamEventPayload::Error(error) => CommittedProducerStreamEventPayload::End(
                     StreamEndResult::ErrorContext(error.into_bytes()),
                 ),
+                LiveStreamEventPayload::ClassifiedError { kind, message } => match kind {
+                    HostFailureKind::Permanent => CommittedProducerStreamEventPayload::Cancel {
+                        role: StreamCancelRole::System,
+                        reason: StreamCancelReason::SourceUnavailable,
+                        details: Some(message),
+                    },
+                    HostFailureKind::Transient => CommittedProducerStreamEventPayload::End(
+                        StreamEndResult::ErrorContext(message.into_bytes()),
+                    ),
+                },
             };
             if let Some(recorded) = recorded {
                 if recorded.payload != payload {
@@ -3547,7 +3559,11 @@ impl StreamSession {
                 sequence += 1;
                 continue;
             }
-            let terminal = matches!(payload, CommittedProducerStreamEventPayload::End(_));
+            let terminal = matches!(
+                payload,
+                CommittedProducerStreamEventPayload::End(_)
+                    | CommittedProducerStreamEventPayload::Cancel { .. }
+            );
             let written = match payload {
                 CommittedProducerStreamEventPayload::PackedU8(byte) => {
                     let first_sequence = sequence;
@@ -3591,6 +3607,11 @@ impl StreamSession {
                 CommittedProducerStreamEventPayload::End(result) => self
                     .producer
                     .end(None, handle.stream_id, sequence, result)
+                    .await
+                    .map(|_| ()),
+                CommittedProducerStreamEventPayload::Cancel { role, reason, details } => self
+                    .producer
+                    .cancel(handle.stream_id, sequence, role, reason, details)
                     .await
                     .map(|_| ()),
                 _ => unreachable!("byte output produces only bytes and terminals"),
@@ -3929,6 +3950,31 @@ impl StreamSession {
                     .await
                     .map(|_| ())
                     .map_err(|error| error.to_string()),
+                LiveStreamEventPayload::ClassifiedError { kind, message } => match kind {
+                    HostFailureKind::Permanent => self
+                        .producer
+                        .cancel(
+                            handle.stream_id,
+                            event.offset,
+                            StreamCancelRole::System,
+                            StreamCancelReason::SourceUnavailable,
+                            Some(message),
+                        )
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| error.to_string()),
+                    HostFailureKind::Transient => self
+                        .producer
+                        .end(
+                            None,
+                            handle.stream_id,
+                            event.offset,
+                            StreamEndResult::ErrorContext(message.into_bytes()),
+                        )
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| error.to_string()),
+                },
             };
             if let Err(error) = result {
                 let _ = self
@@ -5471,6 +5517,93 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx> for DurableInputLiveAdmission<Ctx> {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum DurableInputEvent {
+    Item(SchemaValue),
+    End,
+    Cancelled,
+}
+
+pub(crate) struct DurableInputReceiveAdmission {
+    opens_source: bool,
+    source_wait: bool,
+    ordinal: u64,
+    result: oneshot::Sender<Result<ReceiveGuard, WorkerExecutorError>>,
+}
+
+impl<U: Send + 'static, Ctx: WorkerCtx> AccessorTask<U, HasSelf<DurableWorkerCtx<Ctx>>>
+    for DurableInputReceiveAdmission
+{
+    async fn run(
+        self,
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    ) -> wasmtime::Result<()> {
+        let mut result = self.result;
+        let admit = async {
+            if self.opens_source {
+                loop {
+                    let state = accessor.with(|mut access| {
+                        let ctx = access.get();
+                        if ctx.is_live() {
+                            return Ok(None);
+                        }
+                        if ctx.rejects_live_continuation_at_replay_tail() {
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                format!("durable input observation {}", self.ordinal),
+                                "end of the recorded consumer journal during completed entity replay",
+                            ));
+                        }
+                        Ok(Some((ctx.state.replay_state.clone(), ctx.tail_work_tracker().activity())))
+                    })?;
+                    let Some((replay, activity)) = state else {
+                        break;
+                    };
+                    replay.await_natural_tail_end(Some(&activity)).await?;
+                    let (transition, primary) = accessor.with(|mut access| {
+                        let ctx = access.get();
+                        (
+                            ctx.prepare_live_continuation_at_replay_tail(
+                                true,
+                                "durable input stream source read".to_string(),
+                            ),
+                            ctx.runtime == OwnerRuntime::Agent,
+                        )
+                    });
+                    match transition.await? {
+                        BeginReplayToLive::ReplayResumed => continue,
+                        BeginReplayToLive::Pending(pending) => {
+                            finish_prepared_access_to_live(
+                                pending,
+                                primary,
+                                accessor,
+                                accessor.getter(),
+                            )
+                            .await?
+                            .require_live()?;
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(accessor.with(|mut access| {
+                let ctx = access.get();
+                ReceiveGuard {
+                    source_wait: self
+                        .source_wait
+                        .then(|| ctx.state.register_passive_suspendable_wait()),
+                    _live_call: LiveCallPermit::new(ctx.state.live_host_call_counter()),
+                }
+            }))
+        };
+        tokio::select! {
+            biased;
+            _ = result.closed() => {},
+            outcome = admit => { let _ = result.send(outcome); }
+        }
+        Ok(())
+    }
+}
+
 /// Deferred cleanup returned when a guest drops an unread durable input.
 pub struct DroppedDurableInput {
     streams: StreamSession,
@@ -5621,6 +5754,116 @@ impl DurableInputProducer {
     fn begin_receive(&mut self) {
         self.pending = Some(self.input.receive(None));
     }
+
+    fn finish_receive(
+        &mut self,
+        result: Result<DurableInputRead, String>,
+    ) -> anyhow::Result<DurableInputEvent> {
+        self.pending = None;
+        let mut read = result.map_err(anyhow::Error::msg)?;
+        self.input.complete_receive(&mut read);
+        let event = read.event.ok_or_else(|| {
+            anyhow::anyhow!("durable input stream source closed without a terminal event")
+        })?;
+        match event.payload {
+            CommittedProducerStreamEventPayload::Value(bytes) => {
+                let value = ProtoSchemaValue::decode(bytes.as_slice())
+                    .map_err(|error| anyhow::anyhow!("invalid durable stream value: {error}"))?;
+                decode_recursive_stream_value(value, |stream_id, _| {
+                    read.endpoints
+                        .remove(&stream_id)
+                        .map(SchemaValueStream::from_host_endpoint)
+                        .ok_or_else(|| format!("unknown nested stream reference {stream_id}"))
+                })
+                .map(DurableInputEvent::Item)
+                .map_err(anyhow::Error::msg)
+            }
+            CommittedProducerStreamEventPayload::PackedU8(byte) => {
+                Ok(DurableInputEvent::Item(SchemaValue::U8(byte)))
+            }
+            CommittedProducerStreamEventPayload::End(StreamEndResult::Ok) => {
+                self.finished = true;
+                Ok(DurableInputEvent::End)
+            }
+            CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(error)) => Err(
+                anyhow::anyhow!("durable stream ended with error context: {error:?}"),
+            ),
+            CommittedProducerStreamEventPayload::Cancel {
+                role: StreamCancelRole::InputProducer | StreamCancelRole::OutputProducer,
+                ..
+            } => {
+                self.finished = true;
+                Ok(DurableInputEvent::End)
+            }
+            CommittedProducerStreamEventPayload::Cancel {
+                role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
+                ..
+            } => {
+                self.finished = true;
+                Ok(DurableInputEvent::Cancelled)
+            }
+            CommittedProducerStreamEventPayload::Cancel {
+                role: role @ StreamCancelRole::System,
+                reason,
+                details,
+            } => Err(durable_stream_cancel_error(role, reason, details)),
+        }
+    }
+
+    /// Receives a host-side value through the same consumer-journal path used by the guest ABI.
+    pub(crate) async fn receive_value(
+        &mut self,
+        admission: Option<&mpsc::UnboundedSender<DurableInputReceiveAdmission>>,
+    ) -> anyhow::Result<Option<DurableInputEvent>> {
+        if self.finished {
+            return Ok(Some(DurableInputEvent::End));
+        }
+        if self.pending.is_none() {
+            let guard = if let Some(admission) = admission {
+                let (result, response) = oneshot::channel();
+                if admission
+                    .send(DurableInputReceiveAdmission {
+                        opens_source: self.input.opens_source(),
+                        source_wait: self.input.journal.is_empty(),
+                        ordinal: self.input.consumer_read_ordinal,
+                        result,
+                    })
+                    .is_err()
+                {
+                    return Ok(None);
+                }
+                let Ok(result) = response.await else {
+                    return Ok(None);
+                };
+                Some(result?)
+            } else {
+                #[cfg(not(test))]
+                anyhow::bail!("durable projection has no store admission");
+                #[cfg(test)]
+                None
+            };
+            self.pending = Some(self.input.receive(guard));
+        }
+        let result = std::future::poll_fn(|cx| {
+            self.pending
+                .as_mut()
+                .expect("durable receive is missing")
+                .as_mut()
+                .poll(cx)
+        })
+        .await;
+        let result = self.finish_receive(result);
+        if result.is_err() {
+            self.finished = true;
+        }
+        result.map(Some)
+    }
+
+    pub(crate) fn abort_for_teardown(&mut self) {
+        self.finished = true;
+        self.pending = None;
+        self.input.reader = None;
+    }
 }
 
 impl DurableInputEndpoint {
@@ -5673,14 +5916,15 @@ impl DurableInputEndpoint {
                 }
             };
             if event.as_ref().is_some_and(|event| {
-                matches!(
-                    &event.payload,
-                    CommittedProducerStreamEventPayload::Cancel {
-                        role: StreamCancelRole::System,
-                        reason: StreamCancelReason::SourceUnavailable,
-                        ..
-                    }
-                )
+                event.terminal_author.is_none()
+                    && matches!(
+                        &event.payload,
+                        CommittedProducerStreamEventPayload::Cancel {
+                            role: StreamCancelRole::System,
+                            reason: StreamCancelReason::SourceUnavailable,
+                            ..
+                        }
+                    )
             }) {
                 journaled = true;
             }
@@ -6054,81 +6298,21 @@ impl DurableInputProducer {
                 _live_call: live_call,
             })));
         }
-        let mut read = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
+        let receive_result = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
             Poll::Pending => return Poll::Pending,
-            Poll::Ready(Ok(result)) => result,
-            Poll::Ready(Err(error)) => {
-                self.finished = true;
-                return Poll::Ready(Err(wasmtime::Error::msg(error)));
-            }
+            Poll::Ready(result) => result,
         };
-        self.pending = None;
-        self.input.complete_receive(&mut read);
-        let Some(event) = read.event else {
-            self.finished = true;
-            return Poll::Ready(Err(wasmtime::Error::msg(
-                "durable input stream source closed without a terminal event",
-            )));
-        };
-
-        let value = match event.payload {
-            CommittedProducerStreamEventPayload::Value(bytes) => {
-                let value = match ProtoSchemaValue::decode(bytes.as_slice()) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        self.finished = true;
-                        return Poll::Ready(Err(wasmtime::Error::msg(format!(
-                            "invalid durable stream value: {error}"
-                        ))));
-                    }
-                };
-                match decode_recursive_stream_value(value, |stream_id, _| {
-                    read.endpoints
-                        .remove(&stream_id)
-                        .map(SchemaValueStream::from_host_endpoint)
-                        .ok_or_else(|| format!("unknown nested stream reference {stream_id}"))
-                }) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        self.finished = true;
-                        return Poll::Ready(Err(wasmtime::Error::msg(error)));
-                    }
-                }
-            }
-            CommittedProducerStreamEventPayload::PackedU8(byte) => SchemaValue::U8(byte),
-            CommittedProducerStreamEventPayload::End(StreamEndResult::Ok) => {
-                self.finished = true;
+        let value = match self.finish_receive(receive_result) {
+            Ok(DurableInputEvent::Item(value)) => value,
+            Ok(DurableInputEvent::End) => {
                 return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
             }
-            CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(error)) => {
-                self.finished = true;
-                return Poll::Ready(Err(wasmtime::Error::msg(format!(
-                    "durable stream ended with error context: {error:?}"
-                ))));
-            }
-            CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::InputProducer | StreamCancelRole::OutputProducer,
-                ..
-            } => {
-                self.finished = true;
-                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
-            }
-            CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
-                ..
-            } => {
-                self.finished = true;
+            Ok(DurableInputEvent::Cancelled) => {
                 return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Cancelled)));
             }
-            CommittedProducerStreamEventPayload::Cancel {
-                role: role @ StreamCancelRole::System,
-                reason,
-                details,
-            } => {
+            Err(error) => {
                 self.finished = true;
-                return Poll::Ready(Err(wasmtime::Error::from_anyhow(
-                    durable_stream_cancel_error(role, reason, details),
-                )));
+                return Poll::Ready(Err(wasmtime::Error::from_anyhow(error)));
             }
         };
         Poll::Ready(Ok(DurableInputItem::Value(value)))
@@ -6334,6 +6518,11 @@ pub fn strip_streams(value: SchemaValue) -> SchemaValue {
         }
         other => other,
     }
+}
+
+/// Removes runtime stream resources while preserving a value's pinned schema graph.
+pub(crate) fn strip_typed_streams(value: &TypedSchemaValue) -> TypedSchemaValue {
+    TypedSchemaValue::new(value.graph().clone(), strip_streams(value.value().clone()))
 }
 
 fn discards_input_after_terminal(error: &StreamStoreError, session_key: &StreamSessionKey) -> bool {

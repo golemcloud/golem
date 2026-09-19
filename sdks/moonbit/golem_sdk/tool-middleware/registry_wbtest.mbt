@@ -34,6 +34,7 @@ fn universal_middleware(
     aliases,
     doc: registry_doc(name),
     scope: Universal,
+    parameter_schema: empty_parameter_schema(),
   }
 }
 
@@ -44,6 +45,31 @@ async fn empty_registry_invoker(
   _underlying : UnderlyingTool,
 ) -> Result[RawInvocationResult, ToolInvokeError[RawTypedSchemaValue]] {
   Ok(invocation.empty_result())
+}
+
+///|
+fn empty_parameter_value() -> @types.TypedSchemaValue {
+  try! @model.typed_schema_value_to_wit({
+    graph: empty_parameter_schema(),
+    value: @model.SchemaValue::Record([]),
+  })
+}
+
+///|
+test "empty middleware parameters validate both schema and value" {
+  let graph = empty_parameter_schema()
+  assert_true(
+    validate_installation_parameters(graph, {
+      graph,
+      value: @model.SchemaValue::Record([]),
+    }),
+  )
+  assert_false(
+    validate_installation_parameters(graph, {
+      graph,
+      value: @model.SchemaValue::Tuple([]),
+    }),
+  )
 }
 
 ///|
@@ -63,6 +89,7 @@ test "middleware registry sorts discovery and keeps aliases out of lookup" {
         presented: registry_tool("presented"),
         expected: Some(registry_tool("expected")),
       }),
+      parameter_schema: empty_parameter_schema(),
     },
     empty_registry_invoker,
   )
@@ -210,6 +237,7 @@ test "guest boundary preserves raw carriers and tears down after final transfer"
           "pass-through",
           "runtime-tool",
           registry_tool("runtime-metadata"),
+          empty_parameter_value(),
           ["nested", "run"],
           registry_raw_secret(701),
           Some(registry_counted_stream(stdin_drops)),
@@ -219,7 +247,7 @@ test "guest boundary preserves raw carriers and tears down after final transfer"
         Ok(result) => final_result.val = Some(result)
         Err(_) => fail("registered middleware invocation failed")
       }
-      assert_eq(raw_drops.val, 0)
+      assert_eq(raw_drops.val, 1)
       assert_eq(stdout_drops.val, 0)
     })
     assert_eq(backend_calls.val, 1)
@@ -270,6 +298,7 @@ test "universal middleware short-circuits without invoking and cleans raw input"
         "short-circuit",
         "runtime-tool",
         registry_tool("runtime-metadata"),
+        empty_parameter_value(),
         [],
         registry_raw_secret(705),
         Some(registry_counted_stream(stdin_drops)),
@@ -278,7 +307,7 @@ test "universal middleware short-circuits without invoking and cleans raw input"
       )
       assert_true(result is Ok({ result: None, stdout: None, }))
       assert_eq(backend_calls.val, 0)
-      assert_eq(raw_drops.val, 0)
+      assert_eq(raw_drops.val, 1)
     })
     assert_eq(backend_calls.val, 0)
     assert_eq(raw_drops.val, 1)
@@ -328,6 +357,7 @@ test "universal middleware can retry the underlying capability sequentially" {
         "retry",
         "runtime-tool",
         registry_tool("runtime-metadata"),
+        empty_parameter_value(),
         [],
         @model.typed_schema_value_to_wit(
           @schema.try_into_typed_schema_value(()),
@@ -338,7 +368,7 @@ test "universal middleware can retry the underlying capability sequentially" {
       )
       assert_true(result is Ok({ result: None, stdout: None, }))
       assert_eq(backend_calls.val, 2)
-      assert_eq(raw_drops.val, 0)
+      assert_eq(raw_drops.val, 1)
     })
     assert_eq(raw_drops.val, 1)
   })
@@ -365,6 +395,7 @@ test "guest boundary cleans uninvoked input stdin and underlying on lookup failu
         "missing",
         "runtime-tool",
         registry_tool("runtime-metadata"),
+        empty_parameter_value(),
         [],
         registry_raw_secret(702),
         Some(registry_counted_stream(stdin_drops)),
@@ -411,6 +442,7 @@ test "guest boundary preserves protocol errors and transfers raw custom errors" 
         "protocol-error",
         "runtime-tool",
         registry_tool("runtime-metadata"),
+        empty_parameter_value(),
         [],
         @model.typed_schema_value_to_wit(
           @schema.try_into_typed_schema_value(()),
@@ -432,6 +464,7 @@ test "guest boundary preserves protocol errors and transfers raw custom errors" 
           "custom-error",
           "runtime-tool",
           registry_tool("runtime-metadata"),
+          empty_parameter_value(),
           [],
           registry_raw_secret(704),
           None,
@@ -442,7 +475,7 @@ test "guest boundary preserves protocol errors and transfers raw custom errors" 
           custom_payload.val = Some(payload.payload)
         _ => fail("guest boundary changed raw custom error")
       }
-      assert_eq(raw_drops.val, 0)
+      assert_eq(raw_drops.val, 2)
     })
     assert_eq(raw_drops.val, 2)
     assert_resource_drop_counts(0, 0, 0)
@@ -483,6 +516,7 @@ test "guest boundary group teardown runs when a registered invoker raises" {
             "raises",
             "runtime-tool",
             registry_tool("runtime-metadata"),
+            empty_parameter_value(),
             [],
             registry_raw_secret(703),
             Some(registry_counted_stream(stdin_drops)),

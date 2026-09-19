@@ -37,7 +37,7 @@ pub struct ToolInvocation[E] {
   priv future : @toolHost.FutureInvokeResult
   priv decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?
   priv stdout_source : @async-core.Stream[
-    Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ]?
   stdout : @async-core.Stream[Byte]?
 }

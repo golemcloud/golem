@@ -104,6 +104,8 @@ interface common {
     aliases: list<string>,
     doc:     doc,
     scope:   tool-middleware-scope,
+    /// Schema of the static configuration supplied for each installation.
+    parameter-schema: schema-graph,
   }
 
   variant tool-middleware-scope {
@@ -380,15 +382,5 @@ interface common {
   record invocation-result {
     %result: option<typed-schema-value>,
     stdout:  option<stream<u8>>,
-  }
-
-  /// Invocation-scoped access to exactly the next inner layer in a tool
-  /// middleware chain. The runtime creates this resource; guests cannot.
-  resource underlying-tool {
-    invoke: async func(
-      command-path: list<string>,
-      input:        typed-schema-value,
-      stdin:        option<stream<u8>>,
-    ) -> result<invocation-result, tool-error>;
   }
 }

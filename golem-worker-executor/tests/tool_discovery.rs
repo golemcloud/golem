@@ -191,12 +191,13 @@ fn set_agent_bindings(
     deployment.tool_bindings.insert(owner, bindings);
 }
 
-fn add_unimplemented_middleware(
+fn add_missing_component_middleware(
     deployment: &mut ToolDeploymentState,
     agent_type: &AgentTypeName,
     tool_name: &ToolName,
     component_revision: ComponentRevision,
-) {
+) -> ComponentId {
+    let component_id = ComponentId::new();
     let middleware_name = ToolMiddlewareName::try_from("test-middleware").unwrap();
     let registered = RegisteredToolMiddleware {
         deployment_revision: deployment.deployment_revision,
@@ -207,10 +208,11 @@ fn add_unimplemented_middleware(
             aliases: Vec::new(),
             doc: Doc::default(),
             scope: ToolMiddlewareScope::Universal,
+            parameter_schema: SchemaGraph::empty(),
         },
         provision: ToolProvisionConfig::default(),
         source: ToolMiddlewareSource::Component {
-            component_id: ComponentId::new(),
+            component_id,
             component_revision,
             component_name: ComponentName("test-middleware-component".to_string()),
         },
@@ -222,7 +224,10 @@ fn add_unimplemented_middleware(
     let effective_definition = deployment.registered_tools[tool_name].definition.clone();
     let occurrence = CompiledToolMiddlewareOccurrence {
         middleware: registered.clone(),
-        parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        parameters: golem_common::schema::TypedSchemaValue::new(
+            registered.definition.parameter_schema.clone(),
+            golem_common::schema::SchemaValue::Record { fields: vec![] },
+        ),
         provision: ToolProvisionConfig::default(),
         config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
@@ -252,6 +257,7 @@ fn add_unimplemented_middleware(
             },
         )]),
     );
+    component_id
 }
 
 fn summary(name: &str, component_id: ComponentId) -> ToolSummary {
@@ -696,7 +702,7 @@ async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn durable_tool_invocation_rejects_nonempty_middleware_chain(
+async fn durable_tool_invocation_fails_when_middleware_component_is_missing(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -725,7 +731,12 @@ async fn durable_tool_invocation_rejects_nonempty_middleware_chain(
         component.revision,
         &[(tool_name.as_str(), component.id, true)],
     );
-    add_unimplemented_middleware(&mut deployment, &agent_type, &tool_name, component.revision);
+    let missing_component = add_missing_component_middleware(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        component.revision,
+    );
     service.set_tool_deployment(
         context.default_environment_id,
         component.id,
@@ -744,16 +755,15 @@ async fn durable_tool_invocation_rejects_nonempty_middleware_chain(
             "tool_rpc_invoke_and_await_result",
             data_value!(tool_name.as_str(), Vec::<String>::new(), String::new()),
         )
-        .await?
-        .into_typed::<Result<(), String>>()?;
+        .await;
 
+    let error = result.expect_err("missing middleware component must fail the invocation");
     assert!(
-        result.as_ref().is_err_and(|error| {
-            error.contains("RemoteInternalError")
-                && error.contains("tool middleware invocation is not implemented by the executor")
-                && !error.contains("InvalidToolName")
-        }),
-        "a nonempty middleware chain must fail closed before base tool dispatch: {result:?}"
+        error.to_string().contains(&format!(
+            "No such component found: {missing_component}/{}",
+            component.revision
+        )),
+        "dispatch must resolve the pinned middleware rather than bypass it: {error}"
     );
     assert_eq!(service.tool_activation_calls(), 1);
 

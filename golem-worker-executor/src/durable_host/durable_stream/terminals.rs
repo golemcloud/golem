@@ -520,6 +520,33 @@ impl DurableStreamStore {
         Ok(())
     }
 
+    /// Commits and publishes a cancellation at the supplied producer sequence.
+    pub(crate) async fn cancel(
+        &self,
+        stream_id: StreamId,
+        sequence: u64,
+        role: StreamCancelRole,
+        reason: StreamCancelReason,
+        details: Option<String>,
+    ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
+        self.run_owned(
+            None,
+            details.as_ref().map_or(0, String::len),
+            move |owner, context| async move {
+                let index = owner.index_for_terminal([], stream_id).await?;
+                let pending = owner
+                    .commit_cancel_locked(
+                        &context, index, stream_id, sequence, role, reason, details,
+                    )
+                    .await?;
+                owner
+                    .publish_committed_cancellation(Some(&context), pending)
+                    .await
+            },
+        )
+        .await
+    }
+
     /// Installs a disposable signal used to stop active source work after durable cancellation.
     pub fn register_source_cancellation(
         &self,

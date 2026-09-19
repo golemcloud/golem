@@ -59,10 +59,12 @@ test "underlying copies share overlap revocation and exactly-once drop state" {
   let started : Result[Unit, ToolInvokeError[Unit]] = underlying.ownership.begin_call()
   assert_true(started is Ok(_))
   let overlap : Result[Unit, ToolInvokeError[Unit]] = copy.ownership.begin_call()
-  assert_true(overlap is Err(InvalidInput(_)))
+  assert_true(overlap is Ok(_))
   copy.revoke()
   assert_eq(drops.val, 0)
   underlying.ownership.finish_call()
+  assert_eq(drops.val, 0)
+  copy.ownership.finish_call()
   assert_eq(drops.val, 1)
   copy.revoke()
   assert_eq(drops.val, 1)
@@ -658,7 +660,7 @@ test "raw invoke supports sequential calls and raw backend errors" {
       _ => fail("raw backend custom error was not returned")
     }
     assert_eq(calls.val, 3)
-    assert_true(!underlying.ownership.state.val.active)
+    assert_true(underlying.ownership.state.val.active_calls == 0)
     assert_resource_drop_counts(1, 0, 0)
     underlying.revoke()
     assert_resource_drop_counts(1, 0, 0)
@@ -1001,7 +1003,7 @@ test "fake backend supports sequential calls and clears active state" {
     assert_true(first is Ok(_))
     assert_true(second is Ok(_))
     assert_eq(calls.val, 2)
-    assert_true(!underlying.ownership.state.val.active)
+    assert_true(underlying.ownership.state.val.active_calls == 0)
     match first {
       Ok(result) => ignore(result.drop())
       Err(_) => ()
@@ -1014,14 +1016,18 @@ test "fake backend supports sequential calls and clears active state" {
 }
 
 ///|
-test "fake backend overlap is rejected while the first call is suspended" {
+test "fake backend permits overlapping calls" {
   run_component_async(async fn() {
     let (started, started_promise) = @async-core.Future::new()
     let (release, release_promise) = @async-core.Future::new()
+    let calls = Ref(0)
     let underlying = new_underlying_tool(
       async fn(_, _, _) {
-        ignore(started_promise.complete(()))
-        release.get()
+        calls.val += 1
+        if calls.val == 1 {
+          ignore(started_promise.complete(()))
+          release.get()
+        }
         Ok({ result: None, stdout: None, })
       },
       no_raw_drop,
@@ -1030,15 +1036,335 @@ test "fake backend overlap is rejected while the first call is suspended" {
     @async-core.with_task_group(async fn(group) {
       let first = group.spawn(async fn() { underlying.invoke([], input, None) })
       started.get()
-      let overlap = underlying.invoke([], input, None)
-      assert_true(overlap is Err(InvalidInput(_)))
+      let overlap = group.spawn(async fn() {
+        underlying.invoke([], input, None)
+      })
+      match overlap.wait() {
+        Ok(result) => ignore(result.drop())
+        Err(_) => fail("overlapping invocation unexpectedly failed")
+      }
       ignore(release_promise.complete(()))
       match first.wait() {
         Ok(result) => ignore(result.drop())
         Err(_) => fail("first invocation unexpectedly failed")
       }
     })
-    assert_true(!underlying.ownership.state.val.active)
+    assert_true(underlying.ownership.state.val.active_calls == 0)
+  })
+}
+
+///|
+test "per-call observers complete in reverse order and isolate disposal and cancellation" {
+  run_component_async(async fn() {
+    let (first_done, _) = @async-core.Future::new()
+    let (second_done, second_done_promise) = @async-core.Future::new()
+    let calls = Ref(0)
+    let cancels = [Ref(0), Ref(0)]
+    let drops = [Ref(0), Ref(0)]
+    let stdout_drops = [Ref(0), Ref(0)]
+    let underlying : UnderlyingTool = {
+      ownership: OwnershipContext::new(no_raw_drop),
+      invoke: async fn(_, _, _) {
+        let index = calls.val
+        calls.val += 1
+        let done = if index == 0 { first_done } else { second_done }
+        {
+          get: async fn() {
+            done.get()
+            Ok({ result: None, stdout: None, })
+          },
+          stdout: Some(counted_stream(stdout_drops[index])),
+          cancel: fn() { cancels[index].val += 1 },
+          drop: fn() { drops[index].val += 1 },
+        }
+      },
+    }
+    let input = @schema.try_into_typed_schema_value(())
+    let first = match
+      underlying.start_with(
+        [],
+        input,
+        None,
+        fn(_, _) { None },
+        decode_result_empty,
+      ) {
+      Ok(call) => call
+      Err(_) => abort("first call was not admitted")
+    }
+    let second = match
+      underlying.start_with(
+        [],
+        input,
+        None,
+        fn(_, _) { None },
+        decode_result_empty,
+      ) {
+      Ok(call) => call
+      Err(_) => abort("second call was not admitted")
+    }
+    assert_true(first.stdout() is Some(_))
+    assert_true(second.stdout() is Some(_))
+    second.cancel()
+    assert_eq(cancels[0].val, 0)
+    assert_eq(cancels[1].val, 1)
+    ignore(second_done_promise.complete(()))
+    assert_true(second.get() is Ok(_))
+    assert_true(second.get() is Ok(_))
+    assert_eq(drops[1].val, 1)
+    first.drop()
+    assert_eq(cancels[0].val, 0)
+    assert_eq(drops[0].val, 1)
+    match first.stdout() {
+      Some(stdout) => stdout.drop_sync()
+      None => fail("first observer lost stdout")
+    }
+    match second.stdout() {
+      Some(stdout) => stdout.drop_sync()
+      None => fail("second observer lost stdout")
+    }
+    assert_eq(stdout_drops[0].val, 1)
+    assert_eq(stdout_drops[1].val, 1)
+  })
+}
+
+///|
+test "dropping an observer with an in-flight get defers raw disposal through completion" {
+  run_component_async(async fn() {
+    let (started, started_promise) = @async-core.Future::new()
+    let (release, release_promise) = @async-core.Future::new()
+    let observer_drops = Ref(0)
+    let underlying : UnderlyingTool = {
+      ownership: OwnershipContext::new(no_raw_drop),
+      invoke: async fn(_, _, _) {
+        {
+          get: async fn() {
+            ignore(started_promise.complete(()))
+            release.get()
+            Err(@underlying.UnderlyingError::InternalError("terminal"))
+          },
+          stdout: None,
+          cancel: fn() {  },
+          drop: fn() { observer_drops.val += 1 },
+        }
+      },
+    }
+    let input = @schema.try_into_typed_schema_value(())
+    let invocation = underlying
+      .start_with([], input, None, fn(_, _) { None }, decode_result_empty)
+      .unwrap()
+    @async-core.with_task_group(async fn(group) {
+      let result = group.spawn(() => invocation.get())
+      started.get()
+      invocation.drop()
+      invocation.drop()
+      assert_eq(observer_drops.val, 0)
+      assert_true(underlying.ownership.state.val.active_calls == 1)
+      ignore(release_promise.complete(()))
+      assert_true(result.wait() is Err(InternalError("terminal")))
+    })
+    assert_eq(observer_drops.val, 1)
+    assert_true(underlying.ownership.state.val.active_calls == 0)
+    invocation.drop()
+    assert_eq(observer_drops.val, 1)
+  })
+}
+
+///|
+test "underlying terminals retain cancellation and resource exhaustion across concurrent and repeated get" {
+  run_component_async(async fn() {
+    for
+      error in [
+        @underlying.UnderlyingError::Cancelled,
+        @underlying.UnderlyingError::ResourceExhausted("quota"),
+      ] {
+      let gets = Ref(0)
+      let drops = Ref(0)
+      let cancellations = Ref(0)
+      let (entered, entered_promise) = @async-core.Future::new()
+      let (release, release_promise) = @async-core.Future::new()
+      let underlying : UnderlyingTool = {
+        ownership: OwnershipContext::new(no_raw_drop),
+        invoke: async fn(_, _, _) {
+          {
+            get: async fn() {
+              gets.val += 1
+              ignore(entered_promise.complete(()))
+              release.get()
+              Err(error)
+            },
+            stdout: None,
+            cancel: fn() { cancellations.val += 1 },
+            drop: fn() { drops.val += 1 },
+          }
+        },
+      }
+      let invocation = underlying
+        .start_with(
+          [],
+          @schema.try_into_typed_schema_value(()),
+          None,
+          fn(_, _) { None },
+          decode_result_empty,
+        )
+        .unwrap()
+      @async-core.with_task_group(async fn(group) {
+        let first = group.spawn(() => invocation.get())
+        entered.get()
+        let second = group.spawn(() => invocation.get())
+        ignore(release_promise.complete(()))
+        let expected : Result[Unit, ToolInvokeError[RawCustomToolError]] = match
+          error {
+          @underlying.UnderlyingError::Cancelled => Err(Cancelled)
+          _ => Err(ResourceExhausted("quota"))
+        }
+        assert_eq(first.wait(), expected)
+        assert_eq(second.wait(), expected)
+        assert_eq(invocation.get(), expected)
+      })
+      assert_eq(gets.val, 1)
+      assert_eq(drops.val, 1)
+      assert_eq(cancellations.val, 0)
+    }
+    assert_eq(
+      encode_tool_error(Cancelled),
+      @types.ToolError::ConstraintViolation(
+        "underlying invocation was cancelled",
+      ),
+    )
+    assert_eq(
+      encode_tool_error(ResourceExhausted("quota")),
+      @types.ToolError::ConstraintViolation(
+        "underlying invocation exhausted resources: quota",
+      ),
+    )
+  })
+}
+
+///|
+test "cancelling one waiter preserves shared typed and raw observation" {
+  run_component_async(async fn() {
+    for raw_lane in [false, true] {
+      for successful in [false, true] {
+        let gets = Ref(0)
+        let drops = Ref(0)
+        let cancellations = Ref(0)
+        let (entered, entered_promise) = @async-core.Future::new()
+        let (release, release_promise) = @async-core.Future::new()
+        let underlying : UnderlyingTool = {
+          ownership: OwnershipContext::new(no_raw_drop),
+          invoke: async fn(_, _, _) {
+            {
+              get: async fn() {
+                gets.val += 1
+                ignore(entered_promise.complete(()))
+                release.get()
+                if successful {
+                  Ok({ result: None, stdout: None, })
+                } else {
+                  Err(@underlying.UnderlyingError::ResourceExhausted("quota"))
+                }
+              },
+              stdout: None,
+              cancel: fn() { cancellations.val += 1 },
+              drop: fn() { drops.val += 1 },
+            }
+          },
+        }
+        let input = @schema.try_into_typed_schema_value(())
+        let get : async () -> Result[Unit, ToolInvokeError[Unit]] = if raw_lane {
+          let raw_input = underlying.ownership.own_raw_typed_schema_value(
+            @model.typed_schema_value_to_wit(input),
+          )
+          let invocation = underlying.start_raw([], raw_input, None).unwrap()
+          async fn() {
+            match invocation.get() {
+              Ok(_) => Ok(())
+              Err(error) => Err(error.map_tool(fn(_) { () }))
+            }
+          }
+        } else {
+          let invocation : UnderlyingInvocation[Unit, Unit] = underlying
+            .start_with([], input, None, fn(_, _) { None }, decode_result_empty)
+            .unwrap()
+          async fn() { invocation.get() }
+        }
+        @async-core.with_task_group(async fn(group) {
+          let first = group.spawn(async fn() {
+            try get() catch {
+              @async-core.Cancelled::Cancelled => ()
+              error => raise error
+            } noraise {
+              _ => fail("cancelled waiter unexpectedly returned")
+            }
+          })
+          entered.get()
+          let second = group.spawn(get)
+          first.cancel()
+          ignore(release_promise.complete(()))
+          let expected = if successful {
+            Ok(())
+          } else {
+            Err(ResourceExhausted("quota"))
+          }
+          assert_eq(second.wait(), expected)
+          assert_eq(get(), expected)
+          first.wait()
+        })
+        assert_eq(gets.val, 1)
+        assert_eq(drops.val, 1)
+        assert_eq(cancellations.val, 0)
+      }
+    }
+  })
+}
+
+///|
+#warnings("-unused_async")
+fn failing_byte_source(
+  failure : @toolStreams.ByteStreamFailure,
+) -> @async-core.Stream[
+  Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
+] {
+  let emitted = Ref(false)
+  @async-core.Stream::from_source(
+    async fn(_) {
+      if emitted.val {
+        None
+      } else {
+        emitted.val = true
+        Some([Err(failure)])
+      }
+    },
+    async fn() {  },
+    fn() {  },
+  )
+}
+
+///|
+test "failure-aware byte stream preserves asymmetric terminal failures" {
+  run_component_async(async fn() {
+    let failures = [
+      @toolStreams.ByteStreamFailure::Cancelled,
+      @toolStreams.ByteStreamFailure::Abandoned,
+      @toolStreams.ByteStreamFailure::ResourceExhausted,
+      @toolStreams.ByteStreamFailure::Failed("specific"),
+    ]
+    for failure in failures {
+      let stream = failure_aware_byte_stream(failing_byte_source(failure))
+      let error = try stream.read(1) catch {
+        error => error
+      } noraise {
+        _ => abort("failing byte stream unexpectedly completed")
+      }
+      match (failure, error) {
+        (Cancelled, @toolCore.ToolStreamError::Cancelled)
+        | (Abandoned, @toolCore.ToolStreamError::Abandoned)
+        | (ResourceExhausted, @toolCore.ToolStreamError::ResourceExhausted)
+        | (Failed("specific"), @toolCore.ToolStreamError::Failed("specific")) =>
+          ()
+        _ => fail("byte stream failure variant was not preserved")
+      }
+    }
   })
 }
 
@@ -1068,7 +1394,7 @@ test "revocation during an active call delays and deduplicates raw drop" {
         Err(_) => fail("active invocation unexpectedly failed")
       }
     })
-    assert_true(!underlying.ownership.state.val.active)
+    assert_true(underlying.ownership.state.val.active_calls == 0)
     assert_eq(raw_drops.val, 1)
     underlying.revoke()
     assert_eq(raw_drops.val, 1)
@@ -1085,7 +1411,7 @@ test "backend protocol and raised errors both clear active state" {
     )
     let result = protocol_error.invoke([], input, None)
     assert_true(result is Err(InvalidInput("backend rejected input")))
-    assert_true(!protocol_error.ownership.state.val.active)
+    assert_true(protocol_error.ownership.state.val.active_calls == 0)
 
     let raised_error = new_underlying_tool(
       (_, _, _) => raise FakeBackendFailure,
@@ -1097,7 +1423,7 @@ test "backend protocol and raised errors both clear active state" {
     } noraise {
       _ => fail("raised backend error unexpectedly returned")
     }
-    assert_true(!raised_error.ownership.state.val.active)
+    assert_true(raised_error.ownership.state.val.active_calls == 0)
   })
 }
 
@@ -1126,7 +1452,7 @@ test "cancelling a suspended backend call clears active state" {
         _ => fail("cancelled invocation unexpectedly returned")
       }
     })
-    assert_true(!underlying.ownership.state.val.active)
+    assert_true(underlying.ownership.state.val.active_calls == 0)
   })
 }
 
@@ -1185,7 +1511,8 @@ test "enclosing group cancellation settles active call before scoped raw drop" {
             fn() {
               match underlying_holder.val {
                 Some(underlying) =>
-                  active_at_drop.val = underlying.ownership.state.val.active
+                  active_at_drop.val = underlying.ownership.state.val.active_calls >
+                    0
                 None => active_at_drop.val = true
               }
               raw_drops.val = raw_drops.val + 1

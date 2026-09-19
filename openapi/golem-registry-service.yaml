@@ -19360,6 +19360,7 @@ components:
       - aliases
       - doc
       - scope
+      - parameter_schema
       properties:
         name:
           type: string
@@ -19373,6 +19374,8 @@ components:
           $ref: '#/components/schemas/Doc'
         scope:
           $ref: '#/components/schemas/ToolMiddlewareScope'
+        parameter_schema:
+          $ref: '#/components/schemas/SchemaGraph'
     ToolMiddlewareDeploymentMetadata:
       type: object
       title: ToolMiddlewareDeploymentMetadata

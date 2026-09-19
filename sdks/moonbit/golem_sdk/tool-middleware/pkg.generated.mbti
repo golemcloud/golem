@@ -96,6 +96,11 @@ pub(all) enum ToolInvokeError[E] {
   InvalidResult(String)
   Tool(E)
   UnknownToolError(@types.CustomToolError)
+  ProtocolError(String)
+  Denied(String)
+  InternalError(String)
+  Cancelled
+  ResourceExhausted(String)
 } derive(Eq, @debug.Debug)
 pub fn[E, M] ToolInvokeError::map_tool(Self[E], (E) -> M) -> Self[M]
 
@@ -105,6 +110,7 @@ pub(all) struct ToolMiddleware {
   aliases : Array[String]
   doc : @golemcloud/golem_sdk/interface/golem/tool/common.Doc
   scope : ToolMiddlewareScope
+  parameter_schema : @schema_model.SchemaGraph
 }
 
 pub(all) enum ToolMiddlewareScope {
@@ -112,11 +118,20 @@ pub(all) enum ToolMiddlewareScope {
   Universal
 }
 
+pub struct UnderlyingInvocation[T, E] {
+  // private fields
+}
+pub fn[T, E] UnderlyingInvocation::cancel(Self[T, E]) -> Unit
+pub fn[T, E] UnderlyingInvocation::drop(Self[T, E]) -> Unit
+pub async fn[T, E] UnderlyingInvocation::get(Self[T, E]) -> Result[T, ToolInvokeError[E]]
+pub fn[T, E] UnderlyingInvocation::stdout(Self[T, E]) -> @async-core.Stream[Byte]?
+
 pub struct UnderlyingTool {
   // private fields
 }
 pub async fn UnderlyingTool::invoke(Self, Array[String], @schema_model.TypedSchemaValue, MiddlewareStdin?) -> Result[OwnedInvocationResult, ToolInvokeError[RawCustomToolError]]
 pub async fn UnderlyingTool::invoke_raw(Self, Array[String], RawTypedSchemaValue, MiddlewareStdin?) -> Result[RawInvocationResult, ToolInvokeError[RawTypedSchemaValue]]
+pub async fn UnderlyingTool::start_raw(Self, Array[String], RawTypedSchemaValue, MiddlewareStdin?) -> Result[UnderlyingInvocation[RawInvocationResult, RawTypedSchemaValue], ToolInvokeError[RawTypedSchemaValue]]
 
 // Type aliases
 

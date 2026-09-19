@@ -5,6 +5,7 @@ import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
   "golemcloud/golem_sdk/interface/golem/tool/host",
+  "golemcloud/golem_sdk/interface/golem/tool/streams",
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model",
   "golemcloud/golem_sdk/tool-core",
@@ -14,7 +15,7 @@ import {
 // Values
 pub fn build_canonical_input(@tool-core.CanonicalInputModel, Array[(String, @schema_model.SchemaValue)]) -> @schema_model.TypedSchemaValue raise @tool-core.ToolBuildError
 
-pub fn byte_stream(@async-core.Stream[Result[FixedArray[Byte], @host.ByteStreamFailure]]) -> @async-core.Stream[Byte]
+pub fn byte_stream(@async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]) -> @async-core.Stream[Byte]
 
 pub fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field(Array[@tool-core.CanonicalInputValue], String, String) -> T raise @types.ToolError
 
@@ -78,7 +79,7 @@ pub fn literal_to_schema_value(@schema_model.SchemaGraph, @tool-core.ToolLiteral
 
 pub fn new_stdout() -> (@async-core.Stream[Byte], @async-core.Sink[Byte])
 
-pub fn provider_stdout(@host.ToolStdoutWriter) -> ProviderStdout
+pub fn provider_stdout(@streams.ToolStdoutWriter) -> ProviderStdout
 
 pub fn refine_numeric(@schema_model.SchemaGraph, String?, String?, String?) -> @schema_model.SchemaGraph raise @tool-core.ToolBuildError
 

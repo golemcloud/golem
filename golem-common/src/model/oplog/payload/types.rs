@@ -2235,26 +2235,24 @@ pub enum SerializableEntityBodyExecution {
     Debug,
     Clone,
     PartialEq,
-    Eq,
     BinaryCodec,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
 pub struct SerializableToolResultValue {
-    #[schema(binary())]
-    bytes: Vec<u8>,
+    value: TypedSchemaValue,
 }
 
 impl SerializableToolResultValue {
     pub fn from_typed(value: &TypedSchemaValue) -> Result<Self, String> {
-        serde_json::to_vec(value)
-            .map(|bytes| Self { bytes })
-            .map_err(|error| error.to_string())
+        Ok(Self {
+            value: value.clone(),
+        })
     }
 
     pub fn into_typed(self) -> Result<TypedSchemaValue, String> {
-        serde_json::from_slice(&self.bytes).map_err(|error| error.to_string())
+        Ok(self.value)
     }
 }
 
