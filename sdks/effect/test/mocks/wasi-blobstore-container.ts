@@ -86,10 +86,16 @@ export class Container {
     const obj = this._entry.objects.get(name)
     maybeFail("getData", obj === undefined, `object ${name} not found`)
     const bytes = obj!.bytes()
+    // Mock follows the host: both offsets are inclusive, and a range
+    // with a byte that is not in the object is an error.
     const s = Number(start)
-    // Mock follows the in-memory backend: `end` is exclusive (Rust slice).
-    const e = Math.min(Number(end), bytes.length)
-    const slice = bytes.subarray(s, e)
+    const e = Number(end)
+    maybeFail(
+      "getData",
+      s > e || e >= bytes.length,
+      `range ${s}-${e} is not in object ${name} of ${bytes.length} bytes`,
+    )
+    const slice = bytes.subarray(s, e + 1)
     return new IncomingValue(new Uint8Array(slice))
   }
 

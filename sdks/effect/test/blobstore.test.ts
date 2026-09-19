@@ -279,19 +279,51 @@ describe("Container.forSchema", () => {
     }),
   )
 
-  it.effect("whole-object read tolerates exclusive-end backends", () =>
+  it.effect("whole-object read asks for the inclusive last byte", () =>
     Effect.gen(function* () {
       const fake = yield* makeBlobFake
       yield* Effect.gen(function* () {
-        // The fake follows the in-mem/fs backend: end is exclusive.
-        // The SDK's getData first tries (0, size - 1) (returns size - 1
-        // bytes on the fake), then retries with end = size to recover
-        // the full payload.
-        const c = yield* Blobstore.createContainer("excl-c")
+        // The host reads `end` as inclusive, so a whole-object read
+        // asks for `size - 1`. Asking for `size` is a range that is
+        // not in the object, which the fake refuses like the host.
+        const c = yield* Blobstore.createContainer("whole-c")
         yield* c.writeData("k", u8("alpha"))
         const got = yield* c.getData("k")
         expect(s(got)).toBe("alpha")
       }).pipe(Effect.provide(fake.layer))
+    }),
+  )
+
+  it.effect("an explicit range gives end - start + 1 bytes", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeBlobFake
+      yield* Effect.gen(function* () {
+        const c = yield* Blobstore.createContainer("range-c")
+        yield* c.writeData("k", u8("alpha"))
+        expect(s(yield* c.getData("k", { start: 1n, end: 3n }))).toBe("lph")
+        expect(s(yield* c.getData("k", { start: 0n, end: 0n }))).toBe("a")
+        expect(s(yield* c.getData("k", { start: 4n, end: 4n }))).toBe("a")
+      }).pipe(Effect.provide(fake.layer))
+    }),
+  )
+
+  it.effect("a range that is not in the object fails", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeBlobFake
+      const exit = yield* Effect.exit(
+        Effect.gen(function* () {
+          const c = yield* Blobstore.createContainer("bad-range-c")
+          yield* c.writeData("k", u8("alpha"))
+          // `end` is the size, so it is one past the last byte.
+          return yield* c.getData("k", { start: 0n, end: 5n })
+        }).pipe(Effect.provide(fake.layer)),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("BlobstoreHostError")
+        expect(json).toContain("is not in object")
+      }
     }),
   )
 

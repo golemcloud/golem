@@ -4,10 +4,9 @@
  * fake's per-container handles, plus a `Ref<Option<...>>` for
  * one-shot error injection.
  *
- * The fake mirrors the bug in the Golem in-memory + filesystem
- * backends: ranged reads treat `end` as Rust-exclusive (i.e.
- * `bytes.subarray(start, end)`). The SDK's whole-object recovery
- * logic (in `src/blobstore.ts`) is what makes that observable.
+ * The fake holds to the same range contract as the host: both
+ * offsets are inclusive, and a range with a byte that is not in the
+ * object is an error (see `src/Blobstore.ts` `ByteRange`).
  *
  * Use with `Effect.provide(eff, fake.layer)` once per test (NOT via
  * `it.layer(fake.layer)`, which would share state across the entire
@@ -117,10 +116,22 @@ const makeFakeContainer = (
             ),
           )
         }
+        // Mock follows the host: both offsets are inclusive, and a
+        // range with a byte that is not in the object is an error.
         const start = Number(range.start)
-        // Mock follows the in-memory backend: `end` is exclusive.
-        const end = Math.min(Number(range.end), obj.bytes.length)
-        return new Uint8Array(obj.bytes.subarray(start, end))
+        const end = Number(range.end)
+        if (start > end || end >= obj.bytes.length) {
+          return yield* Effect.fail(
+            new BlobstoreHostError(
+              new Error(
+                `range ${start}-${end} is not in object ${objectName} of ` +
+                  `${obj.bytes.length} bytes`,
+              ),
+              "container.getData",
+            ),
+          )
+        }
+        return new Uint8Array(obj.bytes.subarray(start, end + 1))
       }),
     )
 

@@ -33,8 +33,8 @@ export interface HostObjectId {
 
 /**
  * Inclusive byte range for {@link HostContainer.getData}. Passed
- * through to the host verbatim — the SDK does NOT massage backend
- * divergence (see public `ByteRange` JSDoc in `src/blobstore.ts`).
+ * through to the host verbatim (see the public `ByteRange` JSDoc in
+ * `src/Blobstore.ts` for the contract the host holds to).
  */
 export interface HostByteRange {
   readonly start: bigint
@@ -74,9 +74,9 @@ export interface HostContainer {
   readonly info: Effect.Effect<HostContainerMetadata, BlobstoreHostError>
   readonly clear: Effect.Effect<void, BlobstoreHostError>
   /**
-   * Fetch a byte range. Inclusive end per the WIT spec; backend
-   * divergence is the consumer's problem (see
-   * `src/blobstore.ts` `ByteRange` JSDoc).
+   * Fetch a byte range. Both offsets are inclusive, on every backend.
+   * A range that asks for a byte the object does not have fails, and
+   * the host does not retry it (see `src/Blobstore.ts` `ByteRange`).
    */
   getData(name: string, range: HostByteRange): Effect.Effect<Uint8Array, BlobstoreHostError>
   /** Create or replace `name` with `data`. Chunked at 4096 bytes per write. */
