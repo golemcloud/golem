@@ -4327,7 +4327,7 @@ impl StreamSession {
             terminal_cursor,
         } = if let Some(through) = after {
             self.recover_session_mappings().await?;
-            self.output_mappings_introduced_through(&handle, through)
+            self.output_mappings_introduced_through(transport_stream_id, &handle, through)
                 .await?
         } else {
             OutputReplay {
@@ -4575,9 +4575,13 @@ impl StreamSession {
 
     async fn output_mappings_introduced_through(
         &self,
+        transport_stream_id: u64,
         handle: &DurableStreamHandle,
         through: golem_common::model::durable_stream::StreamOffset,
     ) -> Result<OutputReplay, String> {
+        let local_binding = self
+            .binding(transport_stream_id)
+            .is_some_and(|binding| matches!(binding.source, StreamRecordReference::Local(_)));
         let mut after = None;
         let mut nested_streams = Vec::new();
         let mut seen = HashSet::new();
@@ -4589,7 +4593,7 @@ impl StreamSession {
                     .map_err(|error| error.to_string())?
             } else {
                 let mapping = self
-                    .mapping_for_handle(handle, SessionStreamRole::Output)
+                    .mapping(transport_stream_id)
                     .ok_or_else(|| "foreign durable stream has no session mapping".to_string())?;
                 let attachment = self.attachment_key(handle, self.reader_epoch().await?)?;
                 if self.topology_state(&attachment, Some(&mapping)).await?
@@ -4642,7 +4646,7 @@ impl StreamSession {
                         .zip(event.nested_references)
                 })
                 .map(|(nested_handle, reference)| {
-                    let reference = if self.producer.owns_handle_identity(handle) {
+                    let reference = if local_binding {
                         reference
                     } else {
                         StreamRecordReference::Foreign(nested_handle.clone())
@@ -4694,15 +4698,15 @@ impl StreamSession {
                     .get(&mapping.handle.stream_id)
                     .copied()
                     .flatten()
-                    .map(|cursor| (mapping.handle.clone(), cursor))
+                    .map(|cursor| (mapping.transport_stream_id, mapping.handle.clone(), cursor))
             })
             .collect::<Vec<_>>();
         let mut terminal = HashSet::new();
-        for (handle, cursor) in candidates {
+        for (transport_stream_id, handle, cursor) in candidates {
             let OutputReplay {
                 terminal_cursor, ..
             } = self
-                .output_mappings_introduced_through(&handle, cursor)
+                .output_mappings_introduced_through(transport_stream_id, &handle, cursor)
                 .await?;
             if terminal_cursor {
                 terminal.insert(handle.stream_id);
@@ -4802,10 +4806,10 @@ impl StreamSession {
         after: Option<golem_common::model::durable_stream::StreamOffset>,
     ) -> Result<DurableStreamReader, String> {
         let handle = mapping.handle.clone();
-        let binding = self
+        let foreign_binding = self
             .binding(mapping.transport_stream_id)
-            .unwrap_or_else(|| StreamBindingRecord::foreign(&mapping));
-        let reader = if matches!(binding.source, StreamRecordReference::Local(_)) {
+            .is_none_or(|binding| matches!(binding.source, StreamRecordReference::Foreign(_)));
+        let reader = if self.producer.owns_handle_identity(&handle) {
             DurableStreamReader::Owned {
                 reader: Box::new(
                     self.producer
@@ -4815,6 +4819,7 @@ impl StreamSession {
                 ),
                 source: self.producer.clone(),
                 handle: Box::new(handle),
+                foreign_binding,
                 next_journal_lag_sample: Instant::now(),
             }
         } else {
@@ -5224,6 +5229,7 @@ enum DurableStreamReader {
         reader: Box<DurableCatchUpReader>,
         source: Arc<DurableStreamStore>,
         handle: Box<DurableStreamHandle>,
+        foreign_binding: bool,
         next_journal_lag_sample: Instant,
     },
     Attached(Box<AttachedDurableCatchUpReader>),
@@ -5256,20 +5262,25 @@ impl DurableStreamReader {
     }
 
     async fn next(&mut self) -> Result<Option<CommittedProducerStreamEvent>, StreamStoreError> {
-        match self {
-            Self::Owned { reader, .. } => reader.next().await,
-            Self::Attached(reader) => reader.next().await.map(|event| {
-                event.map(|mut event| {
-                    event.nested_references = event
-                        .nested_handles
-                        .iter()
-                        .cloned()
-                        .map(StreamRecordReference::Foreign)
-                        .collect();
-                    event
-                })
-            }),
-        }
+        let (event, foreign_binding) = match self {
+            Self::Owned {
+                reader,
+                foreign_binding,
+                ..
+            } => (reader.next().await?, *foreign_binding),
+            Self::Attached(reader) => (reader.next().await?, true),
+        };
+        Ok(event.map(|mut event| {
+            if foreign_binding {
+                event.nested_references = event
+                    .nested_handles
+                    .iter()
+                    .cloned()
+                    .map(StreamRecordReference::Foreign)
+                    .collect();
+            }
+            event
+        }))
     }
 }
 

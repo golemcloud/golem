@@ -1501,6 +1501,7 @@ async fn assert_local_nested_stream_drains_after_root_admission(root_kind: Strea
             reader: Box::new(producer.catch_up(handle.clone(), None).await.unwrap()),
             source: producer.clone(),
             handle: Box::new(handle),
+            foreign_binding: false,
             next_journal_lag_sample: Instant::now(),
         };
         assert!(matches!(
@@ -3758,6 +3759,7 @@ async fn owned_tail_backlog_uses_source_history() {
         reader: Box::new(producer.catch_up(handle.clone(), None).await.unwrap()),
         source: producer.clone(),
         handle: Box::new(handle.clone()),
+        foreign_binding: false,
         next_journal_lag_sample: Instant::now(),
     };
 
@@ -7716,6 +7718,21 @@ async fn remote_result_schema_validation_accepts_a_stream_in_union_branch_one() 
             .role,
         SessionStreamRole::Output
     );
+    streams
+        .producer
+        .end(None, handle.stream_id, 0, StreamEndResult::Ok)
+        .await
+        .unwrap();
+    let mut reader = streams.stream_reader(foreign.clone(), None).await.unwrap();
+    let terminal = reader.next().await.unwrap().unwrap();
+    assert!(matches!(
+        terminal.payload,
+        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+    ));
+    assert_eq!(
+        streams.binding(foreign.transport_stream_id).unwrap().source,
+        StreamRecordReference::Foreign(handle)
+    );
 }
 
 #[test]
@@ -8132,6 +8149,64 @@ async fn output_catch_up_persists_a_missing_nested_transport_mapping_before_emit
     }
     assert_eq!(bytes, vec![11]);
     assert_eq!(terminals, HashSet::from([7, nested_transport_stream_id]));
+
+    let received_root = restarted
+        .ensure_nested_mapping(None, root.clone(), SessionStreamRole::Output)
+        .await
+        .unwrap();
+    let (responses, _receiver) = mpsc::channel(4);
+    let received_children = restarted
+        .pump_output_stream_from(
+            received_root.transport_stream_id,
+            root.clone(),
+            None,
+            &responses,
+        )
+        .await
+        .unwrap();
+    assert_eq!(received_children.len(), 1);
+    let received_child = &received_children[0];
+    assert_ne!(
+        received_child.transport_stream_id,
+        nested_transport_stream_id
+    );
+    let binding = restarted
+        .binding(received_child.transport_stream_id)
+        .unwrap();
+    assert_eq!(
+        binding.source,
+        StreamRecordReference::Foreign(nested.clone())
+    );
+    let replayed = restarted
+        .output_mappings_introduced_through(
+            received_root.transport_stream_id,
+            &root,
+            root_ended.value,
+        )
+        .await
+        .unwrap();
+    assert_eq!(replayed.mappings, received_children);
+    assert!(replayed.terminal_cursor);
+
+    let mut child_owner = identity.agent_id.clone();
+    child_owner.agent_id = "forked-stream-owner".into();
+    let child_producer = DurableStreamStore::load(
+        Arc::new(TestOplog::default()),
+        identity.environment_id,
+        child_owner,
+        AgentFingerprint(Uuid::new_v4()),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        child_producer
+            .materialize_bindings(&[binding])
+            .await
+            .unwrap()[0]
+            .handle,
+        nested
+    );
 }
 
 #[test]

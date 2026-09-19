@@ -84,6 +84,22 @@ impl ProducerMetadataKey {
         owner_fingerprint: AgentFingerprint,
     ) -> Vec<Self> {
         let mut keys = Vec::new();
+        let bindings: &[StreamBindingRecord] = match record {
+            StreamSessionRecord::Mapping(record) => std::slice::from_ref(&record.mapping),
+            StreamSessionRecord::Prepared(record) => &record.stream_mappings,
+            StreamSessionRecord::InvocationResult(record) => &record.stream_mappings,
+            _ => &[],
+        };
+        keys.extend(bindings.iter().filter_map(|binding| {
+            match binding.source {
+                StreamRecordReference::Local(id) => {
+                    qualify_local_stream(id, owner_environment_id, owner, owner_fingerprint)
+                        .ok()
+                        .map(Self::Stream)
+                }
+                StreamRecordReference::Foreign(_) => None,
+            }
+        }));
         if let Some(key) = crate::worker::stream_session_record_key(
             record,
             owner_environment_id,
@@ -845,6 +861,16 @@ impl Projection<'_> {
         author: &OwnedAgentId,
         fingerprint: AgentFingerprint,
     ) -> Result<(), String> {
+        for key in ProducerMetadataKey::session_record(
+            record,
+            author.environment_id,
+            &author.agent_id,
+            fingerprint,
+        ) {
+            if let ProducerMetadataKey::Stream(stream) = key {
+                self.stream(stream).await?;
+            }
+        }
         if let Some(session) = crate::worker::stream_session_record_key(
             record,
             author.environment_id,
@@ -1968,7 +1994,9 @@ mod tests {
     use crate::services::worker::session_index_tests::UnusedComponentService;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::durable_stream::{StreamRegistrationInvocation, StreamRootKind};
+    use golem_common::model::durable_stream::{
+        StreamRegistrationInvocation, StreamRootKind, StreamSessionMappingUpdateRecord,
+    };
     use golem_common::model::{AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp};
     use golem_common::read_only_lock;
     use test_r::{test, timeout};
@@ -2254,6 +2282,46 @@ mod tests {
                 .has_active_attachment(&key.session_key, &handle)
                 .await
                 .unwrap()
+        );
+    }
+
+    #[test]
+    #[timeout("60s")]
+    async fn cold_session_mapping_loads_its_local_registration() {
+        let fixture = Fixture::new().await;
+        let producer = fixture.producer().await;
+        let handle = producer
+            .register(None, fixture.registration(0))
+            .await
+            .unwrap()
+            .value;
+        let binding = producer
+            .local_binding(17, &handle, SessionStreamRole::Output)
+            .await
+            .unwrap();
+        fixture.persist().await;
+        drop(producer);
+
+        let cold = fixture.producer().await;
+        cold.append_session_record(
+            None,
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: StreamRegistrationInvocation::Local(
+                    fixture.identity.invocation.idempotency_key.clone(),
+                ),
+                mapping: binding.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+        fixture.persist().await;
+        drop(cold);
+
+        let cold = fixture.producer().await;
+        assert_eq!(
+            cold.materialize_bindings(&[binding]).await.unwrap()[0].handle,
+            handle
         );
     }
 
