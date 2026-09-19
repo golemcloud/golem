@@ -279,18 +279,21 @@ describe("Container.forSchema", () => {
     }),
   )
 
-  it.effect("whole-object read asks for the inclusive last byte", () =>
+  it.effect("whole-object read asks once for the inclusive last byte", () =>
     Effect.gen(function* () {
       const fake = yield* makeBlobFake
       yield* Effect.gen(function* () {
-        // The host reads `end` as inclusive, so a whole-object read
-        // asks for `size - 1`. Asking for `size` is a range that is
-        // not in the object, which the fake refuses like the host.
         const c = yield* Blobstore.createContainer("whole-c")
         yield* c.writeData("k", u8("alpha"))
         const got = yield* c.getData("k")
         expect(s(got)).toBe("alpha")
       }).pipe(Effect.provide(fake.layer))
+      // The end offset is the last byte, not the size, and one call
+      // gets the whole object. The SDK once asked twice, to recover
+      // the last byte from a backend that read `end` as exclusive.
+      expect(yield* fake.getDataCalls).toEqual([
+        { container: "whole-c", object: "k", start: 0n, end: 4n },
+      ])
     }),
   )
 
@@ -307,7 +310,7 @@ describe("Container.forSchema", () => {
     }),
   )
 
-  it.effect("a range that is not in the object fails", () =>
+  it.effect("an end past the last byte fails", () =>
     Effect.gen(function* () {
       const fake = yield* makeBlobFake
       const exit = yield* Effect.exit(
@@ -322,7 +325,46 @@ describe("Container.forSchema", () => {
       if (exit._tag === "Failure") {
         const json = JSON.stringify(exit.cause)
         expect(json).toContain("BlobstoreHostError")
-        expect(json).toContain("is not in object")
+        expect(json).toContain("the byte range 0-5 is not in the blob")
+      }
+    }),
+  )
+
+  it.effect("a start after the end fails", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeBlobFake
+      const exit = yield* Effect.exit(
+        Effect.gen(function* () {
+          const c = yield* Blobstore.createContainer("inverted-range-c")
+          yield* c.writeData("k", u8("alpha"))
+          // The host refuses this before it reads the blob.
+          return yield* c.getData("k", { start: 3n, end: 1n })
+        }).pipe(Effect.provide(fake.layer)),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("BlobstoreHostError")
+        expect(json).toContain("the byte range 3-1 is not in the blob")
+      }
+    }),
+  )
+
+  it.effect("every range of an empty object fails", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeBlobFake
+      const exit = yield* Effect.exit(
+        Effect.gen(function* () {
+          const c = yield* Blobstore.createContainer("empty-range-c")
+          yield* c.writeData("k", new Uint8Array(0))
+          return yield* c.getData("k", { start: 0n, end: 0n })
+        }).pipe(Effect.provide(fake.layer)),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("BlobstoreHostError")
+        expect(json).toContain("the byte range 0-0 is not in the blob")
       }
     }),
   )

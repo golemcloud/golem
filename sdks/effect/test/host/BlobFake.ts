@@ -23,6 +23,7 @@ import {
   type HostObjectMetadata,
 } from "../../src/host/BlobstoreClient.js"
 import { BlobstoreHostError } from "../../src/Blobstore.js"
+import { rangeErrorMessage, rangeIsOutsideObject } from "../blob-range.js"
 
 interface ObjectEntry {
   bytes: Uint8Array
@@ -35,8 +36,21 @@ interface ContainerEntry {
   objects: Map<string, ObjectEntry>
 }
 
+/** One `getData` call the fake was asked for, in the order it arrived. */
+export interface GetDataCall {
+  readonly container: string
+  readonly object: string
+  readonly start: bigint
+  readonly end: bigint
+}
+
 export interface BlobFake {
   readonly layer: Layer.Layer<BlobstoreClient>
+  /**
+   * Every range the fake was asked to read. Lets a test pin the range
+   * the SDK derives, and the number of calls it takes to get it.
+   */
+  readonly getDataCalls: Effect.Effect<ReadonlyArray<GetDataCall>>
   /**
    * Queue a one-shot host failure for the *next* call into any
    * service method (top-level OR per-container). Consumed exactly
@@ -85,6 +99,7 @@ const guardWith = <A>(
 const makeFakeContainer = (
   entry: ContainerEntry,
   nextError: Ref.Ref<Option.Option<BlobstoreHostError>>,
+  calls: Array<GetDataCall>,
 ): HostContainer => {
   const info: HostContainer["info"] = guardWith(
     nextError,
@@ -107,6 +122,12 @@ const makeFakeContainer = (
     guardWith(
       nextError,
       Effect.gen(function* () {
+        calls.push({
+          container: entry.name,
+          object: objectName,
+          start: range.start,
+          end: range.end,
+        })
         const obj = entry.objects.get(objectName)
         if (obj === undefined) {
           return yield* Effect.fail(
@@ -116,19 +137,12 @@ const makeFakeContainer = (
             ),
           )
         }
-        // Mock follows the host: both offsets are inclusive, and a
-        // range with a byte that is not in the object is an error.
+        // Mock follows the host: see `test/blob-range.ts`.
         const start = Number(range.start)
         const end = Number(range.end)
-        if (start > end || end >= obj.bytes.length) {
+        if (rangeIsOutsideObject(start, end, obj.bytes.length)) {
           return yield* Effect.fail(
-            new BlobstoreHostError(
-              new Error(
-                `range ${start}-${end} is not in object ${objectName} of ` +
-                  `${obj.bytes.length} bytes`,
-              ),
-              "container.getData",
-            ),
+            new BlobstoreHostError(new Error(rangeErrorMessage(start, end)), "container.getData"),
           )
         }
         return new Uint8Array(obj.bytes.subarray(start, end + 1))
@@ -225,6 +239,7 @@ const makeFakeContainer = (
 export const make: Effect.Effect<BlobFake> = Effect.gen(function* () {
   const containers = new Map<string, ContainerEntry>()
   const nextError = yield* Ref.make<Option.Option<BlobstoreHostError>>(Option.none())
+  const calls: Array<GetDataCall> = []
 
   const ensure = (name: string): ContainerEntry => {
     let entry = containers.get(name)
@@ -236,7 +251,10 @@ export const make: Effect.Effect<BlobFake> = Effect.gen(function* () {
   }
 
   const acquire = (entry: ContainerEntry) =>
-    Effect.acquireRelease(Effect.succeed(makeFakeContainer(entry, nextError)), () => Effect.void)
+    Effect.acquireRelease(
+      Effect.succeed(makeFakeContainer(entry, nextError, calls)),
+      () => Effect.void,
+    )
 
   const layer = Layer.succeed(
     BlobstoreClient,
@@ -372,6 +390,7 @@ export const make: Effect.Effect<BlobFake> = Effect.gen(function* () {
   return {
     layer,
     setNextError: (err) => Ref.set(nextError, Option.some(err)),
+    getDataCalls: Effect.sync(() => [...calls]),
     containers: Effect.sync(() => Array.from(containers.keys())),
     objectsIn: (name) =>
       Effect.sync(() => {
