@@ -214,6 +214,13 @@ impl MultiSqliteIndexedStorage {
                 let mode = super::agent_mode_prefix(*agent_mode);
                 format!("{mode}-oplog-{}.db", self.agent_id_hash(agent_id).await)
             }
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!("{mode}-oplog-{}.db", self.agent_id_hash(agent_id).await)
+            }
             IndexedStorageNamespace::CompressedOpLog {
                 agent_id,
                 agent_mode,
@@ -428,6 +435,34 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         self.storage_by_namespace(namespace)
             .await?
             .append_many(svc_name, api_name, entity_name, namespace, key, pairs)
+            .await
+    }
+
+    async fn publish_staged(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        agent_id: &AgentId,
+        agent_mode: golem_common::model::agent::AgentMode,
+        stage_key: &str,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        let namespace = IndexedStorageNamespace::OpLog {
+            agent_id: agent_id.clone(),
+            agent_mode,
+        };
+        self.storage_by_namespace(&namespace)
+            .await?
+            .publish_staged(
+                svc_name,
+                api_name,
+                agent_id,
+                agent_mode,
+                stage_key,
+                target_key,
+                expected_last_id,
+            )
             .await
     }
 

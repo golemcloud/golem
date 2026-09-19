@@ -211,8 +211,11 @@ unverified metering settlement, including `ObserverLost` during startup rollback
 
 Create, open, archival, fork-source reads, and deletion share the logical oplog's exclusive cold
 lifecycle guard. Fork reads persisted source history without constructing an absent source;
-target construction and rollback are not atomic and are not protected across executor ownership
-changes. Archival is routed through the existing worker owner. A scheduled archive releases the
+the complete hidden stage is published atomically into an absent target under its lifecycle guard.
+Source and target guards are never held together, and publication releases the target guard before
+resuming the child. Cancellation or failure may leave an unreachable hidden stage; cleanup removes
+only that stage's index and never target payloads or canonical state. Archival is routed through the
+existing worker owner. A scheduled archive releases the
 guard once its transfer is queued, while the oplog sweep holds it until the transfer finishes. No
 lifecycle lock is taken for individual stream items, oplog reads, or replay steps.
 

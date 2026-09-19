@@ -65,6 +65,17 @@ impl InMemoryIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}/oplog/{component_id}/{agent_name}/{key}")
             }
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id:
+                    AgentId {
+                        component_id,
+                        agent_id: agent_name,
+                    },
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}/staged-oplog/{component_id}/{agent_name}/{key}")
+            }
             IndexedStorageNamespace::CompressedOpLog {
                 agent_id:
                     AgentId {
@@ -243,7 +254,10 @@ impl IndexedStorage for InMemoryIndexedStorage {
         id: u64,
         value: Vec<u8>,
     ) -> Result<(), IndexedStorageError> {
-        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
+        let primary_oplog_insert = matches!(
+            &namespace,
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+        );
         let composite_key = Self::composite_key(namespace, key);
         let mut entry = self
             .data
@@ -260,6 +274,53 @@ impl IndexedStorage for InMemoryIndexedStorage {
         } else {
             Err(IndexedStorageError::Other("Key already exists".to_string()))
         }
+    }
+
+    async fn publish_staged(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        agent_id: &AgentId,
+        agent_mode: golem_common::model::agent::AgentMode,
+        stage_key: &str,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        let stage = Self::composite_key(
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id: agent_id.clone(),
+                agent_mode,
+            },
+            stage_key,
+        );
+        let target = Self::composite_key(
+            IndexedStorageNamespace::OpLog {
+                agent_id: agent_id.clone(),
+                agent_mode,
+            },
+            target_key,
+        );
+        if self.data.contains_async(&target).await {
+            return Ok(false);
+        }
+        let staged = self
+            .data
+            .read_async(&stage, |_, entries| entries.clone())
+            .await
+            .ok_or_else(|| IndexedStorageError::Other("staged oplog is missing".to_string()))?;
+        if expected_last_id == 0
+            || staged.len() as u64 != expected_last_id
+            || staged.keys().copied().ne(1..=expected_last_id)
+        {
+            return Err(IndexedStorageError::Other(
+                "staged oplog is empty, gapped, or has an unexpected tip".to_string(),
+            ));
+        }
+        if self.data.insert_async(target, staged).await.is_err() {
+            return Ok(false);
+        }
+        self.data.remove_async(&stage).await;
+        Ok(true)
     }
 
     async fn length(
@@ -417,7 +478,8 @@ mod tests {
     use test_r::test;
 
     use crate::storage::indexed::{
-        IndexedStorageLabelledApi, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+        IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
+        IndexedStorageNamespace,
     };
     use assert2::check;
     use golem_common::model::AgentId;
@@ -433,6 +495,292 @@ mod tests {
                 agent_id: "worker".to_string(),
             })
             .clone()
+    }
+
+    fn staged_namespace() -> IndexedStorageNamespace {
+        IndexedStorageNamespace::StagedOpLog {
+            agent_id: test_agent_id(),
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
+        }
+    }
+
+    #[test]
+    async fn staged_publication_is_atomic_validated_and_hidden() {
+        let storage = super::InMemoryIndexedStorage::new();
+        for (id, value) in [(1, b"one"), (2, b"two")] {
+            storage
+                .append(
+                    "test",
+                    "append",
+                    "entry",
+                    staged_namespace(),
+                    "stage",
+                    id,
+                    value.to_vec(),
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            storage
+                .scan(
+                    "test",
+                    "scan",
+                    IndexedStorageMetaNamespace::Oplog {
+                        agent_mode: golem_common::model::agent::AgentMode::Durable,
+                    },
+                    None,
+                    0,
+                    100,
+                )
+                .await
+                .unwrap()
+                .1,
+            Vec::<String>::new()
+        );
+        assert!(
+            storage
+                .publish_staged(
+                    "test",
+                    "publish",
+                    &test_agent_id(),
+                    golem_common::model::agent::AgentMode::Durable,
+                    "stage",
+                    "target",
+                    2
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .read(
+                    "test",
+                    "read",
+                    "entry",
+                    IndexedStorageNamespace::OpLog {
+                        agent_id: test_agent_id(),
+                        agent_mode: golem_common::model::agent::AgentMode::Durable
+                    },
+                    "target",
+                    1,
+                    2
+                )
+                .await
+                .unwrap(),
+            vec![(1, b"one".to_vec()), (2, b"two".to_vec())]
+        );
+        assert!(
+            !storage
+                .exists("test", "exists", staged_namespace(), "stage")
+                .await
+                .unwrap()
+        );
+
+        for (key, pairs, tip) in [
+            ("empty", vec![], 1),
+            ("gap", vec![(1, b"one".to_vec()), (3, b"three".to_vec())], 3),
+            ("tip", vec![(1, b"one".to_vec())], 2),
+        ] {
+            for (id, value) in pairs {
+                storage
+                    .append(
+                        "test",
+                        "append",
+                        "entry",
+                        staged_namespace(),
+                        key,
+                        id,
+                        value,
+                    )
+                    .await
+                    .unwrap();
+            }
+            assert!(
+                storage
+                    .publish_staged(
+                        "test",
+                        "publish",
+                        &test_agent_id(),
+                        golem_common::model::agent::AgentMode::Durable,
+                        key,
+                        key,
+                        tip
+                    )
+                    .await
+                    .is_err()
+            );
+            assert!(
+                !storage
+                    .exists(
+                        "test",
+                        "exists",
+                        IndexedStorageNamespace::OpLog {
+                            agent_id: test_agent_id(),
+                            agent_mode: golem_common::model::agent::AgentMode::Durable
+                        },
+                        key
+                    )
+                    .await
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
+        let storage = std::sync::Arc::new(super::InMemoryIndexedStorage::new());
+        for stage in ["first", "second"] {
+            storage
+                .append(
+                    "test",
+                    "append",
+                    "entry",
+                    staged_namespace(),
+                    stage,
+                    1,
+                    stage.as_bytes().to_vec(),
+                )
+                .await
+                .unwrap();
+        }
+        let a = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .publish_staged(
+                        "test",
+                        "publish",
+                        &test_agent_id(),
+                        golem_common::model::agent::AgentMode::Durable,
+                        "first",
+                        "target",
+                        1,
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        let b = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .publish_staged(
+                        "test",
+                        "publish",
+                        &test_agent_id(),
+                        golem_common::model::agent::AgentMode::Durable,
+                        "second",
+                        "target",
+                        1,
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        assert_ne!(a.await.unwrap(), b.await.unwrap());
+        let before = storage
+            .read(
+                "test",
+                "read",
+                "entry",
+                IndexedStorageNamespace::OpLog {
+                    agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
+                },
+                "target",
+                1,
+                1,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .publish_staged(
+                    "test",
+                    "publish",
+                    &test_agent_id(),
+                    golem_common::model::agent::AgentMode::Durable,
+                    if before[0].1 == b"first" {
+                        "second"
+                    } else {
+                        "first"
+                    },
+                    "target",
+                    1
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .read(
+                    "test",
+                    "read",
+                    "entry",
+                    IndexedStorageNamespace::OpLog {
+                        agent_id: test_agent_id(),
+                        agent_mode: golem_common::model::agent::AgentMode::Durable
+                    },
+                    "target",
+                    1,
+                    1
+                )
+                .await
+                .unwrap(),
+            before
+        );
+
+        storage
+            .append(
+                "test",
+                "append",
+                "entry",
+                staged_namespace(),
+                "third",
+                1,
+                b"staged".to_vec(),
+            )
+            .await
+            .unwrap();
+        let publish = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .publish_staged(
+                        "test",
+                        "publish",
+                        &test_agent_id(),
+                        golem_common::model::agent::AgentMode::Durable,
+                        "third",
+                        "ordinary-race",
+                        1,
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        let append = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .append(
+                        "test",
+                        "append",
+                        "entry",
+                        IndexedStorageNamespace::OpLog {
+                            agent_id: test_agent_id(),
+                            agent_mode: golem_common::model::agent::AgentMode::Durable,
+                        },
+                        "ordinary-race",
+                        1,
+                        b"ordinary".to_vec(),
+                    )
+                    .await
+                    .is_ok()
+            })
+        };
+        assert_ne!(publish.await.unwrap(), append.await.unwrap());
     }
 
     #[test]

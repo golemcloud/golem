@@ -109,6 +109,42 @@ pub trait OplogService: Debug + Send + Sync {
 
     fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>>;
 
+    /// Creates an empty, hidden oplog with one writer and a fresh per-attempt stage id.
+    /// It bypasses visible oplog caches, archives and derived session indexes. Payloads use
+    /// the final agent's blob namespace so publication needs no payload rewrite.
+    async fn create_staged(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _stage_id: uuid::Uuid,
+        _initial_worker_metadata: AgentMetadata,
+    ) -> Result<Arc<dyn Oplog>, String> {
+        Err("staged oplogs are unsupported by this oplog service".to_string())
+    }
+
+    /// Publishes a fully committed stage if no primary oplog exists. The caller must stop
+    /// and drop its staged writer first. `false` means a competing target exists; errors may
+    /// have indeterminate outcomes and must be reconciled using the target's fork provenance.
+    async fn publish_staged(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _stage_id: uuid::Uuid,
+        _expected_last_index: OplogIndex,
+    ) -> Result<bool, String> {
+        Err("staged oplogs are unsupported by this oplog service".to_string())
+    }
+
+    /// Removes only this attempt's hidden index, never the target's shared payload namespace.
+    async fn discard_staged(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _stage_id: uuid::Uuid,
+    ) -> Result<(), String> {
+        Err("staged oplogs are unsupported by this oplog service".to_string())
+    }
+
     async fn create(
         &self,
         lifecycle: &mut OplogLifecycleGuard,

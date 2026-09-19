@@ -18,10 +18,9 @@ use super::file_loader::FileLoader;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService};
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::metrics::workers::record_worker_call;
-use crate::model::ExecutionStatus;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::oplog::{CommitLevel, Oplog, OplogLifecycleGuard, OplogOps};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -45,6 +44,7 @@ use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::base_model::regions::DeletedRegionsBuilder;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::GolemApiFork;
@@ -54,13 +54,14 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{AgentFingerprint, AgentMetadata, Timestamp};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
-use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use tokio::runtime::Handle;
 use uuid::Uuid;
 use wasmtime_wasi_http::HttpConnectionPool;
+
+mod payload;
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
@@ -511,7 +512,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<(Arc<dyn Oplog>, OplogLifecycleGuard), WorkerExecutorError> {
+    ) -> Result<(Arc<dyn Oplog>, OwnedAgentId, Uuid), WorkerExecutorError> {
         record_worker_call("fork");
 
         tracing::debug!(
@@ -630,37 +631,18 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 WorkerExecutorError::unknown("Failed to update worker id in oplog entry"),
             )?;
 
-        let mut target_lifecycle = self.oplog_service.lock_lifecycle(&target_agent_id).await;
-        if self
-            .worker_service
-            .get(&owned_target_agent_id)
-            .await?
-            .is_some()
-        {
-            return Err(WorkerExecutorError::worker_already_exists(target_agent_id));
-        }
-        // Note: Features of the oplog that rely on the current status / execution status will not work correctly as we are not updating them here.
+        let stage_id = Uuid::new_v4();
         let new_oplog = self
             .oplog_service
-            .create(
-                &mut target_lifecycle,
+            .create_staged(
                 &owned_target_agent_id,
                 agent_mode,
-                target_initial_oplog_entry,
+                stage_id,
                 target_worker_metadata,
-                read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
-                    arc_swap::ArcSwap::from_pointee(
-                        initial_source_worker_metadata.last_known_status,
-                    ),
-                )),
-                read_only_lock::std::ReadOnlyLock::new(Arc::new(std::sync::RwLock::new(
-                    ExecutionStatus::Suspended {
-                        agent_mode,
-                        timestamp: Timestamp::now_utc(),
-                    },
-                ))),
             )
-            .await;
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        new_oplog.add(target_initial_oplog_entry).await;
 
         let oplog_range = OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);
 
@@ -672,11 +654,24 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let mut deleted_regions_builder = DeletedRegionsBuilder::new();
 
         for oplog_index in oplog_range {
-            let entry = rewrite_forked_oplog_entry(
+            let mut entry = rewrite_forked_oplog_entry(
                 read_source(oplog_index).await,
                 &owned_source_agent_id.agent_id,
                 &owned_target_agent_id.agent_id,
             );
+            payload::copy_entry_payloads(&mut entry, |payload_id, md5_hash| async {
+                let bytes = self
+                    .oplog_service
+                    .download_raw_payload(&owned_source_agent_id, agent_mode, payload_id, md5_hash)
+                    .await?;
+                new_oplog.upload_raw_payload(bytes).await
+            })
+            .await
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed copying fork payload at oplog index {oplog_index}: {error}"
+                ))
+            })?;
             new_oplog.add(entry.clone()).await;
 
             if let OplogEntry::Revert { dropped_region, .. } = &entry {
@@ -752,7 +747,46 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 .await;
         }
 
-        Ok((new_oplog, target_lifecycle))
+        Ok((new_oplog, owned_target_agent_id, stage_id))
+    }
+
+    async fn publish_fork_stage(
+        &self,
+        oplog: Arc<dyn Oplog>,
+        target: &OwnedAgentId,
+        stage_id: Uuid,
+    ) -> Result<(), WorkerExecutorError> {
+        oplog.commit(CommitLevel::Always).await;
+        let last = oplog.current_oplog_index().await;
+        drop(oplog);
+
+        let target_lifecycle = self.oplog_service.lock_lifecycle(&target.agent_id).await;
+        let result = self
+            .oplog_service
+            .publish_staged(target, AgentMode::Durable, stage_id, last)
+            .await;
+        drop(target_lifecycle);
+
+        let cleanup = self
+            .oplog_service
+            .discard_staged(target, AgentMode::Durable, stage_id)
+            .await;
+        if let Err(error) = cleanup {
+            tracing::warn!(
+                agent_id = %target,
+                stage_id = %stage_id,
+                error = %error,
+                "Failed to discard hidden fork stage"
+            );
+        }
+
+        match result {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(WorkerExecutorError::worker_already_exists(
+                target.agent_id.clone(),
+            )),
+            Err(error) => Err(WorkerExecutorError::runtime(error)),
+        }
     }
 
     pub fn update_agent_id(
@@ -866,7 +900,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError> {
-        let (new_oplog, target_lifecycle) = self
+        let (new_oplog, target, stage_id) = self
             .copy_source_oplog(
                 fork_account_id,
                 source_agent_id,
@@ -874,9 +908,8 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                 oplog_index_cut_off,
             )
             .await?;
-
-        new_oplog.commit(CommitLevel::Always).await;
-        drop(target_lifecycle);
+        self.publish_fork_stage(new_oplog, &target, stage_id)
+            .await?;
 
         // We go through worker proxy to resume the worker
         // as we need to make sure as it may live in another worker executor,
@@ -902,7 +935,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError> {
-        let (new_oplog, target_lifecycle) = self
+        let (new_oplog, target, stage_id) = self
             .copy_source_oplog(
                 fork_account_id,
                 source_agent_id,
@@ -966,8 +999,8 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                 .await;
         }
 
-        new_oplog.commit(CommitLevel::Always).await;
-        drop(target_lifecycle);
+        self.publish_fork_stage(new_oplog, &target, stage_id)
+            .await?;
 
         // We go through worker proxy to resume the worker
         // as we need to make sure as it may live in another worker executor,
