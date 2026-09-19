@@ -6297,7 +6297,8 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
     assert_eq!(secondary_length, 0);
     assert_eq!(tertiary_length, 1);
 
-    assert!(!primary_exists);
+    // The primary key fences new creation even after all entries have been archived.
+    assert!(primary_exists);
     assert!(!secondary_exists);
     assert!(tertiary_exists);
 }
