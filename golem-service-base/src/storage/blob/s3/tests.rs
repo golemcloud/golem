@@ -38,11 +38,14 @@ use http_body_util::StreamBody;
 use pretty_assertions::assert_eq;
 use std::convert::Infallible;
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{test, timeout};
+use tracing::Level;
+use tracing::instrument::WithSubscriber;
 use uuid::Uuid;
 
 /// A request that the scripted transport received.
@@ -88,8 +91,8 @@ impl SentRequest {
 
 /// The answer of the scripted transport to one request.
 ///
-/// The answer has a `Content-Length` only when `content_length` is set, and its body counts
-/// itself in `body_reads` when it is set and the body gets read.
+/// The answer has a `Content-Length` only when `content_length` is set. The body is one frame.
+/// When `body_reads` is set, a read of that frame adds 1 to it.
 struct Answer {
     status: u16,
     content_range: Option<&'static str>,
@@ -116,8 +119,8 @@ impl Answer {
         }
     }
 
-    /// The whole object with the status 200 and its `Content-Length`, the answer of a server
-    /// that ignores the range. Its body counts itself in `body_reads` when it gets read.
+    /// The whole object with the status 200 and its `Content-Length`, which the backend takes as
+    /// the answer of a server that ignores the range. A read of the body adds 1 to `body_reads`.
     fn whole_object(body: &str, body_reads: &Arc<AtomicUsize>) -> Self {
         Self {
             content_length: Some(body.len()),
@@ -126,8 +129,8 @@ impl Answer {
         }
     }
 
-    /// Gives the body, which counts itself in `body_reads` when it is set and the body gets
-    /// read.
+    /// Gives the body as one frame. When `body_reads` is set, a read of that frame adds 1 to
+    /// it.
     fn into_body(self) -> SdkBody {
         match self.body_reads {
             Some(body_reads) => SdkBody::from_body_1_x(StreamBody::new(
@@ -242,6 +245,90 @@ fn scripted_storage_with(
 
 fn sent(requests: &SentRequests) -> Vec<SentRequest> {
     requests.lock().unwrap().clone()
+}
+
+/// Gives the `BlobRangeError` of an error of the blob storage, or `None` for another error.
+fn range_error(error: anyhow::Error) -> Option<BlobRangeError> {
+    error.downcast_ref::<BlobRangeError>().copied()
+}
+
+/// The lines that a subscriber wrote, one JSON object for each event.
+#[derive(Clone, Default)]
+struct LogLines(Arc<Mutex<Vec<u8>>>);
+
+impl LogLines {
+    /// Gives the `op_label` and the message of each event of the retry loop of
+    /// `golem_common::retries`, in their order.
+    fn retry_events(&self) -> Vec<(String, String)> {
+        let field = |event: &serde_json::Value, name: &str| {
+            event["fields"][name]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        };
+        String::from_utf8(self.0.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|event| event["target"] == "golem_common::retries")
+            .map(|event| (field(&event, "op_label"), field(&event, "message")))
+            .collect()
+    }
+}
+
+impl std::io::Write for LogLines {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogLines {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// Runs a future with a subscriber that records each event of the `error` level.
+///
+/// Gives the output of the future, and the `op_label` and the message of each recorded event
+/// of the retry loop, in their order.
+async fn with_error_log<T>(future: impl Future<Output = T>) -> (T, Vec<(String, String)>) {
+    let lines = LogLines::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_max_level(Level::ERROR)
+        .with_writer(lines.clone())
+        .finish();
+    let output = future.with_subscriber(subscriber).await;
+    (output, lines.retry_events())
+}
+
+/// Gives the number of failures that the metric `external_call_failure_total` counts for the
+/// target `test` and the given operation.
+fn external_call_failures(op_label: &str) -> f64 {
+    prometheus::gather()
+        .iter()
+        .filter(|family| family.name() == "external_call_failure_total")
+        .flat_map(|family| family.get_metric())
+        .filter(|metric| {
+            let has = |name: &str, value: &str| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| (label.name(), label.value()) == (name, value))
+            };
+            has("target", "test") && has("op", op_label)
+        })
+        .map(|metric| metric.get_counter().value())
+        .next()
+        .unwrap_or(0.0)
 }
 
 fn namespace() -> BlobStorageNamespace {
@@ -472,10 +559,7 @@ async fn get_raw_slice_refuses_an_inverted_range_without_a_request() {
         .await;
 
     assert_eq!(
-        (
-            result.map_err(|error| error.downcast_ref::<BlobRangeError>().copied()),
-            sent(&requests).len()
-        ),
+        (result.map_err(range_error), sent(&requests).len()),
         (Err(Some(BlobRangeError { start: 3, end: 2 })), 0)
     );
 }
@@ -497,7 +581,7 @@ async fn get_raw_slice_turns_416_into_a_range_error_without_a_retry() {
 
     assert_eq!(
         (
-            result.map_err(|error| error.downcast_ref::<BlobRangeError>().copied()),
+            result.map_err(range_error),
             sent(&requests)
                 .iter()
                 .map(|request| request.range.clone())
@@ -511,11 +595,71 @@ async fn get_raw_slice_turns_416_into_a_range_error_without_a_retry() {
 }
 
 #[test]
+async fn get_raw_slice_keeps_a_416_and_a_missing_object_out_of_the_error_log() {
+    // Each read makes 1 attempt. The read of the failing object gets a server error, so it is
+    // the control that shows that the log and the metric record a failure.
+    let (storage, requests) =
+        scripted_storage_with(RetryConfig::disabled(), 1, "", |request, _| {
+            if request.uri.contains("outside") {
+                Answer::new(416, INVALID_RANGE)
+            } else if request.uri.contains("missing") {
+                Answer::new(404, NO_SUCH_KEY)
+            } else {
+                Answer::new(500, INTERNAL_ERROR)
+            }
+        });
+    let read = |path: &'static str, op_label: &'static str| {
+        storage.get_raw_slice("test", op_label, namespace(), Path::new(path), 6, 9)
+    };
+
+    let ((outside, missing, failing), errors) = with_error_log(async {
+        (
+            read("outside", "get-raw-slice-416")
+                .await
+                .map_err(range_error),
+            read("missing", "get-raw-slice-404")
+                .await
+                .map_err(range_error),
+            read("failing", "get-raw-slice-500")
+                .await
+                .map_err(range_error),
+        )
+    })
+    .await;
+
+    assert_eq!(
+        (
+            outside,
+            missing,
+            failing,
+            errors,
+            [
+                external_call_failures("get-raw-slice-416"),
+                external_call_failures("get-raw-slice-404"),
+                external_call_failures("get-raw-slice-500")
+            ],
+            sent(&requests).len()
+        ),
+        (
+            Err(Some(BlobRangeError { start: 6, end: 9 })),
+            Ok(None),
+            Err(None),
+            vec![(
+                "get-raw-slice-500".to_string(),
+                "op failure - no more retries".to_string()
+            )],
+            [0.0, 0.0, 1.0],
+            3
+        )
+    );
+}
+
+#[test]
 async fn get_raw_slice_takes_the_range_out_of_a_200_response() {
     // The script answers 200 with the whole object, no content range and no content length,
-    // which is the response of a server that ignores the range (RFC 9110, sections 14.2 and
-    // 15.5.17). The last range is the one that a guest reaches the host with after it gives
-    // a negative offset for the start and the end. The S3 case of
+    // which the backend takes as the response of a server that ignores the range (RFC 9110,
+    // sections 14.2 and 15.5.17). The last range is the one that a guest reaches the host with
+    // after it gives a negative offset for the start and the end. The S3 case of
     // `get_raw_slice_uses_inclusive_ranges` in `tests/blob_storage.rs` sends the same range
     // to MinIO.
     let (storage, requests) = scripted_storage("", |request, _| {
@@ -546,11 +690,7 @@ async fn get_raw_slice_takes_the_range_out_of_a_200_response() {
         ("blob", u64::MAX, u64::MAX),
     ];
     let range_errors = futures::stream::iter(outside)
-        .then(|(path, start, end)| async move {
-            read(path, start, end)
-                .await
-                .map_err(|error| error.downcast_ref::<BlobRangeError>().copied())
-        })
+        .then(|(path, start, end)| async move { read(path, start, end).await.map_err(range_error) })
         .collect::<Vec<_>>()
         .await;
 
@@ -596,11 +736,7 @@ async fn get_raw_slice_refuses_a_range_past_the_content_length_without_reading_t
 
     let outside = [(0, 6), (6, 6), (7, u64::MAX)];
     let range_errors = futures::stream::iter(outside)
-        .then(|(start, end)| async move {
-            read(start, end)
-                .await
-                .map_err(|error| error.downcast_ref::<BlobRangeError>().copied())
-        })
+        .then(|(start, end)| async move { read(start, end).await.map_err(range_error) })
         .collect::<Vec<_>>()
         .await;
     let bodies_read_outside = body_reads.load(Ordering::SeqCst);
@@ -687,11 +823,7 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
             end,
         )
     };
-    let read_error = |start, end| async move {
-        read(start, end)
-            .await
-            .map_err(|error| error.downcast_ref::<BlobRangeError>().copied())
-    };
+    let read_error = |start, end| async move { read(start, end).await.map_err(range_error) };
 
     let inside = read(1, 3).await.unwrap();
     let one_byte = read(5, 5).await.unwrap();
@@ -706,8 +838,8 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
     let short_body = read_error(0, 2).await;
     let long_body = read_error(3, 4).await;
     let without_content_range = read_error(0, 5).await;
-    // A 206 response without a content range does not hold the whole object, so its content
-    // length does not tell whether the range is in the object.
+    // The backend does not take a 206 response without a content range as the whole object,
+    // so its content length does not tell the backend whether the range is in the object.
     let partial_without_content_range = read_error(0, 9).await;
 
     assert_eq!(

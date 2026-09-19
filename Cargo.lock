@@ -4246,6 +4246,7 @@ dependencies = [
  "tonic-tracing-opentelemetry",
  "tower 0.5.3",
  "tracing",
+ "tracing-subscriber",
  "tryhard",
  "url",
  "uuid",
