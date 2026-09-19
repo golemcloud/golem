@@ -2912,6 +2912,88 @@ async fn completed_output_reconstruction_does_not_require_an_attachment() {
 }
 
 #[test]
+async fn same_owner_foreign_cancellation_requires_routed_authority() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = producer
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    let mapping = StreamSessionMappingRecord {
+        transport_stream_id: 17,
+        handle: handle.clone(),
+        role: SessionStreamRole::Output,
+    };
+    let session_reference =
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone());
+    let intent = StreamConsumerCancelIntentRecord {
+        format_version: DURABLE_STREAM_FORMAT_VERSION,
+        session_key: session_reference.clone(),
+        consumer_invocation: identity.invocation.idempotency_key,
+        source: StreamRecordReference::Foreign(handle),
+        epoch: 1,
+        role: StreamCancelRole::OutputConsumer,
+        reason: StreamCancelReason::GuestDrop,
+        details: None,
+    };
+    for record in [
+        StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: session_reference.clone(),
+            mapping: StreamBindingRecord::foreign(&mapping),
+        }),
+        StreamSessionRecord::ConsumerCancelIntent(intent.clone()),
+    ] {
+        producer.append_session_record(None, record).await.unwrap();
+    }
+    let streams = StreamSession::new(producer.clone(), oplog.clone(), session_reference, []);
+    let before = oplog.current_oplog_index().await;
+    let live = streams.clone();
+    let error = producer
+        .run_admitted(None, 0, true, move |_, admission| async move {
+            let guard = live.session_lock.lock().await;
+            live.apply_cancel_intent_owned(&admission, mapping, intent, guard)
+                .await
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error,
+        "foreign durable stream cancellation routing is unavailable"
+    );
+    assert_eq!(oplog.current_oplog_index().await, before);
+    assert_eq!(
+        streams
+            .reconcile_foreign_cancellation_intents(Duration::from_secs(1))
+            .await
+            .unwrap_err(),
+        "foreign cancellation routing is unavailable"
+    );
+    assert_eq!(oplog.current_oplog_index().await, before);
+}
+
+#[test]
 async fn local_cancellation_intent_recovers_without_retry_and_preserves_terminal() {
     for already_ended in [false, true] {
         let identity = identity();
@@ -9846,18 +9928,24 @@ async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registra
     )
     .await
     .unwrap();
+    let element_type = SchemaType::u32();
+    let graph = SchemaGraph::anonymous(element_type.clone());
     let forwarded = producer
         .register(
             None,
-            registration(
-                &identity,
-                StreamRegistrationCoordinate::Root {
-                    invocation_id: identity.invocation.clone(),
-                    root_kind: StreamRootKind::MethodInput,
-                    recursive_value_path: Vec::new(),
-                },
-                StreamSourceKind::AgentHostedInput,
-            ),
+            ProducerRegistrationRequest {
+                element_schema_fingerprint: schema_fingerprint_v1(&graph, Some(&element_type))
+                    .unwrap(),
+                ..registration(
+                    &identity,
+                    StreamRegistrationCoordinate::Root {
+                        invocation_id: identity.invocation.clone(),
+                        root_kind: StreamRootKind::MethodInput,
+                        recursive_value_path: Vec::new(),
+                    },
+                    StreamSourceKind::AgentHostedInput,
+                )
+            },
         )
         .await
         .unwrap()
@@ -9885,38 +9973,32 @@ async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registra
         [],
     )
     .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
-    let mapping_streams = streams.clone();
-    let mapping_handle = forwarded.clone();
-    producer
-        .run_owned(None, 0, move |_, context| async move {
-            mapping_streams
-                .append_mapping_once(
-                    &context,
-                    StreamBindingRecord {
-                        transport_stream_id: 3,
-                        source: StreamRecordReference::Foreign(mapping_handle),
-                        role: SessionStreamRole::Output,
-                    },
-                )
-                .await
-        })
+    let (publisher, endpoint) = test_output_stream_pair(2).unwrap();
+    publisher
+        .publish_item(SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+            ForwardedDurableInput {
+                handle: forwarded.clone(),
+            },
+        )))
         .await
         .unwrap();
-    let value = ProtoSchemaValue {
-        value: Some(schema_value::Value::StreamReference(
-            SchemaValueStreamReference { stream_id: 0 },
-        )),
-    };
-    producer
-        .write_items_with_nested_sources(
-            None,
-            parent.stream_id,
-            0,
-            StreamItemsPayload::Values(vec![value.encode_to_vec()]),
-            vec![NestedStreamWrite::Forward(forwarded.clone())],
+    publisher.publish_end().await.unwrap();
+    let (nested_tx, mut nested_rx) = mpsc::unbounded_channel();
+    streams
+        .drain_output(
+            PendingOwnedStreamDrain {
+                handle: parent.clone(),
+                endpoint,
+                element_type: SchemaType::stream(Some(element_type)),
+                role: SessionStreamRole::Output,
+            },
+            Arc::new(graph),
+            nested_tx,
         )
         .await
         .unwrap();
+    assert!(nested_rx.try_recv().is_err());
+    assert_eq!(streams.mappings.read().unwrap().len(), 1);
 
     let mut reader = producer.catch_up(parent, None).await.unwrap();
     let event = reader.next().await.unwrap().unwrap();

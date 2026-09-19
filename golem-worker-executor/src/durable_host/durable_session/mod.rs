@@ -2471,7 +2471,7 @@ impl StreamSession {
         {
             return Ok(());
         }
-        if self.producer.owns_handle_identity(&mapping.handle) {
+        if matches!(intent.source, StreamRecordReference::Local(_)) {
             let attribution = self.entity_parent_start_index;
             admission
                 .submit(move |owner, context| async move {
@@ -3875,6 +3875,9 @@ impl StreamSession {
                                                         .into_iter()
                                                         .zip(nested_handles)
                                                     {
+                                                        if output.forwarded_handle.is_some() {
+                                                            continue;
+                                                        }
                                                         let mut binding = session
                                                             .producer
                                                             .local_binding(0, &nested_handle, role)

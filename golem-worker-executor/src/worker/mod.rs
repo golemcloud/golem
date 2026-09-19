@@ -5618,6 +5618,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             );
             let topologies = foreign_mappings
                 .iter()
+                .filter(|mapping| !producer.owns_handle_identity(&mapping.handle))
                 .map(|mapping| {
                     Ok(
                         golem_common::model::durable_stream::StreamTopologyPreparedRecord {
@@ -5755,7 +5756,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let persisted_foreign_mappings = producer
             .materialize_bindings(persisted_foreign_bindings)
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            .into_iter()
+            .filter(|mapping| !producer.owns_handle_identity(&mapping.handle))
+            .collect::<Vec<_>>();
         for mapping in &persisted_foreign_mappings {
             if streams
                 .has_journaled_consumer_terminal(mapping)
@@ -6031,7 +6035,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let streams = make_streams(existing.accepted_epoch, attempt.attempt_id)?;
                 if streams.ensure_current_attachment().await.is_ok() {
                     for (binding, mapping) in mappings.iter().zip(&materialized_mappings) {
-                        if matches!(binding.source, StreamRecordReference::Foreign(_)) {
+                        if matches!(binding.source, StreamRecordReference::Foreign(_))
+                            && !producer.owns_handle_identity(&mapping.handle)
+                        {
                             if mapping.role == SessionStreamRole::Input
                                 && streams
                                     .has_journaled_consumer_terminal(mapping)
@@ -6126,7 +6132,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let streams = make_streams(accepted_epoch, attempt.attempt_id)?;
         for (binding, mapping) in mappings.iter().zip(&materialized_mappings) {
-            if matches!(binding.source, StreamRecordReference::Foreign(_)) {
+            if matches!(binding.source, StreamRecordReference::Foreign(_))
+                && !producer.owns_handle_identity(&mapping.handle)
+            {
                 if mapping.role == SessionStreamRole::Input
                     && streams
                         .has_journaled_consumer_terminal(mapping)
