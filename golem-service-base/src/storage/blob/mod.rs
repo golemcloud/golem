@@ -23,6 +23,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::path::Component;
 use std::path::{Path, PathBuf};
@@ -130,6 +131,11 @@ pub trait BlobStorage: Debug + Send + Sync {
         Ok(())
     }
 
+    /// Makes a directory at the path.
+    ///
+    /// A root path changes nothing and leaves no entry behind. A path is at the root when it has
+    /// no name in it, for example an empty path or `.`. A second call on the same path changes
+    /// nothing.
     async fn create_dir(
         &self,
         target_label: &'static str,
@@ -473,14 +479,26 @@ pub struct BlobRangeError {
     pub end: u64,
 }
 
-pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
+/// Gives the one form of a relative blob path, or an error.
+///
+/// The form holds the names of the path and one separator between two names. A `.` and an extra
+/// separator are not names, so they go away, and a path at the root of a namespace becomes the
+/// empty path. Two paths that name the same blob get the same form. An absolute path, a path
+/// with `..` in it, and a path with a drive letter are errors.
+pub(crate) fn normalized_blob_path(path: &Path) -> Result<Cow<'_, Path>, Error> {
     if path.is_absolute() {
         return Err(anyhow!("Blob path must be relative: {path:?}"));
     }
 
+    let mut names_length = 0usize;
+    let mut names_count = 0usize;
     for component in path.components() {
         match component {
-            Component::Normal(_) | Component::CurDir => {}
+            Component::Normal(name) => {
+                names_length += name.len();
+                names_count += 1;
+            }
+            Component::CurDir => {}
             Component::ParentDir => {
                 return Err(anyhow!(
                     "Blob path cannot contain parent traversal: {path:?}"
@@ -492,7 +510,17 @@ pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
         }
     }
 
-    Ok(())
+    // The path is already in its one form when its length is exactly its names plus the one
+    // separator that sits between two names, so nothing has to be built.
+    if names_length + names_count.saturating_sub(1) == path.as_os_str().len() {
+        return Ok(Cow::Borrowed(path));
+    }
+
+    Ok(Cow::Owned(
+        path.components()
+            .filter(|component| matches!(component, Component::Normal(_)))
+            .collect(),
+    ))
 }
 
 /// Tells if the path is at the root of a namespace.

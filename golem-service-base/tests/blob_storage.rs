@@ -1973,3 +1973,329 @@ async fn delete_dir_deletes_more_than_1000_blobs(
         (2001, true, Vec::new())
     );
 }
+
+#[test]
+#[tracing::instrument]
+async fn a_leading_current_dir_names_the_same_blob(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let dotted = Path::new("./leading-dot-blob");
+    let plain = Path::new("leading-dot-blob");
+    let data = Bytes::from("leading-dot-payload").to_vec();
+
+    storage
+        .put_raw(
+            "a_leading_current_dir_names_the_same_blob",
+            "put-dotted",
+            namespace.clone(),
+            dotted,
+            &data,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .get_raw(
+                "a_leading_current_dir_names_the_same_blob",
+                "get-plain",
+                namespace.clone(),
+                plain,
+            )
+            .await
+            .unwrap(),
+        Some(data.clone())
+    );
+    assert_eq!(
+        storage
+            .get_raw(
+                "a_leading_current_dir_names_the_same_blob",
+                "get-dotted",
+                namespace.clone(),
+                dotted,
+            )
+            .await
+            .unwrap(),
+        Some(data.clone())
+    );
+    assert_eq!(
+        storage
+            .exists(
+                "a_leading_current_dir_names_the_same_blob",
+                "exists-plain",
+                namespace.clone(),
+                plain,
+            )
+            .await
+            .unwrap(),
+        ExistsResult::File
+    );
+    assert_eq!(
+        storage
+            .exists(
+                "a_leading_current_dir_names_the_same_blob",
+                "exists-dotted",
+                namespace.clone(),
+                dotted,
+            )
+            .await
+            .unwrap(),
+        ExistsResult::File
+    );
+
+    storage
+        .delete(
+            "a_leading_current_dir_names_the_same_blob",
+            "delete-dotted",
+            namespace.clone(),
+            dotted,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .get_raw(
+                "a_leading_current_dir_names_the_same_blob",
+                "get-deleted",
+                namespace.clone(),
+                plain,
+            )
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn an_interior_current_dir_names_the_same_blob(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let dotted = Path::new("interior-dot-dir/./blob");
+    let plain = Path::new("interior-dot-dir/blob");
+    let data = Bytes::from("interior-dot-payload").to_vec();
+
+    storage
+        .put_raw(
+            "an_interior_current_dir_names_the_same_blob",
+            "put-dotted",
+            namespace.clone(),
+            dotted,
+            &data,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .get_raw(
+                "an_interior_current_dir_names_the_same_blob",
+                "get-plain",
+                namespace.clone(),
+                plain,
+            )
+            .await
+            .unwrap(),
+        Some(data.clone())
+    );
+    assert_eq!(
+        storage
+            .exists(
+                "an_interior_current_dir_names_the_same_blob",
+                "exists-dotted",
+                namespace.clone(),
+                dotted,
+            )
+            .await
+            .unwrap(),
+        ExistsResult::File
+    );
+    // A backend that keeps no entry for a directory that only holds blobs reports that directory
+    // as missing. The two spellings of the directory must still agree.
+    assert_eq!(
+        storage
+            .exists(
+                "an_interior_current_dir_names_the_same_blob",
+                "exists-dotted-dir",
+                namespace.clone(),
+                Path::new("interior-dot-dir/."),
+            )
+            .await
+            .unwrap(),
+        storage
+            .exists(
+                "an_interior_current_dir_names_the_same_blob",
+                "exists-plain-dir",
+                namespace.clone(),
+                Path::new("interior-dot-dir"),
+            )
+            .await
+            .unwrap(),
+    );
+
+    storage
+        .delete(
+            "an_interior_current_dir_names_the_same_blob",
+            "delete-dotted",
+            namespace.clone(),
+            dotted,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .get_raw(
+                "an_interior_current_dir_names_the_same_blob",
+                "get-deleted",
+                namespace.clone(),
+                plain,
+            )
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_repeated_separator_names_the_same_blob(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let doubled = Path::new("repeated-sep-dir//blob");
+    let plain = Path::new("repeated-sep-dir/blob");
+    let data = Bytes::from("repeated-sep-payload").to_vec();
+
+    storage
+        .put_raw(
+            "a_repeated_separator_names_the_same_blob",
+            "put-doubled",
+            namespace.clone(),
+            doubled,
+            &data,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .get_raw(
+                "a_repeated_separator_names_the_same_blob",
+                "get-plain",
+                namespace.clone(),
+                plain,
+            )
+            .await
+            .unwrap(),
+        Some(data.clone())
+    );
+    assert_eq!(
+        storage
+            .exists(
+                "a_repeated_separator_names_the_same_blob",
+                "exists-doubled",
+                namespace.clone(),
+                doubled,
+            )
+            .await
+            .unwrap(),
+        ExistsResult::File
+    );
+
+    storage
+        .delete(
+            "a_repeated_separator_names_the_same_blob",
+            "delete-doubled",
+            namespace.clone(),
+            doubled,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .get_raw(
+                "a_repeated_separator_names_the_same_blob",
+                "get-deleted",
+                namespace.clone(),
+                plain,
+            )
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn create_dir_at_a_root_path_leaves_nothing_behind(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    // The namespace is fresh, so a stray entry at its root can only come from this test. The S3
+    // backend keeps one bucket for every environment, so a shared namespace would hide one.
+    let namespace = BlobStorageNamespace::CustomStorage {
+        environment_id: EnvironmentId(Uuid::new_v4()),
+    };
+
+    // Every one of these paths is at the root of the namespace, because none of them has a name
+    // in it.
+    for root_path in ["", ".", "./", "././"] {
+        storage
+            .create_dir(
+                "create_dir_at_a_root_path_leaves_nothing_behind",
+                "create-root-dir",
+                namespace.clone(),
+                Path::new(root_path),
+            )
+            .await
+            .unwrap_or_else(|err| panic!("create_dir({root_path:?}) failed: {err}"));
+
+        // The S3 backend marks a directory with a blob named `__dir_marker` inside it, so a
+        // marker at the root of the namespace reads back as a blob of that name.
+        assert_eq!(
+            storage
+                .get_raw(
+                    "create_dir_at_a_root_path_leaves_nothing_behind",
+                    "get-root-marker",
+                    namespace.clone(),
+                    Path::new("__dir_marker"),
+                )
+                .await
+                .unwrap(),
+            None,
+            "create_dir({root_path:?}) left a marker at the root"
+        );
+    }
+
+    storage
+        .put_raw(
+            "create_dir_at_a_root_path_leaves_nothing_behind",
+            "put-blob",
+            namespace.clone(),
+            Path::new("only-blob"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    let mut entries = storage
+        .list_dir(
+            "create_dir_at_a_root_path_leaves_nothing_behind",
+            "list-root",
+            namespace.clone(),
+            Path::new(""),
+        )
+        .await
+        .unwrap();
+    entries.sort();
+
+    assert_eq!(entries, vec![Path::new("only-blob").to_path_buf()]);
+}
