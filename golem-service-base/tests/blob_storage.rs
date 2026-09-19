@@ -1869,7 +1869,11 @@ async fn get_raw_slice_uses_inclusive_ranges(
         ("ranges/empty", 0, 0),
         ("ranges/missing", 3, 2),
         // A guest gives an offset as a `u64`. A negative offset reaches the host as the
-        // value that it wraps to, which is at the top of the `u64` range.
+        // value that it wraps to, which is at the top of the `u64` range. The Effect SDK
+        // test doubles assert on these two ranges (`sdks/effect/test/blobstore.test.ts`).
+        // The wrapped start is a start after the end, which each backend refuses as it
+        // refuses `(3, 2)`, before the S3 backend sends a request. The wrapped end reaches
+        // the backend. MinIO answers it with the status 200 and no `Content-Range`.
         ("ranges/blob", u64::MAX, 2),
         ("ranges/blob", u64::MAX, u64::MAX),
     ];
