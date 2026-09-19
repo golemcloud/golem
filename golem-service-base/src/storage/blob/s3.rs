@@ -105,6 +105,15 @@ impl Intercept for ResponseStatus {
     }
 }
 
+/// What the body of a response to a ranged read holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RangedBody {
+    /// The bytes of the range.
+    Range,
+    /// The whole object, which a server that ignores the range gives.
+    WholeObject,
+}
+
 impl S3BlobStorage {
     #[allow(deprecated)]
     pub async fn new(config: S3BlobStorageConfig) -> Self {
@@ -339,31 +348,38 @@ impl S3BlobStorage {
         Ok(!response.contents().is_empty())
     }
 
-    /// Gives the bytes from `start` to `end` out of the response to a ranged read.
+    /// Tells what the body of a response to a ranged read holds, before the body is read.
     ///
-    /// `status` and `content_range` are the status and the `Content-Range` of the response,
-    /// and `body` is its whole body.
+    /// `status`, `content_range` and `content_length` are the status, the `Content-Range` and
+    /// the `Content-Length` of the response.
     ///
-    /// A `Content-Range` that gives the range `start` to `end` gives the body. A
-    /// `Content-Range` that starts at `start` and ends before `end` gives a `BlobRangeError`.
+    /// A `Content-Range` that gives the range `start` to `end` tells that the body is the range.
+    /// A `Content-Range` that starts at `start` and ends before `end` gives a `BlobRangeError`.
     /// Any other `Content-Range` gives a different error.
     ///
     /// A response with the status 200 and no `Content-Range` holds the whole object (RFC 9110,
     /// section 15.3.1). This is the response of a server that ignores the range (sections 14.2
-    /// and 15.5.17). The result is the range of the body that [`blob_range`] gives, which is
-    /// the rule of the default `get_raw_slice`. Any other response without a `Content-Range`
-    /// gives a different error. A 206 response holds a part of the object (section 15.3.7), so
-    /// its body does not tell whether the range is in the object.
-    fn ranged_bytes<'a>(
+    /// and 15.5.17). Its `Content-Length` is the size of the object. A `Content-Length` that
+    /// puts `end` outside the object gives a `BlobRangeError`. Without a `Content-Length`, the
+    /// body tells whether the range is in the object. The backend does not check that the body
+    /// is the object. A 200 response with a different body, for example an error page, gives
+    /// the range of that body.
+    ///
+    /// Any other response without a `Content-Range` gives a different error. A 206 response
+    /// holds a part of the object (section 15.3.7), so without a `Content-Range` neither its
+    /// `Content-Length` nor its body tells whether the range is in the object.
+    fn ranged_body(
         status: u16,
         content_range: Option<&str>,
-        body: &'a [u8],
+        content_length: Option<i64>,
         start: u64,
         end: u64,
-    ) -> Result<&'a [u8], Error> {
+    ) -> Result<RangedBody, Error> {
         let Some(content_range) = content_range else {
-            return match status {
-                HTTP_OK => blob_range(body, start, end).map_err(Error::from),
+            let size = content_length.and_then(|length| u64::try_from(length).ok());
+            return match (status, size) {
+                (HTTP_OK, Some(size)) if end >= size => Err(BlobRangeError { start, end }.into()),
+                (HTTP_OK, _) => Ok(RangedBody::WholeObject),
                 _ => Err(anyhow!(
                     "S3 returned the status {status} with no content range for the byte range {start}-{end}"
                 )),
@@ -375,7 +391,7 @@ impl S3BlobStorage {
             .and_then(|(range, _)| range.split_once('-'))
             .and_then(|(first, last)| first.parse::<u64>().ok().zip(last.parse::<u64>().ok()));
         match returned {
-            Some((first, last)) if first == start && last == end => Ok(body),
+            Some((first, last)) if first == start && last == end => Ok(RangedBody::Range),
             Some((first, last)) if first == start && last < end => {
                 Err(BlobRangeError { start, end }.into())
             }
@@ -383,6 +399,20 @@ impl S3BlobStorage {
                 "S3 returned the content range {content_range:?} for the byte range {start}-{end}"
             )),
         }
+    }
+
+    /// Gives the body of a response whose `Content-Range` gives the range `start` to `end`.
+    ///
+    /// A body that does not have one byte for each offset of the range gives an error.
+    fn range_body(body: Vec<u8>, start: u64, end: u64) -> Result<Vec<u8>, Error> {
+        let length = body.len();
+        let expected = end.checked_sub(start).and_then(|last| last.checked_add(1));
+        u64::try_from(length)
+            .ok()
+            .zip(expected)
+            .is_some_and(|(length, expected)| length == expected)
+            .then_some(body)
+            .ok_or_else(|| anyhow!("S3 returned {length} bytes for the byte range {start}-{end}"))
     }
 
     /// Deletes objects in requests of at most [`MAX_KEYS_PER_DELETE_OBJECTS`] keys, one request
@@ -731,11 +761,20 @@ impl BlobStorage for S3BlobStorage {
                 let status = status.ok_or_else(|| {
                     anyhow!("S3 gave an output without a response for the byte range {start}-{end}")
                 })?;
-                let content_range = response.content_range;
-                let body = response.body.collect().await?.into_bytes();
-                let bytes =
-                    Self::ranged_bytes(status, content_range.as_deref(), &body, start, end)?
-                        .to_vec();
+                let ranged_body = Self::ranged_body(
+                    status,
+                    response.content_range.as_deref(),
+                    response.content_length,
+                    start,
+                    end,
+                )?;
+                let body = response.body.collect().await?.to_vec();
+                let bytes = match ranged_body {
+                    RangedBody::Range => Self::range_body(body, start, end)?,
+                    // The rule of the default `get_raw_slice`, so every backend gives the same
+                    // error for a range that is not in the object.
+                    RangedBody::WholeObject => blob_range(&body, start, end)?.to_vec(),
+                };
 
                 Ok(Some(bytes))
             }

@@ -33,9 +33,13 @@ use axum::routing::put;
 use bytes::Bytes;
 use futures::StreamExt;
 use golem_common::model::environment::EnvironmentId;
+use http_body::Frame;
+use http_body_util::StreamBody;
 use pretty_assertions::assert_eq;
+use std::convert::Infallible;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{test, timeout};
@@ -83,9 +87,14 @@ impl SentRequest {
 }
 
 /// The answer of the scripted transport to one request.
+///
+/// The answer has a `Content-Length` only when `content_length` is set, and its body counts
+/// itself in `body_reads` when it is set and the body gets read.
 struct Answer {
     status: u16,
     content_range: Option<&'static str>,
+    content_length: Option<usize>,
+    body_reads: Option<Arc<AtomicUsize>>,
     body: String,
 }
 
@@ -94,15 +103,40 @@ impl Answer {
         Self {
             status,
             content_range: None,
+            content_length: None,
+            body_reads: None,
             body: body.into(),
         }
     }
 
     fn partial(content_range: Option<&'static str>, body: &str) -> Self {
         Self {
-            status: 206,
             content_range,
-            body: body.to_string(),
+            ..Self::new(206, body)
+        }
+    }
+
+    /// The whole object with the status 200 and its `Content-Length`, the answer of a server
+    /// that ignores the range. Its body counts itself in `body_reads` when it gets read.
+    fn whole_object(body: &str, body_reads: &Arc<AtomicUsize>) -> Self {
+        Self {
+            content_length: Some(body.len()),
+            body_reads: Some(body_reads.clone()),
+            ..Self::new(200, body)
+        }
+    }
+
+    /// Gives the body, which counts itself in `body_reads` when it is set and the body gets
+    /// read.
+    fn into_body(self) -> SdkBody {
+        match self.body_reads {
+            Some(body_reads) => SdkBody::from_body_1_x(StreamBody::new(
+                futures::stream::iter([Ok::<_, Infallible>(Frame::data(Bytes::from(self.body)))])
+                    .inspect(move |_| {
+                        body_reads.fetch_add(1, Ordering::SeqCst);
+                    }),
+            )),
+            None => SdkBody::from(self.body),
         }
     }
 }
@@ -135,17 +169,22 @@ impl HttpConnector for ScriptedTransport {
             requests.len() - 1
         };
         let answer = (self.script)(&sent, earlier);
-        let mut response = HttpResponse::new(
-            StatusCode::try_from(answer.status).unwrap(),
-            SdkBody::from(answer.body),
-        );
+        let status = StatusCode::try_from(answer.status).unwrap();
+        let content_range = answer.content_range;
+        let content_length = answer.content_length;
+        let mut response = HttpResponse::new(status, answer.into_body());
         response
             .headers_mut()
             .insert("content-type", "application/xml");
-        if let Some(content_range) = answer.content_range {
+        if let Some(content_range) = content_range {
             response
                 .headers_mut()
                 .insert("content-range", content_range);
+        }
+        if let Some(content_length) = content_length {
+            response
+                .headers_mut()
+                .insert("content-length", content_length.to_string());
         }
         HttpConnectorFuture::ready(Ok(response))
     }
@@ -536,6 +575,58 @@ async fn get_raw_slice_takes_the_range_out_of_a_200_response() {
 }
 
 #[test]
+async fn get_raw_slice_refuses_a_range_past_the_content_length_without_reading_the_body() {
+    // The script answers 200 with the whole object and its content length, and counts the
+    // bodies that get read.
+    let body_reads = Arc::new(AtomicUsize::new(0));
+    let (storage, requests) = scripted_storage("", {
+        let body_reads = body_reads.clone();
+        move |_, _| Answer::whole_object("abcdef", &body_reads)
+    });
+    let read = |start, end| {
+        storage.get_raw_slice(
+            "test",
+            "get-raw-slice",
+            namespace(),
+            Path::new("blob"),
+            start,
+            end,
+        )
+    };
+
+    let outside = [(0, 6), (6, 6), (7, u64::MAX)];
+    let range_errors = futures::stream::iter(outside)
+        .then(|(start, end)| async move {
+            read(start, end)
+                .await
+                .map_err(|error| error.downcast_ref::<BlobRangeError>().copied())
+        })
+        .collect::<Vec<_>>()
+        .await;
+    let bodies_read_outside = body_reads.load(Ordering::SeqCst);
+    let inside = read(1, 3).await.unwrap();
+
+    assert_eq!(
+        (
+            range_errors,
+            bodies_read_outside,
+            inside,
+            body_reads.load(Ordering::SeqCst),
+            sent(&requests).len()
+        ),
+        (
+            outside
+                .map(|(start, end)| Err(Some(BlobRangeError { start, end })))
+                .to_vec(),
+            0,
+            Some(b"bcd".to_vec()),
+            1,
+            4
+        )
+    );
+}
+
+#[test]
 async fn get_raw_slice_reads_the_status_of_the_attempt_that_gave_the_output() {
     // The SDK makes 2 attempts for the one request of the blob storage. The first gets a
     // server error, and the second gets the whole object with the status 200.
@@ -576,7 +667,15 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
         Some("bytes=5-5") => Answer::partial(Some("bytes 5-5/6"), "f"),
         Some("bytes=4-9") => Answer::partial(Some("bytes 4-5/6"), "ef"),
         Some("bytes=2-4") => Answer::partial(Some("bytes 0-3/6"), "abcd"),
-        _ => Answer::partial(None, "abcdef"),
+        Some("bytes=1-4") => Answer::partial(Some("bytes 1-5/6"), "bcde"),
+        Some("bytes=0-1") => Answer::partial(Some("bytes 0-3/6"), "abcd"),
+        Some("bytes=0-2") => Answer::partial(Some("bytes 0-2/6"), "a"),
+        Some("bytes=3-4") => Answer::partial(Some("bytes 3-4/6"), "def"),
+        Some("bytes=3-5") => Answer::partial(Some("bytes 1-5/6"), "def"),
+        _ => Answer {
+            content_length: Some(6),
+            ..Answer::partial(None, "abcdef")
+        },
     });
     let read = |start, end| {
         storage.get_raw_slice(
@@ -588,23 +687,28 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
             end,
         )
     };
+    let read_error = |start, end| async move {
+        read(start, end)
+            .await
+            .map_err(|error| error.downcast_ref::<BlobRangeError>().copied())
+    };
 
     let inside = read(1, 3).await.unwrap();
     let one_byte = read(5, 5).await.unwrap();
-    let after_the_end = read(4, 9)
-        .await
-        .map_err(|error| error.downcast_ref::<BlobRangeError>().copied());
-    let from_another_byte = read(2, 4)
-        .await
-        .map_err(|error| error.downcast_ref::<BlobRangeError>().copied());
-    let without_content_range = read(0, 5)
-        .await
-        .map_err(|error| error.downcast_ref::<BlobRangeError>().copied());
-    // A 206 response without a content range does not hold the whole object, so its length
-    // does not tell whether the range is in the object.
-    let partial_without_content_range = read(0, 9)
-        .await
-        .map_err(|error| error.downcast_ref::<BlobRangeError>().copied());
+    let after_the_end = read_error(4, 9).await;
+    let from_another_byte = read_error(2, 4).await;
+    // The content range starts before the range, and the body has the bytes of the range.
+    let starting_before_the_range = read_error(3, 5).await;
+    // The content range ends after the range, and the body has the bytes of the range.
+    let ending_after_the_range = read_error(1, 4).await;
+    // The content range ends after the range, and the body has the bytes of the content range.
+    let more_than_the_range = read_error(0, 1).await;
+    let short_body = read_error(0, 2).await;
+    let long_body = read_error(3, 4).await;
+    let without_content_range = read_error(0, 5).await;
+    // A 206 response without a content range does not hold the whole object, so its content
+    // length does not tell whether the range is in the object.
+    let partial_without_content_range = read_error(0, 9).await;
 
     assert_eq!(
         (
@@ -612,6 +716,11 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
             one_byte,
             after_the_end,
             from_another_byte,
+            starting_before_the_range,
+            ending_after_the_range,
+            more_than_the_range,
+            short_body,
+            long_body,
             without_content_range,
             partial_without_content_range
         ),
@@ -619,6 +728,11 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
             Some(b"bcd".to_vec()),
             Some(b"f".to_vec()),
             Err(Some(BlobRangeError { start: 4, end: 9 })),
+            Err(None),
+            Err(None),
+            Err(None),
+            Err(None),
+            Err(None),
             Err(None),
             Err(None),
             Err(None)
