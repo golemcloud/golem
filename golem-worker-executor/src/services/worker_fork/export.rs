@@ -475,6 +475,11 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
             cut.oplog_index = cut.oplog_index.next();
         }
     }
+    // The snapshot may include appends after the initial commit. Make its fixed horizon
+    // durable before staging reads the source from storage.
+    worker
+        .commit_oplog_and_update_state(CommitLevel::Always)
+        .await;
     Ok(Candidate {
         export: StreamExportFork {
             source: source.agent_id.clone(),

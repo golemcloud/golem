@@ -756,6 +756,8 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         matches!(rejected.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::TooLarge as i32),
         "{rejected:?}"
     );
+    executor.interrupt(&source).await?;
+    executor.append_after_next_oplog_commit(&source);
     let lost = executor
         .client
         .clone()
@@ -768,6 +770,10 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             Some(fork_stream_slot_response::Result::Failure(_))
         ),
         "{lost:?}"
+    );
+    assert!(
+        format!("{lost:?}").contains("lost fork resume response"),
+        "fork snapshot must be committed before staging: {lost:?}"
     );
     let fork_append = executor
         .client

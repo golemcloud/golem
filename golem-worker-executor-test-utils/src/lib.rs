@@ -856,6 +856,15 @@ impl TestWorkerExecutor {
         (entered_rx, release_tx)
     }
 
+    /// Appends a buffered lifecycle hint after the next source commit has flushed.
+    pub fn append_after_next_oplog_commit(&self, agent_id: &AgentId) {
+        self.additional_test_deps
+            .append_after_commit
+            .lock()
+            .unwrap()
+            .insert(agent_id.clone());
+    }
+
     pub async fn commit_oplog(&self, agent_id: &AgentId) -> anyhow::Result<()> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
         let worker = self
@@ -4384,7 +4393,21 @@ impl Oplog for TestOplog {
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
-        self.oplog.commit(level).await
+        let committed = self.oplog.commit(level).await;
+        let append = self
+            .additional_test_deps
+            .append_after_commit
+            .lock()
+            .unwrap()
+            .remove(&self.owned_agent_id.agent_id);
+        if append {
+            self.oplog
+                .add(OplogEntry::Suspend {
+                    timestamp: golem_common::model::Timestamp::now_utc(),
+                })
+                .await;
+        }
+        committed
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -4846,6 +4869,7 @@ pub struct AdditionalTestDeps {
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
+    append_after_commit: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
     /// agent inside the [`TestOplog`] wrapper — after the entry is durable in
@@ -4898,6 +4922,7 @@ impl AdditionalTestDeps {
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
             no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_read_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            append_after_commit: Arc::new(std::sync::Mutex::new(HashSet::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
             agent_initialization_enqueue_gates: Arc::new(scc::HashMap::new()),
