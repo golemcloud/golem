@@ -1528,6 +1528,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     let metadata = make_agent_metadata(agent.clone(), AccountId::new(), owned.environment_id);
     let create = OplogEntry::create(
         agent.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Durable,
         ComponentRevision::INITIAL,
         vec![],
