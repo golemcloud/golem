@@ -13,7 +13,7 @@ import {
   OutgoingValue,
   type ContainerMetadata,
 } from "./wasi-blobstore-types.js"
-import { rangeErrorMessage, rangeIsNotInObject } from "../blob-range.js"
+import { hostOffset, rangeErrorMessage, rangeIsNotInObject } from "../blob-range.js"
 
 interface ObjectEntry {
   bytes: () => Uint8Array
@@ -87,13 +87,15 @@ export class Container {
     const obj = this._entry.objects.get(name)
     maybeFail("getData", obj === undefined, `object ${name} not found`)
     const bytes = obj!.bytes()
-    // Mock follows the host: see `test/blob-range.ts`.
+    // Mock follows the host, offsets included: see `test/blob-range.ts`.
+    const first = hostOffset(start)
+    const last = hostOffset(end)
     maybeFail(
       "getData",
-      rangeIsNotInObject(start, end, BigInt(bytes.length)),
-      rangeErrorMessage(start, end),
+      rangeIsNotInObject(first, last, BigInt(bytes.length)),
+      rangeErrorMessage(first, last),
     )
-    const slice = bytes.subarray(Number(start), Number(end) + 1)
+    const slice = bytes.subarray(Number(first), Number(last) + 1)
     return new IncomingValue(new Uint8Array(slice))
   }
 

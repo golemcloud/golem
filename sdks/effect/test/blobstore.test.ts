@@ -381,7 +381,27 @@ describe("Container.forSchema", () => {
       if (exit._tag === "Failure") {
         const json = JSON.stringify(exit.cause)
         expect(json).toContain("BlobstoreHostError")
-        expect(json).toContain("the byte range -1-2 is not in the blob")
+        // The host gets the offset as the `u64` it wraps to, and
+        // refuses it as a start after the end: see `test/blob-range.ts`.
+        expect(json).toContain("the byte range 18446744073709551615-2 is not in the blob")
+      }
+    }),
+  )
+
+  it.effect("a negative offset fails the same way through the host wrapper", () =>
+    Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        Effect.gen(function* () {
+          const c = yield* Blobstore.createContainer("live-negative-range")
+          yield* c.writeData("k", u8("alpha"))
+          return yield* c.getData("k", { start: -1n, end: 2n })
+        }).pipe(Effect.provide(BlobstoreLive)),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("BlobstoreHostError")
+        expect(json).toContain("the byte range 18446744073709551615-2 is not in the blob")
       }
     }),
   )
