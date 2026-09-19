@@ -36,15 +36,15 @@ use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, ExternalProducerId,
     InputStreamHighWater, MAX_DURABLE_STREAM_ITEM_SIZE, MAX_DURABLE_STREAMS_PER_SESSION,
     MAX_LIVE_JOIN_BUFFER_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE, MAX_PACKED_U8_STREAM_ITEM_SIZE,
-    MAX_STREAM_VALUE_TRAVERSAL_DEPTH, PersistedStreamInvocationDescriptor,
-    STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS, STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
-    SessionStreamRole, StartAttemptDescriptor, StreamAttachmentFinalizationReason,
-    StreamAttachmentKey, StreamCancelReason, StreamCancelRole, StreamCascadeDependentResult,
-    StreamConsumerDeletingRecord, StreamConsumerItemValueRecord, StreamEndResult, StreamId,
-    StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
-    StreamRegistrationCoordinate, StreamRootKind, StreamSessionKey, StreamSessionMappingRecord,
-    StreamSessionMappingUpdateRecord, StreamSessionPreparedRecord, StreamSessionRecord,
-    StreamSourceKind, StreamTerminalAuthor, StreamTopologyActivatedRecord,
+    MAX_STREAM_VALUE_TRAVERSAL_DEPTH, PersistedInvocationTarget,
+    PersistedStreamInvocationDescriptor, STREAM_ATTACHMENT_ABANDONED_PREPARE_MILLIS,
+    STREAM_ATTACHMENT_LEASE_TTL_MILLIS, SessionStreamRole, StartAttemptDescriptor,
+    StreamAttachmentFinalizationReason, StreamAttachmentKey, StreamCancelReason, StreamCancelRole,
+    StreamCascadeDependentResult, StreamConsumerDeletingRecord, StreamConsumerItemValueRecord,
+    StreamEndResult, StreamId, StreamInvocationId, StreamItemsPayload, StreamItemsRecord,
+    StreamOffset, StreamRegistrationCoordinate, StreamRootKind, StreamSessionKey,
+    StreamSessionMappingRecord, StreamSessionMappingUpdateRecord, StreamSessionPreparedRecord,
+    StreamSessionRecord, StreamSourceKind, StreamTerminalAuthor, StreamTopologyActivatedRecord,
     StreamTopologyPreparedRecord, StreamValuePathStep,
 };
 use golem_common::base_model::environment::EnvironmentId;
@@ -4846,7 +4846,9 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
                                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                                     session_key,
                                     target_component_revision: ComponentRevision::INITIAL,
-                                    method_name: "consume".to_string(),
+                                    target: PersistedInvocationTarget::AgentMethod {
+                                        method_name: "consume".to_string(),
+                                    },
                                     invocation_value: vec![1],
                                     stream_handles: handles,
                                     execution_config: vec![2],
@@ -7388,4 +7390,73 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
             .await,
         Err(StreamStoreError::SessionFinished(_))
     ));
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn byte_output_drain_publishes_only_the_live_suffix() {
+    use crate::durable_host::durable_session::StreamSession;
+    use crate::durable_host::stream_transport::test_output_stream_pair;
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let store = producer(oplog.clone(), &identity, None).await;
+    let handle = store
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    store
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![17, 128, 0]),
+        )
+        .await
+        .unwrap();
+    drop(store);
+    let store = producer(oplog.clone(), &identity, None).await;
+    let mut subscription = store
+        .stream_bus(handle.stream_id)
+        .await
+        .unwrap()
+        .subscribe()
+        .await
+        .unwrap();
+    let session = StreamSession::new(store.clone(), oplog.clone(), identity.invocation, []);
+    let (publisher, endpoint) = test_output_stream_pair(8).unwrap();
+    let (_, drained) = tokio::join!(
+        async {
+            for byte in [17, 128, 0, 255] {
+                publisher.publish_item(SchemaValue::U8(byte)).await.unwrap();
+            }
+            publisher.publish_end().await.unwrap();
+        },
+        session.drain_registered_output(
+            handle.clone(),
+            endpoint,
+            Arc::new(SchemaGraph::empty()),
+            SchemaType::u8()
+        ),
+    );
+    drained.unwrap();
+    let first = subscription.recv().await.unwrap();
+    assert_eq!(first.payload.producer_sequence, 3);
+    assert_eq!(
+        first.payload.payload,
+        CommittedProducerStreamEventPayload::PackedU8(255)
+    );
+    let terminal = subscription.recv().await.unwrap();
+    assert_eq!(terminal.payload.producer_sequence, 4);
+    assert_eq!(
+        terminal.payload.payload,
+        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), subscription.recv())
+            .await
+            .is_err()
+    );
 }

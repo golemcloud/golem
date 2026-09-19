@@ -50,7 +50,6 @@ use crate::services::golem_config::{
     ActiveAgentsConfig, AgentStatusFlushConfig, FilesystemStorageConfig, MemoryConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
-use crate::worker::Worker;
 use crate::worker::entity_invocation::{
     EntityInvocationHandle, RetainedEntityStore, start_entity_invocation,
     start_native_entity_invocation, start_pre_acquired_entity_invocation,
@@ -65,10 +64,11 @@ use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
+use crate::worker::{Worker, WorkerCreationMode};
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
+use golem_common::model::agent::{InvocationFreshnessDisposition, OwnerKind, Principal};
 use golem_common::model::card::CardId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::entity::{
@@ -77,7 +77,7 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, OplogIndex, OwnedAgentId, Timestamp};
+use golem_common::model::{AgentId, IdempotencyKey, OplogIndex, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use wasmtime::Store;
@@ -797,6 +797,9 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
+        OwnerKind::ComponentAgent
+            .validate_instance_name(&owned_agent_id.agent_id.agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
         let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
         let worker = active_agent.primary.clone();
         worker
@@ -808,6 +811,82 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 invocation_context_stack.clone(),
                 principal,
                 freshness_disposition,
+                WorkerCreationMode::ComponentAgent,
+            )
+            .in_current_span()
+            .await?;
+        Ok(active_agent.primary())
+    }
+
+    pub async fn get_or_add_ephemeral_external_tool<T>(
+        &self,
+        deps: &T,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        let component = deps
+            .component_service()
+            .get_metadata(component_id, None)
+            .await?;
+        self.get_or_add_ephemeral_external_tool_pinned(
+            deps,
+            component_id,
+            environment_id,
+            idempotency_key,
+            component.revision,
+            invocation_context_stack,
+            principal,
+        )
+        .await
+    }
+
+    pub async fn get_or_add_ephemeral_external_tool_pinned<T>(
+        &self,
+        deps: &T,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        component_revision: ComponentRevision,
+        invocation_context_stack: &InvocationContextStack,
+        principal: Principal,
+    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
+    where
+        T: HasAll<Ctx> + Clone + Send + Sync + 'static,
+    {
+        let component = deps
+            .component_service()
+            .get_metadata(component_id, Some(component_revision))
+            .await?;
+        if component.environment_id != environment_id {
+            return Err(WorkerExecutorError::invalid_request(
+                "external tool owner environment does not match the component environment",
+            ));
+        }
+        let owned_agent_id = OwnedAgentId::new(
+            environment_id,
+            &AgentId {
+                component_id,
+                agent_id: OwnerKind::external_tool_instance_name(idempotency_key),
+            },
+        );
+        let active_agent = self.get_or_add_unresolved(deps, &owned_agent_id).await?;
+        let worker = active_agent.primary.clone();
+        worker
+            .ensure_created(
+                None,
+                Vec::new(),
+                Some(component_revision),
+                None,
+                invocation_context_stack.clone(),
+                principal,
+                InvocationFreshnessDisposition::MayExist,
+                WorkerCreationMode::EphemeralExternalTool,
             )
             .in_current_span()
             .await?;

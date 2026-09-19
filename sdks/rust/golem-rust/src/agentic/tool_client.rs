@@ -25,11 +25,11 @@ use std::task::{Context, Poll, Wake, Waker};
 use crate::TypedSchemaValue;
 use crate::agentic::AmbientToolRpc;
 use crate::agentic::InputStream;
-use crate::bindings::golem::tool::host::RpcError as WitRpcError;
 use crate::bindings::golem::tool::host::{
     self, ToolRpc as HostToolRpc, ToolStdin as HostToolStdin, ToolStdout as HostToolStdout,
 };
 use crate::golem_agentic::golem::tool::host as agentic_host_api;
+use crate::schema::wit::wire::{ToolError as WitToolError, ToolRpcError as WitRpcError};
 use crate::schema::{FromSchema, FromSchemaError, IntoSchema};
 use crate::tool::RawCustomToolError;
 
@@ -242,7 +242,6 @@ impl ToolRpcClient for AmbientToolRpc {
         self.inner
             .invoke_and_await(command_path.to_vec(), input, stdin, stdout)
             .await
-            .map_err(Into::into)
     }
 }
 
@@ -272,7 +271,6 @@ impl ToolRpcClient for crate::golem_agentic::golem::tool::host::ToolRpc {
     ) -> Result<host::InvocationResult, WitRpcError> {
         self.invoke_and_await(command_path.to_vec(), input, stdin, stdout)
             .await
-            .map_err(Into::into)
     }
 }
 
@@ -353,24 +351,6 @@ pub async fn invoke_and_await_infallible<R: ToolRpcClient>(
         .map_err(map_infallible_rpc_error)?;
 
     decode_wire_invocation_result(result)
-}
-
-impl From<crate::golem_agentic::golem::tool::host::RpcError> for WitRpcError {
-    fn from(error: crate::golem_agentic::golem::tool::host::RpcError) -> Self {
-        use crate::golem_agentic::golem::tool::host as agentic_host;
-
-        match error {
-            agentic_host::RpcError::ProtocolError(message) => Self::ProtocolError(message),
-            agentic_host::RpcError::Denied(message) => Self::Denied(message),
-            agentic_host::RpcError::NotFound(message) => Self::NotFound(message),
-            agentic_host::RpcError::RemoteInternalError(message) => {
-                Self::RemoteInternalError(message)
-            }
-            agentic_host::RpcError::RemoteToolError(error) => Self::RemoteToolError(error),
-            agentic_host::RpcError::Cancelled => Self::Cancelled,
-            agentic_host::RpcError::ResourceExhausted(message) => Self::ResourceExhausted(message),
-        }
-    }
 }
 
 fn map_rpc_error<E>(
@@ -718,9 +698,7 @@ pub fn start_tool_invocation<T: 'static, E: 'static>(
         move || {
             Box::pin(async move {
                 let result = future.get().await.map_err(|error| {
-                    map_rpc_error(error.into(), &|_, _| {
-                        Ok::<Option<TypedSchemaValue>, String>(None)
-                    })
+                    map_rpc_error(error, &|_, _| Ok::<Option<TypedSchemaValue>, String>(None))
                 })?;
                 decode_wire_invocation_result(result)
             })
@@ -739,12 +717,11 @@ pub fn start_tool_invocation<T: 'static, E: 'static>(
 }
 
 fn map_remote_tool_error<E>(
-    error: host::ToolError,
+    error: WitToolError,
     decode_error: &(impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String> + ?Sized),
 ) -> ToolError<E> {
     match error {
-        host::ToolError::CustomError(error) => match decode_custom_tool_error_value(&error.payload)
-        {
+        WitToolError::CustomError(error) => match decode_custom_tool_error_value(&error.payload) {
             Ok(value) => match decode_error(error.name.clone(), value.clone()) {
                 Ok(Some(error)) => ToolError::Tool(error),
                 Ok(None) => ToolError::UnknownCustomError(RawCustomToolError {
@@ -786,24 +763,25 @@ fn protocol_error<E>(message: String) -> ToolError<E> {
     ToolError::Rpc(RpcError::Protocol(message))
 }
 
-fn remote_tool_error_label(error: &host::ToolError) -> String {
+fn remote_tool_error_label(error: &WitToolError) -> String {
     match error {
-        host::ToolError::InvalidToolName(name) => format!("invalid tool name `{name}`"),
-        host::ToolError::InvalidCommandPath(path) => {
+        WitToolError::InvalidToolName(name) => format!("invalid tool name `{name}`"),
+        WitToolError::InvalidCommandPath(path) => {
             format!("invalid command path `{}`", path.join(" "))
         }
-        host::ToolError::InvalidInput(message) => format!("invalid input: {message}"),
-        host::ToolError::ConstraintViolation(message) => {
+        WitToolError::InvalidInput(message) => format!("invalid input: {message}"),
+        WitToolError::ConstraintViolation(message) => {
             format!("constraint violation: {message}")
         }
-        host::ToolError::InvalidResult(message) => format!("invalid result: {message}"),
-        host::ToolError::CustomError(_) => "custom error".to_string(),
+        WitToolError::InvalidResult(message) => format!("invalid result: {message}"),
+        WitToolError::CustomError(_) => "custom error".to_string(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schema::wit::wire::CustomToolError;
     use crate::{FromSchema, IntoSchema, IntoTypedSchemaValue};
     use std::cell::Cell;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -812,6 +790,38 @@ mod tests {
     #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
     enum CliError {
         Usage(String),
+    }
+
+    #[test]
+    fn tool_rpc_errors_are_shared_with_oplog_bindings() {
+        use crate::bindings::golem::api::oplog;
+
+        let payload = "bad flag".to_string().into_typed_schema_value().unwrap();
+        let error = WitRpcError::RemoteToolError(WitToolError::CustomError(CustomToolError {
+            name: "usage".to_string(),
+            payload: crate::encode_typed_schema_value(&payload).unwrap(),
+        }));
+        let error: host::ToolRpcError = error;
+        let error: agentic_host_api::ToolRpcError = error;
+        let recorded = oplog::ExternalToolResultParameters { result: Err(error) };
+        let error = recorded.result.unwrap_err();
+        let decoded = map_rpc_error(error, &|name, value| {
+            assert_eq!(name, "usage");
+            String::from_value(value.value())
+                .map(CliError::Usage)
+                .map(Some)
+                .map_err(format_from_schema_error)
+        });
+        assert_eq!(
+            decoded,
+            ToolError::Tool(CliError::Usage("bad flag".to_string()))
+        );
+
+        let recorded = oplog::ToolInvocationResult {
+            result: Some(crate::encode_typed_schema_value(&payload).unwrap()),
+        };
+        let value = crate::decode_typed_schema_value_owned(recorded.result.unwrap()).unwrap();
+        assert_eq!(String::from_value(value.value()).unwrap(), "bad flag");
     }
 
     #[test]
@@ -832,7 +842,7 @@ mod tests {
         let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
 
         let decoded = map_remote_tool_error(
-            host::ToolError::CustomError(crate::schema::tool::wit::wire::CustomToolError {
+            WitToolError::CustomError(CustomToolError {
                 name: "usage".to_string(),
                 payload: wire_payload,
             }),
@@ -856,7 +866,7 @@ mod tests {
         let payload = "raw".to_string().into_typed_schema_value().unwrap();
         let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
         let decoded: ToolError<CliError> = map_remote_tool_error(
-            host::ToolError::CustomError(crate::schema::tool::wit::wire::CustomToolError {
+            WitToolError::CustomError(CustomToolError {
                 name: "new-error".to_string(),
                 payload: wire_payload,
             }),
@@ -878,7 +888,7 @@ mod tests {
         let payload = 42u32.into_typed_schema_value().unwrap();
         let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
         let decoded: ToolError<CliError> = map_remote_tool_error(
-            host::ToolError::CustomError(crate::schema::tool::wit::wire::CustomToolError {
+            WitToolError::CustomError(CustomToolError {
                 name: "usage".to_string(),
                 payload: wire_payload,
             }),
@@ -1019,8 +1029,8 @@ mod tests {
             let payload = "bad flag".to_string().into_typed_schema_value().unwrap();
             let wire_payload = crate::encode_typed_schema_value(&payload).unwrap();
 
-            Err(WitRpcError::RemoteToolError(host::ToolError::CustomError(
-                crate::schema::tool::wit::wire::CustomToolError {
+            Err(WitRpcError::RemoteToolError(WitToolError::CustomError(
+                CustomToolError {
                     name: "usage".to_string(),
                     payload: wire_payload,
                 },
@@ -1049,7 +1059,7 @@ mod tests {
             Err(match self.0 {
                 FakeFailure::Denied => WitRpcError::Denied("no access".to_string()),
                 FakeFailure::RemoteInvalidInput => WitRpcError::RemoteToolError(
-                    host::ToolError::InvalidInput("bad wire input".to_string()),
+                    WitToolError::InvalidInput("bad wire input".to_string()),
                 ),
             })
         }

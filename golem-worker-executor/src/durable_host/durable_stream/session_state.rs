@@ -837,6 +837,13 @@ impl SessionControlMetadata {
                 std::slice::from_ref(&record.mapping)
             }
             StreamSessionRecord::Prepared(record) if &record.attempt.session_key == key => {
+                for mapping in &record.stream_mappings {
+                    if mapping.role == SessionStreamRole::Output
+                        && !self.root_outputs.contains(&mapping.transport_stream_id)
+                    {
+                        self.root_outputs.push(mapping.transport_stream_id);
+                    }
+                }
                 &record.stream_mappings
             }
             StreamSessionRecord::TopologyPrepared(record) if &record.session_key == key => {

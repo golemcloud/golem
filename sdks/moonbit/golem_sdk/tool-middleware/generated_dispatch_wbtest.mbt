@@ -48,7 +48,7 @@ async fn invoke_generated(
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
   underlying : UnderlyingTool,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   invoke_registered_tool_middleware(
     middleware_name,
     "presented",
@@ -268,7 +268,7 @@ test "generated monomorphic dispatch rejects malformed input and result" {
         None,
         underlying,
       )
-      assert_true(result is Err(@toolCommon.ToolError::InvalidInput(_)))
+      assert_true(result is Err(@types.ToolError::InvalidInput(_)))
     })
     assert_eq(malformed_input_calls.val, 0)
 
@@ -291,7 +291,7 @@ test "generated monomorphic dispatch rejects malformed input and result" {
         None,
         underlying,
       )
-      assert_true(result is Err(@toolCommon.ToolError::InvalidResult(_)))
+      assert_true(result is Err(@types.ToolError::InvalidResult(_)))
     })
     assert_eq(malformed_result_calls.val, 1)
   })
@@ -312,7 +312,7 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
             None => fail("generated custom-error dispatch lost stdin")
           }
           Err(
-            @toolCommon.ToolError::CustomError({
+            @types.ToolError::CustomError({
               name: "broken",
               payload: @authoring.run_error_payload_for_tests("boom"),
             }),
@@ -329,7 +329,7 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
         underlying,
       )
       match result {
-        Err(@toolCommon.ToolError::CustomError(payload)) => {
+        Err(@types.ToolError::CustomError(payload)) => {
           let decoded = @authoring.decode_run_error_payload_for_tests(
             payload.payload,
           )
@@ -348,7 +348,7 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
             None => fail("generated malformed-error dispatch lost stdin")
           }
           Err(
-            @toolCommon.ToolError::CustomError({
+            @types.ToolError::CustomError({
               name: "broken",
               payload: generated_result(()),
             }),
@@ -364,7 +364,7 @@ test "generated monomorphic dispatch decodes and re-encodes custom errors" {
         Some(counted_stream(stdin_drops)),
         underlying,
       )
-      assert_true(result is Err(@toolCommon.ToolError::InvalidResult(_)))
+      assert_true(result is Err(@types.ToolError::InvalidResult(_)))
     })
   })
   assert_eq(stdin_drops.val, 2)
@@ -393,7 +393,7 @@ test "generated monomorphic dispatch cleans abandoned stdout and transfers retur
         underlying,
       )
       assert_true(
-        result is Err(@toolCommon.ToolError::InvalidResult("abandoned stdout")),
+        result is Err(@types.ToolError::InvalidResult("abandoned stdout")),
       )
       assert_eq(abandoned_drops.val, 0)
     })

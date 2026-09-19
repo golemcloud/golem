@@ -4203,6 +4203,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-schema",
  "h2 0.4.19",
  "headers",
  "hex",

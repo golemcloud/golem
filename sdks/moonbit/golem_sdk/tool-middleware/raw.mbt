@@ -399,14 +399,13 @@ pub fn[E] RawToolInvocation::decode_input(
     Err(message) => return Err(InvalidInput(message))
   }
   Ok(@toolCore.decode_canonical_input_value(def, command_index, typed, context)) catch {
-    @toolCommon.ToolError::InvalidToolName(name) => Err(InvalidToolName(name))
-    @toolCommon.ToolError::InvalidCommandPath(path) =>
-      Err(InvalidCommandPath(path))
-    @toolCommon.ToolError::InvalidInput(message) => Err(InvalidInput(message))
-    @toolCommon.ToolError::ConstraintViolation(message) =>
+    @types.ToolError::InvalidToolName(name) => Err(InvalidToolName(name))
+    @types.ToolError::InvalidCommandPath(path) => Err(InvalidCommandPath(path))
+    @types.ToolError::InvalidInput(message) => Err(InvalidInput(message))
+    @types.ToolError::ConstraintViolation(message) =>
       Err(ConstraintViolation(message))
-    @toolCommon.ToolError::InvalidResult(message) => Err(InvalidResult(message))
-    @toolCommon.ToolError::CustomError(value) => {
+    @types.ToolError::InvalidResult(message) => Err(InvalidResult(message))
+    @types.ToolError::CustomError(value) => {
       @model.drop_wit_capabilities(value.payload.value)
       Err(
         InvalidResult("canonical input decoding returned a custom tool error"),
@@ -560,15 +559,13 @@ pub async fn UnderlyingTool::invoke_raw(
     Err(error) =>
       Err(
         match error {
-          @toolCommon.ToolError::InvalidToolName(name) => InvalidToolName(name)
-          @toolCommon.ToolError::InvalidCommandPath(path) =>
-            InvalidCommandPath(path)
-          @toolCommon.ToolError::InvalidInput(message) => InvalidInput(message)
-          @toolCommon.ToolError::ConstraintViolation(message) =>
+          @types.ToolError::InvalidToolName(name) => InvalidToolName(name)
+          @types.ToolError::InvalidCommandPath(path) => InvalidCommandPath(path)
+          @types.ToolError::InvalidInput(message) => InvalidInput(message)
+          @types.ToolError::ConstraintViolation(message) =>
             ConstraintViolation(message)
-          @toolCommon.ToolError::InvalidResult(message) =>
-            InvalidResult(message)
-          @toolCommon.ToolError::CustomError(error) => UnknownToolError(error)
+          @types.ToolError::InvalidResult(message) => InvalidResult(message)
+          @types.ToolError::CustomError(error) => UnknownToolError(error)
         },
       )
   }
@@ -579,20 +576,20 @@ pub async fn UnderlyingTool::invoke_raw(
 pub fn encode_raw_tool_error(
   error : ToolInvokeError[RawTypedSchemaValue],
   context : OwnershipContext,
-) -> @toolCommon.ToolError {
+) -> @types.ToolError {
   match error {
-    InvalidToolName(name) => @toolCommon.ToolError::InvalidToolName(name)
-    InvalidCommandPath(path) => @toolCommon.ToolError::InvalidCommandPath(path)
-    InvalidInput(message) => @toolCommon.ToolError::InvalidInput(message)
+    InvalidToolName(name) => @types.ToolError::InvalidToolName(name)
+    InvalidCommandPath(path) => @types.ToolError::InvalidCommandPath(path)
+    InvalidInput(message) => @types.ToolError::InvalidInput(message)
     ConstraintViolation(message) =>
-      @toolCommon.ToolError::ConstraintViolation(message)
-    InvalidResult(message) => @toolCommon.ToolError::InvalidResult(message)
+      @types.ToolError::ConstraintViolation(message)
+    InvalidResult(message) => @types.ToolError::InvalidResult(message)
     Tool(value) =>
       match value.take_for_final(context) {
         Ok(value) =>
-          @toolCommon.ToolError::CustomError({ name: "custom", payload: value, })
-        Err(message) => @toolCommon.ToolError::InvalidResult(message)
+          @types.ToolError::CustomError({ name: "custom", payload: value, })
+        Err(message) => @types.ToolError::InvalidResult(message)
       }
-    UnknownToolError(error) => @toolCommon.ToolError::CustomError(error)
+    UnknownToolError(error) => @types.ToolError::CustomError(error)
   }
 }

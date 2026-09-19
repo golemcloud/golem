@@ -37,7 +37,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal, ResolvedOwnerContext};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::card::recipient::RecipientPattern;
@@ -62,15 +62,16 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
+use golem_common::model::tool::ToolName;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
-    AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
-    IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment,
-    ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision, TransactionId,
+    AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
+    AgentStatusRecord, IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig,
+    ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision, TransactionId,
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
-use golem_common::schema::{FromSchema, IntoTypedSchemaValue, SchemaValue};
+use golem_common::schema::{FromSchema, IntoTypedSchemaValue, SchemaValue, TypedSchemaValue};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{
@@ -158,7 +159,7 @@ use golem_worker_executor::services::worker_enumeration::WorkerEnumerationServic
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
-use golem_worker_executor::services::{HasAll, NoAdditionalDeps, rdbms};
+use golem_worker_executor::services::{HasActiveAgents, HasAll, NoAdditionalDeps, rdbms};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
 use golem_worker_executor::workerctx::{
@@ -589,6 +590,7 @@ pub struct TestWorkerExecutor {
     /// wasmtime instance while keeping the `Worker` shell (and its read-only
     /// cache) alive, and to read per-agent instance load counts.
     additional_test_deps: AdditionalTestDeps,
+    services: Option<golem_worker_executor::services::All<TestWorkerCtx>>,
     production_active_agents:
         Option<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
     concurrent_resource_entry: Option<Arc<AtomicResourceEntry>>,
@@ -596,6 +598,70 @@ pub struct TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
+    /// Exercises creation and lookup of the virtual owner used by native external-tool ingress.
+    /// The returned worker is only valid while this executor's service graph is alive.
+    pub async fn get_or_add_ephemeral_external_tool(
+        &self,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        invocation_context: &InvocationContextStack,
+        principal: Principal,
+    ) -> Result<Arc<Worker<TestWorkerCtx>>, WorkerExecutorError> {
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        services
+            .active_agents()
+            .get_or_add_ephemeral_external_tool(
+                services,
+                component_id,
+                environment_id,
+                idempotency_key,
+                invocation_context,
+                principal,
+            )
+            .await
+    }
+
+    /// Exercises executor-internal external-tool admission without introducing a public transport.
+    /// Resolves only an already-persisted owner, including when it is cold after an executor
+    /// restart; unlike ordinary invocation ingress, this cannot create a missing owner.
+    pub async fn invoke_external_tool(
+        &self,
+        agent_id: &AgentId,
+        expected_fingerprint: AgentFingerprint,
+        idempotency_key: IdempotencyKey,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+        scope_card: Option<golem_common::model::card::ScopeCard>,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker =
+            Worker::get_exact_existing_suspended(services, &owned_agent_id, principal.clone())
+                .await?;
+        worker
+            .invoke_external_tool(
+                expected_fingerprint,
+                idempotency_key,
+                tool_name,
+                command_path,
+                input,
+                invocation_context,
+                principal,
+                scope_card,
+            )
+            .await
+    }
+
     pub async fn shutdown_and_wait_for_invocation_loops(&self) -> anyhow::Result<()> {
         self._run_details.shutdown.cancel();
         tokio::time::timeout(
@@ -1623,6 +1689,8 @@ type WrapKeyValueStorageFn = dyn Fn(Arc<dyn KeyValueStorage + Send + Sync>) -> A
     + Sync;
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
+type WrapComponentServiceFn =
+    dyn Fn(Arc<dyn ComponentService>) -> Arc<dyn ComponentService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
 type WrapWorkerProxyFn = dyn Fn(Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> + Send + Sync;
 type CreateCardServiceFn = dyn Fn() -> Arc<dyn CardService> + Send + Sync;
@@ -1638,6 +1706,7 @@ pub struct TestExecutorOverrides {
     /// budget would.
     pub wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
+    pub wrap_component_service: Option<Arc<WrapComponentServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
     /// Wraps the executor's `ShardService`, so a test can observe or fake which
     /// agents this executor owns. Everything that gates on ownership reads it,
@@ -1772,6 +1841,7 @@ async fn start_executor_with_config(
     // `TestWorkerExecutor` returned to the test (so tests can observe and
     // mutate per-worker test-only state, e.g. eviction).
     let additional_test_deps = AdditionalTestDeps::new();
+    let services = Arc::new(Mutex::new(None));
 
     context.wait_for_shut_down_executors().await;
     let details = run(
@@ -1781,6 +1851,7 @@ async fn start_executor_with_config(
         deps.component_service_directory.clone(),
         overrides,
         additional_test_deps.clone(),
+        services.clone(),
         &mut join_set,
     )
     .await?;
@@ -1811,6 +1882,7 @@ async fn start_executor_with_config(
                 client,
                 context: context.clone(),
                 additional_test_deps,
+                services: services.lock().unwrap().take(),
                 production_active_agents: None,
                 concurrent_resource_entry: None,
                 leak_detector,
@@ -1877,6 +1949,7 @@ async fn run(
     component_service_directory: PathBuf,
     overrides: TestExecutorOverrides,
     additional_test_deps: AdditionalTestDeps,
+    services: Arc<Mutex<Option<golem_worker_executor::services::All<TestWorkerCtx>>>>,
     join_set: &mut JoinSet<Result<(), Error>>,
 ) -> Result<RunDetails, Error> {
     info!("Golem Worker Executor starting up...");
@@ -1886,6 +1959,7 @@ async fn run(
             component_service_directory,
             overrides,
             additional_test_deps,
+            services,
         },
         golem_config,
         prometheus_registry,
@@ -2307,6 +2381,7 @@ struct TestServerBootstrap {
     /// from `create_additional_deps`. Shared with `TestWorkerExecutor` so tests
     /// can observe (and mutate) per-worker test-only state.
     additional_test_deps: AdditionalTestDeps,
+    services: Arc<Mutex<Option<golem_worker_executor::services::All<TestWorkerCtx>>>>,
 }
 
 #[async_trait]
@@ -2344,7 +2419,7 @@ impl WorkerCtx for TestWorkerCtx {
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -2407,7 +2482,7 @@ impl WorkerCtx for TestWorkerCtx {
 
         let durable_ctx = DurableWorkerCtx::create(
             owned_agent_id,
-            agent_id,
+            owner_context,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -2486,6 +2561,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
+    }
+
+    fn owner_context(&self) -> &ResolvedOwnerContext {
+        self.durable_ctx.owner_context()
     }
 
     fn agent_type_provision_config(
@@ -2799,6 +2878,10 @@ impl InvocationContextManagement for TestWorkerCtx {
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
+    fn capture_services(&self, services: &golem_worker_executor::services::All<TestWorkerCtx>) {
+        *self.services.lock().unwrap() = Some(services.clone());
+    }
+
     fn create_native_tool_catalog(&self) -> anyhow::Result<Arc<NativeToolCatalog<TestWorkerCtx>>> {
         let helper_effects = self.additional_test_deps.native_test_helper_effects.clone();
         let helper = NativeDurableHelperImpl(helper_effects.clone());
@@ -2919,12 +3002,17 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         _registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService> {
-        Arc::new(ComponentServiceLocalFileSystem::new(
+        let service = Arc::new(ComponentServiceLocalFileSystem::new(
             &self.component_service_directory,
             10000,
             Duration::from_secs(3600),
             Arc::new(DefaultCompiledComponentService::new(blob_storage)),
-        ))
+        ));
+        if let Some(wrap) = &self.overrides.wrap_component_service {
+            wrap(service)
+        } else {
+            service
+        }
     }
 
     fn create_card_service(
@@ -3326,6 +3414,7 @@ async fn run_production_context_bootstrap(
                 // use `production_active_agents`; the remaining test-context-only
                 // helpers see empty additional dependencies.
                 additional_test_deps: AdditionalTestDeps::new(),
+                services: None,
                 production_active_agents: Some(
                     active_agents
                         .get()

@@ -95,6 +95,7 @@ impl DurableStreamsHandler {
         let start = InvocationStart {
             agent_id: Some(agent_id.clone().into()),
             method_name: Some(behaviour.method_name.clone()),
+            external_tool: None,
             input: Some(input),
             idempotency_key: Some(IdempotencyKey::new(session.to_owned()).into()),
             context: Some(InvocationContext {

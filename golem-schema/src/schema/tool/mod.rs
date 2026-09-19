@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod canonical;
 pub mod compatibility;
+pub mod constraints;
 #[cfg(feature = "full")]
 mod protobuf;
 pub mod validation;

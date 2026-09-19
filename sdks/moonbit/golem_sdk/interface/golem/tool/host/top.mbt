@@ -12,16 +12,6 @@ pub(all) struct RegisteredTool {
       lookup_name : String; definition : @common.Tool; implemented_by : @types.ComponentId
 } derive(Debug, Eq)
 ///|
-pub(all) suberror RpcError {
-      ProtocolError(String)
-      Denied(String)
-      NotFound(String)
-      RemoteInternalError(String)
-      RemoteToolError(@common.ToolError)
-      Cancelled
-      ResourceExhausted(String)
-} derive(Debug, Eq)
-///|
 /// Recoverable attachment failures are stream values rather than Component
 /// Model stream errors. A producer emits one final failure item and then
 /// closes the underlying stream. Clean EOF is represented only by closure.
@@ -12462,7 +12452,7 @@ pub fn ToolRpc::tool_rpc(tool_name : String) -> ToolRpc {
 /// drive this wait and the already-created reader concurrently. Callers
 /// that manually created an open stdin must likewise drive its writer
 /// concurrently; see `create-stdin`.
-pub async fn ToolRpc::invoke_and_await(self : ToolRpc, command_path : Array[String], input : @types.TypedSchemaValue, stdin : ToolStdin?, stdout : ToolStdout?) -> Result[@common.InvocationResult, RpcError] {
+pub async fn ToolRpc::invoke_and_await(self : ToolRpc, command_path : Array[String], input : @types.TypedSchemaValue, stdin : ToolStdin?, stdout : ToolStdout?) -> Result[@common.InvocationResult, @types.ToolRpcError] {
 
       let lower_ptr : Int = mbt_ffi_malloc(60)
       defer mbt_ffi_free(lower_ptr)
@@ -20340,25 +20330,25 @@ pub async fn ToolRpc::invoke_and_await(self : ToolRpc, command_path : Array[Stri
 
                               let result233 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              RpcError::ProtocolError(result233)
+                              @types.ToolRpcError::ProtocolError(result233)
                         }
                         1 => {
 
                               let result234 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              RpcError::Denied(result234)
+                              @types.ToolRpcError::Denied(result234)
                         }
                         2 => {
 
                               let result235 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              RpcError::NotFound(result235)
+                              @types.ToolRpcError::NotFound(result235)
                         }
                         3 => {
 
                               let result236 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              RpcError::RemoteInternalError(result236)
+                              @types.ToolRpcError::RemoteInternalError(result236)
                         }
                         4 => {
 
@@ -20367,7 +20357,7 @@ pub async fn ToolRpc::invoke_and_await(self : ToolRpc, command_path : Array[Stri
 
                                           let result237 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 12), mbt_ffi_load32((result_ptr) + 16))
 
-                                          @common.ToolError::InvalidToolName(result237)
+                                          @types.ToolError::InvalidToolName(result237)
                                     }
                                     1 => {
 
@@ -20381,25 +20371,25 @@ pub async fn ToolRpc::invoke_and_await(self : ToolRpc, command_path : Array[Stri
                                           }
                                           mbt_ffi_free(mbt_ffi_load32((result_ptr) + 12))
 
-                                          @common.ToolError::InvalidCommandPath(array239)
+                                          @types.ToolError::InvalidCommandPath(array239)
                                     }
                                     2 => {
 
                                           let result241 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 12), mbt_ffi_load32((result_ptr) + 16))
 
-                                          @common.ToolError::InvalidInput(result241)
+                                          @types.ToolError::InvalidInput(result241)
                                     }
                                     3 => {
 
                                           let result242 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 12), mbt_ffi_load32((result_ptr) + 16))
 
-                                          @common.ToolError::ConstraintViolation(result242)
+                                          @types.ToolError::ConstraintViolation(result242)
                                     }
                                     4 => {
 
                                           let result243 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 12), mbt_ffi_load32((result_ptr) + 16))
 
-                                          @common.ToolError::InvalidResult(result243)
+                                          @types.ToolError::InvalidResult(result243)
                                     }
                                     5 => {
 
@@ -22233,22 +22223,22 @@ pub async fn ToolRpc::invoke_and_await(self : ToolRpc, command_path : Array[Stri
                                           }
                                           mbt_ffi_free(mbt_ffi_load32((result_ptr) + 40))
 
-                                          @common.ToolError::CustomError(@common.CustomToolError::{name : result244, payload : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array441, defs : array446, root : mbt_ffi_load32((result_ptr) + 36)}, value : @types.SchemaValueTree::{value_nodes : array477, root : mbt_ffi_load32((result_ptr) + 48)}}})
+                                          @types.ToolError::CustomError(@types.CustomToolError::{name : result244, payload : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array441, defs : array446, root : mbt_ffi_load32((result_ptr) + 36)}, value : @types.SchemaValueTree::{value_nodes : array477, root : mbt_ffi_load32((result_ptr) + 48)}}})
                                     }
                                     _ => panic()
                               }
 
-                              RpcError::RemoteToolError(lifted479)
+                              @types.ToolRpcError::RemoteToolError(lifted479)
                         }
                         5 => {
 
-                              RpcError::Cancelled
+                              @types.ToolRpcError::Cancelled
                         }
                         6 => {
 
                               let result480 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              RpcError::ResourceExhausted(result480)
+                              @types.ToolRpcError::ResourceExhausted(result480)
                         }
                         _ => panic()
                   }
@@ -22264,7 +22254,7 @@ pub async fn ToolRpc::invoke_and_await(self : ToolRpc, command_path : Array[Stri
 ///|
 /// Durably admits fire-and-forget work. Declared output is discarded by
 /// the host so an absent caller reader cannot apply backpressure.
-pub fn ToolRpc::invoke(self : ToolRpc, command_path : Array[String], input : @types.TypedSchemaValue, stdin : ToolStdin?) -> Result[Unit, RpcError] {
+pub fn ToolRpc::invoke(self : ToolRpc, command_path : Array[String], input : @types.TypedSchemaValue, stdin : ToolStdin?) -> Result[Unit, @types.ToolRpcError] {
       let cleanup_list : Array[Int] = []
 
       let ToolRpc(handle) = self
@@ -24965,25 +24955,25 @@ pub fn ToolRpc::invoke(self : ToolRpc, command_path : Array[String], input : @ty
 
                               let result = mbt_ffi_ptr2str(mbt_ffi_load32((return_area) + 8), mbt_ffi_load32((return_area) + 12))
 
-                              RpcError::ProtocolError(result)
+                              @types.ToolRpcError::ProtocolError(result)
                         }
                         1 => {
 
                               let result449 = mbt_ffi_ptr2str(mbt_ffi_load32((return_area) + 8), mbt_ffi_load32((return_area) + 12))
 
-                              RpcError::Denied(result449)
+                              @types.ToolRpcError::Denied(result449)
                         }
                         2 => {
 
                               let result450 = mbt_ffi_ptr2str(mbt_ffi_load32((return_area) + 8), mbt_ffi_load32((return_area) + 12))
 
-                              RpcError::NotFound(result450)
+                              @types.ToolRpcError::NotFound(result450)
                         }
                         3 => {
 
                               let result451 = mbt_ffi_ptr2str(mbt_ffi_load32((return_area) + 8), mbt_ffi_load32((return_area) + 12))
 
-                              RpcError::RemoteInternalError(result451)
+                              @types.ToolRpcError::RemoteInternalError(result451)
                         }
                         4 => {
 
@@ -24992,7 +24982,7 @@ pub fn ToolRpc::invoke(self : ToolRpc, command_path : Array[String], input : @ty
 
                                           let result452 = mbt_ffi_ptr2str(mbt_ffi_load32((return_area) + 12), mbt_ffi_load32((return_area) + 16))
 
-                                          @common.ToolError::InvalidToolName(result452)
+                                          @types.ToolError::InvalidToolName(result452)
                                     }
                                     1 => {
 
@@ -25006,25 +24996,25 @@ pub fn ToolRpc::invoke(self : ToolRpc, command_path : Array[String], input : @ty
                                           }
                                           mbt_ffi_free(mbt_ffi_load32((return_area) + 12))
 
-                                          @common.ToolError::InvalidCommandPath(array)
+                                          @types.ToolError::InvalidCommandPath(array)
                                     }
                                     2 => {
 
                                           let result455 = mbt_ffi_ptr2str(mbt_ffi_load32((return_area) + 12), mbt_ffi_load32((return_area) + 16))
 
-                                          @common.ToolError::InvalidInput(result455)
+                                          @types.ToolError::InvalidInput(result455)
                                     }
                                     3 => {
 
                                           let result456 = mbt_ffi_ptr2str(mbt_ffi_load32((return_area) + 12), mbt_ffi_load32((return_area) + 16))
 
-                                          @common.ToolError::ConstraintViolation(result456)
+                                          @types.ToolError::ConstraintViolation(result456)
                                     }
                                     4 => {
 
                                           let result457 = mbt_ffi_ptr2str(mbt_ffi_load32((return_area) + 12), mbt_ffi_load32((return_area) + 16))
 
-                                          @common.ToolError::InvalidResult(result457)
+                                          @types.ToolError::InvalidResult(result457)
                                     }
                                     5 => {
 
@@ -26858,22 +26848,22 @@ pub fn ToolRpc::invoke(self : ToolRpc, command_path : Array[String], input : @ty
                                           }
                                           mbt_ffi_free(mbt_ffi_load32((return_area) + 40))
 
-                                          @common.ToolError::CustomError(@common.CustomToolError::{name : result458, payload : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array654, defs : array659, root : mbt_ffi_load32((return_area) + 36)}, value : @types.SchemaValueTree::{value_nodes : array690, root : mbt_ffi_load32((return_area) + 48)}}})
+                                          @types.ToolError::CustomError(@types.CustomToolError::{name : result458, payload : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array654, defs : array659, root : mbt_ffi_load32((return_area) + 36)}, value : @types.SchemaValueTree::{value_nodes : array690, root : mbt_ffi_load32((return_area) + 48)}}})
                                     }
                                     _ => panic()
                               }
 
-                              RpcError::RemoteToolError(lifted692)
+                              @types.ToolRpcError::RemoteToolError(lifted692)
                         }
                         5 => {
 
-                              RpcError::Cancelled
+                              @types.ToolRpcError::Cancelled
                         }
                         6 => {
 
                               let result693 = mbt_ffi_ptr2str(mbt_ffi_load32((return_area) + 8), mbt_ffi_load32((return_area) + 12))
 
-                              RpcError::ResourceExhausted(result693)
+                              @types.ToolRpcError::ResourceExhausted(result693)
                         }
                         _ => panic()
                   }
@@ -29610,7 +29600,7 @@ pub fn ToolRpc::async_invoke_and_await(self : ToolRpc, command_path : Array[Stri
 ///|
 /// Sequential calls return the same immutable terminal. Only one call may
 /// be outstanding at a time.
-pub async fn FutureInvokeResult::get(self : FutureInvokeResult) -> Result[@common.InvocationResult, RpcError] {
+pub async fn FutureInvokeResult::get(self : FutureInvokeResult) -> Result[@common.InvocationResult, @types.ToolRpcError] {
 
       let FutureInvokeResult(handle) = self
 
@@ -33210,25 +33200,25 @@ pub async fn FutureInvokeResult::get(self : FutureInvokeResult) -> Result[@commo
 
                               let result233 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              RpcError::ProtocolError(result233)
+                              @types.ToolRpcError::ProtocolError(result233)
                         }
                         1 => {
 
                               let result234 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              RpcError::Denied(result234)
+                              @types.ToolRpcError::Denied(result234)
                         }
                         2 => {
 
                               let result235 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              RpcError::NotFound(result235)
+                              @types.ToolRpcError::NotFound(result235)
                         }
                         3 => {
 
                               let result236 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              RpcError::RemoteInternalError(result236)
+                              @types.ToolRpcError::RemoteInternalError(result236)
                         }
                         4 => {
 
@@ -33237,7 +33227,7 @@ pub async fn FutureInvokeResult::get(self : FutureInvokeResult) -> Result[@commo
 
                                           let result237 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 12), mbt_ffi_load32((result_ptr) + 16))
 
-                                          @common.ToolError::InvalidToolName(result237)
+                                          @types.ToolError::InvalidToolName(result237)
                                     }
                                     1 => {
 
@@ -33251,25 +33241,25 @@ pub async fn FutureInvokeResult::get(self : FutureInvokeResult) -> Result[@commo
                                           }
                                           mbt_ffi_free(mbt_ffi_load32((result_ptr) + 12))
 
-                                          @common.ToolError::InvalidCommandPath(array239)
+                                          @types.ToolError::InvalidCommandPath(array239)
                                     }
                                     2 => {
 
                                           let result241 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 12), mbt_ffi_load32((result_ptr) + 16))
 
-                                          @common.ToolError::InvalidInput(result241)
+                                          @types.ToolError::InvalidInput(result241)
                                     }
                                     3 => {
 
                                           let result242 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 12), mbt_ffi_load32((result_ptr) + 16))
 
-                                          @common.ToolError::ConstraintViolation(result242)
+                                          @types.ToolError::ConstraintViolation(result242)
                                     }
                                     4 => {
 
                                           let result243 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 12), mbt_ffi_load32((result_ptr) + 16))
 
-                                          @common.ToolError::InvalidResult(result243)
+                                          @types.ToolError::InvalidResult(result243)
                                     }
                                     5 => {
 
@@ -35103,22 +35093,22 @@ pub async fn FutureInvokeResult::get(self : FutureInvokeResult) -> Result[@commo
                                           }
                                           mbt_ffi_free(mbt_ffi_load32((result_ptr) + 40))
 
-                                          @common.ToolError::CustomError(@common.CustomToolError::{name : result244, payload : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array441, defs : array446, root : mbt_ffi_load32((result_ptr) + 36)}, value : @types.SchemaValueTree::{value_nodes : array477, root : mbt_ffi_load32((result_ptr) + 48)}}})
+                                          @types.ToolError::CustomError(@types.CustomToolError::{name : result244, payload : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array441, defs : array446, root : mbt_ffi_load32((result_ptr) + 36)}, value : @types.SchemaValueTree::{value_nodes : array477, root : mbt_ffi_load32((result_ptr) + 48)}}})
                                     }
                                     _ => panic()
                               }
 
-                              RpcError::RemoteToolError(lifted479)
+                              @types.ToolRpcError::RemoteToolError(lifted479)
                         }
                         5 => {
 
-                              RpcError::Cancelled
+                              @types.ToolRpcError::Cancelled
                         }
                         6 => {
 
                               let result480 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              RpcError::ResourceExhausted(result480)
+                              @types.ToolRpcError::ResourceExhausted(result480)
                         }
                         _ => panic()
                   }
@@ -35144,7 +35134,7 @@ pub fn FutureInvokeResult::cancel(self : FutureInvokeResult) -> Unit {
 /// Waits for an explicit set of result observers as one causal batch. The
 /// input order controls the result order; filesystem-capable bodies become
 /// eligible together and execute in durable Start order.
-pub async fn get_invoke_results(futures : Array[FutureInvokeResult]) -> Array[Result[@common.InvocationResult, RpcError]] {
+pub async fn get_invoke_results(futures : Array[FutureInvokeResult]) -> Array[Result[@common.InvocationResult, @types.ToolRpcError]] {
 
       let address = mbt_ffi_malloc((futures).length() * 4);
       for index = 0; index < (futures).length(); index = index + 1 {
@@ -36902,7 +36892,7 @@ pub async fn get_invoke_results(futures : Array[FutureInvokeResult]) -> Array[Re
       },
       )
 
-      let array483 : Array[Result[@common.InvocationResult, RpcError]] = [];
+      let array483 : Array[Result[@common.InvocationResult, @types.ToolRpcError]] = [];
       for index484 = 0; index484 < (mbt_ffi_load32((result_ptr) + 4)); index484 = index484 + 1 {
             let iter_base = (mbt_ffi_load32((result_ptr) + 0)) + (index484 * 52)
 
@@ -38765,25 +38755,25 @@ pub async fn get_invoke_results(futures : Array[FutureInvokeResult]) -> Array[Re
 
                                     let result233 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                                    RpcError::ProtocolError(result233)
+                                    @types.ToolRpcError::ProtocolError(result233)
                               }
                               1 => {
 
                                     let result234 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                                    RpcError::Denied(result234)
+                                    @types.ToolRpcError::Denied(result234)
                               }
                               2 => {
 
                                     let result235 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                                    RpcError::NotFound(result235)
+                                    @types.ToolRpcError::NotFound(result235)
                               }
                               3 => {
 
                                     let result236 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                                    RpcError::RemoteInternalError(result236)
+                                    @types.ToolRpcError::RemoteInternalError(result236)
                               }
                               4 => {
 
@@ -38792,7 +38782,7 @@ pub async fn get_invoke_results(futures : Array[FutureInvokeResult]) -> Array[Re
 
                                                 let result237 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 12), mbt_ffi_load32((iter_base) + 16))
 
-                                                @common.ToolError::InvalidToolName(result237)
+                                                @types.ToolError::InvalidToolName(result237)
                                           }
                                           1 => {
 
@@ -38806,25 +38796,25 @@ pub async fn get_invoke_results(futures : Array[FutureInvokeResult]) -> Array[Re
                                                 }
                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 12))
 
-                                                @common.ToolError::InvalidCommandPath(array239)
+                                                @types.ToolError::InvalidCommandPath(array239)
                                           }
                                           2 => {
 
                                                 let result241 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 12), mbt_ffi_load32((iter_base) + 16))
 
-                                                @common.ToolError::InvalidInput(result241)
+                                                @types.ToolError::InvalidInput(result241)
                                           }
                                           3 => {
 
                                                 let result242 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 12), mbt_ffi_load32((iter_base) + 16))
 
-                                                @common.ToolError::ConstraintViolation(result242)
+                                                @types.ToolError::ConstraintViolation(result242)
                                           }
                                           4 => {
 
                                                 let result243 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 12), mbt_ffi_load32((iter_base) + 16))
 
-                                                @common.ToolError::InvalidResult(result243)
+                                                @types.ToolError::InvalidResult(result243)
                                           }
                                           5 => {
 
@@ -40658,22 +40648,22 @@ pub async fn get_invoke_results(futures : Array[FutureInvokeResult]) -> Array[Re
                                                 }
                                                 mbt_ffi_free(mbt_ffi_load32((iter_base) + 40))
 
-                                                @common.ToolError::CustomError(@common.CustomToolError::{name : result244, payload : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array441, defs : array446, root : mbt_ffi_load32((iter_base) + 36)}, value : @types.SchemaValueTree::{value_nodes : array477, root : mbt_ffi_load32((iter_base) + 48)}}})
+                                                @types.ToolError::CustomError(@types.CustomToolError::{name : result244, payload : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array441, defs : array446, root : mbt_ffi_load32((iter_base) + 36)}, value : @types.SchemaValueTree::{value_nodes : array477, root : mbt_ffi_load32((iter_base) + 48)}}})
                                           }
                                           _ => panic()
                                     }
 
-                                    RpcError::RemoteToolError(lifted479)
+                                    @types.ToolRpcError::RemoteToolError(lifted479)
                               }
                               5 => {
 
-                                    RpcError::Cancelled
+                                    @types.ToolRpcError::Cancelled
                               }
                               6 => {
 
                                     let result480 = mbt_ffi_ptr2str(mbt_ffi_load32((iter_base) + 8), mbt_ffi_load32((iter_base) + 12))
 
-                                    RpcError::ResourceExhausted(result480)
+                                    @types.ToolRpcError::ResourceExhausted(result480)
                               }
                               _ => panic()
                         }

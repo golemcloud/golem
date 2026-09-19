@@ -318,10 +318,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .collect::<anyhow::Result<BTreeMap<_, _>>>()?,
         );
         let agent_mode = registered_agent_type.agent_type.mode;
+        let owner_component = self.owner_component_metadata();
         let remote_owner = AgentOwnerPattern::Agent {
             account: registered_agent_type.implemented_by.account_email.clone(),
-            application: self.owner_component_metadata().application_name.clone(),
-            environment: self.owner_component_metadata().environment_name.clone(),
+            application: owner_component.application_name.clone(),
+            environment: owner_component.environment_name.clone(),
             component: golem_common::model::component::ComponentName(
                 registered_agent_type.implemented_by.component_name.clone(),
             ),

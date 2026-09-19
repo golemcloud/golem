@@ -89,7 +89,7 @@ test "middleware registry sorts discovery and keeps aliases out of lookup" {
   }
   assert_true(
     get_registered_tool_middleware("alpha-alias")
-    is Err(@toolCommon.ToolError::InvalidToolName("alpha-alias")),
+    is Err(@types.ToolError::InvalidToolName("alpha-alias")),
   )
   assert_true(tool_middleware_state.invokers.contains("alpha-policy"))
   assert_true(!tool_middleware_state.invokers.contains("alpha-alias"))
@@ -316,7 +316,7 @@ test "universal middleware can retry the underlying capability sequentially" {
         (_, _, _) => {
           backend_calls.val = backend_calls.val + 1
           if backend_calls.val == 1 {
-            Err(@toolCommon.ToolError::ConstraintViolation("retry"))
+            Err(@types.ToolError::ConstraintViolation("retry"))
           } else {
             Ok({ result: None, stdout: None, })
           }
@@ -371,9 +371,7 @@ test "guest boundary cleans uninvoked input stdin and underlying on lookup failu
         @agentCommon.Principal::Anonymous,
         underlying,
       )
-      assert_true(
-        result is Err(@toolCommon.ToolError::InvalidToolName("missing")),
-      )
+      assert_true(result is Err(@types.ToolError::InvalidToolName("missing")))
       assert_eq(raw_drops.val, 0)
     })
     assert_eq(backend_calls.val, 0)
@@ -422,7 +420,7 @@ test "guest boundary preserves protocol errors and transfers raw custom errors" 
         protocol_underlying,
       )
       assert_true(
-        protocol is Err(@toolCommon.ToolError::ConstraintViolation("denied")),
+        protocol is Err(@types.ToolError::ConstraintViolation("denied")),
       )
       let custom_underlying = new_scoped_underlying_tool(
         (_, _, _) => Ok({ result: None, stdout: None, }),
@@ -440,7 +438,7 @@ test "guest boundary preserves protocol errors and transfers raw custom errors" 
           @agentCommon.Principal::Anonymous,
           custom_underlying,
         ) {
-        Err(@toolCommon.ToolError::CustomError(payload)) =>
+        Err(@types.ToolError::CustomError(payload)) =>
           custom_payload.val = Some(payload.payload)
         _ => fail("guest boundary changed raw custom error")
       }

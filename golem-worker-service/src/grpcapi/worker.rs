@@ -1335,6 +1335,7 @@ mod protocol_tests {
     fn start() -> InvocationRequest {
         InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
+                method_name: Some("run".to_string()),
                 input: Some(SchemaValue {
                     value: Some(schema_value::Value::U8Value(1)),
                 }),

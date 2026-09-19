@@ -81,6 +81,7 @@ oplog_entry! {
         wit_public_type: "create-parameters"
         raw {
             agent_id: AgentId,
+            owner_kind: crate::base_model::agent::OwnerKind,
             agent_mode: AgentMode,
             component_revision: ComponentRevision,
             env: Vec<(String, String)>,
@@ -97,6 +98,7 @@ oplog_entry! {
         }
         public {
             agent_id: AgentId,
+            owner_kind: crate::base_model::agent::OwnerKind,
             agent_mode: AgentMode,
             component_revision: ComponentRevision,
             env: BTreeMap<String, String>,

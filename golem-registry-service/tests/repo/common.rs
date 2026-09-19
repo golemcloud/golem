@@ -42,8 +42,8 @@ use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::plan::PlanId;
 use golem_common::model::tool::{
     CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, TOOL_METADATA_WIT_VERSION,
-    ToolBindingInput, ToolDeploymentMetadata, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
-    ToolSource,
+    ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
@@ -2957,6 +2957,7 @@ pub async fn test_component_stage(deps: &Deps) {
                     },
                     provision: ToolProvisionConfig::default(),
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 },
             )]),
@@ -3170,7 +3171,8 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3195,6 +3197,13 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     deps.component_repo
         .update(
@@ -3218,7 +3227,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         .list_initial_permission_card_ids_by_account(owner.revision.account_id)
         .await
         .unwrap();
-    assert_eq!(ids, vec![initial_card.card_id]);
+    assert_eq!(ids, vec![component_card_id, initial_card.card_id]);
 }
 
 pub async fn test_agent_initial_card_from_older_component_revision_remains_live(deps: &Deps) {
@@ -3297,7 +3306,8 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         .await
         .unwrap();
 
-    deps.component_repo
+    let updated = deps
+        .component_repo
         .update(
             ComponentRevisionRecord {
                 component_id: component_id.0,
@@ -3313,6 +3323,13 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         )
         .await
         .unwrap();
+    let current_component_card_id = updated
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     assert!(
         deps.component_repo
@@ -3335,8 +3352,8 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         .unwrap();
     assert_eq!(
         ids,
-        Vec::<CardId>::new(),
-        "the staged-card listing follows the current component revision"
+        vec![current_component_card_id],
+        "the staged-card listing contains the current component card but not the older agent card"
     );
 
     assert_eq!(
@@ -3455,7 +3472,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3480,13 +3498,20 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     let ids = deps
         .component_repo
         .list_initial_permission_card_ids_by_account(owner.revision.account_id)
         .await
         .unwrap();
-    assert_eq!(ids, vec![initial_card.card_id]);
+    assert_eq!(ids, vec![component_card_id, initial_card.card_id]);
 
     deps.component_repo
         .delete(owner.revision.account_id, component_id.0, 1)
@@ -3539,7 +3564,8 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3564,13 +3590,20 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     assert_eq!(
         deps.component_repo
             .list_initial_permission_card_ids_by_account(owner.revision.account_id)
             .await
             .unwrap(),
-        vec![initial_card.card_id]
+        vec![component_card_id, initial_card.card_id]
     );
 
     deps.component_repo
@@ -3804,7 +3837,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         .unwrap()
         .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
 
-    deps.component_repo
+    let recreated = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3822,6 +3856,13 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         )
         .await
         .unwrap();
+    let recreated_component_card_id = recreated
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     let ids = deps
         .component_repo
@@ -3830,8 +3871,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         .unwrap();
     assert_eq!(
         ids,
-        Vec::<CardId>::new(),
-        "agent-initial cards from a deleted component incarnation must not reappear after same-name recreation"
+        vec![recreated_component_card_id],
+        "the recreated component card must appear without agent cards from the deleted incarnation"
     );
     assert!(
         services
@@ -4776,6 +4817,7 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
                     .unwrap(),
                     definition: release_tool,
                     provision: ToolProvisionConfig::default(),
+                    component_bindings: BTreeMap::new(),
                     source: release_source,
                     owner_account_id: AccountId(owner_account_id),
                     owner_account_email: golem_common::model::account::AccountEmail::new(
@@ -4984,6 +5026,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         release_id: None,
         definition: definition.clone(),
         provision: ToolProvisionConfig::default(),
+        component_bindings: BTreeMap::new(),
         source: component_source.clone(),
         owner_account_id: actor,
         owner_account_email: golem_common::model::account::AccountEmail::new(
@@ -6108,6 +6151,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 .unwrap(),
                 definition,
                 provision: ToolProvisionConfig::default(),
+                component_bindings: BTreeMap::new(),
                 source: source.clone(),
                 owner_account_id: AccountId(owner_account_id),
                 owner_account_email: golem_common::model::account::AccountEmail::new(
@@ -6143,7 +6187,9 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                     CompiledToolBinding {
                         deployment_revision,
                         release_id: tool.release_id,
-                        agent_type_name: AgentTypeName(agent_type_name.clone()),
+                        owner: ToolBindingOwner::AgentType {
+                            agent_type_name: AgentTypeName(agent_type_name.clone()),
+                        },
                         tool_name: alpha_name,
                         version: tool.definition.version.clone(),
                         metadata_version: tool.metadata_version.clone(),
@@ -6305,13 +6351,16 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             let effective_definition = make_test_tool("alpha", "1.0.0");
             let chain = CompiledToolMiddlewareChain {
                 deployment_revision,
-                agent_type_name: AgentTypeName(agent_type_name.clone()),
+                owner: ToolBindingOwner::AgentType {
+                    agent_type_name: AgentTypeName(agent_type_name.clone()),
+                },
                 tool_name: alpha,
                 effective_definition: effective_definition.clone(),
                 occurrences: vec![CompiledToolMiddlewareOccurrence {
                     middleware: published.clone(),
                     parameters: universal[0].parameters.clone(),
                     provision: ToolProvisionConfig::default(),
+                    config_keys_readable: Default::default(),
                     secret_keys_readable: SecretKeyScope::All,
                     secret_keys_revealable: SecretKeyScope::All,
                     filesystem_access: ToolFilesystemAccess::Allowed,
@@ -6612,14 +6661,16 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         "2.0.0"
     );
     assert_eq!(
-        current.agent_tool_bindings[&AgentTypeName(agent_type_name.clone())]
-            [&ToolName::try_from("alpha").unwrap()]
+        current.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone())
+        }][&ToolName::try_from("alpha").unwrap()]
             .metadata_version,
         TOOL_METADATA_WIT_VERSION
     );
     assert_eq!(
-        current.agent_tool_bindings[&AgentTypeName(agent_type_name.clone())]
-            [&ToolName::try_from("alpha").unwrap()]
+        current.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone())
+        }][&ToolName::try_from("alpha").unwrap()]
             .parameters
             .0,
         serde_json::json!({ "revision": 2 })
@@ -6643,6 +6694,25 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
+    let rolled_back: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_active_tool_deployment_state_by_component_revision(
+            &environment_id,
+            &component_id,
+            component_revision_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(rolled_back.deployment_revision.get(), 1);
+    assert_eq!(
+        rolled_back.registered_tools[&ToolName::try_from("alpha").unwrap()]
+            .definition
+            .version,
+        "1.0.0"
+    );
     let staged_after_component_update = deps
         .full_deployment_repo
         .get_staged_identity(environment_id)
@@ -6678,7 +6748,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
 
     let latest_for_component: golem_common::model::tool::ToolDeploymentState = deps
         .full_deployment_repo
-        .get_latest_tool_deployment_state_by_component_revision(
+        .get_active_tool_deployment_state_by_component_revision(
             &environment_id,
             &component_id,
             component_revision_id,
@@ -6691,7 +6761,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     assert_eq!(latest_for_component.deployment_revision.get(), 2);
     let latest_for_updated_component: golem_common::model::tool::ToolDeploymentState = deps
         .full_deployment_repo
-        .get_latest_tool_deployment_state_by_component_revision(
+        .get_active_tool_deployment_state_by_component_revision(
             &environment_id,
             &component_id,
             updated_component_revision_id,
@@ -6729,6 +6799,13 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             config: NormalizedJsonValue::new(serde_json::json!({ "consumer": true })),
             ..ToolProvisionConfig::default()
         },
+        component_bindings: BTreeMap::from([(
+            golem_common::model::component::ComponentName("consumer".to_string()),
+            ToolBindingInput {
+                parameters: NormalizedJsonValue::new(serde_json::json!({ "baseline": "remote" })),
+                ..ToolBindingInput::default()
+            },
+        )]),
         source: remote_source.clone(),
         owner_account_id: AccountId(owner_account_id),
         owner_account_email: golem_common::model::account::AccountEmail::new(
@@ -6753,7 +6830,9 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let remote_binding = CompiledToolBinding {
         deployment_revision: DeploymentRevision::try_from(4_i64).unwrap(),
         release_id: Some(remote_release_id),
-        agent_type_name: AgentTypeName(agent_type_name.clone()),
+        owner: ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone()),
+        },
         tool_name: ToolName::try_from("remote-search").unwrap(),
         version: "1.0.0".to_string(),
         metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
@@ -6778,6 +6857,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let remote_hash = diff::remote_tool_deployments(
         [remote_registered_tool.clone()],
         [remote_binding.clone()],
+        &BTreeMap::new(),
         &BTreeSet::new(),
     )
     .unwrap()["remote-search"]
@@ -7548,6 +7628,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -7583,6 +7664,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -7620,6 +7702,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -7645,6 +7728,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -7672,6 +7756,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };

@@ -12,7 +12,7 @@ use golem_common::base_model::retry_policy::{
     ApiPropertySubstring, ApiRetryPolicy, ApiRetryPolicyPair, ApiTextValue, ApiTimeBoxPolicy,
 };
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::quota::{
@@ -20,6 +20,7 @@ use golem_common::model::quota::{
     ResourceName, ResourceRateLimit, TimePeriod,
 };
 use golem_common::model::security_scheme::SecuritySchemeName;
+use golem_common::model::tool::ToolName;
 use indexmap::IndexMap;
 use proptest::prelude::*;
 use proptest::string::string_regex;
@@ -345,6 +346,21 @@ fn arb_initial_component_file_model() -> BoxedStrategy<InitialComponentFile> {
         .boxed()
 }
 
+fn arb_component_config_schema_model() -> BoxedStrategy<ComponentConfigSchema> {
+    arb_ident()
+        .prop_map(|name| ComponentConfigSchema {
+            schema: golem_common::schema::SchemaGraph::anonymous(
+                golem_common::schema::SchemaType::string(),
+            ),
+            declarations: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
+                source: golem_common::model::agent::AgentConfigSource::Local,
+                path: vec![name],
+                value_type: golem_common::schema::SchemaType::string(),
+            }],
+        })
+        .boxed()
+}
+
 fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
     (
         any::<bool>(),
@@ -364,6 +380,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
+            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -374,6 +391,10 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
             arb_opt(arb_vec_merge_mode_model()),
             arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
         ),
+        (
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_tool_bindings_model()),
+        ),
     )
         .prop_map(
             |(
@@ -381,8 +402,9 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 component_wasm,
                 output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config, env_merge_mode, env),
+                (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
+                (tools_merge_mode, tools),
             )| ComponentPreset {
                 default: is_default.then_some(Marker),
                 component_wasm,
@@ -392,6 +414,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 build,
                 custom_commands,
                 clean,
+                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -400,6 +423,8 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 plugins,
                 files_merge_mode,
                 files,
+                tools_merge_mode,
+                tools,
             },
         )
         .boxed()
@@ -424,6 +449,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
+            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -434,6 +460,10 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
             arb_opt(arb_vec_merge_mode_model()),
             arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
         ),
+        (
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_tool_bindings_model()),
+        ),
         prop::collection::vec((arb_ident(), arb_component_preset_model()), 0..=2)
             .prop_map(IndexMap::from_iter),
     )
@@ -443,8 +473,9 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 component_wasm,
                 output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config, env_merge_mode, env),
+                (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
+                (tools_merge_mode, tools),
                 presets,
             )| ComponentTemplate {
                 templates,
@@ -455,6 +486,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 build,
                 custom_commands,
                 clean,
+                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -463,6 +495,8 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 plugins,
                 files_merge_mode,
                 files,
+                tools_merge_mode,
+                tools,
                 presets,
             },
         )
@@ -489,6 +523,7 @@ fn arb_component_model() -> BoxedStrategy<Component> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
+            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -498,6 +533,10 @@ fn arb_component_model() -> BoxedStrategy<Component> {
             arb_opt(prop::collection::vec(arb_plugin_installation_model(), 0..=2).boxed()),
             arb_opt(arb_vec_merge_mode_model()),
             arb_opt(prop::collection::vec(arb_initial_component_file_model(), 0..=2).boxed()),
+        ),
+        (
+            arb_opt(arb_map_merge_mode_model()),
+            arb_opt(arb_tool_bindings_model()),
         ),
         prop::collection::vec((arb_ident(), arb_component_preset_model()), 0..=2)
             .prop_map(IndexMap::from_iter),
@@ -509,8 +548,9 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 component_wasm,
                 output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config, env_merge_mode, env),
+                (config_schema, config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
+                (tools_merge_mode, tools),
                 presets,
             )| Component {
                 templates,
@@ -522,6 +562,7 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 build,
                 custom_commands,
                 clean,
+                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -530,6 +571,8 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 plugins,
                 files_merge_mode,
                 files,
+                tools_merge_mode,
+                tools,
                 presets,
             },
         )
@@ -902,11 +945,43 @@ fn arb_mcp_deployment_model() -> BoxedStrategy<McpDeployment> {
             0..=3,
         )
         .prop_map(IndexMap::from_iter),
+        prop::collection::vec(
+            (
+                arb_tool_name().prop_map(|name| ToolName::try_from(name).unwrap()),
+                (
+                    arb_ident().prop_map(ComponentName),
+                    arb_opt(arb_ident()),
+                    prop_oneof![
+                        Just((None, None)),
+                        prop::collection::vec(arb_ident(), 0..=2)
+                            .prop_map(|include| (Some(include), None)),
+                        prop::collection::vec(arb_ident(), 0..=2)
+                            .prop_map(|exclude| (None, Some(exclude))),
+                    ],
+                )
+                    .prop_map(
+                        |(owner_component, security_scheme, (include, exclude))| {
+                            McpDeploymentToolOptions {
+                                owner_component,
+                                security_scheme,
+                                include,
+                                exclude,
+                            }
+                        },
+                    ),
+            ),
+            0..=3,
+        )
+        .prop_map(IndexMap::from_iter),
     )
-        .prop_map(|(domain, agents)| McpDeployment {
+        .prop_map(|(domain, agents, tools)| McpDeployment {
             domain: Some(Domain(format!("{domain}.example.com")).into()),
             subdomain: None,
             agents,
+            tools,
+        })
+        .prop_filter("MCP deployments require an agent or tool", |deployment| {
+            !deployment.agents.is_empty() || !deployment.tools.is_empty()
         })
         .boxed()
 }
@@ -1315,6 +1390,52 @@ prop_compose! {
     fn arb_application_document()(app in arb_application_model_v3()) -> Application {
         app
     }
+}
+
+#[test]
+fn schema_and_serde_require_explicit_mcp_tool_owner_component() {
+    let mut value = serde_json::json!({"mcp":{"deployments":{"local":[{
+        "subdomain":"mcp", "agents":{"Counter":{}},
+        "tools":{"files":{"ownerComponent":"app:owner","include":["read **"]}}
+    }]}}});
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    let parsed = serde_json::from_value::<Application>(value.clone()).unwrap();
+    let mcp = parsed.mcp.unwrap();
+    let options = &mcp.deployments.values().next().unwrap()[0].tools;
+    assert_eq!(
+        options.values().next().unwrap().owner_component.0,
+        "app:owner"
+    );
+    value["mcp"]["deployments"]["local"][0]["tools"]["files"]
+        .as_object_mut()
+        .unwrap()
+        .remove("ownerComponent");
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    assert!(serde_json::from_value::<Application>(value).is_err());
+}
+
+#[test]
+fn schema_and_serde_accept_inherited_component_config_schema() {
+    let config_schema = serde_json::to_value(
+        arb_component_config_schema_model()
+            .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
+            .unwrap()
+            .current(),
+    )
+    .unwrap();
+    let value = serde_json::json!({
+        "app": "test-app",
+        "componentTemplates": {"configured": {
+            "configSchema": config_schema,
+            "presets": {"custom": {"configSchema": config_schema}}
+        }},
+        "components": {"app:main": {
+            "templates": "configured", "componentWasm": "main.wasm",
+            "presets": {"custom": {"configSchema": config_schema}}
+        }}
+    });
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    serde_json::from_value::<Application>(value).unwrap();
 }
 
 #[test]

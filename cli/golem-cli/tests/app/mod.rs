@@ -116,6 +116,7 @@ mod cmd {
     pub static REGISTER: &str = "register";
     pub static REPL: &str = "repl";
     pub static TEMPLATES: &str = "templates";
+    pub static TOOL: &str = "tool";
 }
 
 mod flag {
