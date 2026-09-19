@@ -601,6 +601,50 @@ return 1
         Ok(())
     }
 
+    /// Validates a source stream and atomically renames it to a previously absent target.
+    /// Returns 1 when moved, 0 when the target exists, and -1 for an invalid source.
+    pub async fn move_stream_if_absent<K>(
+        &self,
+        source_key: K,
+        target_key: K,
+        expected_last_id: u64,
+    ) -> RedisResult<i64>
+    where
+        K: AsRef<str>,
+    {
+        const SCRIPT: &str = r#"
+if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
+if tonumber(ARGV[1]) == 0 or redis.call('XLEN', KEYS[1]) ~= tonumber(ARGV[1]) then return -1 end
+local first = redis.call('XRANGE', KEYS[1], '-', '+', 'COUNT', 1)
+local last = redis.call('XREVRANGE', KEYS[1], '+', '-', 'COUNT', 1)
+if first[1][1] ~= '1-0' or last[1][1] ~= ARGV[1] .. '-0' then return -1 end
+redis.call('RENAME', KEYS[1], KEYS[2])
+return 1
+"#;
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let args: Vec<Value> = vec![
+            SCRIPT.into(),
+            2.into(),
+            self.prefixed_key(source_key).into(),
+            self.prefixed_key(target_key).into(),
+            expected_last_id.to_string().into(),
+        ];
+        let options = Options {
+            max_attempts: Some(1),
+            ..Default::default()
+        };
+        let result = self
+            .pool
+            .next()
+            .with_options(&options)
+            .custom_raw(cmd!("EVAL"), args)
+            .await
+            .and_then(|frame| frame.try_into())
+            .and_then(|value: Value| value.convert::<i64>());
+        self.record(start, "EVAL", result)
+    }
+
     pub async fn xlen<R, K>(&self, key: K) -> RedisResult<R>
     where
         R: FromValue,
