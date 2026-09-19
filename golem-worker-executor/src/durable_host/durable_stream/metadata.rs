@@ -3350,7 +3350,7 @@ mod tests {
             matches!(rows[4], Some(ProducerMetadataRow::Batch(position)) if position == OplogIndex::from_u64(7))
         );
         assert!(
-            matches!(&rows[5], Some(ProducerMetadataRow::SessionPage(sessions)) if sessions == &[fixture.identity.invocation.clone()])
+            matches!(&rows[5], Some(ProducerMetadataRow::SessionPage(sessions)) if sessions == std::slice::from_ref(&fixture.identity.invocation))
         );
         assert!(rows[6].is_none());
         assert!(rows[7].is_none());
