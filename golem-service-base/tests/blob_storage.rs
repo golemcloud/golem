@@ -1873,7 +1873,13 @@ async fn get_raw_slice_uses_inclusive_ranges(
         // test doubles assert on these two ranges (`sdks/effect/test/blobstore.test.ts`).
         // The wrapped start is a start after the end, which each backend refuses as it
         // refuses `(3, 2)`, before the S3 backend sends a request. The wrapped end reaches
-        // the backend. MinIO answers it with the status 200 and no `Content-Range`.
+        // the backend. The MinIO release that `S3Test` starts parses each offset of the
+        // range with `strconv.ParseInt(s, 10, 64)` in `parseRequestRangeSpec`
+        // (`cmd/httprange.go`), so 2^64-1 overflows `int64` and gives a parse error that
+        // is not `errInvalidRange`. `getObjectHandler` (`cmd/object-handlers.go`) ignores
+        // such a parse error and serves a regular GET: the status 200, the whole object and
+        // no `Content-Range`. This is the integer overflow path of MinIO, not a behaviour
+        // of S3.
         ("ranges/blob", u64::MAX, 2),
         ("ranges/blob", u64::MAX, u64::MAX),
     ];
