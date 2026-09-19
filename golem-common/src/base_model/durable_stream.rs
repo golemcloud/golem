@@ -492,6 +492,7 @@ pub struct LocalStreamReaderId {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[allow(clippy::large_enum_variant)]
 pub enum StreamRecordReference {
     Local(LocalStreamId),
     Foreign(DurableStreamHandle),

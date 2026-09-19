@@ -6220,6 +6220,7 @@ mod tests {
             durable_input_mappings: Vec::new(),
             scope_card: None,
             external_tool: None,
+            origin_invocation: None,
         };
 
         let _responses = harness

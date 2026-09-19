@@ -200,7 +200,7 @@ pub enum ProducerMetadataRow {
     Session(ProducerSessionMetadata),
     SessionPage(Vec<StreamSessionKey>),
     Batch(OplogIndex),
-    Attachment(IndexedStreamAttachment),
+    Attachment(Box<IndexedStreamAttachment>),
     ActiveAttachmentCount(u64),
     ConsumerHead(IndexedConsumerJournal),
     Cascade(StreamCascadeDependentResult),
@@ -278,11 +278,11 @@ impl ProducerStreamIndex {
                 ProducerMetadataRow::Position(*first, *count)
             }
             ProducerMetadataKey::Attachment(attachment, stream, environment, consumer) => {
-                ProducerMetadataRow::Attachment(
+                ProducerMetadataRow::Attachment(Box::new(
                     self.attachments
                         .get(&(*attachment, *stream, *environment, consumer.clone()))?
                         .clone(),
-                )
+                ))
             }
             ProducerMetadataKey::ActiveAttachmentCount(session, stream) => {
                 ProducerMetadataRow::ActiveAttachmentCount(
@@ -440,7 +440,7 @@ impl ProducerStreamIndex {
                     return Err("producer metadata attachment identity mismatch".into());
                 }
                 self.attachments
-                    .insert((attachment, stream, environment, consumer), value);
+                    .insert((attachment, stream, environment, consumer), *value);
             }
             (
                 ProducerMetadataKey::ConsumerHead(session, stream),
@@ -1737,7 +1737,7 @@ impl DurableStreamStore {
                 ));
             };
             candidates.push(IndexedAttachmentCandidate {
-                attachment: attachment.clone(),
+                attachment: attachment.as_ref().clone(),
                 journal_summary: ProducerJournalSummary {
                     event_count: stream.next_sequence + u64::from(stream.terminal),
                     last_offset: stream.last_offset,

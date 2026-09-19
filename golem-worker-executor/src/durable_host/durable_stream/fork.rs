@@ -337,19 +337,19 @@ impl ProducerStreamIndex {
         self.coordinates.retain(|_, id| retained.contains(id));
         self.local_stream_ids.retain(|_, id| retained.contains(id));
 
-        if let Some(selected) = selected {
-            if let Some(state) = self.streams.get_mut(&selected) {
-                let count = selected_prefix_items.expect("selected stream has a prefix");
-                state.next_sequence = count;
-                state.batches.retain(|first, _| *first < count);
-                if count == 0 {
-                    state.first_sequence = None;
-                }
-                state.terminal = false;
-                state.terminal_event = None;
-                state.last_offset = record.retained_through;
-                state.last_item_offset = record.retained_through;
+        if let Some(selected) = selected
+            && let Some(state) = self.streams.get_mut(&selected)
+        {
+            let count = selected_prefix_items.expect("selected stream has a prefix");
+            state.next_sequence = count;
+            state.batches.retain(|first, _| *first < count);
+            if count == 0 {
+                state.first_sequence = None;
             }
+            state.terminal = false;
+            state.terminal_event = None;
+            state.last_offset = record.retained_through;
+            state.last_item_offset = record.retained_through;
         }
         self.open_session_streams.clear();
         self.open_streams = 0;
