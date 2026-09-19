@@ -153,7 +153,7 @@ pub mod bindings {
         }
 
         pub mod agent {
-            pub use crate::raw_bindings::golem::agent::{common, host};
+            pub use crate::raw_bindings::golem::agent::{common, durable_streams, host};
         }
 
         pub mod permissions {
@@ -466,6 +466,9 @@ mod json;
 
 #[cfg(feature = "json")]
 pub use json::*;
+
+#[cfg(feature = "json")]
+pub mod durable_streams;
 
 mod checkpoint;
 pub mod quota;

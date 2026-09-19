@@ -7,6 +7,7 @@ world golem-rust {
   import golem:api/retry@1.5.0;
 
   import golem:agent/host@2.0.0;
+  import golem:agent/durable-streams@2.0.0;
   import golem:tool/host@0.1.0;
   import golem:permissions/types@0.1.0;
   import golem:permissions/inspect@0.1.0;

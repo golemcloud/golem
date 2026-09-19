@@ -1,0 +1,12 @@
+import {
+  "golemcloud/golem_sdk/interface/golem/agent/durable-streams",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/wasi/clocks/monotonic-clock" @clock,
+  "golemcloud/golem_sdk/api",
+  "golemcloud/golem_sdk/async-core",
+  "golemcloud/golem_sdk/schema",
+  "moonbitlang/core/json",
+  "moonbitlang/core/encoding/utf8",
+}
+
+supported_targets = "+wasm"

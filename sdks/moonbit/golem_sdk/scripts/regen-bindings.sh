@@ -67,7 +67,7 @@ for root in "${GENERATED_ROOTS[@]}"; do
     continue
   fi
   find "$root" -type f \
-    \( -name 'moon.pkg' -o -name 'stub.mbt' \) \
+    \( -name 'moon.pkg' -o -name 'stub.mbt' -o -name '*_test.mbt' -o -name '*_wbtest.mbt' \) \
     -print0 |
     while IFS= read -r -d '' file; do
       destination="$preserved_root/$file"

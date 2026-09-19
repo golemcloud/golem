@@ -17,6 +17,7 @@ use figment::Figment;
 use figment::providers::{Format, Toml};
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
+    byte_size,
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::{
@@ -520,6 +521,9 @@ impl SafeDisplay for Limits {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DurableStreamConfig {
+    /// Maximum encoded payload size of one external Durable Streams read or append.
+    #[serde(with = "byte_size::required")]
+    pub external_batch_max_size: usize,
     #[serde(with = "humantime_serde")]
     pub lease_ttl: Duration,
     #[serde(with = "humantime_serde")]
@@ -533,6 +537,10 @@ pub struct DurableStreamConfig {
 
 impl DurableStreamConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.external_batch_max_size > 0,
+            "external durable stream batch limit must be non-zero"
+        );
         anyhow::ensure!(
             self.lease_ttl
                 == Duration::from_millis(
@@ -575,6 +583,7 @@ impl DurableStreamConfig {
 impl Default for DurableStreamConfig {
     fn default() -> Self {
         Self {
+            external_batch_max_size: 8 * 1024 * 1024,
             lease_ttl: Duration::from_millis(
                 golem_common::base_model::durable_stream::STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
             ),
@@ -596,6 +605,11 @@ impl Default for DurableStreamConfig {
 impl SafeDisplay for DurableStreamConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "external batch maximum size: {}",
+            humansize::ISizeFormatter::new(self.external_batch_max_size, humansize::BINARY)
+        );
         let _ = writeln!(&mut result, "lease TTL: {:?}", self.lease_ttl);
         let _ = writeln!(&mut result, "renewal interval: {:?}", self.renewal_interval);
         let _ = writeln!(
@@ -2667,6 +2681,27 @@ mod tests {
     use golem_common::SafeDisplay;
     use serde_json::Value;
     use test_r::test;
+
+    #[test]
+    fn durable_stream_config_uses_byte_size() {
+        let config = DurableStreamConfig::default();
+        let mut serialized = serde_json::to_value(&config).unwrap();
+        assert_eq!(serialized["external_batch_max_size"], "8388608 B");
+        assert!(serialized.get("external_batch_max_bytes").is_none());
+        serialized["external_batch_max_size"] = Value::from("1536 KiB");
+        let decoded: DurableStreamConfig = serde_json::from_value(serialized.clone()).unwrap();
+        assert_eq!(decoded.external_batch_max_size, 1_572_864);
+        assert!(decoded.validate().is_ok());
+        assert!(
+            decoded
+                .to_safe_string()
+                .contains("external batch maximum size: 1.50 MiB")
+        );
+        for invalid in ["0 B", "1.5 MiB"] {
+            serialized["external_batch_max_size"] = Value::from(invalid);
+            assert!(serde_json::from_value::<DurableStreamConfig>(serialized.clone()).is_err());
+        }
+    }
 
     #[test]
     fn durable_stream_config_enforces_renewal_before_lease_expiry() {

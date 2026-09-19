@@ -23,6 +23,7 @@ import { case_ as inventorySaga } from "./inventory-saga.ts"
 import { case_ as lookup } from "./lookup.ts"
 import { case_ as p3 } from "./p3.ts"
 import { case_ as toolMiddleware } from "./tool-middleware.ts"
+import { case_ as durableStreams } from "./durable-streams.ts"
 
 export const allCases: ReadonlyArray<TestCase> = [
   counter,
@@ -36,6 +37,7 @@ export const allCases: ReadonlyArray<TestCase> = [
   websocket,
   lookup,
   p3,
+  durableStreams,
   toolMiddleware,
   sqliteCounter,
   pgCounter,

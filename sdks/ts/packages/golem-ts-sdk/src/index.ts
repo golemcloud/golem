@@ -61,6 +61,7 @@ export { Principal } from './principal';
 export { AgentClassName } from './agentClassName';
 export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
+export * from './durableStreams';
 export * from './webhook';
 export * from './host/hostapi';
 export * as oplog from './host/oplog';

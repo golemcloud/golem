@@ -4022,6 +4022,52 @@ async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items(
 
 #[test]
 #[test_r::timeout("30s")]
+async fn reconstructed_packed_u8_write_requires_original_host_batch_boundary() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let live = producer(oplog.clone(), &identity, None).await;
+    let handle = live
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    live.write_items(
+        None,
+        handle.stream_id,
+        0,
+        StreamItemsPayload::PackedU8(vec![13, 79]),
+    )
+    .await
+    .unwrap();
+
+    let reconstructed = producer(oplog, &identity, None).await;
+    assert!(
+        reconstructed
+            .write_items(
+                None,
+                handle.stream_id,
+                0,
+                StreamItemsPayload::PackedU8(vec![13, 79]),
+            )
+            .await
+            .unwrap()
+            .replayed
+    );
+    assert!(matches!(
+        reconstructed
+            .write_items(
+                None,
+                handle.stream_id,
+                0,
+                StreamItemsPayload::PackedU8(vec![13]),
+            )
+            .await,
+        Err(StreamStoreError::EventConflict)
+    ));
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn handle_read_hydrates_cancellation_committed_before_request_abort() {
     use golem_common::model::durable_stream::StreamHandleReadRequest;
 

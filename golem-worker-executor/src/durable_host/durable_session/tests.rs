@@ -1140,6 +1140,169 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
 
 #[test]
 #[test_r::timeout("30s")]
+async fn guest_byte_drain_after_partial_fork_rejects_the_retained_batch_suffix() {
+    use crate::services::oplog::DurableStreamOplogRecord;
+    use crate::services::worker_fork::lineage::tests::prepared;
+
+    async fn drain_bytes(
+        producer: Arc<DurableStreamStore>,
+        oplog: Arc<TestOplog>,
+        handle: DurableStreamHandle,
+    ) {
+        let streams = StreamSession::new(producer, oplog, handle.source_invocation.clone(), []);
+        let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
+        let (nested_tx, _nested_rx) = mpsc::unbounded_channel();
+        let drain = PendingOwnedStreamDrain {
+            handle,
+            endpoint,
+            element_type: SchemaType::u8(),
+            role: SessionStreamRole::Output,
+        };
+        let (result, ()) = tokio::join!(
+            streams.drain_output(
+                drain,
+                Arc::new(SchemaGraph::anonymous(SchemaType::u8())),
+                nested_tx,
+            ),
+            async {
+                for byte in [5, 19, 83] {
+                    publisher.publish_item(SchemaValue::U8(byte)).await.unwrap();
+                }
+                publisher.publish_end().await.unwrap();
+            }
+        );
+        result.unwrap();
+    }
+
+    let source_identity = identity();
+    let source_oplog = Arc::new(TestOplog::default());
+    let source = DurableStreamStore::load(
+        source_oplog.clone(),
+        source_identity.environment_id,
+        source_identity.agent_id.clone(),
+        source_identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    source
+        .append_session_record(
+            None,
+            StreamSessionRecord::Prepared(prepared(&source_identity.invocation)),
+        )
+        .await
+        .unwrap();
+    let handle = source
+        .register(
+            None,
+            registration(
+                &source_identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: source_identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: vec![],
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    drain_bytes(source.clone(), source_oplog.clone(), handle.clone()).await;
+    let original = source.read_segment(&handle, None, None).await.unwrap();
+    assert_eq!(original.len(), 4);
+    assert_eq!(original[1].offset.sub_index(), 1);
+    assert_eq!(
+        original[0].offset.producer_oplog_index(),
+        original[2].offset.producer_oplog_index(),
+        "all three bytes must be in the batch that the fork cuts"
+    );
+    let retained = original[1].offset;
+    let cut_index = retained.producer_oplog_index();
+    let mut target_identity = identity();
+    target_identity.agent_id.agent_id = "fork".into();
+    target_identity.fingerprint = AgentFingerprint(Uuid::from_u128(4));
+    let source_owner = OwnedAgentId::new(source_identity.environment_id, &source_identity.agent_id);
+    let target_owner = OwnedAgentId::new(source_identity.environment_id, &target_identity.agent_id);
+    let cut = DurableStreamStore::prepare_fork_cut(
+        source_oplog.as_ref(),
+        (&source_owner, source_identity.fingerprint),
+        (&target_owner, target_identity.fingerprint),
+        source_oplog.current_oplog_index().await,
+        cut_index,
+        Some((handle.stream_id, Some(retained))),
+        [0; 32],
+        false,
+    )
+    .await
+    .unwrap();
+    let fork_handle = cut
+        .streams
+        .iter()
+        .find(|mapping| mapping.source == handle)
+        .unwrap()
+        .continuation
+        .clone();
+    let fork_oplog = Arc::new(TestOplog::default());
+    for (_, entry) in source_oplog
+        .read_exact(
+            OplogIndex::INITIAL,
+            cut_index.as_u64() - OplogIndex::INITIAL.as_u64() + 1,
+        )
+        .await
+    {
+        fork_oplog.add(entry).await;
+    }
+    fork_oplog
+        .add(
+            DurableStreamOplogRecord::Session(None, Box::new(StreamSessionRecord::ForkCut(cut)))
+                .into_inline_entry(),
+        )
+        .await;
+    fork_oplog.commit(CommitLevel::Always).await;
+    let fork = DurableStreamStore::load(
+        fork_oplog.clone(),
+        target_owner.environment_id,
+        target_owner.agent_id,
+        target_identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let prefix = fork.read_segment(&fork_handle, None, None).await.unwrap();
+    assert_eq!(prefix.len(), 2);
+    assert_eq!(
+        prefix[0].payload,
+        CommittedProducerStreamEventPayload::PackedU8(5)
+    );
+    assert_eq!(
+        prefix[1].payload,
+        CommittedProducerStreamEventPayload::PackedU8(19)
+    );
+    assert!(!fork.stream_head(&fork_handle).await.unwrap().closed);
+
+    drain_bytes(fork.clone(), fork_oplog, fork_handle.clone()).await;
+    let replayed = fork.read_segment(&fork_handle, None, None).await.unwrap();
+    assert_eq!(replayed.len(), 3, "the suffix byte was not appended");
+    assert_eq!(replayed[0], prefix[0]);
+    assert_eq!(replayed[1], prefix[1]);
+    let CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(error)) =
+        &replayed[2].payload
+    else {
+        panic!("expected the byte-batch replay conflict, got {replayed:?}");
+    };
+    assert_eq!(
+        String::from_utf8_lossy(error),
+        StreamStoreError::EventConflict.to_string()
+    );
+    assert_eq!(
+        source.read_segment(&handle, None, None).await.unwrap(),
+        original
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn materialized_output_releases_admission_and_survives_abandoned_response() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());

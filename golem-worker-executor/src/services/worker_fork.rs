@@ -21,8 +21,9 @@ pub mod stream_cut;
 
 use super::agent_webhooks::AgentWebhooksService;
 use super::environment_state::EnvironmentStateService;
+use super::external_durable_stream::ExternalDurableStreamService;
 use super::file_loader::FileLoader;
-use super::{HasAgentWebhooksService, HasEnvironmentStateService};
+use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasExternalDurableStreamService};
 use crate::durable_host::durable_stream::{DurableStreamStore, StreamStoreError};
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::metrics::workers::record_worker_call;
@@ -105,6 +106,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     pub agent_types: Arc<dyn agent_types::AgentTypesService>,
     pub agent_webhooks: Arc<AgentWebhooksService>,
+    pub external_durable_streams: Arc<dyn ExternalDurableStreamService>,
     pub engine: Arc<wasmtime::Engine>,
     pub linker: Arc<wasmtime::component::Linker<Ctx>>,
     pub runtime: Handle,
@@ -160,6 +162,12 @@ impl<Ctx: WorkerCtx> HasAgentTypesService for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> HasAgentWebhooksService for DefaultWorkerFork<Ctx> {
     fn agent_webhooks(&self) -> Arc<AgentWebhooksService> {
         self.agent_webhooks.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasExternalDurableStreamService for DefaultWorkerFork<Ctx> {
+    fn external_durable_streams(&self) -> Arc<dyn ExternalDurableStreamService> {
+        self.external_durable_streams.clone()
     }
 }
 
@@ -361,6 +369,7 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             active_agents: self.active_agents.clone(),
             agent_types: self.agent_types.clone(),
             agent_webhooks: self.agent_webhooks.clone(),
+            external_durable_streams: self.external_durable_streams.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
@@ -432,6 +441,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks: Arc<AgentWebhooksService>,
+        external_durable_streams: Arc<dyn ExternalDurableStreamService>,
         shutdown_token: tokio_util::sync::CancellationToken,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
@@ -444,6 +454,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             active_agents,
             agent_types,
             agent_webhooks,
+            external_durable_streams,
             engine,
             linker,
             runtime,
