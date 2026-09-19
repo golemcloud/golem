@@ -901,11 +901,18 @@ async fn manual_periodic_snapshot_failed_manual_baseline_returns_error_without_l
     let mut manual_failures = 0;
     let mut periodic_failures = 0;
     let outcome = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut outcome = None;
         loop {
+            // Invocation responses and captured events use independent transports.
+            if periodic_failures > 0 && manual_failures > 0
+                && let Some(result) = outcome.take()
+            {
+                break result;
+            }
             tokio::select! {
                 biased;
                 event = events.recv() => {
-                    let event = event.expect("Recovery event stream ended before invocation returned");
+                    let event = event.expect("Recovery event stream ended before both failures arrived");
                     if let Ok(AgentEvent::SnapshotRecoveryFailed { snapshot_index, error, .. }) = AgentEvent::try_from(event) {
                         if snapshot_index == periodic_index {
                             periodic_failures += 1;
@@ -916,7 +923,7 @@ async fn manual_periodic_snapshot_failed_manual_baseline_returns_error_without_l
                         }
                     }
                 }
-                result = &mut invocation => break result,
+                result = &mut invocation, if outcome.is_none() => outcome = Some(result),
             }
         }
     }).await.expect("Recovery must return the manual snapshot load failure rather than retry forever");
