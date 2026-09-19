@@ -31,6 +31,7 @@ use axum::extract::State;
 use axum::http::{Response, StatusCode as ServerStatus};
 use axum::routing::put;
 use bytes::Bytes;
+use futures::StreamExt;
 use golem_common::model::environment::EnvironmentId;
 use pretty_assertions::assert_eq;
 use std::fmt::{Debug, Formatter};
@@ -134,7 +135,6 @@ impl HttpConnector for ScriptedTransport {
             requests.len() - 1
         };
         let answer = (self.script)(&sent, earlier);
-        let content_length = answer.body.len().to_string();
         let mut response = HttpResponse::new(
             StatusCode::try_from(answer.status).unwrap(),
             SdkBody::from(answer.body),
@@ -142,11 +142,6 @@ impl HttpConnector for ScriptedTransport {
         response
             .headers_mut()
             .insert("content-type", "application/xml");
-        // A server sends the length of the body that it sends. The range check of a ranged
-        // read reads it.
-        response
-            .headers_mut()
-            .insert("content-length", content_length);
         if let Some(content_range) = answer.content_range {
             response
                 .headers_mut()
@@ -158,10 +153,23 @@ impl HttpConnector for ScriptedTransport {
 
 /// Makes an S3 blob storage that sends its requests to a script.
 ///
-/// The client reads no environment, no profile file and no instance metadata. The SDK does not
-/// retry, so each attempt of the blob storage is one request. The blob storage makes 3 attempts
-/// with a delay of 1 ms.
+/// The SDK does not retry, so each attempt of the blob storage is one request. The blob storage
+/// makes 3 attempts with a delay of 1 ms.
 fn scripted_storage(
+    object_prefix: &str,
+    script: impl Fn(&SentRequest, usize) -> Answer + Send + Sync + 'static,
+) -> (S3BlobStorage, SentRequests) {
+    scripted_storage_with(RetryConfig::disabled(), 3, object_prefix, script)
+}
+
+/// Makes an S3 blob storage that sends its requests to a script, with the given retries of the
+/// SDK and the given number of attempts of the blob storage.
+///
+/// The client reads no environment, no profile file and no instance metadata. The blob storage
+/// waits 1 ms between its attempts.
+fn scripted_storage_with(
+    sdk_retries: RetryConfig,
+    attempts: u32,
     object_prefix: &str,
     script: impl Fn(&SentRequest, usize) -> Answer + Send + Sync + 'static,
 ) -> (S3BlobStorage, SentRequests) {
@@ -178,7 +186,7 @@ fn scripted_storage(
         .endpoint_url("http://s3.test")
         .force_path_style(true)
         .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
-        .retry_config(RetryConfig::disabled())
+        .retry_config(sdk_retries)
         .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
         .http_client(http_client_fn(move |_, _| connector.clone()))
         .build();
@@ -186,7 +194,7 @@ fn scripted_storage(
         object_prefix: object_prefix.to_string(),
         ..Default::default()
     };
-    config.retries.max_attempts = 3;
+    config.retries.max_attempts = attempts;
     config.retries.min_delay = Duration::from_millis(1);
     config.retries.max_delay = Duration::from_millis(1);
     config.retries.max_jitter_factor = None;
@@ -464,13 +472,87 @@ async fn get_raw_slice_turns_416_into_a_range_error_without_a_retry() {
 }
 
 #[test]
-async fn get_raw_slice_turns_an_ignored_range_into_a_range_error() {
-    // The script answers 200 with the whole object and no content range, which is the
-    // response of a server that does not apply the range (RFC 9110, section 14.2). The
-    // range is the one that a guest reaches the host with after it gives a negative offset
-    // for the start and the end. The S3 case of `get_raw_slice_uses_inclusive_ranges` in
-    // `tests/blob_storage.rs` sends the same range to MinIO.
-    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, "abcdef"));
+async fn get_raw_slice_takes_the_range_out_of_a_200_response() {
+    // The script answers 200 with the whole object, no content range and no content length,
+    // which is the response of a server that ignores the range (RFC 9110, sections 14.2 and
+    // 15.5.17). The last range is the one that a guest reaches the host with after it gives
+    // a negative offset for the start and the end. The S3 case of
+    // `get_raw_slice_uses_inclusive_ranges` in `tests/blob_storage.rs` sends the same range
+    // to MinIO.
+    let (storage, requests) = scripted_storage("", |request, _| {
+        if request.uri.contains("empty") {
+            Answer::new(200, "")
+        } else {
+            Answer::new(200, "abcdef")
+        }
+    });
+    let read = |path: &'static str, start: u64, end: u64| {
+        storage.get_raw_slice(
+            "test",
+            "get-raw-slice",
+            namespace(),
+            Path::new(path),
+            start,
+            end,
+        )
+    };
+
+    let inside = read("blob", 1, 3).await.unwrap();
+    let last_byte = read("blob", 5, 5).await.unwrap();
+    let whole = read("blob", 0, 5).await.unwrap();
+    let outside = [
+        ("blob", 0, 6),
+        ("blob", 6, 6),
+        ("empty", 0, 0),
+        ("blob", u64::MAX, u64::MAX),
+    ];
+    let range_errors = futures::stream::iter(outside)
+        .then(|(path, start, end)| async move {
+            read(path, start, end)
+                .await
+                .map_err(|error| error.downcast_ref::<BlobRangeError>().copied())
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    assert_eq!(
+        (
+            inside,
+            last_byte,
+            whole,
+            range_errors,
+            sent(&requests).len()
+        ),
+        (
+            Some(b"bcd".to_vec()),
+            Some(b"f".to_vec()),
+            Some(b"abcdef".to_vec()),
+            outside
+                .map(|(_, start, end)| Err(Some(BlobRangeError { start, end })))
+                .to_vec(),
+            7
+        )
+    );
+}
+
+#[test]
+async fn get_raw_slice_reads_the_status_of_the_attempt_that_gave_the_output() {
+    // The SDK makes 2 attempts for the one request of the blob storage. The first gets a
+    // server error, and the second gets the whole object with the status 200.
+    let (storage, requests) = scripted_storage_with(
+        RetryConfig::standard()
+            .with_max_attempts(2)
+            .with_initial_backoff(Duration::from_millis(1)),
+        1,
+        "",
+        |_, earlier| {
+            if earlier == 0 {
+                Answer::new(500, INTERNAL_ERROR)
+            } else {
+                Answer::new(200, "abcdef")
+            }
+        },
+    );
 
     let result = storage
         .get_raw_slice(
@@ -478,29 +560,13 @@ async fn get_raw_slice_turns_an_ignored_range_into_a_range_error() {
             "get-raw-slice",
             namespace(),
             Path::new("blob"),
-            u64::MAX,
-            u64::MAX,
+            1,
+            3,
         )
-        .await;
+        .await
+        .unwrap();
 
-    assert_eq!(
-        (
-            result.map_err(|error| error.downcast_ref::<BlobRangeError>().copied()),
-            sent(&requests)
-                .iter()
-                .map(|request| request.range.clone())
-                .collect::<Vec<_>>()
-        ),
-        (
-            Err(Some(BlobRangeError {
-                start: u64::MAX,
-                end: u64::MAX
-            })),
-            vec![Some(
-                "bytes=18446744073709551615-18446744073709551615".to_string()
-            )]
-        )
-    );
+    assert_eq!((result, sent(&requests).len()), (Some(b"bcd".to_vec()), 2));
 }
 
 #[test]
@@ -562,13 +628,15 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
 
 #[test]
 async fn get_raw_slice_retries_a_server_error_but_not_a_missing_object() {
+    // The attempt after the server error gets the whole object with the status 200, so the
+    // result also shows that the status of the attempt before it does not stay.
     let (storage, requests) = scripted_storage("", |request, earlier| {
         if request.uri.contains("missing") {
             Answer::new(404, NO_SUCH_KEY)
         } else if earlier == 0 {
             Answer::new(500, INTERNAL_ERROR)
         } else {
-            Answer::partial(Some("bytes 0-2/6"), "abc")
+            Answer::new(200, "abcdef")
         }
     });
     let read = |path: &'static str, start: u64, end: u64| {

@@ -16,7 +16,7 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
-    blob_path_is_root, blob_path_to_string, validate_relative_blob_path,
+    blob_path_is_root, blob_path_to_string, blob_range, validate_relative_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -52,8 +52,9 @@ use tracing::info;
 /// The largest number of keys that S3 accepts in one `DeleteObjects` request.
 const MAX_KEYS_PER_DELETE_OBJECTS: usize = 1_000;
 
-/// The HTTP status of a response that holds the whole object.
-const OK: u16 = 200;
+/// The HTTP status that a server gives with the whole object, also when it ignores the range
+/// (RFC 9110, sections 14.2 and 15.5.17).
+const HTTP_OK: u16 = 200;
 
 /// The HTTP status that S3 gives for a range that has no byte in the object.
 const RANGE_NOT_SATISFIABLE: u16 = 416;
@@ -67,17 +68,22 @@ pub struct S3BlobStorage {
     config: S3BlobStorageConfig,
 }
 
-/// Records the HTTP status of the last response that a request got.
+/// Records the HTTP status of the response that the SDK makes the output of a request from.
 ///
-/// The output of a request does not hold the status of its response. This interceptor reads
-/// the status before the SDK deserializes the response. Each attempt of the request writes
-/// over the status of the attempt before it, so the status is that of the response that the
-/// SDK made the output from.
+/// The output of a request does not hold the status of its response. The SDK runs
+/// `read_before_deserialization` with the response of an attempt, and then makes the output
+/// of that attempt from that response (`try_attempt` in
+/// `aws_smithy_runtime::client::orchestrator`). The interceptor stores the status of the
+/// response that it gets, and `get` gives the status that it stored last. When the SDK makes
+/// more than one attempt for a request, the attempt that gets a response stores its status
+/// after the attempts before it. The test
+/// `get_raw_slice_reads_the_status_of_the_attempt_that_gave_the_output` exercises this with
+/// a server error before the response that gives the output.
 #[derive(Debug, Clone, Default)]
 struct ResponseStatus(Arc<Mutex<Option<u16>>>);
 
 impl ResponseStatus {
-    /// Gives the status of the last response, or `None` before the first response.
+    /// Gives the status that the interceptor stored last, or `None` when it got no response.
     fn get(&self) -> Option<u16> {
         *self.0.lock().unwrap()
     }
@@ -333,35 +339,33 @@ impl S3BlobStorage {
         Ok(!response.contents().is_empty())
     }
 
-    /// Checks that a ranged read got the bytes from `start` to `end`.
+    /// Gives the bytes from `start` to `end` out of the response to a ranged read.
     ///
-    /// `status`, `content_range` and `content_length` are the status, the `Content-Range` and
-    /// the `Content-Length` of the response. The content length is the size of the body
-    /// (aws-sdk-s3 1.143.0, `GetObjectOutput::content_length`).
+    /// `status` and `content_range` are the status and the `Content-Range` of the response,
+    /// and `body` is its whole body.
     ///
-    /// A `Content-Range` that gives the range `start` to `end` passes. A `Content-Range` that
-    /// starts at `start` and ends before `end` gives a `BlobRangeError`. Any other
-    /// `Content-Range` gives a different error.
+    /// A `Content-Range` that gives the range `start` to `end` gives the body. A
+    /// `Content-Range` that starts at `start` and ends before `end` gives a `BlobRangeError`.
+    /// Any other `Content-Range` gives a different error.
     ///
-    /// A response with the status 200 and no `Content-Range` gives a `BlobRangeError` when
-    /// `end` is not before its content length. The body of a 200 response is the whole object
-    /// (RFC 9110, section 15.3.1), so its content length is the size of the object. Any other
-    /// response without a `Content-Range` gives a different error. A 206 response without a
-    /// `Content-Range` does not follow RFC 9110, section 15.3.7. Its body is a part of the
-    /// object, so its content length does not give the size of the object.
-    fn check_content_range(
-        status: Option<u16>,
+    /// A response with the status 200 and no `Content-Range` holds the whole object (RFC 9110,
+    /// section 15.3.1). This is the response of a server that ignores the range (sections 14.2
+    /// and 15.5.17). The result is the range of the body that [`blob_range`] gives, which is
+    /// the rule of the default `get_raw_slice`. Any other response without a `Content-Range`
+    /// gives a different error. A 206 response holds a part of the object (section 15.3.7), so
+    /// its body does not tell whether the range is in the object.
+    fn ranged_bytes<'a>(
+        status: u16,
         content_range: Option<&str>,
-        content_length: Option<i64>,
+        body: &'a [u8],
         start: u64,
         end: u64,
-    ) -> Result<(), Error> {
+    ) -> Result<&'a [u8], Error> {
         let Some(content_range) = content_range else {
-            let size = content_length.and_then(|length| u64::try_from(length).ok());
-            return match (status, size) {
-                (Some(OK), Some(size)) if end >= size => Err(BlobRangeError { start, end }.into()),
+            return match status {
+                HTTP_OK => blob_range(body, start, end).map_err(Error::from),
                 _ => Err(anyhow!(
-                    "S3 returned the status {status:?} with {content_length:?} bytes and no content range for the byte range {start}-{end}"
+                    "S3 returned the status {status} with no content range for the byte range {start}-{end}"
                 )),
             };
         };
@@ -371,7 +375,7 @@ impl S3BlobStorage {
             .and_then(|(range, _)| range.split_once('-'))
             .and_then(|(first, last)| first.parse::<u64>().ok().zip(last.parse::<u64>().ok()));
         match returned {
-            Some((first, last)) if first == start && last == end => Ok(()),
+            Some((first, last)) if first == start && last == end => Ok(body),
             Some((first, last)) if first == start && last < end => {
                 Err(BlobRangeError { start, end }.into())
             }
@@ -692,16 +696,16 @@ impl BlobStorage for S3BlobStorage {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
-        let status = ResponseStatus::default();
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str, status.clone()),
-            |(client, bucket, key, status)| {
+            &(self.client.clone(), bucket, key_str),
+            |(client, bucket, key)| {
                 Box::pin(async move {
+                    let status = ResponseStatus::default();
                     client
                         .get_object()
                         .bucket(*bucket)
@@ -711,6 +715,7 @@ impl BlobStorage for S3BlobStorage {
                         .interceptor(status.clone())
                         .send()
                         .await
+                        .map(|response| (response, status.get()))
                 })
             },
             Self::is_get_object_error_retriable,
@@ -720,17 +725,17 @@ impl BlobStorage for S3BlobStorage {
         .await;
 
         match result {
-            Ok(response) => {
-                Self::check_content_range(
-                    status.get(),
-                    response.content_range(),
-                    response.content_length(),
-                    start,
-                    end,
-                )?;
-                let body = response.body;
-                let aggregated_bytes = body.collect().await?;
-                let bytes = aggregated_bytes.to_vec();
+            Ok((response, status)) => {
+                // The SDK makes an output only after the interceptor stored the status of a
+                // response (see `ResponseStatus`).
+                let status = status.ok_or_else(|| {
+                    anyhow!("S3 gave an output without a response for the byte range {start}-{end}")
+                })?;
+                let content_range = response.content_range;
+                let body = response.body.collect().await?.into_bytes();
+                let bytes =
+                    Self::ranged_bytes(status, content_range.as_deref(), &body, start, end)?
+                        .to_vec();
 
                 Ok(Some(bytes))
             }

@@ -72,12 +72,9 @@ pub trait BlobStorage: Debug + Send + Sync {
             .get_raw(target_label, op_label, namespace, path)
             .await?;
         data.map(|data| {
-            usize::try_from(start)
-                .ok()
-                .zip(usize::try_from(end).ok())
-                .and_then(|(first, last)| data.get(first..=last))
+            blob_range(&data, start, end)
                 .map(<[u8]>::to_vec)
-                .ok_or_else(|| Error::from(BlobRangeError { start, end }))
+                .map_err(Error::from)
         })
         .transpose()
     }
@@ -473,6 +470,18 @@ pub struct BlobRangeError {
     pub end: u64,
 }
 
+/// Gives the bytes from `start` to `end` of a whole blob. Both offsets are inclusive.
+///
+/// A range with a byte that is not in the blob gives a [`BlobRangeError`]: an `end` at or
+/// after the length of the blob, a `start` after `end`, and each range of an empty blob.
+pub(crate) fn blob_range(blob: &[u8], start: u64, end: u64) -> Result<&[u8], BlobRangeError> {
+    (start <= end)
+        .then(|| usize::try_from(start).ok().zip(usize::try_from(end).ok()))
+        .flatten()
+        .and_then(|(first, last)| blob.get(first..=last))
+        .ok_or(BlobRangeError { start, end })
+}
+
 pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
     if path.is_absolute() {
         return Err(anyhow!("Blob path must be relative: {path:?}"));
@@ -539,4 +548,47 @@ pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
                 .map(|s| s.to_string())
                 .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BlobRangeError, blob_range};
+    use pretty_assertions::assert_eq;
+    use test_r::test;
+
+    #[test]
+    fn blob_range_gives_the_inclusive_range_or_a_range_error() {
+        let blob = b"abcdef";
+        let ranges = [
+            (1, 3),
+            (0, 5),
+            (5, 5),
+            (0, 6),
+            (6, 6),
+            (3, 2),
+            (u64::MAX, u64::MAX),
+        ];
+
+        let results = ranges.map(|(start, end)| blob_range(blob, start, end));
+
+        assert_eq!(
+            results,
+            [
+                Ok(&b"bcd"[..]),
+                Ok(&b"abcdef"[..]),
+                Ok(&b"f"[..]),
+                Err(BlobRangeError { start: 0, end: 6 }),
+                Err(BlobRangeError { start: 6, end: 6 }),
+                Err(BlobRangeError { start: 3, end: 2 }),
+                Err(BlobRangeError {
+                    start: u64::MAX,
+                    end: u64::MAX
+                }),
+            ]
+        );
+        assert_eq!(
+            blob_range(b"", 0, 0),
+            Err(BlobRangeError { start: 0, end: 0 })
+        );
+    }
 }
