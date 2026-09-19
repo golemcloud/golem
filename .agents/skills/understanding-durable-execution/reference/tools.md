@@ -4,7 +4,9 @@ Detailed mechanics behind the "Tool invocations and entity bodies" section of `S
 are relative to `golem-worker-executor/src/` unless stated.
 
 `durable_host/tool/mod.rs` implements `golem:tool/host@0.1.0`. Tool discovery is a durable read
-of environment state; authorization is enforced before any backend runs.
+of environment state. The ambient invocation is authorized once against the outer tool surface;
+middleware descendants retain that original calling principal rather than authorizing their
+transformed inner surfaces again.
 
 ### Dispatch and ownership
 
@@ -94,6 +96,36 @@ belonging to one owner": entity Stores clone the primary's `ReplayState`, which 
 rather than opening a second cursor over the same oplog, and `HostedInstance::invoke_scoped` runs
 one entity export and then destroys the body `Store`.
 
+### Pinned middleware traversal
+
+The root entity request records the complete resolved universal → monomorphic → leaf plan once.
+Each descendant request stores only the root `Start` and plan position; replay loads and validates
+the root payload rather than re-reading a changed deployment. Every occurrence records the
+original principal and typed static installation parameters. Component and host-implemented leaf
+tools use the same terminal dispatch path.
+
+The host-owned `underlying-tool` has no guest constructor and is bound to the next position only.
+A middleware may invoke it zero, one or many times, including overlapping starts. Each
+`underlying-invoke-result` independently supports `get` and `cancel`; dropping the resource is
+observer cleanup, not cancellation. `tool/boundary.rs` projects monomorphic inputs, results and
+custom errors through the recorded compatibility edge; a universal boundary is identity.
+
+Each start receives a fresh body Store while sharing the owner's replay state. Stream-bearing
+typed results retain durable stream mappings while the producer and durable session remain alive
+until materialization settles (`tool/streams.rs`). The typed outcome is exposed only through the
+entity completion; there is no separate early-result observation call. Scheduling still uses each
+layer's own filesystem capability.
+Underlying stdout uses the ordinary writer path. Forwarded typed stdin preserves item failures;
+Store or executor loss stops resident drains without recording EOF. Reconstruction recreates
+producers and consumers from durable registrations and offsets. Normal operation settlement
+finalizes its input/output session, canceling any unread input rather than leaking the producer.
+
+Handler return closes descendant admission. Starts already admitted remain operation-owned and
+must settle before the full parent operation completes; dropping an observer or returning from
+a handler is not operation cancellation (`tool/operation/mod.rs`). The entity `End` records body
+completion, not full descendant settlement. A forward-only parent may record its `End` first to
+release nested filesystem work; its resources and admitted children remain retained.
+
 ### Native bodies
 
 Native tools use the same owner-oplog entity boundary with a retained worker context instead of
@@ -156,6 +188,10 @@ pressure (`completed_tool_replay_bypasses_current_attachment_memory_pressure`,
 `incomplete_tool_replay_persists_attachment_upgrade_rejection`). Attachments
 (`tool/attachment.rs`) are in-memory stdin/stdout endpoints and are recreated, never preserved.
 
+For an incomplete entity, `entity.rs` finds that entity's abandoned atomic regions, commits their
+`Jump`s, and registers the rollback before its body or descendants can claim history. The rollback
+is scoped to those regions; unrelated ownership entries remain available to their owners.
+
 `AcceptedToolCall::attachment_counterparty` separates two attachment protocols. A guest
 counterparty shares the body's causal lane: filesystem-capable guest tools retain EOF stdin
 staging before body execution and publish stdout only after the body terminal and lane return.
@@ -177,6 +213,17 @@ drains the owner group without inventing entity terminals
 (`guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group`,
 `detached_and_fire_and_forget_traps_fail_the_owner_without_entity_terminals`).
 
+An asynchronous incapable admission does not transfer the filesystem lane. An actual result await
+temporarily connects its caller to the awaited subtree, including children retained after a body
+terminal. Before returning a result, the await withdraws its incapable edges and waits for any
+already-running capable descendant to return the lane. Later capable work stays queued until a
+new causal await or caller completion; an output producer must not depend on an unawaited ambient
+capable call after its caller resumes.
+
+Owner failure selection is a runtime teardown boundary, like executor loss: unfinished durable
+calls remain incomplete rather than applying guest cancellation or non-cancellable-drop policies.
+This also prevents a pending producer from recording a false EOF while its Store is discarded.
+
 ### Tests
 
 `tests/tool_streaming.rs::{concurrent_tool_attempt_identity_survives_reordered_admission_and_replay,
@@ -185,3 +232,5 @@ deterministic_stream_crash_checkpoint_matrix,
 capable_terminal_lane_return_and_delayed_publication_survive_crash}` and
 `tests/tool_discovery.rs`. These use an in-process tokio crash-checkpoint server
 (`start_crash_checkpoint_server`), so they stay within the no-external-process rule.
+Middleware tests in `tests/tool_streaming.rs` additionally cover pinned multilayer traversal,
+overlapping calls, detached observers, typed input/output projections and restart between items.

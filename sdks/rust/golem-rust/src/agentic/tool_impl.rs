@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "export_golem_agentic")]
 use crate::agentic::InputStream;
 #[cfg(feature = "export_golem_agentic")]
 use crate::agentic::agent_impl::Component;
@@ -23,8 +24,9 @@ use crate::golem_agentic::exports::golem::tool::guest::{
 };
 #[cfg(feature = "export_golem_agentic")]
 use crate::golem_agentic::golem::agent::common::Principal;
-use crate::golem_agentic::golem::tool::host::ToolStdoutWriter;
-use crate::golem_agentic::golem::tool::host::{ByteStreamFailure, StreamWriteError};
+use crate::golem_agentic::golem::tool::streams::{
+    ByteStreamFailure, StreamWriteError, ToolStdoutWriter,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 

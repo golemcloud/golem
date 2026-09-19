@@ -475,6 +475,7 @@ pub(crate) struct PrimaryInvocationBody {
 
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
+        self.begin_stream_runtime_teardown();
         self.linear_memory.clear_limit_exceeded_callback();
     }
 }
@@ -711,6 +712,52 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .worker()
             .commit_oplog_and_update_state(CommitLevel::Always)
             .await;
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn test_install_entity_tool_operation(
+        &mut self,
+        parent: OwnerInvocationId,
+        call_mode: crate::worker::owner_lane::EntityCallMode,
+    ) -> Result<(), WorkerExecutorError> {
+        let scope = self.entity_invocation_scope().cloned().ok_or_else(|| {
+            WorkerExecutorError::runtime("Entity invocation scope is not installed")
+        })?;
+        let operation = self.owner_execution.tool_operations().create(
+            tool::operation::OwnerToolOperationContext {
+                parent,
+                call_mode,
+                activation: scope.activation().clone(),
+                calling_principal: scope.calling_principal().clone(),
+                principal: self.invocation_principal(),
+                descriptor: golem_common::model::entity::EntityInvocationDescriptor::Tool(
+                    golem_common::model::entity::ToolInvocationDescriptor {
+                        attempt_ordinal: 0,
+                        command_path: Vec::new(),
+                        args: Vec::new(),
+                        has_stdin: false,
+                        has_stdout: false,
+                        declares_stdout: false,
+                        output_contract: golem_common::model::entity::ToolOutputContract {
+                            result: None,
+                            errors: Vec::new(),
+                        },
+                    },
+                ),
+                input: golem_common::schema::TypedSchemaValue::new(
+                    golem_common::schema::SchemaGraph::anonymous(
+                        golem_common::schema::SchemaType::tuple(Vec::new()),
+                    ),
+                    golem_common::schema::SchemaValue::Tuple {
+                        elements: Vec::new(),
+                    },
+                ),
+            },
+        );
+        let operation = operation
+            .accept(scope.invocation_id().clone())
+            .ok_or_else(|| WorkerExecutorError::runtime("Tool operation registration failed"))?;
+        self.set_entity_tool_operation(operation)
     }
 
     pub(crate) fn entity_reconstruction_claim_hook(
@@ -1307,6 +1354,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             (OwnerRuntime::Agent, _, Some(_)) => Err(WorkerExecutorError::runtime(
                 "Cannot install an entity invocation scope in the primary Store",
             )),
+            (OwnerRuntime::Agent, _, None) => Ok(()),
             (OwnerRuntime::Entity(_), Some(_), Some(_)) => Err(WorkerExecutorError::runtime(
                 "Entity invocation scope is already installed",
             )),
@@ -1314,6 +1362,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "Entity invocation scope is not installed",
             )),
             _ => {
+                if let Some(scope) = &scope {
+                    self.state
+                        .set_current_idempotency_key(scope.idempotency_key().clone());
+                    self.state.assume_idempotence = scope.assume_idempotence();
+                    self.state.entity_logical_key_position =
+                        scope.logical_key_positions().then_some(OplogIndex::INITIAL);
+                } else {
+                    self.state.current_idempotency_key = None;
+                    self.state.assume_idempotence = true;
+                    self.state.entity_logical_key_position = None;
+                }
                 self.entity_invocation_scope = scope;
                 Ok(())
             }
@@ -1328,7 +1387,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         operation: tool::operation::OwnerToolOperation,
     ) -> Result<(), WorkerExecutorError> {
-        if !matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))) {
+        if !matches!(
+            self.runtime,
+            OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+        ) {
             return Err(WorkerExecutorError::runtime(
                 "Tool operation can only be installed in a tool entity Store",
             ));
@@ -2477,7 +2539,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn begin_switch_to_live(&self) -> Result<BeginReplayToLive, WorkerExecutorError> {
         begin_replay_to_live(
             self.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
-            matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+            matches!(
+                self.runtime,
+                OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+            ),
             self.entity_tool_operation(),
             &self.public_state,
             &self.linear_memory,
@@ -2519,7 +2584,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let replay_state = self.state.replay_state.clone();
         let public_state = self.public_state.clone();
         let linear_memory = self.linear_memory.clone();
-        let tool_entity = matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_)));
+        let tool_entity = matches!(
+            self.runtime,
+            OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+        );
         let tool_operation = self.entity_tool_operation();
         let local_live_tail = self.state.local_live_tail();
         let role = if self.runtime == OwnerRuntime::Agent {
@@ -4272,13 +4340,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self,
     ) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
         let stream_runtime_teardown = self.stream_runtime_teardown.clone();
+        // Owner failure fences entity Stores immediately. The primary signals teardown
+        // separately when its interrupt is delivered, not when it is merely queued.
+        let fenced_entity_operations = matches!(self.runtime, OwnerRuntime::Entity(_))
+            .then(|| self.owner_execution.tool_operations());
         let invocation_loops = self
             .public_state
             .worker()
             .active_agents()
             .invocation_loops();
         Arc::new(move || {
-            stream_runtime_teardown.load(Ordering::Acquire) || invocation_loops.is_shut_down()
+            stream_runtime_teardown.load(Ordering::Acquire)
+                || invocation_loops.is_shut_down()
+                || fenced_entity_operations
+                    .as_ref()
+                    .is_some_and(|operations| operations.selected_owner_failure().is_some())
         })
     }
 
@@ -10156,6 +10232,9 @@ struct PrivateDurableWorkerState {
     owner_context: ResolvedOwnerContext,
     created_by_email: AccountEmail,
     current_idempotency_key: Option<IdempotencyKey>,
+    /// Child positions under an entity seed admitted in a caller's atomic region.
+    /// This is Store-local derivation state, not an atomic scope or shared lease.
+    entity_logical_key_position: Option<OplogIndex>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
     resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
@@ -10619,6 +10698,7 @@ impl PrivateDurableWorkerState {
             agent_config,
             owned_agent_id,
             current_idempotency_key: None,
+            entity_logical_key_position: None,
             rpc,
             worker_proxy,
             resources: HashMap::new(),
@@ -10985,7 +11065,9 @@ impl PrivateDurableWorkerState {
     }
 
     pub fn current_idempotency_key_oplog_index(&mut self, oplog_index: OplogIndex) -> OplogIndex {
-        if let Some(outermost_atomic_region) = self.active_atomic_regions.first_mut() {
+        if let Some(position) = self.entity_logical_key_position.as_mut() {
+            next_atomic_region_idempotency_key_oplog_index(position)
+        } else if let Some(outermost_atomic_region) = self.active_atomic_regions.first_mut() {
             next_atomic_region_idempotency_key_oplog_index(
                 &mut outermost_atomic_region.next_idempotency_key_oplog_index,
             )
@@ -10995,9 +11077,11 @@ impl PrivateDurableWorkerState {
     }
 
     pub fn current_atomic_region_idempotency_key_oplog_index(&self) -> Option<OplogIndex> {
-        self.active_atomic_regions
-            .first()
-            .map(|region| region.next_idempotency_key_oplog_index)
+        self.entity_logical_key_position.or_else(|| {
+            self.active_atomic_regions
+                .first()
+                .map(|region| region.next_idempotency_key_oplog_index)
+        })
     }
 
     /// Enriches retry properties with worker-local context: `agent-type` and `is-idempotent`.

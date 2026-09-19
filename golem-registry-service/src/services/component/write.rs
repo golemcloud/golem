@@ -2619,6 +2619,7 @@ mod tests {
             version: version.to_string(),
             aliases: Vec::new(),
             doc: Doc::default(),
+            parameter_schema: SchemaGraph::empty(),
             scope: ToolMiddlewareScope::Universal,
         }
     }

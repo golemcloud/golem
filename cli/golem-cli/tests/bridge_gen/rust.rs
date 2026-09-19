@@ -1561,7 +1561,7 @@ fn cargo_check(target_path: &Utf8Path) {
 fn tool_generation_compiles() {
     let (_dir, target_path) = generate_tool(grep_tool(), "grep-tool-guest-client");
     let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
-    assert!(lib_rs.contains("pub fn replace("), "{lib_rs}");
+    assert!(lib_rs.contains("pub async fn replace("), "{lib_rs}");
     assert!(
         lib_rs.contains("agentic::ToolInvocation<(), std::convert::Infallible>"),
         "{lib_rs}"
@@ -1570,6 +1570,7 @@ fn tool_generation_compiles() {
         lib_rs.contains("agentic::start_tool_invocation("),
         "{lib_rs}"
     );
+    assert!(lib_rs.contains(")\n            .await"), "{lib_rs}");
     for shape in [
         "__name: String",
         "__value: golem_rust::TypedSchemaValue",

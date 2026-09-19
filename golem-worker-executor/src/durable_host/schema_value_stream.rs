@@ -13,15 +13,19 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::concurrent::DropEvent;
 use crate::durable_host::durable_session::{
-    DurableInputEndpoint, DurableInputProducer, ForwardedDurableInput,
+    DurableInputEndpoint, DurableInputEvent, DurableInputProducer, ForwardedDurableInput,
 };
 use crate::durable_host::stream_transport::{
-    LiveInputProducer, LiveStreamEndpoint, output_stream_pair,
+    LiveInputProducer, LiveStreamEndpoint, output_stream_pair, relay_stream_pair,
 };
 use crate::workerctx::WorkerCtx;
 use golem_schema::schema::schema_value::{
     PermissionCardValuePayload, QuotaTokenValuePayload, SecretValuePayload,
+};
+use golem_schema::schema::tool::compatibility::{
+    ProjectionPlan, ProjectionStreamHandler, apply_projection,
 };
 use golem_schema::schema::wit::wire::{
     Host, HostQuotaToken, HostSchemaValueStream, HostSchemaValueStreamWithStore, HostSecret,
@@ -33,7 +37,11 @@ use golem_schema::schema::wit::{
 };
 use golem_schema::schema::{SchemaValue, SchemaValueStream, SchemaValueStreamHandleRep};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::future::Future;
 use std::marker::PhantomData;
+use std::pin::Pin;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{Accessor, HasData, Resource, StreamReader};
 
@@ -58,6 +66,194 @@ pub fn contains_stream(value: &SchemaValue) -> bool {
         },
         SchemaValue::Union(payload) => contains_stream(&payload.body),
         _ => false,
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ExecutorProjectionStreams {
+    pub(crate) capacity: usize,
+    pub(crate) runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    pub(crate) drop_event_sink: mpsc::UnboundedSender<DropEvent>,
+}
+
+impl ExecutorProjectionStreams {
+    pub(crate) fn new<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> Self {
+        Self {
+            capacity: ctx.live_stream_event_capacity(),
+            runtime_teardown: ctx.stream_runtime_teardown_probe(),
+            drop_event_sink: ctx
+                .state
+                .dropped_call_event_sender()
+                .expect("dropped-call event sender is always available"),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(capacity: usize) -> Self {
+        let (drop_event_sink, _) = mpsc::unbounded_channel();
+        Self {
+            capacity,
+            runtime_teardown: Arc::new(|| false),
+            drop_event_sink,
+        }
+    }
+}
+
+impl ProjectionStreamHandler for ExecutorProjectionStreams {
+    fn project_stream(
+        &mut self,
+        stream: SchemaValueStream,
+        item_plan: Option<ProjectionPlan>,
+    ) -> Result<SchemaValueStream, String> {
+        let Some(item_plan) = item_plan else {
+            return Ok(stream);
+        };
+        let durable = stream
+            .with_host_endpoint::<DurableInputEndpoint, _>(|_| ())
+            .is_ok();
+        if !durable && let Err(error) = stream.with_host_endpoint::<LiveStreamEndpoint, _>(|_| ()) {
+            self.discard_stream(stream);
+            return Err(error);
+        }
+        let (publisher, target) = relay_stream_pair(self.capacity)?;
+        let target_lifecycle = target.lifecycle();
+        let item_context = self.clone();
+        if durable {
+            let endpoint = stream.take_host_endpoint::<DurableInputEndpoint>()?;
+            let mut source = DurableInputProducer::new(endpoint)
+                .with_drop_cleanup(self.drop_event_sink.clone(), self.runtime_teardown.clone());
+            tokio::spawn(async move {
+                loop {
+                    let event = tokio::select! {
+                        biased;
+                        _ = target_lifecycle.cancelled() => return,
+                        event = source.receive_value() => event,
+                    };
+                    let (publication, terminal): (Pin<Box<dyn Future<Output = _> + Send>>, bool) =
+                        match event {
+                            Ok(DurableInputEvent::Item(value)) => {
+                                let mut context = item_context.clone();
+                                match apply_projection(&item_plan, value, &mut context) {
+                                    Ok(value) => (Box::pin(publisher.publish_item(value)), false),
+                                    Err(error) => (
+                                        Box::pin(publisher.publish_error(format!(
+                                            "schema stream item projection failed at {}: {}",
+                                            error.path, error.message
+                                        ))),
+                                        true,
+                                    ),
+                                }
+                            }
+                            Ok(DurableInputEvent::End) => (Box::pin(publisher.publish_end()), true),
+                            Ok(DurableInputEvent::Cancelled) => {
+                                target_lifecycle.abort();
+                                return;
+                            }
+                            Err(error) => {
+                                let message = format!("durable stream receive failed: {error}");
+                                (Box::pin(publisher.publish_host_error(error, message)), true)
+                            }
+                        };
+                    tokio::select! {
+                        biased;
+                        _ = target_lifecycle.cancelled() => return,
+                        result = publication => {
+                            if result.is_err() { target_lifecycle.abort(); return; }
+                            if terminal { return; }
+                        }
+                    }
+                }
+            });
+        } else {
+            let source = stream.take_host_endpoint::<LiveStreamEndpoint>()?;
+            let source_lifecycle = source.lifecycle();
+            let mut source = source.activate();
+            tokio::spawn(async move {
+                loop {
+                    let event = tokio::select! {
+                        biased;
+                        _ = source_lifecycle.cancelled() => {
+                            target_lifecycle.abort();
+                            return;
+                        },
+                        _ = target_lifecycle.cancelled() => return,
+                        event = source.recv() => event,
+                    };
+                    let mut terminal = true;
+                    let publication: Pin<Box<dyn Future<Output = _> + Send>> = match event {
+                        Ok(event) => match event.payload {
+                            crate::durable_host::stream_bus::LiveStreamEventPayload::Item(
+                                value,
+                            ) => {
+                                let mut context = item_context.clone();
+                                match apply_projection(&item_plan, value, &mut context) {
+                                    Ok(value) => {
+                                        terminal = false;
+                                        Box::pin(publisher.publish_item(value))
+                                    }
+                                    Err(error) => Box::pin(publisher.publish_error(format!(
+                                        "schema stream item projection failed at {}: {}",
+                                        error.path, error.message
+                                    ))),
+                                }
+                            }
+                            crate::durable_host::stream_bus::LiveStreamEventPayload::End => {
+                                Box::pin(publisher.publish_end())
+                            }
+                            crate::durable_host::stream_bus::LiveStreamEventPayload::Error(
+                                error,
+                            ) => Box::pin(publisher.publish_error(error)),
+                            crate::durable_host::stream_bus::LiveStreamEventPayload::ClassifiedError {
+                                kind,
+                                message,
+                            } => {
+                                let ordinary_message = message.clone();
+                                Box::pin(publisher.publish_host_error(
+                                    anyhow::Error::new(
+                                        crate::durable_host::durability::ClassifiedHostError {
+                                            kind,
+                                            message,
+                                        },
+                                    ),
+                                    ordinary_message,
+                                ))
+                            }
+                        },
+                        Err(error) => Box::pin(
+                            publisher
+                                .publish_error(format!("live stream receive failed: {error:?}")),
+                        ),
+                    };
+                    tokio::select! {
+                        biased;
+                        _ = source_lifecycle.cancelled() => {
+                            target_lifecycle.abort();
+                            return;
+                        },
+                        _ = target_lifecycle.cancelled() => return,
+                        result = publication => {
+                            if result.is_err() {
+                                target_lifecycle.abort();
+                                return;
+                            }
+                            if terminal { return; }
+                        },
+                    }
+                }
+            });
+        }
+        Ok(SchemaValueStream::from_host_endpoint(target))
+    }
+
+    fn discard_stream(&mut self, stream: SchemaValueStream) {
+        DurableInputProducer::drop_unread(
+            stream.clone(),
+            self.drop_event_sink.clone(),
+            self.runtime_teardown.clone(),
+        );
+        if let Ok(endpoint) = stream.take_host_endpoint::<LiveStreamEndpoint>() {
+            drop(endpoint);
+        }
     }
 }
 
@@ -362,5 +558,238 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostWithStore<T> for CoreTypesHost<Ctx> {
     async fn uuid_to_string(_accessor: &Accessor<T, Self>, uuid: Uuid) -> anyhow::Result<String> {
         let uuid: uuid::Uuid = uuid.into();
         Ok(uuid.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable_host::stream_bus::LiveStreamEventPayload;
+    use golem_schema::schema::metadata::MetadataEnvelope;
+    use golem_schema::schema::schema_type::NamedFieldType;
+    use golem_schema::schema::tool::compatibility::{ProjectionNode, RecordFieldProjection};
+    use golem_schema::schema::{SchemaGraph, SchemaType};
+    use test_r::{test, timeout};
+
+    fn reordered_record_plan() -> ProjectionPlan {
+        let source = SchemaType::record(vec![
+            NamedFieldType {
+                name: "a".into(),
+                body: SchemaType::u64(),
+                metadata: MetadataEnvelope::default(),
+            },
+            NamedFieldType {
+                name: "b".into(),
+                body: SchemaType::string(),
+                metadata: MetadataEnvelope::default(),
+            },
+        ]);
+        let target = SchemaType::record(vec![
+            NamedFieldType {
+                name: "b".into(),
+                body: SchemaType::string(),
+                metadata: MetadataEnvelope::default(),
+            },
+            NamedFieldType {
+                name: "a".into(),
+                body: SchemaType::u64(),
+                metadata: MetadataEnvelope::default(),
+            },
+        ]);
+        ProjectionPlan {
+            source_schema: SchemaGraph::anonymous(source),
+            target_schema: SchemaGraph::anonymous(target),
+            nodes: vec![
+                ProjectionNode::Record {
+                    fields: vec![
+                        RecordFieldProjection {
+                            target_name: "b".into(),
+                            source_index: Some(1),
+                            plan: Some(1),
+                            default: None,
+                        },
+                        RecordFieldProjection {
+                            target_name: "a".into(),
+                            source_index: Some(0),
+                            plan: Some(1),
+                            default: None,
+                        },
+                    ],
+                    discard: vec![],
+                },
+                ProjectionNode::Identity,
+            ],
+            root: 0,
+        }
+    }
+
+    #[test]
+    #[timeout("2s")]
+    async fn relay_maps_items() {
+        let (source_publisher, source_endpoint) = relay_stream_pair(2).unwrap();
+        let source = SchemaValueStream::from_host_endpoint(source_endpoint);
+        let mut streams = ExecutorProjectionStreams::for_test(2);
+        let target = streams
+            .project_stream(source, Some(reordered_record_plan()))
+            .unwrap();
+        let target = target.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
+        let mut target = target.activate();
+
+        source_publisher
+            .publish_item(SchemaValue::Record {
+                fields: vec![SchemaValue::U64(7), SchemaValue::String("seven".into())],
+            })
+            .await
+            .unwrap();
+        source_publisher.publish_end().await.unwrap();
+
+        assert!(
+            matches!(target.recv().await.unwrap().payload, LiveStreamEventPayload::Item(
+            SchemaValue::Record { fields }
+        ) if fields == vec![SchemaValue::String("seven".into()), SchemaValue::U64(7)])
+        );
+        assert!(matches!(
+            target.recv().await.unwrap().payload,
+            LiveStreamEventPayload::End
+        ));
+    }
+
+    #[test]
+    #[timeout("2s")]
+    async fn dropping_unread_projection_target_cancels_source() {
+        let (source_publisher, source_endpoint) = relay_stream_pair(1).unwrap();
+        let source_lifecycle = source_endpoint.lifecycle();
+        let mut streams = ExecutorProjectionStreams::for_test(1);
+        let target = streams
+            .project_stream(
+                SchemaValueStream::from_host_endpoint(source_endpoint),
+                Some(reordered_record_plan()),
+            )
+            .unwrap();
+        drop(target.take_host_endpoint::<LiveStreamEndpoint>().unwrap());
+        source_lifecycle.cancelled().await;
+        assert!(
+            source_publisher
+                .publish_item(SchemaValue::Bool(true))
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn relay_backpressure_and_source_abort_reach_downstream() {
+        for buffered in [false, true] {
+            let (publisher, endpoint) = relay_stream_pair(1).unwrap();
+            let lifecycle = endpoint.lifecycle();
+            let mut streams = ExecutorProjectionStreams::for_test(1);
+            let target = streams
+                .project_stream(
+                    SchemaValueStream::from_host_endpoint(endpoint),
+                    Some(reordered_record_plan()),
+                )
+                .unwrap()
+                .take_host_endpoint::<LiveStreamEndpoint>()
+                .unwrap();
+            let target_lifecycle = target.lifecycle();
+            let mut target = target.activate();
+            if buffered {
+                for i in 0..3 {
+                    publisher
+                        .publish_item(SchemaValue::Record {
+                            fields: vec![SchemaValue::U64(i), SchemaValue::String(i.to_string())],
+                        })
+                        .await
+                        .unwrap();
+                }
+                // One target item, one relay item, and one source item fill capacity.
+                assert!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(50),
+                        publisher.publish_item(SchemaValue::Record {
+                            fields: vec![SchemaValue::U64(3), SchemaValue::String("3".into())],
+                        }),
+                    )
+                    .await
+                    .is_err()
+                );
+                assert!(matches!(
+                    target.recv().await.unwrap().payload,
+                    LiveStreamEventPayload::Item(SchemaValue::Record { fields })
+                        if fields == vec![SchemaValue::String("0".into()), SchemaValue::U64(0)]
+                ));
+            }
+            lifecycle.abort();
+            target_lifecycle.cancelled().await;
+            assert!(target_lifecycle.is_aborted());
+        }
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn relay_abort_takes_priority_over_buffered_terminal() {
+        let (publisher, endpoint) = relay_stream_pair(1).unwrap();
+        publisher
+            .publish_error("buffered failure".into())
+            .await
+            .unwrap();
+        endpoint.lifecycle().abort();
+        drop(publisher);
+        let mut streams = ExecutorProjectionStreams::for_test(1);
+        let target = streams
+            .project_stream(
+                SchemaValueStream::from_host_endpoint(endpoint),
+                Some(reordered_record_plan()),
+            )
+            .unwrap()
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap();
+        let lifecycle = target.lifecycle();
+        let mut target = target.activate();
+        lifecycle.cancelled().await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), target.recv(),)
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn relay_errors_terminate_and_cancel_upstream() {
+        for invalid_item in [false, true] {
+            let (publisher, endpoint) = relay_stream_pair(1).unwrap();
+            let lifecycle = endpoint.lifecycle();
+            let mut streams = ExecutorProjectionStreams::for_test(1);
+            let mut target = streams
+                .project_stream(
+                    SchemaValueStream::from_host_endpoint(endpoint),
+                    Some(reordered_record_plan()),
+                )
+                .unwrap()
+                .take_host_endpoint::<LiveStreamEndpoint>()
+                .unwrap()
+                .activate();
+            if invalid_item {
+                publisher
+                    .publish_item(SchemaValue::Bool(true))
+                    .await
+                    .unwrap();
+            } else {
+                publisher
+                    .publish_error("upstream failure".into())
+                    .await
+                    .unwrap();
+            }
+            let LiveStreamEventPayload::Error(error) = target.recv().await.unwrap().payload else {
+                panic!("expected error terminal");
+            };
+            if invalid_item {
+                assert!(error.contains("projection failed"));
+                lifecycle.cancelled().await;
+            } else {
+                assert_eq!(error, "upstream failure");
+            }
+        }
     }
 }

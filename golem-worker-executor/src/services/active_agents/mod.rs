@@ -53,13 +53,14 @@ use crate::services::resource_limits::AtomicResourceEntry;
 use crate::worker::entity_invocation::{
     EntityInvocationHandle, RetainedEntityStore, start_entity_invocation,
     start_native_entity_invocation, start_pre_acquired_entity_invocation,
+    start_registered_entity_invocation, start_registered_native_entity_invocation,
 };
 use crate::worker::entity_slot::ActiveEntityInvocationMetadata;
 use crate::worker::entity_slot::EntitySlot;
 use crate::worker::instance::{
     EntityInvocationBody, InstanceHost, OwnerExecution, OwnerRuntimeResources,
 };
-use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId};
+use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId, OwnerInvocationTicket};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
@@ -408,6 +409,46 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         )
     }
 
+    pub(crate) fn start_registered_entity_invocation<R, F, Finalize, Finalized>(
+        &self,
+        scope: EntityInvocationScope,
+        owner_component_metadata: Arc<golem_service_base::model::component::Component>,
+        mode: EntityCallMode,
+        ticket: OwnerInvocationTicket,
+        invoke: F,
+        finalize: Finalize,
+    ) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        F: Send + 'static,
+        F: for<'a> FnOnce(
+            &'a Instance,
+            &'a mut Store<Ctx>,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<R, WorkerExecutorError>> + Send + 'a>,
+        >,
+        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    {
+        let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
+        let host = InstanceHost::new_entity(
+            &self.primary(),
+            scope.activation(),
+            slot.clone(),
+            owner_component_metadata,
+        )?;
+        start_registered_entity_invocation(
+            host,
+            slot,
+            self.execution().lane(),
+            scope,
+            mode,
+            ticket,
+            invoke,
+            finalize,
+        )
+    }
+
     /// Starts a sidecar after its operation has already registered and acquired the existing owner
     /// lane node. The operation retains that permit until its durable terminal is committed.
     pub(crate) fn start_pre_acquired_entity_invocation<R, F, Finalize, Finalized>(
@@ -498,6 +539,47 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             parent,
             scope,
             mode,
+            run,
+            finalize,
+        )
+    }
+
+    pub(crate) fn start_registered_native_entity_invocation<R, Run, Finalize, Finalized>(
+        &self,
+        scope: EntityInvocationScope,
+        mode: EntityCallMode,
+        ticket: OwnerInvocationTicket,
+        run: Run,
+        finalize: Finalize,
+    ) -> Result<EntityInvocationHandle<R>, WorkerExecutorError>
+    where
+        R: Send + 'static,
+        Run: Send + 'static,
+        Run: for<'a> FnOnce(
+            EntityInvocationScope,
+            &'a crate::worker::entity_slot::EntitySlotRegistration,
+            tokio_util::sync::CancellationToken,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = (
+                            Result<R, WorkerExecutorError>,
+                            Option<Box<dyn RetainedEntityStore>>,
+                        ),
+                    > + Send
+                    + 'a,
+            >,
+        >,
+        Finalize: FnOnce(Result<R, WorkerExecutorError>) -> Finalized + Send + 'static,
+        Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
+    {
+        let slot = self.entity_slot_if_accepting(scope.invocation_id().entity())?;
+        start_registered_native_entity_invocation(
+            slot,
+            self.execution().lane(),
+            scope,
+            mode,
+            ticket,
             run,
             finalize,
         )

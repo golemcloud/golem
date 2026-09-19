@@ -16,8 +16,10 @@ pub async fn invoke(
   tool_name : String,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @async-core.Stream[Result[FixedArray[Byte], @host.ByteStreamFailure]]?,
-  stdout : @host.ToolStdoutWriter?,
+  stdin : @async-core.Stream[
+    Result[FixedArray[Byte], @streams.ByteStreamFailure],
+  ]?,
+  stdout : @streams.ToolStdoutWriter?,
   principal : @common0.Principal,
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @types.ToolError] {

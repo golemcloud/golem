@@ -23,6 +23,7 @@ use crate::model::json::NormalizedJsonValue;
 use crate::model::tool_middleware_release::{
     ToolMiddlewareReleaseId, ToolMiddlewareReleaseReference,
 };
+use crate::schema::TypedSchemaValue;
 use crate::schema::tool::compatibility::CompiledToolCompatibility;
 use crate::schema::tool::{Tool, ToolMiddleware};
 use serde::{Deserialize, Serialize};
@@ -192,7 +193,7 @@ pub struct RemoteToolMiddlewareDeployment {
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct CompiledToolMiddlewareOccurrence {
     pub middleware: RegisteredToolMiddleware,
-    pub parameters: NormalizedJsonValue,
+    pub parameters: TypedSchemaValue,
     pub provision: ToolProvisionConfig,
     pub config_keys_readable: crate::model::tool::ConfigKeyScope,
     pub secret_keys_readable: SecretKeyScope,

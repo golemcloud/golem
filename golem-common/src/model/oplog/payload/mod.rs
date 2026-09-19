@@ -342,6 +342,7 @@ oplog_payload! {
         EntityInvocation {
             metadata: Vec<u8>,
             input: TypedSchemaValue,
+            stream_session_idempotency_key: IdempotencyKey,
         },
         GolemToolInvocationRejected {
             attempt_ordinal: u64,

@@ -5669,7 +5669,7 @@ fn sample_tool_middleware_release()
         "id": uuid::Uuid::new_v4(), "ownerAccountId": uuid::Uuid::new_v4(),
         "name": "audit", "version": "1.0.0",
         "source": { "kind": "component", "componentId": uuid::Uuid::new_v4(), "componentRevision": 0, "componentName": "middleware" },
-        "definition": { "name": "audit", "version": "1.0.0", "aliases": [], "doc": { "summary": "", "description": "", "examples": [] }, "scope": { "kind": "universal" } },
+        "definition": { "name": "audit", "version": "1.0.0", "aliases": [], "doc": { "summary": "", "description": "", "examples": [] }, "scope": { "kind": "universal" }, "parameter_schema": golem_common::schema::SchemaGraph::empty() },
         "metadataVersion": "0.1.0", "metadataDigest": blake3::hash(b"middleware").to_hex().to_string(),
         "immutable": true, "lifecycle": "published", "origin": "ordinary",
         "createdAt": fixed_datetime(), "createdBy": uuid::Uuid::new_v4(),

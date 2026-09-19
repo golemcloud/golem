@@ -575,6 +575,7 @@ mod tests {
                 aliases: Vec::new(),
                 doc: Doc::default(),
                 scope: ToolMiddlewareScope::Universal,
+                parameter_schema: SchemaGraph::empty(),
             },
             provision: ToolProvisionConfig::default(),
             source: ToolMiddlewareSource::Component {
