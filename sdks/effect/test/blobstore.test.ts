@@ -367,44 +367,50 @@ describe("Container.forSchema", () => {
     }),
   )
 
-  it.effect("a negative offset fails instead of counting from the end", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeBlobFake
-      const exit = yield* Effect.exit(
-        Effect.gen(function* () {
-          const c = yield* Blobstore.createContainer("negative-range-c")
-          yield* c.writeData("k", u8("alpha"))
-          return yield* c.getData("k", { start: -1n, end: 2n })
-        }).pipe(Effect.provide(fake.layer)),
-      )
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag === "Failure") {
-        const json = JSON.stringify(exit.cause)
-        expect(json).toContain("BlobstoreHostError")
-        // The host gets the offset as the `u64` it wraps to, and
-        // refuses it as a start after the end: see `test/blob-range.ts`.
-        expect(json).toContain("the byte range 18446744073709551615-2 is not in the blob")
-      }
-    }),
-  )
+  // The host gets a negative offset as the `u64` it wraps to: see
+  // `test/blob-range.ts`. A wrapped start and a wrapped end break the
+  // range in different ways, so each one needs its own case.
+  const negativeRanges = [
+    {
+      name: "a negative start is a start after the end",
+      range: { start: -1n, end: 2n },
+      message: "the byte range 18446744073709551615-2 is not in the blob",
+    },
+    {
+      name: "a negative end is an end past the last byte",
+      range: { start: -1n, end: -1n },
+      message: "the byte range 18446744073709551615-18446744073709551615 is not in the blob",
+    },
+  ] as const
 
-  it.effect("a negative offset fails the same way through the host wrapper", () =>
-    Effect.gen(function* () {
-      const exit = yield* Effect.exit(
+  const blobstoreLayers = [
+    { name: "the fake", layer: Effect.map(makeBlobFake, (fake) => fake.layer) },
+    { name: "the generated binding", layer: Effect.succeed(BlobstoreLive) },
+  ] as const
+
+  for (const [layerIndex, host] of blobstoreLayers.entries()) {
+    for (const [rangeIndex, negative] of negativeRanges.entries()) {
+      it.effect(`${negative.name}, on ${host.name}`, () =>
         Effect.gen(function* () {
-          const c = yield* Blobstore.createContainer("live-negative-range")
-          yield* c.writeData("k", u8("alpha"))
-          return yield* c.getData("k", { start: -1n, end: 2n })
-        }).pipe(Effect.provide(BlobstoreLive)),
+          const layer = yield* host.layer
+          const container = `negative-range-${layerIndex}-${rangeIndex}`
+          const exit = yield* Effect.exit(
+            Effect.gen(function* () {
+              const c = yield* Blobstore.createContainer(container)
+              yield* c.writeData("k", u8("alpha"))
+              return yield* c.getData("k", negative.range)
+            }).pipe(Effect.provide(layer)),
+          )
+          expect(exit._tag).toBe("Failure")
+          if (exit._tag === "Failure") {
+            const json = JSON.stringify(exit.cause)
+            expect(json).toContain("BlobstoreHostError")
+            expect(json).toContain(negative.message)
+          }
+        }),
       )
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag === "Failure") {
-        const json = JSON.stringify(exit.cause)
-        expect(json).toContain("BlobstoreHostError")
-        expect(json).toContain("the byte range 18446744073709551615-2 is not in the blob")
-      }
-    }),
-  )
+    }
+  }
 
   it.effect(
     "decode failure surfaces as a typed failure (Schema.SchemaError via fromJsonString)",

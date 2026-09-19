@@ -23,7 +23,7 @@ import {
   type HostObjectMetadata,
 } from "../../src/host/BlobstoreClient.js"
 import { BlobstoreHostError } from "../../src/Blobstore.js"
-import { hostOffset, rangeErrorMessage, rangeIsNotInObject } from "../blob-range.js"
+import { hostRange } from "../blob-range.js"
 
 interface ObjectEntry {
   bytes: Uint8Array
@@ -122,6 +122,8 @@ const makeFakeContainer = (
     guardWith(
       nextError,
       Effect.gen(function* () {
+        // The spy records the offsets that the caller gave. It does
+        // not record the offsets that `hostRange` resolves them to.
         calls.push({
           container: entry.name,
           object: objectName,
@@ -139,14 +141,13 @@ const makeFakeContainer = (
         }
         // Fake follows the host, offsets included: see
         // `test/blob-range.ts`.
-        const start = hostOffset(range.start)
-        const end = hostOffset(range.end)
-        if (rangeIsNotInObject(start, end, BigInt(obj.bytes.length))) {
+        const resolved = hostRange(range.start, range.end, BigInt(obj.bytes.length))
+        if (resolved.kind === "error") {
           return yield* Effect.fail(
-            new BlobstoreHostError(new Error(rangeErrorMessage(start, end)), "container.getData"),
+            new BlobstoreHostError(new Error(resolved.message), "container.getData"),
           )
         }
-        return new Uint8Array(obj.bytes.subarray(Number(start), Number(end) + 1))
+        return new Uint8Array(obj.bytes.subarray(resolved.first, resolved.last + 1))
       }),
     )
 
