@@ -46,7 +46,17 @@ through output frames on this invocation transport. A persisted result precedes 
 terminal, while a failure before any result is delivered without waiting for guest completion.
 Observer disconnects and invalid controls cannot detach or finalize the original attachment.
 A lost observer response retries the retained `Start`, never `ResumeAttach` as the original
-caller. This transport distinction does not change out-of-band consumer-drop cancellation.
+caller.
+
+Dropping an RPC output reader cancels the source only for the initially accepted physical
+caller. The producer derives that caller from its existing `Prepared` execution configuration,
+not the logical origin or the consumer's fork marker. Other consumers, including forks and
+downstream agents receiving a forwarded output, finalize only their own attachment. The
+producer's registered role distinguishes these outputs (including nested outputs) from ordinary
+agent-hosted inputs, whose cancellation is unchanged. A fresh RPC made by a fork therefore still
+has normal source cancellation. Existing consumer intents and applied receipts recover this
+operation; a `ConsumerFinalized` record can tombstone an absent attachment slot so inherited
+pending intents converge without a source terminal or a late same-epoch attachment activation.
 
 Staged oplogs use a hidden indexed-storage namespace and a standalone primary actor, without
 visible oplog caches, archives or session indexes. Publication atomically moves a complete

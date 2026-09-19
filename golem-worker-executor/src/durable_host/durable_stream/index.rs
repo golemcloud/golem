@@ -1082,6 +1082,23 @@ impl ProducerStreamIndex {
             };
         }
 
+        if existing.is_none()
+            && matches!(
+                record,
+                StreamSessionRecord::AttachmentFinalized(record)
+                    if record.reason == StreamAttachmentFinalizationReason::ConsumerFinalized
+            )
+        {
+            self.attachments.insert(
+                slot,
+                IndexedStreamAttachment {
+                    key: key.clone(),
+                    state,
+                },
+            );
+            return Ok(AttachmentApplyOutcome::Changed);
+        }
+
         let existing = existing.ok_or(StreamStoreError::InvalidAttachmentState)?;
         validate_attachment_epoch(existing, key)?;
         if existing.key != *key {

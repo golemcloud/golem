@@ -2129,6 +2129,160 @@ async fn attachment_lifecycle_is_idempotent_fenced_and_rebuildable() {
 }
 
 #[test]
+async fn absent_attachment_consumer_finalization_is_a_durable_epoch_tombstone() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let live = producer(oplog.clone(), &identity, None).await;
+    let handle = live
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+
+    let sibling = attachment_key(&identity, handle.stream_id);
+    live.prepare_attachment(sibling.clone(), 100).await.unwrap();
+    live.activate_attachment(sibling.clone(), 110)
+        .await
+        .unwrap();
+
+    let mut tombstone = sibling.clone();
+    tombstone.consumer_environment_id = EnvironmentId(Uuid::from_u128(21));
+    tombstone.consumer = AgentId {
+        component_id: ComponentId(Uuid::from_u128(22)),
+        agent_id: "abandoned-fork-reader".to_string(),
+    };
+    tombstone.expected_consumer_fingerprint = AgentFingerprint(Uuid::from_u128(23));
+    tombstone.consumer_invocation.callee_environment_id = tombstone.consumer_environment_id;
+    tombstone.consumer_invocation.callee = tombstone.consumer.clone();
+    tombstone.consumer_invocation.callee_fingerprint = tombstone.expected_consumer_fingerprint;
+    tombstone.epoch = 5;
+
+    let finalized = live
+        .finalize_attachment(
+            tombstone.clone(),
+            StreamAttachmentFinalizationReason::ConsumerFinalized,
+            120,
+        )
+        .await
+        .unwrap();
+    assert!(!finalized.replayed);
+    let after_finalize = oplog.committed_length();
+    assert!(
+        live.finalize_attachment(
+            tombstone.clone(),
+            StreamAttachmentFinalizationReason::ConsumerFinalized,
+            120,
+        )
+        .await
+        .unwrap()
+        .replayed
+    );
+    assert_eq!(oplog.committed_length(), after_finalize);
+    assert_eq!(
+        live.prepare_attachment(tombstone.clone(), 121).await,
+        Err(StreamStoreError::InvalidAttachmentState)
+    );
+
+    let mut stale = tombstone.clone();
+    stale.epoch -= 1;
+    assert_eq!(
+        live.finalize_attachment(
+            stale,
+            StreamAttachmentFinalizationReason::ConsumerFinalized,
+            122,
+        )
+        .await,
+        Err(StreamStoreError::StaleEpoch {
+            current: 5,
+            actual: 4,
+        })
+    );
+    let mut mismatched = tombstone.clone();
+    mismatched.expected_consumer_fingerprint = AgentFingerprint(Uuid::from_u128(24));
+    mismatched.consumer_invocation.callee_fingerprint = mismatched.expected_consumer_fingerprint;
+    assert_eq!(
+        live.finalize_attachment(
+            mismatched,
+            StreamAttachmentFinalizationReason::ConsumerFinalized,
+            123,
+        )
+        .await,
+        Err(StreamStoreError::AttachmentConflict)
+    );
+
+    let mut absent_other_reason = tombstone.clone();
+    absent_other_reason.consumer.agent_id = "other-absent-reader".to_string();
+    absent_other_reason.consumer_invocation.callee = absent_other_reason.consumer.clone();
+    assert_eq!(
+        live.finalize_attachment(
+            absent_other_reason,
+            StreamAttachmentFinalizationReason::ConsumerDeleted,
+            124,
+        )
+        .await,
+        Err(StreamStoreError::InvalidAttachmentState)
+    );
+    assert!(
+        live.has_active_attachment(&sibling.session_key, &handle)
+            .await
+            .unwrap()
+    );
+    live.write_items(
+        None,
+        handle.stream_id,
+        0,
+        StreamItemsPayload::PackedU8(vec![7]),
+    )
+    .await
+    .unwrap();
+    drop(live);
+
+    let restarted = producer(oplog, &identity, None).await;
+    let attachments = restarted.inspect_attachments().await;
+    assert_eq!(attachments.len(), 2);
+    assert!(attachments.iter().any(|view| {
+        view.key == tombstone
+            && view.state
+                == StreamAttachmentState::Finalized(
+                    StreamAttachmentFinalizationReason::ConsumerFinalized,
+                )
+    }));
+    assert!(
+        attachments
+            .iter()
+            .any(|view| { view.key == sibling && view.state == StreamAttachmentState::Active })
+    );
+    assert_eq!(
+        restarted.prepare_attachment(tombstone.clone(), 130).await,
+        Err(StreamStoreError::InvalidAttachmentState)
+    );
+    let mut next_epoch = tombstone;
+    next_epoch.epoch += 1;
+    assert!(
+        !restarted
+            .prepare_attachment(next_epoch, 131)
+            .await
+            .unwrap()
+            .replayed
+    );
+    assert!(
+        restarted
+            .has_active_attachment(&sibling.session_key, &handle)
+            .await
+            .unwrap()
+    );
+    restarted
+        .write_items(
+            None,
+            handle.stream_id,
+            1,
+            StreamItemsPayload::PackedU8(vec![8]),
+        )
+        .await
+        .unwrap();
+}
+
+#[test]
 async fn attachment_prepare_advances_epochs_from_every_remote_recovery_state() {
     for prior_state in [None, Some("prepared"), Some("active"), Some("finalized")] {
         let identity = identity();

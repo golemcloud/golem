@@ -6773,6 +6773,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         "durable stream cancellation role does not match its session mapping",
                     ));
                 }
+                let source = &mapping.handle.source_invocation;
+                if matches!(
+                    role,
+                    golem_common::model::durable_stream::StreamCancelRole::OutputConsumer
+                        | golem_common::model::durable_stream::StreamCancelRole::InputConsumer
+                ) && source.callee_environment_id == self.owned_agent_id.environment_id
+                    && source.callee == self.owned_agent_id.agent_id
+                    && source.callee_fingerprint == self.initial_worker_metadata.fingerprint
+                    && producer
+                        .registered_stream_role(&mapping.handle)
+                        .await
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                        == SessionStreamRole::Output
+                    && let Some(prepared) = self
+                        .prepared_stream_session(&source.idempotency_key)
+                        .await?
+                    && stream_output_consumer_is_observer(&prepared.attempt, &key)?
+                {
+                    return producer
+                        .finalize_attachment(
+                            key,
+                            StreamAttachmentFinalizationReason::ConsumerFinalized,
+                            producer_now_millis,
+                        )
+                        .await
+                        .map(|outcome| outcome.replayed)
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()));
+                }
                 producer
                     .cancel_open(None, key.stream_id, role, reason, details)
                     .await
@@ -11624,6 +11652,33 @@ fn persisted_stream_descriptor_matches(
         && persisted.invocation_value == requested.invocation_value
         && persisted.execution_config == requested.execution_config
         && persisted.effective_identity == requested.effective_identity
+}
+
+fn stream_output_consumer_is_observer(
+    accepted: &StartAttemptDescriptor,
+    attachment: &golem_common::model::durable_stream::StreamAttachmentKey,
+) -> Result<bool, WorkerExecutorError> {
+    let (bytes, _environment): (Vec<u8>, Option<Vec<(String, String)>>) =
+        golem_common::serialization::deserialize(&accepted.invocation.execution_config)
+            .map_err(WorkerExecutorError::runtime)?;
+    let start = golem_api_grpc::proto::golem::worker::InvocationStart::decode(bytes.as_slice())
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    let Some(origin) = start.origin_invocation else {
+        return Ok(false);
+    };
+    let caller = start
+        .context
+        .and_then(|context| context.parent)
+        .ok_or_else(|| {
+            WorkerExecutorError::runtime("persisted streaming RPC has no accepted caller")
+        })?;
+    let environment = origin.callee_environment_id.ok_or_else(|| {
+        WorkerExecutorError::runtime("persisted streaming RPC has no caller environment")
+    })?;
+    // The first accepted caller owns cancellation, even if a fork dispatched an
+    // inherited call before its logical origin did. Other readers abandon only their slot.
+    Ok(caller != attachment.consumer.clone().into()
+        || environment != attachment.consumer_environment_id.into())
 }
 
 fn stream_effective_identity_is_agent(effective_identity: &[u8]) -> bool {

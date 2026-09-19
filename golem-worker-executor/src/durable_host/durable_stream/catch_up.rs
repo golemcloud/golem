@@ -92,6 +92,20 @@ impl DurableStreamStore {
             && handle.expected_producer_fingerprint == self.producer_fingerprint
     }
 
+    /// Returns the producer's role, which forwarding does not change.
+    pub(crate) async fn registered_stream_role(
+        &self,
+        handle: &DurableStreamHandle,
+    ) -> Result<SessionStreamRole, StreamStoreError> {
+        self.validate_handle(handle).await?;
+        self.index_for([ProducerMetadataKey::Stream(handle.stream_id)])
+            .await?
+            .stream_roles
+            .get(&handle.stream_id)
+            .copied()
+            .ok_or_else(|| StreamStoreError::CorruptHistory("registered stream has no role".into()))
+    }
+
     pub(super) async fn validate_cursor(
         &self,
         stream_id: StreamId,

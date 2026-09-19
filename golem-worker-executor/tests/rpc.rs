@@ -29,7 +29,10 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentPrincipal, ParsedAgentId, Principal};
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::ComponentDto;
-use golem_common::model::durable_stream::StreamSessionRecord;
+use golem_common::model::durable_stream::{
+    StreamAttachmentFinalizationReason, StreamCancelRole as DurableStreamCancelRole,
+    StreamSessionRecord,
+};
 use golem_common::model::oplog::payload::HostRequestGolemRpcInvoke;
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
@@ -2792,6 +2795,264 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
             .into_typed::<u64>()?,
         2
     );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn fork_dropping_inherited_rpc_output_does_not_cancel_original_reader(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for (cut_at_start, forwarded_drop) in
+        [(true, false), (false, false), (true, true), (false, true)]
+    {
+        let context = TestContext::new(last_unique_id);
+        let (executor, _) = crate::fork::start_with_remote_streaming_rpc(deps, &context).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_rpc_rust)
+            .store()
+            .await?;
+        let name = format!(
+            "fork-drop-inherited-rpc-output-{}-{}",
+            if cut_at_start { "start" } else { "end" },
+            if forwarded_drop {
+                "forwarded"
+            } else {
+                "direct"
+            }
+        );
+        let original = agent_id!("StreamingRpcCaller", name);
+        let provider = agent_id!("StreamingRpcTarget", name);
+        let downstream = agent_id!("StreamingRpcTarget", format!("{name}-forwarded-drop"));
+        let original_id = executor
+            .start_agent(&component.id, original.clone())
+            .await?;
+        let provider_id = executor
+            .start_agent(&component.id, provider.clone())
+            .await?;
+        let downstream_id = executor
+            .start_agent(&component.id, downstream.clone())
+            .await?;
+        let gate = executor
+            .invoke_and_await_agent(&component, &provider, "create_output_gate", data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let invocation_key = IdempotencyKey::fresh();
+        let invocation = tokio::spawn({
+            let executor = executor.clone();
+            let component = component.clone();
+            let original_for_invocation = original.clone();
+            let gate = gate.clone();
+            let invocation_key = invocation_key.clone();
+            async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &original_for_invocation,
+                        &invocation_key,
+                        "fork_drop_inherited_output",
+                        data_value!(gate, original_for_invocation.to_string(), forwarded_drop),
+                    )
+                    .await
+            }
+        });
+
+        let (cut, rpc_key) = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let caller_history = executor
+                    .get_oplog(&original_id, OplogIndex::INITIAL)
+                    .await?;
+                let rpc = caller_history.iter().find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start)
+                        if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await" =>
+                    {
+                        Some((
+                            entry.oplog_index,
+                            HostRequestGolemRpcInvoke::from_value(
+                                start.request.as_ref().unwrap().value(),
+                            )
+                            .unwrap()
+                            .idempotency_key,
+                        ))
+                    }
+                    _ => None,
+                });
+                if let Some((start, rpc_key)) = rpc {
+                    let end = caller_history.iter().find_map(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)
+                        .then_some(entry.oplog_index)
+                });
+                    let provider_has_item = executor
+                        .get_oplog(&provider_id, OplogIndex::INITIAL)
+                        .await?
+                        .iter()
+                        .any(|entry| matches!(entry.entry, PublicOplogEntry::StreamItems(_)));
+                    if let Some(end) = end
+                        && provider_has_item
+                    {
+                        break Ok::<_, anyhow::Error>((
+                            if cut_at_start { start } else { end },
+                            rpc_key,
+                        ));
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("RPC did not reach End with an open output"))??;
+
+        let fork =
+            golem_common::phantom_agent_id!("StreamingRpcCaller", uuid::Uuid::new_v4(), name);
+        let fork_id = AgentId::from_agent_id(component.id, &fork).map_err(anyhow::Error::msg)?;
+        executor
+            .fork_worker(&original_id, &fork.to_string(), cut)
+            .await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &fork,
+                    &invocation_key,
+                    "fork_drop_inherited_output",
+                    data_value!(gate.clone(), original.to_string(), forwarded_drop),
+                )
+                .await?
+                .into_typed::<Vec<u64>>()?,
+            Vec::<u64>::new(),
+            "the fork must drop its inherited output reader"
+        );
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let provider_history = executor
+                    .get_oplog(&provider_id, OplogIndex::INITIAL)
+                    .await?;
+                let expected_consumer = if forwarded_drop {
+                    &downstream_id
+                } else {
+                    &fork_id
+                };
+                let finalized_stream = provider_history.iter().find_map(|entry| {
+                    let PublicOplogEntry::StreamSession(session) = &entry.entry else {
+                        return None;
+                    };
+                    match StreamSessionRecord::from_value(session.record.value()).unwrap() {
+                        StreamSessionRecord::AttachmentFinalized(record)
+                            if record.reason
+                                == StreamAttachmentFinalizationReason::ConsumerFinalized
+                                && record.key.consumer == *expected_consumer =>
+                        {
+                            Some(record.key.stream_id)
+                        }
+                        _ => None,
+                    }
+                });
+                let downstream_input_cancelled = !forwarded_drop
+                    || executor
+                        .get_oplog(&downstream_id, OplogIndex::INITIAL)
+                        .await?
+                        .iter()
+                        .any(|entry| {
+                            matches!(&entry.entry, PublicOplogEntry::StreamSession(session)
+                            if matches!(
+                                StreamSessionRecord::from_value(session.record.value()).unwrap(),
+                                StreamSessionRecord::ConsumerCancelIntent(record)
+                                    if record.role == DurableStreamCancelRole::InputConsumer
+                            ))
+                        });
+                if finalized_stream.is_some() && downstream_input_cancelled {
+                    break Ok::<_, anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("fork reader finalization was not committed"))??;
+
+        assert!(
+            !executor
+                .get_oplog(&provider_id, OplogIndex::INITIAL)
+                .await?
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::StreamCancel(_))),
+            "dropping an inherited output must not cancel the shared source"
+        );
+
+        invocation.abort();
+        let _ = invocation.await;
+        drop(executor);
+        let (executor, _) = crate::fork::start_with_remote_streaming_rpc(deps, &context).await?;
+        executor.complete_promise(&gate, Vec::new()).await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &original,
+                    &invocation_key,
+                    "fork_drop_inherited_output",
+                    data_value!(gate.clone(), original.to_string(), forwarded_drop),
+                )
+                .await?
+                .into_typed::<Vec<u64>>()?,
+            vec![1, 1],
+            "the original consumer must drain the source after cold recovery"
+        );
+
+        let cancel_count_before_new_rpc = executor
+            .get_oplog(&provider_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::StreamCancel(_)))
+            .count();
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &fork,
+                "drop_new_increment_output",
+                data_value!(),
+            )
+            .await?;
+        let provider_history = executor
+            .get_oplog(&provider_id, OplogIndex::INITIAL)
+            .await?;
+        assert_eq!(
+            provider_history
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::StreamCancel(_)))
+                .count(),
+            cancel_count_before_new_rpc + 1,
+            "a new RPC made by the fork must retain source cancellation"
+        );
+        let executions = provider_history
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                    PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.method_name == "increment_gated_stream"
+                            || method.method_name == "increment_many_stream" =>
+                    {
+                        Some(method.idempotency_key.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(executions.len(), 2);
+        assert_eq!(executions[0], rpc_key);
+        assert_ne!(executions[0], executions[1]);
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &provider, "increment_scalar", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            3,
+            "the inherited RPC and the fork's new RPC must each execute exactly once"
+        );
+    }
     Ok(())
 }
 
