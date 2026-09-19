@@ -450,8 +450,8 @@ impl S3BlobStorage {
     /// Sends one `DeleteObjects` request in quiet mode, with retries.
     ///
     /// A response that reports an error for a key is a failed attempt, so the whole request goes
-    /// again within the retry budget. S3 reports a key that does not exist as deleted, so a new
-    /// attempt is safe.
+    /// again within the retry budget. The new attempt sends the keys that the attempt before
+    /// deleted too. The backend relies on S3 to report such a key as deleted, not as an error.
     async fn delete_objects_request(
         &self,
         target_label: &'static str,
