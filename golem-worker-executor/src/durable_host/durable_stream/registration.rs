@@ -23,6 +23,34 @@ pub struct ResultStreamRegistration {
 }
 
 impl DurableStreamStore {
+    pub(super) fn validate_registration_owner(
+        &self,
+        request: &ProducerRegistrationRequest,
+    ) -> Result<(), StreamStoreError> {
+        if matches!(
+            request.source_invocation,
+            StreamRegistrationInvocation::Local(_)
+        ) && let StreamRegistrationCoordinate::Root { invocation_id, .. } = &request.coordinate
+            && *invocation_id != self.qualify_session(&request.source_invocation)
+        {
+            return Err(StreamStoreError::RegistrationDivergence);
+        }
+        if let Some(mapping) = &request.session_mapping {
+            let session = self.qualify_session(&request.source_invocation);
+            if mapping.session_key != session
+                || !AttachmentId::primary(
+                    session.callee_environment_id,
+                    &session.callee,
+                    &session.idempotency_key,
+                )
+                .is_ok_and(|attachment| attachment == mapping.attachment_id)
+            {
+                return Err(StreamStoreError::RegistrationDivergence);
+            }
+        }
+        Ok(())
+    }
+
     #[tracing::instrument(name = "durable_stream.register", skip_all)]
     /// Durably registers a stream before its handle can be exposed to a consumer.
     pub async fn register(
@@ -41,6 +69,7 @@ impl DurableStreamStore {
         context: &StreamWriteContext,
         request: ProducerRegistrationRequest,
     ) -> Result<ProducerWriteOutcome<DurableStreamHandle>, StreamStoreError> {
+        self.validate_registration_owner(&request)?;
         if registration_coordinate_depth(&request.coordinate) > MAX_STREAM_VALUE_TRAVERSAL_DEPTH {
             crate::metrics::durable_stream::record_limit_violation("traversal_depth");
             return Err(StreamStoreError::TraversalDepthLimit);
@@ -64,7 +93,7 @@ impl DurableStreamStore {
                     "Durable stream registration resolved"
                 );
                 return Ok(ProducerWriteOutcome {
-                    value: existing.handle.clone(),
+                    value: existing.issue(self.generation()),
                     replayed: true,
                 });
             }
@@ -125,6 +154,7 @@ impl DurableStreamStore {
                         producer,
                         producer_fingerprint,
                         request_for_entry,
+                        None,
                     ),
                 )]
             }))
@@ -150,23 +180,36 @@ impl DurableStreamStore {
             &self.producer,
             self.producer_fingerprint,
         )?;
+        let registered = index
+            .registrations
+            .get(
+                &StreamId::derive(
+                    self.environment_id,
+                    &self.producer,
+                    self.producer_fingerprint,
+                    oplog_index,
+                )
+                .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?,
+            )
+            .expect("applied registration is missing")
+            .clone();
         self.buses
             .write()
             .expect("durable stream bus map lock poisoned")
             .insert(
-                record.handle.stream_id,
+                registered.handle.stream_id,
                 Arc::new(DurableLiveStreamBus::new(self.live_join_capacity)?),
             );
         self.record_registered_streams(1);
         crate::metrics::durable_stream::record_producer_operation("register", false);
         tracing::debug!(
-            stream_id = %record.handle.stream_id,
-            registration_oplog_index = record.registration_oplog_index.as_u64(),
+            stream_id = %registered.handle.stream_id,
+            registration_oplog_index = registered.registration_oplog_index.as_u64(),
             replayed = false,
             "Durable stream registration committed"
         );
         Ok(ProducerWriteOutcome {
-            value: record.handle,
+            value: registered.issue(self.generation()),
             replayed: false,
         })
     }
@@ -210,10 +253,10 @@ impl DurableStreamStore {
         for output in &outputs {
             match &output.source {
                 ProducerOutputSource::New(request) => {
-                    keys.extend(ProducerMetadataKey::registration(request))
+                    self.validate_registration_owner(request)?;
+                    keys.extend(ProducerMetadataKey::registration(request));
                 }
                 ProducerOutputSource::Existing(handle) => {
-                    keys.push(ProducerMetadataKey::Reference(handle.stream_id));
                     if self.owns_handle_identity(handle) {
                         keys.push(ProducerMetadataKey::Stream(handle.stream_id));
                     }
@@ -221,8 +264,21 @@ impl DurableStreamStore {
             }
         }
         let mut index = self.index_for(keys).await?;
+        for output in &outputs {
+            if let ProducerOutputSource::Existing(handle) = &output.source
+                && self.owns_handle_identity(handle)
+                && index
+                    .registrations
+                    .get(&handle.stream_id)
+                    .is_none_or(|registration| !registration.accepts(handle, self.generation()))
+            {
+                return Err(StreamStoreError::InvalidHandle);
+            }
+        }
         let result_offset = index.invocation_results.get(&session_key).copied();
         let result_session_key = session_key.clone();
+        let result_session_reference =
+            StreamRegistrationInvocation::Local(session_key.idempotency_key.clone());
         let mut cancellations = Vec::new();
         for (position, output) in outputs.iter().enumerate() {
             if let Some(epoch) = output.cancellation_epoch {
@@ -259,20 +315,22 @@ impl DurableStreamStore {
                 ProducerOutputSource::Existing(_) => None,
             })
             .collect::<Vec<_>>();
-        let make_result = move |owned_handles: Vec<DurableStreamHandle>| {
-            let mut owned_handles = owned_handles.into_iter();
+        let make_result = move |owned_sources: Vec<StreamRecordReference>| {
+            let mut owned_sources = owned_sources.into_iter();
             let stream_mappings = outputs
                 .into_iter()
                 .map(|output| {
-                    let handle = match output.source {
-                        ProducerOutputSource::New(_) => owned_handles
+                    let source = match output.source {
+                        ProducerOutputSource::New(_) => owned_sources
                             .next()
-                            .expect("result allocation supplies one handle per new output"),
-                        ProducerOutputSource::Existing(handle) => handle,
+                            .expect("result allocation supplies one source per new output"),
+                        ProducerOutputSource::Existing(handle) => {
+                            StreamRecordReference::Foreign(handle)
+                        }
                     };
-                    StreamSessionMappingRecord {
+                    StreamBindingRecord {
                         transport_stream_id: output.transport_stream_id,
-                        handle,
+                        source,
                         role: SessionStreamRole::Output,
                     }
                 })
@@ -280,12 +338,8 @@ impl DurableStreamStore {
             StreamSessionRecord::InvocationResult(
                 golem_common::base_model::durable_stream::StreamSessionInvocationResultRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key,
+                    session_key: result_session_reference,
                     result,
-                    output_streams: stream_mappings
-                        .iter()
-                        .map(|mapping| mapping.handle.clone())
-                        .collect(),
                     stream_mappings,
                 },
             )
@@ -336,7 +390,7 @@ impl DurableStreamStore {
                     .get(&request.coordinate)
                     .and_then(|stream_id| index.registrations.get(stream_id))
                     .filter(|registration| registration_matches(registration, request))
-                    .map(|registration| registration.handle.clone())
+                    .map(|registration| registration.issue(self.generation()))
             })
             .collect::<Vec<_>>();
         if existing_handles.iter().any(Option::is_some) {
@@ -347,7 +401,16 @@ impl DurableStreamStore {
                 .into_iter()
                 .map(Option::unwrap)
                 .collect::<Vec<_>>();
-            let expected = make_result(handles.clone());
+            let sources = handles
+                .iter()
+                .map(|handle| {
+                    let registration = index.registrations.get(&handle.stream_id).unwrap();
+                    StreamRecordReference::Local(LocalStreamId(
+                        registration.registration_oplog_index,
+                    ))
+                })
+                .collect();
+            let expected = make_result(sources);
             drop(index);
             if let Some(offset) = result_offset {
                 let record = self.read_session_record(offset).await?;
@@ -405,6 +468,11 @@ impl DurableStreamStore {
         let environment_id = self.environment_id;
         let producer = self.producer.clone();
         let producer_fingerprint = self.producer_fingerprint;
+        let mut handle_local_ids = index
+            .registrations
+            .iter()
+            .map(|(id, registration)| (*id, LocalStreamId(registration.registration_oplog_index)))
+            .collect::<HashMap<_, _>>();
         context.begin_durable_effect();
         let entries = self
             .oplog
@@ -423,14 +491,36 @@ impl DurableStreamStore {
                         producer.clone(),
                         producer_fingerprint,
                         request,
+                        None,
                     );
-                    handles.push(record.handle.clone());
+                    let handle = RegisteredStream::resolve(
+                        record.clone(),
+                        oplog_index,
+                        environment_id,
+                        &producer,
+                        producer_fingerprint,
+                    )
+                    .expect("producer identity was validated")
+                    .handle;
+                    handle_local_ids.insert(handle.stream_id, LocalStreamId(oplog_index));
+                    handles.push(handle);
                     result.push(DurableStreamOplogRecord::Registered(
                         entity_parent_start_index,
                         record,
                     ));
                 }
-                let session_record = make_result(handles);
+                let session_record = make_result(
+                    handles
+                        .iter()
+                        .map(|handle| {
+                            StreamRecordReference::Local(
+                                *handle_local_ids
+                                    .get(&handle.stream_id)
+                                    .expect("new registration has a local id"),
+                            )
+                        })
+                        .collect(),
+                );
                 if !session_record.has_supported_format() {
                     return Vec::new();
                 }
@@ -439,15 +529,16 @@ impl DurableStreamStore {
                 };
                 let mut cancelled = HashSet::new();
                 for (position, epoch, terminal, applied_locally) in cancellations {
-                    let handle = &invocation_result.stream_mappings[position].handle;
-                    if !cancelled.insert(handle.stream_id) { continue; }
+                    let source = invocation_result.stream_mappings[position].source.clone();
+                    if !cancelled.insert(source.clone()) { continue; }
                     result.push(DurableStreamOplogRecord::Session(
                         entity_parent_start_index,
                         Box::new(StreamSessionRecord::ConsumerCancelIntent(
                             golem_common::base_model::durable_stream::StreamConsumerCancelIntentRecord {
                                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                                 session_key: invocation_result.session_key.clone(),
-                                stream_id: handle.stream_id,
+                                consumer_invocation: invocation_result.session_key.idempotency_key().clone(),
+                                source: source.clone(),
                                 epoch,
                                 role: StreamCancelRole::OutputConsumer,
                                 reason: StreamCancelReason::Cancelled,
@@ -459,8 +550,10 @@ impl DurableStreamStore {
                         let offset = StreamOffset::new(OplogIndex::from_u64(first_index.as_u64() + result.len() as u64), 0);
                         result.push(DurableStreamOplogRecord::Cancel(attribution, StreamCancelRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
-                            stream_id: handle.stream_id,
-                            producer_fingerprint,
+                            stream_id: match &source {
+                                StreamRecordReference::Local(local_id) => *local_id,
+                                StreamRecordReference::Foreign(handle) => handle_local_ids[&handle.stream_id],
+                            },
                             sequence,
                             offset,
                             authored_by: StreamTerminalAuthor::Protocol,
@@ -478,7 +571,8 @@ impl DurableStreamStore {
                                     intent: golem_common::base_model::durable_stream::StreamConsumerCancelIntentRecord {
                                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                                         session_key: invocation_result.session_key.clone(),
-                                        stream_id: handle.stream_id,
+                                        consumer_invocation: invocation_result.session_key.idempotency_key().clone(),
+                                        source,
                                         epoch,
                                         role: StreamCancelRole::OutputConsumer,
                                         reason: StreamCancelReason::Cancelled,
@@ -514,7 +608,6 @@ impl DurableStreamStore {
                         .download_payload(record)
                         .await
                         .map_err(StreamStoreError::Oplog)?;
-                    handles.push(record.handle.clone());
                     index.apply_registration(
                         oplog_index,
                         entity_parent_start_index,
@@ -523,11 +616,17 @@ impl DurableStreamStore {
                         &self.producer,
                         self.producer_fingerprint,
                     )?;
+                    let registered = index
+                        .registrations
+                        .values()
+                        .find(|value| value.registration_oplog_index == oplog_index)
+                        .expect("applied registration is missing");
+                    handles.push(registered.issue(self.generation()));
                     self.buses
                         .write()
                         .expect("durable stream bus map lock poisoned")
                         .insert(
-                            record.handle.stream_id,
+                            registered.handle.stream_id,
                             Arc::new(DurableLiveStreamBus::new(self.live_join_capacity)?),
                         );
                 }
@@ -541,8 +640,20 @@ impl DurableStreamStore {
                         .download_payload(record)
                         .await
                         .map_err(StreamStoreError::Oplog)?;
-                    index.apply_session_references(entity_parent_start_index, &record)?;
-                    index.apply_result_offset(oplog_index, &record);
+                    index.apply_session_references(
+                        entity_parent_start_index,
+                        &record,
+                        self.environment_id,
+                        &self.producer,
+                        self.producer_fingerprint,
+                    )?;
+                    index.apply_result_offset(
+                        oplog_index,
+                        &record,
+                        self.environment_id,
+                        &self.producer,
+                        self.producer_fingerprint,
+                    );
                     if matches!(record, StreamSessionRecord::InvocationResult(_)) {
                         session_record = Some(record);
                     }
@@ -613,7 +724,7 @@ impl DurableStreamStore {
         if !registration_matches(registration, request) {
             return Err(StreamStoreError::RegistrationDivergence);
         }
-        Ok(registration.handle.clone())
+        Ok(registration.issue(self.generation()))
     }
 
     /// Enforces the per-session limit before any additional registrations are appended.
@@ -647,41 +758,101 @@ impl DurableStreamStore {
 }
 
 pub(super) fn registration_record(
+    _oplog_index: OplogIndex,
+    environment_id: EnvironmentId,
+    producer: AgentId,
+    producer_fingerprint: AgentFingerprint,
+    request: ProducerRegistrationRequest,
+    local_parent: Option<(StreamId, LocalStreamId)>,
+) -> StreamRegisteredRecord {
+    let source_invocation = request.source_invocation;
+    let coordinate = match request.coordinate {
+        StreamRegistrationCoordinate::Root {
+            invocation_id,
+            root_kind,
+            recursive_value_path,
+        } => {
+            let invocation = match &source_invocation {
+                StreamRegistrationInvocation::Local(key) => {
+                    assert!(
+                        invocation_id.callee_environment_id == environment_id
+                            && invocation_id.callee == producer
+                            && invocation_id.callee_fingerprint == producer_fingerprint
+                            && invocation_id.idempotency_key == *key,
+                        "local stream registration coordinate must identify the registering owner"
+                    );
+                    StreamRegistrationInvocation::Local(key.clone())
+                }
+                StreamRegistrationInvocation::Remote(_) => {
+                    StreamRegistrationInvocation::Remote(invocation_id)
+                }
+            };
+            StreamRegistrationRecordCoordinate::Root {
+                invocation,
+                root_kind,
+                recursive_value_path,
+            }
+        }
+        StreamRegistrationCoordinate::Nested {
+            parent_stream_id,
+            parent_producer_sequence,
+            recursive_value_path,
+        } => StreamRegistrationRecordCoordinate::Nested {
+            parent_stream: if let Some((local_stream_id, local_id)) = local_parent
+                && local_stream_id == parent_stream_id
+            {
+                StreamRecordReference::Local(local_id)
+            } else {
+                panic!("nested registrations require an oplog-local producer parent")
+            },
+            parent_producer_sequence,
+            recursive_value_path,
+        },
+    };
+    StreamRegisteredRecord {
+        format_version: DURABLE_STREAM_FORMAT_VERSION,
+        coordinate,
+        source_invocation,
+        component_revision: request.component_revision,
+        element_schema_fingerprint: request.element_schema_fingerprint,
+        source_kind: request.source_kind,
+        session_role: request.session_mapping.map(|mapping| mapping.role),
+    }
+}
+
+#[cfg(test)]
+pub(super) fn registered_stream(
     oplog_index: OplogIndex,
     environment_id: EnvironmentId,
     producer: AgentId,
     producer_fingerprint: AgentFingerprint,
     request: ProducerRegistrationRequest,
-) -> StreamRegisteredRecord {
-    let stream_id = StreamId::derive(environment_id, &producer, producer_fingerprint, oplog_index)
-        .expect("producer identity was validated before reserving the registration index");
-    StreamRegisteredRecord {
-        format_version: DURABLE_STREAM_FORMAT_VERSION,
-        coordinate: request.coordinate,
-        registration_oplog_index: oplog_index,
-        handle: DurableStreamHandle {
-            format_version: DURABLE_STREAM_FORMAT_VERSION,
-            stream_id,
-            producer_environment_id: environment_id,
-            producer,
-            expected_producer_fingerprint: producer_fingerprint,
-            source_invocation: request.source_invocation,
-            component_revision: request.component_revision,
-            element_schema_fingerprint: request.element_schema_fingerprint,
-        },
-        source_kind: request.source_kind,
-        session_mapping: request.session_mapping,
-    }
+) -> RegisteredStream {
+    RegisteredStream::resolve(
+        registration_record(
+            oplog_index,
+            environment_id,
+            producer.clone(),
+            producer_fingerprint,
+            request,
+            None,
+        ),
+        oplog_index,
+        environment_id,
+        &producer,
+        producer_fingerprint,
+    )
+    .expect("producer identity was validated")
 }
 
 pub(super) fn registration_matches(
-    record: &StreamRegisteredRecord,
+    registration: &RegisteredStream,
     request: &ProducerRegistrationRequest,
 ) -> bool {
-    record.coordinate == request.coordinate
-        && record.handle.source_invocation == request.source_invocation
-        && record.handle.component_revision == request.component_revision
-        && record.handle.element_schema_fingerprint == request.element_schema_fingerprint
-        && record.source_kind == request.source_kind
-        && record.session_mapping == request.session_mapping
+    registration.coordinate == request.coordinate
+        && registration.record.source_invocation == request.source_invocation
+        && registration.handle.component_revision == request.component_revision
+        && registration.handle.element_schema_fingerprint == request.element_schema_fingerprint
+        && registration.record.source_kind == request.source_kind
+        && registration.session_mapping == request.session_mapping
 }

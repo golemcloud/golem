@@ -79,14 +79,14 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
             golem_common::model::DurableStreamSessionStatus {
                 first_prepared: Some(OplogIndex::from_u64(10)),
                 prepared: Some(OplogIndex::from_u64(10)),
-                session_key: Some(session_key.clone()),
+                session_key: Some(session_key.idempotency_key.clone()),
                 prepared_attempt_id: Some(attempt),
                 ..Default::default()
             },
         );
         let attached = StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
-            session_key: session_key.clone(),
+            session_key: session_key.idempotency_key.clone(),
             attachment_id: AttachmentId::primary(
                 session_key.callee_environment_id,
                 &session_key.callee,
@@ -188,12 +188,12 @@ fn update_status_with_new_entries(
 #[test]
 fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
     use golem_common::model::durable_stream::{
-        StreamCancelReason, StreamCancelRole, StreamConsumerCancelAppliedRecord,
-        StreamConsumerCancelIntentRecord,
+        LocalStreamId, StreamCancelReason, StreamCancelRole, StreamConsumerCancelAppliedRecord,
+        StreamConsumerCancelIntentRecord, StreamRecordReference, StreamRegistrationInvocation,
     };
     let intent = StreamConsumerCancelIntentRecord {
         format_version: 1,
-        session_key: StreamInvocationId {
+        session_key: StreamRegistrationInvocation::Remote(StreamInvocationId {
             callee_environment_id: EnvironmentId::new(),
             callee: AgentId {
                 component_id: ComponentId::new(),
@@ -201,8 +201,9 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
             },
             callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
             idempotency_key: IdempotencyKey::fresh(),
-        },
-        stream_id: golem_common::model::StreamId(Uuid::new_v4()),
+        }),
+        consumer_invocation: IdempotencyKey::new("consumer".into()),
+        source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(21))),
         epoch: 7,
         role: StreamCancelRole::OutputConsumer,
         reason: StreamCancelReason::Cancelled,
@@ -264,24 +265,28 @@ fn cancellation_obligations_survive_status_checkpoint_without_local_prepared() {
 fn stream_status_discards_reverted_sessions_and_cancellation_receipts_but_keeps_jumps() {
     use crate::services::worker_fork::lineage::tests::prepared;
     use golem_common::model::durable_stream::{
-        StreamCancelReason, StreamCancelRole, StreamConsumerCancelAppliedRecord,
-        StreamConsumerCancelIntentRecord,
+        LocalStreamId, StreamCancelReason, StreamCancelRole, StreamConsumerCancelAppliedRecord,
+        StreamConsumerCancelIntentRecord, StreamRecordReference,
     };
     let first = crate::durable_host::durable_stream::tests::identity().invocation;
     let mut second = first.clone();
     second.idempotency_key = IdempotencyKey::fresh();
     let intent = StreamConsumerCancelIntentRecord {
         format_version: 1,
-        session_key: first.clone(),
-        stream_id: golem_common::model::StreamId(Uuid::new_v4()),
+        session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Remote(
+            first.clone(),
+        ),
+        consumer_invocation: IdempotencyKey::new("consumer".into()),
+        source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(21))),
         epoch: 7,
         role: StreamCancelRole::OutputConsumer,
         reason: StreamCancelReason::Cancelled,
         details: None,
     };
     let mut removed_intent = intent.clone();
-    removed_intent.session_key = second.clone();
-    removed_intent.stream_id = golem_common::model::StreamId(Uuid::new_v4());
+    removed_intent.session_key =
+        golem_common::model::durable_stream::StreamRegistrationInvocation::Remote(second.clone());
+    removed_intent.source = StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(22)));
     let entry = |record| OplogEntry::StreamSession {
         timestamp: Timestamp::now_utc(),
         entity_parent_start_index: None,
@@ -2599,6 +2604,7 @@ async fn cold_recompute_downloads_uncached_external_stream_session_payload() {
     .unwrap();
     let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
         format_version: 1,
+        session_key: session_key.idempotency_key.clone(),
         attempt: StartAttemptDescriptor {
             format_version: 1,
             session_key: session_key.clone(),

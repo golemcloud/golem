@@ -77,7 +77,7 @@ impl DurableStreamStore {
         if index
             .registrations
             .get(&handle.stream_id)
-            .is_some_and(|record| &record.handle == handle)
+            .is_some_and(|record| record.accepts(handle, self.generation()))
         {
             Ok(())
         } else {

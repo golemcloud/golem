@@ -20,7 +20,7 @@ use crate::durable_host::durable_stream::{
 use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_common::model::durable_stream::{
     DurableStreamHandle, DurableStreamReadRequest, ExternalProducerId, StreamHandleReadRequest,
-    StreamItemsPayload, StreamOffset, StreamSessionKey,
+    StreamItemsPayload, StreamOffset, StreamRegistrationInvocation, StreamSessionKey,
 };
 use golem_common::model::invocation_session_public::validate_durable_stream_session_id;
 use golem_common::schema::{
@@ -472,8 +472,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let source = if status.tombstoned_slots.contains(name) {
             SlotSource::Tombstoned
         } else if schema.writable {
+            let mappings = self
+                .durable_stream_producer()
+                .await?
+                .materialize_bindings(&prepared.stream_mappings)
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
             SlotSource::Stream(
-                schema.extract_handle(&descriptor.invocation_value, &descriptor.stream_handles)?,
+                schema.extract_handle(
+                    &descriptor.invocation_value,
+                    &mappings
+                        .into_iter()
+                        .map(|mapping| mapping.handle)
+                        .collect::<Vec<_>>(),
+                )?,
             )
         } else if let Some(result_index) = status.invocation_result {
             let StreamSessionRecord::InvocationResult(result) =
@@ -484,7 +496,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ));
             };
             if schema.is_stream {
-                SlotSource::Stream(schema.extract_handle(&result.result, &result.output_streams)?)
+                let mappings = self
+                    .durable_stream_producer()
+                    .await?
+                    .materialize_bindings(&result.stream_mappings)
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                SlotSource::Stream(
+                    schema.extract_handle(
+                        &result.result,
+                        &mappings
+                            .into_iter()
+                            .map(|mapping| mapping.handle)
+                            .collect::<Vec<_>>(),
+                    )?,
+                )
             } else {
                 SlotSource::Value {
                     encoded: result.result,
@@ -514,7 +540,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             SchemaType::U8 { .. }
         ) && schema.is_stream;
         Ok(Some(Slot {
-            session: prepared.attempt.session_key,
+            session: StreamRegistrationInvocation::Local(prepared.session_key).qualify(
+                self.owned_agent_id.environment_id,
+                &self.owned_agent_id.agent_id,
+                self.initial_worker_metadata.fingerprint,
+            ),
             name: name.to_owned(),
             slots,
             graph: SchemaGraph {
@@ -715,20 +745,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Ok(ExportStreamControlResult::NotFound);
         }
         let producer = self.durable_stream_producer().await?;
-        let streams = StreamSession::new(
+        let streams = StreamSession::open(
             producer.clone(),
             self.oplog.clone(),
-            prepared.attempt.session_key.clone(),
+            StreamRegistrationInvocation::Local(prepared.session_key.clone()),
             prepared.stream_mappings.iter().cloned(),
         )
+        .await
+        .map_err(WorkerExecutorError::runtime)?
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         if let Some(name) = request.slot {
             let worker = self.clone();
+            let session_key = streams.session_key.clone();
             producer
                 .run_admitted(None, 0, true, move |owner, admission| async move {
-                    let lock = owner.session_lock(&prepared.attempt.session_key);
+                    let lock = owner.session_lock(&session_key);
                     let guard = lock.lock_owned().await;
                     let Some(slot) = worker
                         .resolve_stream_slot(
@@ -813,7 +846,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             external_producer.as_ref(),
         );
         let worker = self.clone();
-        let session_key = prepared.attempt.session_key;
+        let session_key =
+            producer.qualify_session(&StreamRegistrationInvocation::Local(prepared.session_key));
         let result = producer
             .run_admitted(
                 None,
@@ -1041,6 +1075,7 @@ mod tests {
             producer_environment_id: environment,
             producer: id,
             expected_producer_fingerprint: fingerprint,
+            producer_generation: OplogIndex::NONE,
             source_invocation: source,
             component_revision: golem_common::model::component::ComponentRevision::INITIAL,
             element_schema_fingerprint: golem_schema::schema::SchemaFingerprintV1([0; 32]),

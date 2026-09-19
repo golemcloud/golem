@@ -574,9 +574,7 @@ pub(crate) async fn creation_record(
                     .await
                     .map_err(WorkerExecutorError::runtime)?;
                 if let StreamSessionRecord::ForkCut(cut) = record
-                    && cut.target == target.agent_id
-                    && cut.target_environment_id == target.environment_id
-                    && cut.target_fingerprint.0 == *instance_id
+                    && cut.creation_fingerprint.0 == *instance_id
                     && cut.revert.is_none()
                 {
                     return Ok(Some(cut));

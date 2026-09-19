@@ -273,15 +273,17 @@ pub(crate) async fn streaming_acceptance_spans_cut(
     let left = oplog.read(cut).await;
     let right = oplog.read(cut.next()).await;
     match (left, right) {
-        (OplogEntry::StreamRegistered { record, .. }, _) => {
-            let registration = oplog.download_payload(record).await?;
+        (OplogEntry::StreamRegistered { .. }, _) => {
             for index in OplogIndexRange::new(cut.next(), horizon) {
                 match oplog.read(index).await {
                     OplogEntry::StreamRegistered { .. } => continue,
                     OplogEntry::StreamSession { record, .. } => {
                         return Ok(matches!(oplog.download_payload(record).await?,
-                            StreamSessionRecord::Prepared(prepared)
-                                if prepared.stream_mappings.iter().any(|mapping| mapping.handle == registration.handle)));
+                        StreamSessionRecord::Prepared(prepared)
+                            if prepared.stream_mappings.iter().any(|mapping|
+                                matches!(mapping.source,
+                                    golem_common::model::durable_stream::StreamRecordReference::Local(id)
+                                        if id.0 == cut))));
                     }
                     _ => return Ok(false),
                 }
@@ -302,7 +304,7 @@ pub(crate) async fn streaming_acceptance_spans_cut(
             OplogEntry::StreamSession { record, .. },
         ) => Ok(matches!(oplog.download_payload(record).await?,
                 StreamSessionRecord::Attached(attached) if attached.pending_invocation_oplog_index == cut
-                    && attached.session_key.idempotency_key == idempotency_key)),
+                    && attached.session_key == idempotency_key)),
         (
             OplogEntry::StreamSession { record: left, .. },
             OplogEntry::StreamSession { record: right, .. },
@@ -313,7 +315,9 @@ pub(crate) async fn streaming_acceptance_spans_cut(
                 return Ok(false);
             };
             Ok(match oplog.download_payload(left).await? {
-                StreamSessionRecord::Attached(left) => left.session_key == right.session_key,
+                StreamSessionRecord::Attached(left) => {
+                    left.session_key == right.session_key.idempotency_key
+                }
                 StreamSessionRecord::TopologyPrepared(left) => {
                     left.session_key == right.session_key
                 }

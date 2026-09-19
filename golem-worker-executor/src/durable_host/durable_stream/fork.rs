@@ -8,16 +8,15 @@
 
 use super::{DurableStreamStore, ProducerStreamIndex, StreamStoreError};
 use crate::services::oplog::{Oplog, OplogOps};
-use crate::services::worker_fork::lineage::{StreamForkLineage, continuation_stream_id};
+use crate::services::worker_fork::lineage::StreamForkLineage;
 use golem_common::base_model::durable_stream::{
-    AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle,
-    StreamForkCutRecord, StreamForkSessionMapping, StreamForkStreamMapping, StreamId, StreamOffset,
-    StreamRegistrationCoordinate, StreamSessionKey, StreamSessionRecord,
+    DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle, LocalStreamId, StreamForkCutRecord,
+    StreamId, StreamOffset, StreamRegistrationCoordinate, StreamSessionKey, StreamSessionRecord,
 };
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentFingerprint, OplogIndex, OwnedAgentId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 impl DurableStreamStore {
     pub(crate) async fn export_fork_snapshot(
@@ -114,15 +113,11 @@ impl DurableStreamStore {
                 "cut splits a streaming invocation acceptance batch".into(),
             ));
         }
-        let (author, fingerprint) = lineage
-            .historical_author_at(oplog, cut_index, horizon, source.0, source.1)
-            .await
-            .map_err(StreamStoreError::CorruptHistory)?;
         let mut index = Self::read_complete_index(
             oplog,
-            author.environment_id,
-            &author.agent_id,
-            fingerprint,
+            source.0.environment_id,
+            &source.0.agent_id,
+            source.1,
             cut_index,
         )
         .await?;
@@ -131,23 +126,16 @@ impl DurableStreamStore {
                 index
                     .registrations
                     .values()
-                    .find(|registration| {
-                        lineage.continuation_handle(&registration.handle).stream_id == id
-                    })
-                    .map(|registration| registration.handle.stream_id)
+                    .find(|registration| registration.handle.stream_id == id)
+                    .map(|registration| LocalStreamId(registration.registration_oplog_index))
                     .ok_or(StreamStoreError::UnknownStream(id))
             })
             .transpose()?;
-        let mut record = StreamForkCutRecord {
+        let record = StreamForkCutRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             request_hash: request_hash.to_vec(),
+            creation_fingerprint: target.1,
             export: None,
-            source_environment_id: author.environment_id,
-            source: author.agent_id.clone(),
-            source_fingerprint: fingerprint,
-            target_environment_id: target.0.environment_id,
-            target: target.0.agent_id.clone(),
-            target_fingerprint: target.1,
             cut_index,
             revert: revert.then_some(OplogRegion {
                 start: cut_index.next(),
@@ -170,94 +158,13 @@ impl DurableStreamStore {
             },
             selected_stream_id,
             retained_through: selected.and_then(|(_, offset)| offset),
-            streams: vec![],
-            sessions: vec![],
         };
-        for source in index
-            .session_entity_parent_start_indices
-            .keys()
-            .filter(|key| {
-                key.callee_environment_id == author.environment_id
-                    && key.callee == author.agent_id
-                    && key.callee_fingerprint == fingerprint
-            })
-        {
-            let mut continuation = source.clone();
-            continuation.callee_environment_id = target.0.environment_id;
-            continuation.callee = target.0.agent_id.clone();
-            continuation.callee_fingerprint = target.1;
-            record.sessions.push(StreamForkSessionMapping {
-                source: source.clone(),
-                continuation,
-                continuation_attempt_id: AttemptId::fresh(),
-            });
-        }
-        record.sessions.sort_by(|a, b| {
-            a.source
-                .idempotency_key
-                .value
-                .cmp(&b.source.idempotency_key.value)
-        });
-        let mut handles: HashMap<_, _> = index
-            .fork_lineage
-            .cuts()
-            .last()
-            .map(|(_, cut)| {
-                cut.streams
-                    .iter()
-                    .map(|mapping| (mapping.continuation.stream_id, mapping.continuation.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        for registration in index.registrations.values() {
-            handles.insert(registration.handle.stream_id, registration.handle.clone());
-        }
-        for source in handles.values() {
-            let mut continuation = source.clone();
-            continuation.stream_id = continuation_stream_id(&record, source.stream_id)
-                .map_err(StreamStoreError::CorruptHistory)?;
-            continuation.producer_environment_id = target.0.environment_id;
-            continuation.producer = target.0.agent_id.clone();
-            continuation.expected_producer_fingerprint = target.1;
-            if let Some(session) = record
-                .sessions
-                .iter()
-                .find(|mapping| mapping.source == source.source_invocation)
-            {
-                continuation.source_invocation = session.continuation.clone();
-            }
-            record.streams.push(StreamForkStreamMapping {
-                source: source.clone(),
-                continuation,
-            });
-        }
-        record
-            .streams
-            .sort_by_key(|mapping| mapping.source.stream_id.0);
         let retained_items = index.resolve_fork_prefix(&record)?;
         index.apply_fork_cut(&record, retained_items)?;
         StreamForkLineage::validate_fork_cut(oplog, record.clone())
             .await
             .map_err(StreamStoreError::CorruptHistory)?;
         Ok(record)
-    }
-
-    pub(crate) async fn initial_session_epoch(
-        &self,
-        key: &StreamSessionKey,
-    ) -> Result<u64, StreamStoreError> {
-        let floor = self.attachment_epoch_floor();
-        if self.fork_lineage.cuts().last().is_some_and(|(_, cut)| {
-            cut.sessions
-                .iter()
-                .any(|mapping| &mapping.continuation == key)
-        }) {
-            floor
-                .checked_add(1)
-                .ok_or(StreamStoreError::CounterOverflow)
-        } else {
-            Ok(floor)
-        }
     }
 
     pub(crate) fn attachment_epoch_floor(&self) -> u64 {
@@ -334,6 +241,7 @@ impl ProducerStreamIndex {
             )),
             (Some(_), None) => Ok(Some(0)),
             (Some(selected), Some(offset)) => {
+                let selected = self.runtime_stream_id(selected)?;
                 let (first, count) = self
                     .batch_positions
                     .get(&(selected, offset.producer_oplog_index()))
@@ -365,14 +273,11 @@ impl ProducerStreamIndex {
         record: &StreamForkCutRecord,
         selected_prefix_items: Option<u64>,
     ) -> Result<ForkCutChanges, StreamStoreError> {
-        if let Some(selected) = record.selected_stream_id
-            && !self.registrations.contains_key(&selected)
-        {
-            return Err(StreamStoreError::CorruptHistory(
-                "fork selected stream has no active registration at its cut".into(),
-            ));
-        }
-        if record.selected_stream_id.is_some_and(|selected| {
+        let selected = record
+            .selected_stream_id
+            .map(|selected| self.runtime_stream_id(selected))
+            .transpose()?;
+        if selected.is_some_and(|selected| {
             self.finished_sessions
                 .contains(&self.stream_sessions[&selected])
         }) {
@@ -380,18 +285,7 @@ impl ProducerStreamIndex {
                 "selected stream cut retains its owning session completion".into(),
             ));
         }
-        let stream_map: HashMap<_, _> = record
-            .streams
-            .iter()
-            .map(|mapping| (mapping.source.stream_id, mapping.continuation.clone()))
-            .collect();
-        let session_map: HashMap<_, _> = record
-            .sessions
-            .iter()
-            .map(|mapping| (mapping.source.clone(), mapping.continuation.clone()))
-            .collect();
-
-        let selected_prefix_items = match (record.selected_stream_id, selected_prefix_items) {
+        let selected_prefix_items = match (selected, selected_prefix_items) {
             (Some(_), Some(count)) => Some(count),
             (None, None) => None,
             _ => {
@@ -420,7 +314,7 @@ impl ProducerStreamIndex {
                             ..
                         } => {
                             !retained.contains(&parent_stream_id)
-                                || (record.selected_stream_id == Some(parent_stream_id)
+                                || (selected == Some(parent_stream_id)
                                     && parent_producer_sequence
                                         >= selected_prefix_items
                                             .expect("selected stream has a prefix"))
@@ -433,71 +327,18 @@ impl ProducerStreamIndex {
             }
             retained.retain(|stream_id| !discarded.contains(stream_id));
         }
-        retained.retain(|id| stream_map.contains_key(id));
-
         let old_streams: HashSet<_> = self.registrations.keys().copied().collect();
-        let old_sessions: HashSet<_> = self
-            .session_entity_parent_start_indices
-            .keys()
-            .cloned()
-            .collect();
-        let remap_session = |key: &StreamSessionKey| session_map.get(key).unwrap_or(key).clone();
-        let remap_handle = |handle: &DurableStreamHandle| {
-            if old_streams.contains(&handle.stream_id) && !retained.contains(&handle.stream_id) {
-                None
-            } else {
-                Some(stream_map.get(&handle.stream_id).unwrap_or(handle).clone())
-            }
-        };
+        self.registrations.retain(|id, _| retained.contains(id));
+        self.entity_parent_start_indices
+            .retain(|id, _| retained.contains(id));
+        self.streams.retain(|id, _| retained.contains(id));
+        self.stream_sessions.retain(|id, _| retained.contains(id));
+        self.stream_roles.retain(|id, _| retained.contains(id));
+        self.coordinates.retain(|_, id| retained.contains(id));
+        self.local_stream_ids.retain(|_, id| retained.contains(id));
 
-        let mut registrations = HashMap::new();
-        let mut entity_parents = HashMap::new();
-        let mut streams = HashMap::new();
-        let mut stream_sessions = HashMap::new();
-        let mut stream_roles = HashMap::new();
-        let mut coordinates = HashMap::new();
-        for source_id in retained.iter().copied() {
-            let continuation = stream_map[&source_id].clone();
-            let continuation_id = continuation.stream_id;
-            let mut registration = self.registrations[&source_id].clone();
-            registration.handle = continuation.clone();
-            if let Some(mapping) = &mut registration.session_mapping {
-                mapping.session_key = remap_session(&mapping.session_key);
-                mapping.attachment_id = AttachmentId::primary(
-                    mapping.session_key.callee_environment_id,
-                    &mapping.session_key.callee,
-                    &mapping.session_key.idempotency_key,
-                )
-                .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?;
-            }
-            registration.coordinate = match registration.coordinate {
-                StreamRegistrationCoordinate::Root {
-                    invocation_id,
-                    root_kind,
-                    recursive_value_path,
-                } => StreamRegistrationCoordinate::Root {
-                    invocation_id: session_map
-                        .get(&invocation_id)
-                        .cloned()
-                        .unwrap_or(invocation_id),
-                    root_kind,
-                    recursive_value_path,
-                },
-                StreamRegistrationCoordinate::Nested {
-                    parent_stream_id,
-                    parent_producer_sequence,
-                    recursive_value_path,
-                } => StreamRegistrationCoordinate::Nested {
-                    parent_stream_id: stream_map[&parent_stream_id].stream_id,
-                    parent_producer_sequence,
-                    recursive_value_path,
-                },
-            };
-            let mut state = self.streams[&source_id].clone();
-            if let Some(event) = &mut state.terminal_event {
-                event.stream_id = continuation_id;
-            }
-            if record.selected_stream_id == Some(source_id) {
+        if let Some(selected) = selected {
+            if let Some(state) = self.streams.get_mut(&selected) {
                 let count = selected_prefix_items.expect("selected stream has a prefix");
                 state.next_sequence = count;
                 state.batches.retain(|first, _| *first < count);
@@ -509,61 +350,7 @@ impl ProducerStreamIndex {
                 state.last_offset = record.retained_through;
                 state.last_item_offset = record.retained_through;
             }
-            let source_session = &self.stream_sessions[&source_id];
-            let continuation_session = session_map
-                .get(source_session)
-                .cloned()
-                .unwrap_or_else(|| source_session.clone());
-            coordinates.insert(registration.coordinate.clone(), continuation_id);
-            registrations.insert(continuation_id, registration);
-            entity_parents.insert(
-                continuation_id,
-                self.entity_parent_start_indices[&source_id],
-            );
-            streams.insert(continuation_id, state);
-            stream_sessions.insert(continuation_id, continuation_session);
-            stream_roles.insert(continuation_id, self.stream_roles[&source_id]);
-            self.fork_aliases.insert(source_id, continuation);
         }
-
-        self.registrations = registrations;
-        self.entity_parent_start_indices = entity_parents;
-        self.streams = streams;
-        self.stream_sessions = stream_sessions;
-        self.stream_roles = stream_roles;
-        self.coordinates = coordinates;
-
-        self.referenced_handles = self
-            .referenced_handles
-            .iter()
-            .filter_map(|(_, (handle, sessions))| {
-                let handle = remap_handle(handle)?;
-                let sessions = sessions.iter().map(&remap_session).collect();
-                Some((handle.stream_id, (handle, sessions)))
-            })
-            .collect();
-        self.session_stream_mappings = self
-            .session_stream_mappings
-            .iter()
-            .map(|(session, mappings)| {
-                let session = remap_session(session);
-                let mappings = mappings
-                    .iter()
-                    .filter_map(|(handle, role)| remap_handle(handle).map(|handle| (handle, *role)))
-                    .collect::<HashSet<_>>();
-                (session, mappings)
-            })
-            .collect();
-        self.session_stream_counts = self
-            .session_stream_mappings
-            .iter()
-            .map(|(key, mappings)| (key.clone(), mappings.len()))
-            .collect();
-        self.session_entity_parent_start_indices = self
-            .session_entity_parent_start_indices
-            .iter()
-            .map(|(key, value)| (remap_session(key), *value))
-            .collect();
         self.open_session_streams.clear();
         self.open_streams = 0;
         for (stream_id, state) in &self.streams {
@@ -575,46 +362,7 @@ impl ProducerStreamIndex {
                     .insert(*stream_id);
             }
         }
-        self.invocation_results = self
-            .invocation_results
-            .iter()
-            .map(|(key, value)| (remap_session(key), *value))
-            .collect();
-        self.finished_sessions = self.finished_sessions.iter().map(&remap_session).collect();
-        self.consumer_journals = self
-            .consumer_journals
-            .iter()
-            .filter_map(|((session, stream), journal)| {
-                if old_streams.contains(stream) && !retained.contains(stream) {
-                    return None;
-                }
-                Some((
-                    (
-                        remap_session(session),
-                        stream_map
-                            .get(stream)
-                            .map_or(*stream, |handle| handle.stream_id),
-                    ),
-                    journal.clone(),
-                ))
-            })
-            .collect();
-        self.session_consumer_streams.clear();
-        for (session, stream) in self.consumer_journals.keys() {
-            self.session_consumer_streams
-                .entry(session.clone())
-                .or_default()
-                .insert(*stream);
-        }
-        for journal in self.consumer_journals.values_mut() {
-            let Some((key, _)) = &mut journal.source_unavailable else {
-                continue;
-            };
-            crate::services::worker_fork::lineage::project_attachment_key(record, key)
-                .map_err(StreamStoreError::CorruptHistory)?;
-        }
-
-        // Fork continuations begin detached and with no inherited remote producer or deletion state.
+        // A retained prefix begins detached and with no inherited live producer or deletion state.
         self.attachments.clear();
         self.active_attachments_by_session_stream.clear();
         self.active_attachment_count = 0;
@@ -630,34 +378,26 @@ impl ProducerStreamIndex {
             .batch_positions
             .iter()
             .filter_map(|((stream, index), value)| {
-                let continuation = stream_map.get(stream)?;
                 if !retained.contains(stream) {
                     return None;
                 }
                 let mut value = *value;
-                if record.selected_stream_id == Some(*stream) {
+                if selected == Some(*stream) {
                     let retained = selected_prefix_items.expect("selected stream has a prefix");
                     value.1 = value.1.min(retained.saturating_sub(value.0));
                     if value.1 == 0 {
                         return None;
                     }
                 }
-                Some(((continuation.stream_id, *index), value))
+                Some(((*stream, *index), value))
             })
             .collect();
 
         Ok(ForkCutChanges {
             changed_streams: self.registrations.keys().copied().collect(),
-            retired_streams: old_streams,
-            changed_sessions: self
-                .session_entity_parent_start_indices
-                .keys()
-                .cloned()
-                .collect(),
-            retired_sessions: old_sessions
-                .into_iter()
-                .filter(|key| !self.session_entity_parent_start_indices.contains_key(key))
-                .collect(),
+            retired_streams: old_streams.difference(&retained).copied().collect(),
+            changed_sessions: HashSet::new(),
+            retired_sessions: HashSet::new(),
         })
     }
 }
@@ -665,22 +405,25 @@ impl ProducerStreamIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::durable_host::durable_stream::registration::registration_record;
+    use crate::durable_host::durable_stream::registration::{
+        registered_stream, registration_record,
+    };
     use crate::durable_host::durable_stream::{
         CommittedProducerStreamEventPayload, IndexedExternalProducer, ProducerRegistrationRequest,
+        RegisteredStream,
         tests::{attachment_key, identity},
     };
-    use crate::services::worker_fork::lineage::{StreamForkLineage, continuation_stream_id};
+    use crate::services::worker_fork::lineage::StreamForkLineage;
     use golem_common::base_model::durable_stream::{
-        AttemptId, DURABLE_STREAM_FORMAT_VERSION, SessionStreamRole, StreamEndRecord,
-        StreamEndResult, StreamForkSessionMapping, StreamForkStreamMapping, StreamItemsPayload,
-        StreamItemsRecord, StreamRootKind, StreamSessionFinishedRecord, StreamSessionMapping,
-        StreamSourceKind, StreamTerminalAuthor,
+        AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, LocalStreamId, LocalStreamReaderId,
+        SessionStreamRole, StreamEndRecord, StreamEndResult, StreamItemsPayload, StreamItemsRecord,
+        StreamRecordReference, StreamRegistrationInvocation, StreamRootKind,
+        StreamSessionFinishedRecord, StreamSessionMapping, StreamSourceKind, StreamTerminalAuthor,
     };
     use golem_common::base_model::durable_stream::{
         ExternalProducerId, StreamAttachmentActivatedRecord, StreamAttachmentPreparedRecord,
-        StreamCascadeDependentResult, StreamConsumerItemValueRecord, StreamConsumerTerminal,
-        StreamConsumerTerminalRecord, StreamOffset, StreamSessionMappingRecord,
+        StreamBindingRecord, StreamCascadeDependentResult, StreamConsumerItemValueRecord,
+        StreamConsumerTerminal, StreamConsumerTerminalRecord, StreamOffset,
         StreamSessionMappingUpdateRecord, StreamSessionRecord, StreamSourceUnavailableRecord,
     };
     use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
@@ -688,7 +431,6 @@ mod tests {
     use test_r::test;
     use uuid::Uuid;
 
-    // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
     #[test]
     async fn complete_revert_fold_retains_jump_items_and_discards_suffix_streams() {
         use crate::durable_host::durable_stream::tests::TestOplog;
@@ -721,6 +463,7 @@ mod tests {
             .await
             .unwrap()
             .value;
+        let root_local_id = LocalStreamId(oplog.current_oplog_index().await);
         let retained = producer
             .write_items(
                 None,
@@ -755,6 +498,7 @@ mod tests {
             .await
             .unwrap()
             .value;
+        let removed_local_id = LocalStreamId(oplog.current_oplog_index().await);
         let end = oplog.current_oplog_index().await;
         let cut = DurableStreamStore::prepare_fork_cut(
             oplog.as_ref(),
@@ -772,11 +516,10 @@ mod tests {
             start: cut_index.next(),
             end,
         };
-        let continuation = cut.streams[0].continuation.clone();
         let marker =
             DurableStreamOplogRecord::Session(None, Box::new(StreamSessionRecord::ForkCut(cut)))
                 .into_inline_entry();
-        oplog
+        let (_, marker_index) = oplog
             .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
             .await;
         let rebuilt = DurableStreamStore::load(
@@ -788,10 +531,31 @@ mod tests {
         )
         .await
         .unwrap();
+        let continuation = rebuilt
+            .materialize_binding(&StreamBindingRecord {
+                transport_stream_id: 0,
+                source: StreamRecordReference::Local(root_local_id),
+                role: SessionStreamRole::Output,
+            })
+            .await
+            .unwrap()
+            .handle;
+        assert_eq!(continuation.producer_generation, marker_index);
         let head = rebuilt.stream_head(&continuation).await.unwrap();
         assert_eq!(head.offset, retained.last().copied());
         assert!(!head.closed);
         assert!(!head.cancelled);
+        assert!(rebuilt.stream_head(&root).await.is_err());
+        assert!(
+            rebuilt
+                .materialize_binding(&StreamBindingRecord {
+                    transport_stream_id: 1,
+                    source: StreamRecordReference::Local(removed_local_id),
+                    role: SessionStreamRole::Output,
+                })
+                .await
+                .is_err()
+        );
         assert!(rebuilt.stream_head(&removed).await.is_err());
         let appended = rebuilt
             .write_items(
@@ -817,7 +581,16 @@ mod tests {
         use golem_common::model::{oplog::OplogEntry, regions::OplogRegion};
         use std::sync::Arc;
 
-        let key = attachment_key(&identity(), StreamId(Uuid::new_v4()));
+        let source_identity = identity();
+        let handle = registered_stream(
+            OplogIndex::from_u64(50),
+            source_identity.environment_id,
+            source_identity.agent_id.clone(),
+            source_identity.fingerprint,
+            super_registration(&source_identity.invocation, 0),
+        )
+        .handle;
+        let key = attachment_key(&source_identity, handle.stream_id);
         let owner = OwnedAgentId::new(key.consumer_environment_id, &key.consumer);
         let fingerprint = key.expected_consumer_fingerprint;
         let oplog = Arc::new(TestOplog::default());
@@ -837,16 +610,38 @@ mod tests {
             )
             .await
             .unwrap();
+        consumer
+            .append_session_record(
+                None,
+                StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: StreamRegistrationInvocation::Local(
+                        key.session_key.idempotency_key.clone(),
+                    ),
+                    mapping: StreamBindingRecord {
+                        transport_stream_id: 0,
+                        source: StreamRecordReference::Foreign(handle),
+                        role: SessionStreamRole::Input,
+                    },
+                }),
+            )
+            .await
+            .unwrap();
+        let reader_id = LocalStreamReaderId {
+            introducing_oplog_index: oplog.current_oplog_index().await,
+            binding_slot: 0,
+        };
         let record = |ordinal, value| {
             StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
                 format_version: 1,
-                session_key: key.session_key.clone(),
-                stream_id: key.stream_id,
+                session_key: StreamRegistrationInvocation::Local(
+                    key.session_key.idempotency_key.clone(),
+                ),
+                reader_id,
                 source_offset: StreamOffset::new(OplogIndex::from_u64(50), ordinal as u32),
                 consumer_read_ordinal: ordinal,
                 value,
                 packed_u8: true,
-                recursive_handles: vec![],
                 recursive_mappings: vec![],
             })
         };
@@ -894,20 +689,20 @@ mod tests {
         let next = StreamOffset::new(OplogIndex::from_u64(50), 2);
         assert!(
             !rebuilt
-                .commit_source_unavailable_overlay(None, key.clone(), next, 2)
+                .commit_source_unavailable_overlay(None, key.clone(), reader_id, next, 2)
                 .await
                 .unwrap()
         );
         assert!(
             rebuilt
-                .commit_source_unavailable_overlay(None, key, next, 2)
+                .commit_source_unavailable_overlay(None, key, reader_id, next, 2)
                 .await
                 .unwrap()
         );
     }
 
     #[test]
-    async fn fork_marker_preparation_retains_discarded_child_provenance_and_prevalidates() {
+    async fn fork_marker_preparation_discards_nested_suffix_and_prevalidates() {
         use crate::durable_host::durable_stream::tests::TestOplog;
         use crate::services::worker_fork::lineage::tests::prepared;
         use golem_common::model::{
@@ -940,6 +735,7 @@ mod tests {
             .await
             .unwrap()
             .value;
+        let root_local_id = LocalStreamId(oplog.current_oplog_index().await);
         let retained = producer
             .write_items(
                 None,
@@ -993,18 +789,8 @@ mod tests {
             )
             .await
             .unwrap();
-            assert_eq!(
-                cut.streams.len(),
-                2,
-                "discarded child still has lineage provenance"
-            );
-            let continued_root = cut
-                .streams
-                .iter()
-                .find(|mapping| mapping.source.stream_id == selected.unwrap().0)
-                .unwrap()
-                .continuation
-                .clone();
+            assert_eq!(cut.creation_fingerprint, target_fingerprint);
+            assert_eq!(cut.selected_stream_id, Some(root_local_id));
             let copied = Arc::new(TestOplog::default());
             for (_, entry) in history
                 .read_exact(OplogIndex::INITIAL, horizon.as_u64())
@@ -1028,10 +814,25 @@ mod tests {
             )
             .await
             .unwrap();
+            let continued_root = RegisteredStream::resolve(
+                rebuilt
+                    .registrations
+                    .values()
+                    .next()
+                    .unwrap()
+                    .record
+                    .clone(),
+                root_local_id.0,
+                target.environment_id,
+                &target.agent_id,
+                target_fingerprint,
+            )
+            .unwrap()
+            .issue(copied.current_oplog_index().await);
             assert_eq!(
                 rebuilt.registrations.len(),
                 1,
-                "discarded child must not regain authority"
+                "the nested stream introduced by the discarded item must not regain authority"
             );
             assert_eq!(rebuilt.streams[&continued_root.stream_id].next_sequence, 1);
             for invalid in [
@@ -1062,7 +863,7 @@ mod tests {
     }
 
     #[test]
-    async fn fork_marker_preparation_uses_exact_prefix_and_historical_author() {
+    async fn fork_marker_preparation_uses_exact_prefix_and_owner_relative_ids() {
         use crate::durable_host::durable_stream::tests::TestOplog;
         use crate::services::worker_fork::lineage::tests::prepared;
         use golem_common::model::Timestamp;
@@ -1093,6 +894,7 @@ mod tests {
             .await
             .unwrap()
             .value;
+        let root_local_id = LocalStreamId(oplog.current_oplog_index().await);
         let first = producer
             .write_items(
                 None,
@@ -1147,12 +949,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(cut.source, source.agent_id);
-        assert_eq!(cut.streams.len(), 1);
-        assert_eq!(cut.streams[0].source, root);
-        assert_eq!(cut.sessions.len(), 1);
-        assert_eq!(cut.sessions[0].source, identity.invocation);
-        let continuation = cut.streams[0].continuation.clone();
+        assert_eq!(cut.creation_fingerprint, fingerprint);
         let copied = Arc::new(TestOplog::default());
         for (_, entry) in oplog
             .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
@@ -1176,6 +973,15 @@ mod tests {
         )
         .await
         .unwrap();
+        let continuation = forked
+            .materialize_binding(&StreamBindingRecord {
+                transport_stream_id: 0,
+                source: StreamRecordReference::Local(root_local_id),
+                role: SessionStreamRole::Output,
+            })
+            .await
+            .unwrap()
+            .handle;
         let head = forked.stream_head(&continuation).await.unwrap();
         assert_eq!(head.offset, first.last().copied());
         assert!(!head.closed);
@@ -1190,7 +996,7 @@ mod tests {
             2
         );
 
-        // Cutting before the parent's own marker retains the original author's identity.
+        // Cutting before the parent's own marker still resolves the retained local registration.
         let next = OwnedAgentId::new(
             identity.environment_id,
             &AgentId {
@@ -1211,15 +1017,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(before_marker.source, source.agent_id);
-        assert_eq!(before_marker.source_fingerprint, identity.fingerprint);
-        assert_eq!(before_marker.selected_stream_id, Some(root.stream_id));
+        assert_eq!(before_marker.creation_fingerprint, next_fingerprint);
+        assert_eq!(before_marker.selected_stream_id, Some(root_local_id));
         assert_eq!(before_marker.retained_through, first.first().copied());
-        assert_eq!(before_marker.sessions[0].source, identity.invocation);
-        assert_ne!(
-            before_marker.streams[0].continuation.stream_id,
-            continuation.stream_id
-        );
         let after_marker = DurableStreamStore::prepare_fork_cut(
             copied.as_ref(),
             (&target, fingerprint),
@@ -1232,16 +1032,15 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(after_marker.source, target.agent_id);
-        assert_eq!(after_marker.streams[0].source, continuation);
+        assert_eq!(after_marker.creation_fingerprint, next_fingerprint);
 
-        // Reverting before the original fork marker retains A's records in F's oplog.
+        // Reverting before the original fork marker retains the copied registration and items.
         use crate::services::oplog::DurableStreamOplogRecord;
         use golem_common::base_model::durable_stream::{
             ResumeAttemptDescriptor, StreamResumeOperation, StreamSessionResumeAttemptRecord,
         };
-        let session = after_marker.sessions[0].source.clone();
-        let mut previous_id = continuation.stream_id;
+        let session = identity.invocation.clone();
+        let mut previous_handle = continuation;
         for (accepted_epoch, expected_epoch) in [(37, 38), (40, 41)] {
             copied
                 .add(
@@ -1250,6 +1049,7 @@ mod tests {
                         Box::new(StreamSessionRecord::ResumeAttempt(
                             StreamSessionResumeAttemptRecord {
                                 format_version: DURABLE_STREAM_FORMAT_VERSION,
+                                session_key: session.idempotency_key.clone(),
                                 attempt: ResumeAttemptDescriptor {
                                     format_version: DURABLE_STREAM_FORMAT_VERSION,
                                     operation: StreamResumeOperation::Resume,
@@ -1287,19 +1087,15 @@ mod tests {
             )
             .await
             .unwrap();
-            assert_eq!(reverted.source, source.agent_id);
-            assert_eq!(reverted.target, target.agent_id);
+            assert_eq!(reverted.creation_fingerprint, fingerprint);
             assert_eq!(reverted.epoch_floor, expected_epoch);
-            let handle = reverted.streams[0].continuation.clone();
-            assert_ne!(handle.stream_id, previous_id);
-            previous_id = handle.stream_id;
             let region = reverted.revert.clone().unwrap();
             let marker = DurableStreamOplogRecord::Session(
                 None,
                 Box::new(StreamSessionRecord::ForkCut(reverted)),
             )
             .into_inline_entry();
-            copied
+            let (_, marker_index) = copied
                 .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
                 .await;
             let rebuilt = DurableStreamStore::load(
@@ -1311,6 +1107,19 @@ mod tests {
             )
             .await
             .unwrap();
+            let handle = rebuilt
+                .materialize_binding(&StreamBindingRecord {
+                    transport_stream_id: 0,
+                    source: StreamRecordReference::Local(root_local_id),
+                    role: SessionStreamRole::Output,
+                })
+                .await
+                .unwrap()
+                .handle;
+            assert_eq!(handle.stream_id, previous_handle.stream_id);
+            assert_eq!(handle.producer_generation, marker_index);
+            assert!(rebuilt.stream_head(&previous_handle).await.is_err());
+            previous_handle = handle.clone();
             let head = rebuilt.stream_head(&handle).await.unwrap();
             assert_eq!(head.offset, first.last().copied());
             assert!(!head.closed);
@@ -1382,8 +1191,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(historical.source, source.agent_id);
-        assert_eq!(historical.streams[0].source, root);
+        assert_eq!(historical.creation_fingerprint, next_fingerprint);
+        assert_eq!(historical.selected_stream_id, None);
 
         use golem_common::base_model::durable_stream::StreamSessionAttachedRecord;
         copied
@@ -1392,7 +1201,7 @@ mod tests {
                     None,
                     Box::new(StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        session_key: session.clone(),
+                        session_key: session.idempotency_key.clone(),
                         attachment_id: AttachmentId::primary(
                             target.environment_id,
                             &target.agent_id,
@@ -1441,7 +1250,7 @@ mod tests {
         let attached = |epoch| {
             StreamSessionRecord::Attached(StreamSessionAttachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: identity.invocation.clone(),
+                session_key: identity.invocation.idempotency_key.clone(),
                 attachment_id: AttachmentId::primary(
                     owner.environment_id,
                     &owner.agent_id,
@@ -1471,7 +1280,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(cut.sessions.is_empty());
         let region = cut.revert.clone().unwrap();
         let marker = entry(StreamSessionRecord::ForkCut(cut));
         oplog
@@ -1495,7 +1303,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(cut.sessions.len(), 1);
         assert_eq!(cut.epoch_floor, 7);
     }
 
@@ -1567,7 +1374,7 @@ mod tests {
             vec![],
             vec![],
         );
-        for expected_epoch in 1..=3 {
+        for round in 0..3 {
             let producer = DurableStreamStore::load(
                 oplog.clone(),
                 owner.environment_id,
@@ -1587,16 +1394,7 @@ mod tests {
                     pending.clone(),
                     committed,
                     move |bindings| {
-                        descriptor.attempt.invocation.stream_handles =
-                            bindings.iter().map(|(_, h)| h.clone()).collect();
-                        descriptor.stream_mappings = bindings
-                            .into_iter()
-                            .map(|(transport_stream_id, handle)| StreamSessionMappingRecord {
-                                transport_stream_id,
-                                handle,
-                                role: SessionStreamRole::Input,
-                            })
-                            .collect();
+                        descriptor.stream_mappings = bindings;
                         descriptor
                     },
                 )
@@ -1611,7 +1409,7 @@ mod tests {
             else {
                 panic!("missing Attached")
             };
-            assert_eq!(attached.epoch, expected_epoch);
+            assert_eq!(attached.epoch, 1 + round);
             for cut in (horizon.as_u64() - 5)..=horizon.as_u64() {
                 assert_eq!(
                     crate::worker::cut_point::streaming_acceptance_spans_cut(
@@ -1637,7 +1435,6 @@ mod tests {
             )
             .await
             .unwrap();
-            assert!(cut.sessions.is_empty());
             let region = cut.revert.clone().unwrap();
             let marker = crate::services::oplog::DurableStreamOplogRecord::Session(
                 None,
@@ -1651,7 +1448,7 @@ mod tests {
     }
 
     #[test]
-    async fn fork_after_bare_revert_uses_the_fixed_horizon_and_original_author() {
+    async fn fork_after_bare_revert_uses_the_fixed_horizon() {
         use crate::durable_host::durable_stream::tests::TestOplog;
         use crate::services::oplog::DurableStreamOplogRecord;
 
@@ -1685,7 +1482,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(cut.source, owner.agent_id);
+        assert_eq!(cut.creation_fingerprint, fingerprint);
         let cut = DurableStreamStore::prepare_fork_cut(
             &oplog,
             (&owner, identity.fingerprint),
@@ -1719,15 +1516,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(cut.source, owner.agent_id);
-        assert_eq!(cut.source_fingerprint, identity.fingerprint);
+        assert_eq!(cut.creation_fingerprint, identity.fingerprint);
     }
 
-    fn continuation_session(source: &StreamSessionKey, suffix: &str) -> StreamSessionKey {
-        let mut result = source.clone();
-        result.callee.agent_id = format!("fork-{suffix}");
-        result.callee_fingerprint = AgentFingerprint(Uuid::from_u128(300));
-        result
+    fn continuation_session(source: &StreamSessionKey, _suffix: &str) -> StreamSessionKey {
+        source.clone()
     }
 
     fn register(
@@ -1737,14 +1530,32 @@ mod tests {
     ) -> DurableStreamHandle {
         let identity = identity();
         let oplog_index = OplogIndex::from_u64(oplog_index);
+        let local_parent = match &request.coordinate {
+            StreamRegistrationCoordinate::Nested {
+                parent_stream_id, ..
+            } => Some((
+                *parent_stream_id,
+                index.local_stream_id(*parent_stream_id).unwrap(),
+            )),
+            _ => None,
+        };
         let record = registration_record(
             oplog_index,
             identity.environment_id,
             identity.agent_id.clone(),
             identity.fingerprint,
             request,
+            local_parent,
         );
-        let handle = record.handle.clone();
+        let handle = RegisteredStream::resolve(
+            record.clone(),
+            oplog_index,
+            identity.environment_id,
+            &identity.agent_id,
+            identity.fingerprint,
+        )
+        .unwrap()
+        .handle;
         index
             .apply_registration(
                 oplog_index,
@@ -1758,94 +1569,33 @@ mod tests {
         handle
     }
 
-    fn continuation(source: &DurableStreamHandle, suffix: &str) -> DurableStreamHandle {
-        let mut result = source.clone();
-        let target = AgentId {
-            component_id: source.producer.component_id,
-            agent_id: format!("fork-{suffix}"),
-        };
-        let mut cut = marker(Vec::new(), Vec::new(), None, None);
-        cut.target = target.clone();
-        result.stream_id = continuation_stream_id(&cut, source.stream_id).unwrap();
-        result.producer = target.clone();
-        result.expected_producer_fingerprint = AgentFingerprint(Uuid::from_u128(300));
-        if result.source_invocation.callee_environment_id == cut.source_environment_id
-            && result.source_invocation.callee == cut.source
-            && result.source_invocation.callee_fingerprint == cut.source_fingerprint
-        {
-            result.source_invocation.callee = target;
-            result.source_invocation.callee_fingerprint = cut.target_fingerprint;
-        }
-        result
+    fn continuation(source: &DurableStreamHandle, _suffix: &str) -> DurableStreamHandle {
+        source.clone()
     }
 
     fn validate_marker(index: &ProducerStreamIndex, record: &StreamForkCutRecord) {
-        let registrations = index
-            .registrations
-            .values()
-            .cloned()
-            .map(|registration| (registration.registration_oplog_index, registration))
-            .collect::<Vec<_>>();
-        let owner = OwnedAgentId::new(record.target_environment_id, &record.target);
-        StreamForkLineage::validate(
-            vec![(record.cut_index.next(), record.clone())],
-            &registrations,
-            &owner,
-            record.target_fingerprint,
-        )
-        .unwrap();
-        assert!(
-            record.sessions.iter().all(|mapping| mapping
-                .continuation_attempt_id
-                .0
-                .get_version_num()
-                == 4)
-        );
+        let _ = index;
+        crate::durable_host::durable_stream::session_state::SessionControlMetadata::default()
+            .for_fork(record)
+            .unwrap();
     }
 
     fn marker(
-        streams: Vec<(DurableStreamHandle, DurableStreamHandle)>,
-        sessions: Vec<(StreamSessionKey, StreamSessionKey)>,
-        selected: Option<StreamId>,
+        _streams: Vec<(DurableStreamHandle, DurableStreamHandle)>,
+        _sessions: Vec<(StreamSessionKey, StreamSessionKey)>,
+        selected: Option<LocalStreamId>,
         retained_through: Option<golem_common::base_model::durable_stream::StreamOffset>,
     ) -> StreamForkCutRecord {
-        let identity = identity();
         StreamForkCutRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             request_hash: vec![0; 32],
+            creation_fingerprint: AgentFingerprint(Uuid::from_u128(300)),
             export: None,
-            source_environment_id: identity.environment_id,
-            source: identity.agent_id.clone(),
-            source_fingerprint: identity.fingerprint,
-            target_environment_id: identity.environment_id,
-            target: sessions
-                .first()
-                .map(|(_, continuation)| continuation.callee.clone())
-                .unwrap_or_else(|| AgentId {
-                    component_id: identity.agent_id.component_id,
-                    agent_id: "fork-default".to_string(),
-                }),
-            target_fingerprint: AgentFingerprint(Uuid::from_u128(300)),
             cut_index: OplogIndex::from_u64(20),
             revert: None,
             epoch_floor: 1,
             selected_stream_id: selected,
             retained_through,
-            streams: streams
-                .into_iter()
-                .map(|(source, continuation)| StreamForkStreamMapping {
-                    source,
-                    continuation,
-                })
-                .collect(),
-            sessions: sessions
-                .into_iter()
-                .map(|(source, continuation)| StreamForkSessionMapping {
-                    source,
-                    continuation,
-                    continuation_attempt_id: AttemptId::fresh(),
-                })
-                .collect(),
         }
     }
 
@@ -1864,7 +1614,9 @@ mod tests {
                     root_kind: StreamRootKind::MethodResult,
                     recursive_value_path: Vec::new(),
                 },
-                source_invocation: source_session.clone(),
+                source_invocation: StreamRegistrationInvocation::Local(
+                    source_session.idempotency_key.clone(),
+                ),
                 entity_parent_start_index: None,
                 component_revision: golem_common::base_model::component::ComponentRevision::INITIAL,
                 element_schema_fingerprint: golem_schema::schema::SchemaFingerprintV1([7; 32]),
@@ -1887,8 +1639,7 @@ mod tests {
                 None,
                 StreamItemsRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    stream_id: root.stream_id,
-                    producer_fingerprint: identity.fingerprint,
+                    stream_id: LocalStreamId(OplogIndex::from_u64(2)),
                     first_sequence: 0,
                     nested_stream_ids: Vec::new(),
                     newly_registered_stream_ids: Vec::new(),
@@ -1902,7 +1653,7 @@ mod tests {
                         })
                         .collect(),
                 },
-                identity.fingerprint,
+                OplogIndex::NONE,
             )
             .unwrap();
         let child = register(
@@ -1914,7 +1665,9 @@ mod tests {
                     parent_producer_sequence: 3,
                     recursive_value_path: Vec::new(),
                 },
-                source_invocation: source_session.clone(),
+                source_invocation: StreamRegistrationInvocation::Local(
+                    source_session.idempotency_key.clone(),
+                ),
                 entity_parent_start_index: None,
                 component_revision: root.component_revision,
                 element_schema_fingerprint: root.element_schema_fingerprint,
@@ -1928,22 +1681,25 @@ mod tests {
                 None,
                 StreamItemsRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    stream_id: root.stream_id,
-                    producer_fingerprint: identity.fingerprint,
+                    stream_id: LocalStreamId(OplogIndex::from_u64(2)),
                     first_sequence: 3,
-                    nested_stream_ids: vec![child.stream_id],
-                    newly_registered_stream_ids: vec![child.stream_id],
+                    nested_stream_ids: vec![StreamRecordReference::Local(LocalStreamId(
+                        OplogIndex::from_u64(5),
+                    ))],
+                    newly_registered_stream_ids: vec![LocalStreamId(OplogIndex::from_u64(5))],
                     payload: StreamItemsPayload::Values(vec![vec![3]]),
                     offsets: vec![golem_common::base_model::durable_stream::StreamOffset::new(
                         OplogIndex::from_u64(6),
                         0,
                     )],
                 },
-                identity.fingerprint,
+                OplogIndex::NONE,
             )
             .unwrap();
-        for (oplog_index, stream_id, sequence) in [(7, root.stream_id, 4), (8, child.stream_id, 0)]
-        {
+        for (oplog_index, stream_id, sequence) in [
+            (7, LocalStreamId(OplogIndex::from_u64(2)), 4),
+            (8, LocalStreamId(OplogIndex::from_u64(5)), 0),
+        ] {
             let event = index
                 .apply_end(
                     OplogIndex::from_u64(oplog_index),
@@ -1951,7 +1707,6 @@ mod tests {
                     StreamEndRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
                         stream_id,
-                        producer_fingerprint: identity.fingerprint,
                         sequence,
                         offset: golem_common::base_model::durable_stream::StreamOffset::new(
                             OplogIndex::from_u64(oplog_index),
@@ -1963,15 +1718,27 @@ mod tests {
                     identity.fingerprint,
                 )
                 .unwrap();
-            index.streams.get_mut(&stream_id).unwrap().terminal_event = Some(event);
+            let runtime_stream_id = index.runtime_stream_id(stream_id).unwrap();
+            index
+                .streams
+                .get_mut(&runtime_stream_id)
+                .unwrap()
+                .terminal_event = Some(event);
         }
         let mut completed = index.clone();
         completed
-            .apply_finished(&StreamSessionFinishedRecord {
-                format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: source_session.clone(),
-                result: Ok(()),
-            })
+            .apply_finished(
+                &StreamSessionFinishedRecord {
+                    format_version: DURABLE_STREAM_FORMAT_VERSION,
+                    session_key: StreamRegistrationInvocation::Local(
+                        source_session.idempotency_key.clone(),
+                    ),
+                    result: Ok(()),
+                },
+                identity.environment_id,
+                &identity.agent_id,
+                identity.fingerprint,
+            )
             .unwrap();
         let root_next = continuation(&root, "fork");
         let child_next = continuation(&child, "fork");
@@ -1983,19 +1750,13 @@ mod tests {
                 (child, child_next.clone()),
             ],
             vec![(source_session, target_session.clone())],
-            Some(root.stream_id),
+            Some(index.local_stream_id(root.stream_id).unwrap()),
             Some(retained),
         );
         validate_marker(&index, &fork);
         assert!(completed.apply_fork_cut(&fork, Some(2)).is_err());
-        let original_registrations = index
-            .registrations
-            .values()
-            .cloned()
-            .map(|registration| (registration.registration_oplog_index, registration))
-            .collect::<Vec<_>>();
         index.apply_fork_cut(&fork, Some(2)).unwrap();
-        assert!(!index.registrations.contains_key(&root.stream_id));
+        assert!(index.registrations.contains_key(&root.stream_id));
         assert!(index.registrations.contains_key(&root_next.stream_id));
         assert!(!index.registrations.contains_key(&child_next.stream_id));
         assert_eq!(index.streams[&root_next.stream_id].next_sequence, 2);
@@ -2031,8 +1792,7 @@ mod tests {
                 None,
                 StreamItemsRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    stream_id: root_next.stream_id,
-                    producer_fingerprint: AgentFingerprint(Uuid::from_u128(300)),
+                    stream_id: LocalStreamId(OplogIndex::from_u64(2)),
                     first_sequence: 2,
                     nested_stream_ids: Vec::new(),
                     newly_registered_stream_ids: Vec::new(),
@@ -2042,69 +1802,14 @@ mod tests {
                         0,
                     )],
                 },
-                AgentFingerprint(Uuid::from_u128(300)),
+                OplogIndex::NONE,
             )
             .unwrap();
         assert_eq!(index.streams[&root_next.stream_id].next_sequence, 3);
-
-        // A discarded child's mapping is retained provenance, not selectable authority.
-        let mut second = fork.clone();
-        second.source = fork.target.clone();
-        second.source_fingerprint = fork.target_fingerprint;
-        second.target.agent_id = "second-fork".into();
-        second.target_fingerprint = AgentFingerprint(Uuid::from_u128(301));
-        second.cut_index = OplogIndex::from_u64(22);
-        second.selected_stream_id = Some(child_next.stream_id);
-        second.retained_through = None;
-        second.sessions = fork
-            .sessions
-            .iter()
-            .map(|mapping| {
-                let mut continuation = mapping.continuation.clone();
-                continuation.callee = second.target.clone();
-                continuation.callee_fingerprint = second.target_fingerprint;
-                StreamForkSessionMapping {
-                    source: mapping.continuation.clone(),
-                    continuation,
-                    continuation_attempt_id: AttemptId::fresh(),
-                }
-            })
-            .collect();
-        second.streams = fork
-            .streams
-            .iter()
-            .map(|mapping| {
-                let source = mapping.continuation.clone();
-                let mut continuation = source.clone();
-                continuation.stream_id = continuation_stream_id(&second, source.stream_id).unwrap();
-                continuation.producer = second.target.clone();
-                continuation.expected_producer_fingerprint = second.target_fingerprint;
-                continuation.source_invocation = second.sessions[0].continuation.clone();
-                StreamForkStreamMapping {
-                    source,
-                    continuation,
-                }
-            })
-            .collect();
-        StreamForkLineage::validate(
-            vec![
-                (fork.cut_index.next(), fork),
-                (second.cut_index.next(), second.clone()),
-            ],
-            &original_registrations,
-            &OwnedAgentId::new(second.target_environment_id, &second.target),
-            second.target_fingerprint,
-        )
-        .unwrap();
-        assert!(matches!(
-            index.apply_fork_cut(&second, Some(0)),
-            Err(StreamStoreError::CorruptHistory(_))
-        ));
-        assert!(index.registrations.contains_key(&root_next.stream_id));
     }
 
     #[test]
-    fn fork_cut_preserves_other_terminal_and_maps_output_only_session() {
+    fn fork_cut_preserves_unrelated_completed_stream_and_clears_live_state() {
         let identity = identity();
         let source_session = identity.invocation.clone();
         let target_session = continuation_session(&source_session, "fork-output-only");
@@ -2117,14 +1822,14 @@ mod tests {
         let first = register(&mut index, 5, super_registration(&source_session, 0));
         let second = register(&mut index, 6, super_registration(&source_session, 1));
         for (oplog_index, stream_id) in [(7, first.stream_id), (8, second.stream_id)] {
+            let local_stream_id = index.local_stream_id(stream_id).unwrap();
             let event = index
                 .apply_end(
                     OplogIndex::from_u64(oplog_index),
                     None,
                     StreamEndRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        stream_id,
-                        producer_fingerprint: identity.fingerprint,
+                        stream_id: local_stream_id,
                         sequence: 0,
                         offset: golem_common::base_model::durable_stream::StreamOffset::new(
                             OplogIndex::from_u64(oplog_index),
@@ -2157,7 +1862,7 @@ mod tests {
                 (source_session, target_session),
                 (output_only_source.clone(), output_only_target.clone()),
             ],
-            Some(first.stream_id),
+            Some(index.local_stream_id(first.stream_id).unwrap()),
             None,
         );
         validate_marker(&index, &fork);
@@ -2177,9 +1882,8 @@ mod tests {
             CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
         );
         assert!(!index.streams[&first_next.stream_id].terminal);
-        assert!(!index.registrations.contains_key(&first.stream_id));
-        assert_eq!(index.fork_aliases[&first.stream_id], first_next);
-        assert!(index.invocation_results.contains_key(&output_only_target));
+        assert!(index.registrations.contains_key(&first.stream_id));
+        assert!(index.invocation_results.contains_key(&output_only_source));
         assert!(!index.deleting && !index.consumer_deleting);
         assert!(index.attachments.is_empty() && index.cascade_outbox.is_empty());
     }
@@ -2195,6 +1899,7 @@ mod tests {
         let mut index = ProducerStreamIndex::default();
         let mut request = super_registration(&remote, 0);
         request.source_kind = StreamSourceKind::AgentHostedInput;
+        request.source_invocation = StreamRegistrationInvocation::Remote(remote.clone());
         request.coordinate = StreamRegistrationCoordinate::Root {
             invocation_id: remote.clone(),
             root_kind: StreamRootKind::MethodInput,
@@ -2212,8 +1917,13 @@ mod tests {
             OplogIndex::from_u64(7),
         )
         .unwrap();
-        for session in [&local, &remote] {
+        for (binding_slot, session) in [&local, &remote].into_iter().enumerate() {
             let attribution = (session == &local).then_some(OplogIndex::from_u64(1));
+            let session_reference = if session == &local {
+                StreamRegistrationInvocation::Local(session.idempotency_key.clone())
+            } else {
+                StreamRegistrationInvocation::Remote(session.clone())
+            };
             index
                 .apply_session_attribution(session, attribution)
                 .unwrap();
@@ -2222,66 +1932,77 @@ mod tests {
                     attribution,
                     &StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        session_key: session.clone(),
-                        mapping: StreamSessionMappingRecord {
+                        session_key: session_reference.clone(),
+                        mapping: StreamBindingRecord {
                             transport_stream_id: 0,
-                            handle: foreign.clone(),
+                            source: StreamRecordReference::Foreign(foreign.clone()),
                             role: SessionStreamRole::Output,
                         },
                     }),
+                    identity.environment_id,
+                    &identity.agent_id,
+                    identity.fingerprint,
                 )
                 .unwrap();
             index
                 .invocation_results
                 .insert(session.clone(), OplogIndex::from_u64(10));
             index
-                .apply_consumer_journal_record(&StreamSessionRecord::ConsumerItemValue(
-                    StreamConsumerItemValueRecord {
+                .apply_consumer_journal_record(
+                    &StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        session_key: session.clone(),
-                        stream_id: foreign.stream_id,
+                        session_key: session_reference,
+                        reader_id: LocalStreamReaderId {
+                            introducing_oplog_index: OplogIndex::from_u64(1),
+                            binding_slot: binding_slot as u32,
+                        },
                         source_offset: StreamOffset::new(OplogIndex::from_u64(8), 0),
                         consumer_read_ordinal: 0,
                         value: vec![4, 5, 6],
                         packed_u8: true,
-                        recursive_handles: vec![],
                         recursive_mappings: vec![],
-                    },
-                ))
+                    }),
+                    identity.environment_id,
+                    &identity.agent_id,
+                    identity.fingerprint,
+                )
                 .unwrap();
         }
         index
-            .apply_consumer_journal_record(&StreamSessionRecord::ConsumerTerminal(
-                StreamConsumerTerminalRecord {
+            .apply_consumer_journal_record(
+                &StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: local.clone(),
-                    stream_id: foreign.stream_id,
+                    session_key: StreamRegistrationInvocation::Local(local.idempotency_key.clone()),
+                    reader_id: LocalStreamReaderId {
+                        introducing_oplog_index: OplogIndex::from_u64(1),
+                        binding_slot: 0,
+                    },
                     source_offset: StreamOffset::new(OplogIndex::from_u64(9), 0),
                     consumer_read_ordinal: 3,
                     terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
-                },
-            ))
+                }),
+                identity.environment_id,
+                &identity.agent_id,
+                identity.fingerprint,
+            )
             .unwrap();
-        let mut unavailable_key = attachment_key(&identity, foreign.stream_id);
-        unavailable_key.session_key = remote.clone();
-        unavailable_key.attachment_id = AttachmentId::primary(
-            remote.callee_environment_id,
-            &remote.callee,
-            &remote.idempotency_key,
-        )
-        .unwrap();
-        // Neither endpoint belongs to the forked agent, so this epoch remains unchanged.
-        unavailable_key.epoch = 7;
         let unavailable = StreamOffset::new(OplogIndex::from_u64(10), 0);
         index
-            .apply_consumer_journal_record(&StreamSessionRecord::SourceUnavailable(
-                StreamSourceUnavailableRecord {
+            .apply_consumer_journal_record(
+                &StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    key: unavailable_key.clone(),
+                    session_key: StreamRegistrationInvocation::Remote(remote.clone()),
+                    reader_id: LocalStreamReaderId {
+                        introducing_oplog_index: OplogIndex::from_u64(1),
+                        binding_slot: 1,
+                    },
                     source_offset: unavailable,
                     consumer_read_ordinal: 3,
-                },
-            ))
+                }),
+                identity.environment_id,
+                &identity.agent_id,
+                identity.fingerprint,
+            )
             .unwrap();
 
         let key = attachment_key(&identity, input.stream_id);
@@ -2356,12 +2077,12 @@ mod tests {
                 .source_invocation,
             remote
         );
-        assert_eq!(index.referenced_handles[&foreign.stream_id].0, foreign);
-        assert_eq!(
-            index.referenced_handles[&foreign.stream_id].1,
-            HashSet::from([target.clone(), remote.clone()])
-        );
         for session in [&target, &remote] {
+            assert!(
+                index.session_stream_mappings[session]
+                    .iter()
+                    .any(|(source, _)| source == &StreamRecordReference::Foreign(foreign.clone()))
+            );
             assert_eq!(
                 index.session_stream_counts[session],
                 if session == &target { 1 } else { 2 }
@@ -2372,15 +2093,20 @@ mod tests {
                 (session == &target).then_some(OplogIndex::from_u64(1))
             );
         }
-        let journal = &index.consumer_journals[&(target, foreign.stream_id)];
+        let local_reader = LocalStreamReaderId {
+            introducing_oplog_index: OplogIndex::from_u64(1),
+            binding_slot: 0,
+        };
+        let remote_reader = LocalStreamReaderId {
+            introducing_oplog_index: OplogIndex::from_u64(1),
+            binding_slot: 1,
+        };
+        let journal = &index.consumer_journals[&(target, local_reader)];
         assert_eq!(journal.next_read_ordinal, 4);
         assert!(journal.terminal);
-        let journal = &index.consumer_journals[&(remote, foreign.stream_id)];
+        let journal = &index.consumer_journals[&(remote, remote_reader)];
         assert_eq!(journal.next_read_ordinal, 3);
-        assert_eq!(
-            journal.source_unavailable,
-            Some((unavailable_key, unavailable))
-        );
+        assert_eq!(journal.source_unavailable, Some(unavailable));
         assert!(index.attachments.is_empty());
         assert!(index.active_attachments_by_session_stream.is_empty());
         assert_eq!(index.active_attachment_count, 0);
@@ -2401,8 +2127,23 @@ mod tests {
         let mut remote = local.clone();
         remote.callee.agent_id = "remote".into();
         remote.callee_fingerprint = AgentFingerprint(Uuid::from_u128(701));
+        let handle = registered_stream(
+            OplogIndex::from_u64(2),
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            super_registration(&identity.invocation, 0),
+        )
+        .handle;
+        let mut remote_handle = handle.clone();
+        remote_handle.producer = remote.callee.clone();
+        remote_handle.expected_producer_fingerprint = remote.callee_fingerprint;
+        let reader_id = LocalStreamReaderId {
+            introducing_oplog_index: OplogIndex::from_u64(1),
+            binding_slot: 0,
+        };
         for session in [&local, &remote] {
-            let mut key = attachment_key(&identity, StreamId(Uuid::from_u128(702)));
+            let mut key = attachment_key(&identity, handle.stream_id);
             key.producer = remote.callee.clone();
             key.expected_producer_fingerprint = remote.callee_fingerprint;
             key.consumer_environment_id = identity.environment_id;
@@ -2421,39 +2162,55 @@ mod tests {
             let mut index = ProducerStreamIndex::default();
             index.apply_session_attribution(&local, None).unwrap();
             index
-                .apply_consumer_journal_record(&StreamSessionRecord::SourceUnavailable(
-                    StreamSourceUnavailableRecord {
+                .apply_session_references(
+                    None,
+                    &StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        key: key.clone(),
+                        session_key: if session == &local {
+                            StreamRegistrationInvocation::Local(session.idempotency_key.clone())
+                        } else {
+                            StreamRegistrationInvocation::Remote(session.clone())
+                        },
+                        mapping: StreamBindingRecord {
+                            transport_stream_id: 0,
+                            source: StreamRecordReference::Foreign(remote_handle.clone()),
+                            role: SessionStreamRole::Input,
+                        },
+                    }),
+                    identity.environment_id,
+                    &identity.agent_id,
+                    identity.fingerprint,
+                )
+                .unwrap();
+            index
+                .apply_consumer_journal_record(
+                    &StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: if session == &local {
+                            StreamRegistrationInvocation::Local(session.idempotency_key.clone())
+                        } else {
+                            StreamRegistrationInvocation::Remote(session.clone())
+                        },
+                        reader_id,
                         source_offset: offset,
                         consumer_read_ordinal: 0,
-                    },
-                ))
+                    }),
+                    identity.environment_id,
+                    &identity.agent_id,
+                    identity.fingerprint,
+                )
                 .unwrap();
             let fork = marker(vec![], vec![(local.clone(), target.clone())], None, None);
             validate_marker(&index, &fork);
             index.apply_fork_cut(&fork, None).unwrap();
             assert!(index.attachments.is_empty());
             assert!(index.cascade_outbox.is_empty());
-            let mut expected = key.clone();
-            expected.consumer = target.callee.clone();
-            expected.expected_consumer_fingerprint = target.callee_fingerprint;
-            expected.consumer_invocation = target.clone();
-            expected.epoch = 1;
-            if session == &local {
-                expected.session_key = target.clone();
-                expected.attachment_id = AttachmentId::primary(
-                    target.callee_environment_id,
-                    &target.callee,
-                    &target.idempotency_key,
-                )
-                .unwrap();
-            }
+            let expected = key.clone();
             let producer = DurableStreamStore::from_index(
                 Arc::new(TestOplog::default()),
                 identity.environment_id,
-                target.callee.clone(),
-                target.callee_fingerprint,
+                identity.agent_id.clone(),
+                identity.fingerprint,
                 8,
                 Arc::new(|_| Box::pin(async {})),
                 index,
@@ -2461,25 +2218,31 @@ mod tests {
             .unwrap();
             assert_eq!(
                 producer
-                    .consumer_source_unavailable(&expected)
+                    .consumer_source_unavailable(&expected, reader_id)
                     .await
                     .unwrap(),
                 Some(offset)
             );
-            assert!(producer.consumer_source_unavailable(&key).await.is_err());
         }
     }
 
     #[test]
-    async fn fork_cut_full_reconstruction_uses_historical_authors_and_retains_later_writes() {
+    async fn fork_cut_full_reconstruction_qualifies_copied_records_and_retains_later_writes() {
         use crate::durable_host::durable_stream::{DurableStreamStore, tests::TestOplog};
         use crate::services::oplog::{Oplog, OplogOps};
         use crate::services::worker_fork::lineage::tests::prepared;
         use golem_common::model::{Timestamp, oplog::OplogEntry};
 
         let identity = identity();
-        let target_session = continuation_session(&identity.invocation, "reconstruction");
-        let registration = registration_record(
+        let target_agent = AgentId {
+            component_id: identity.agent_id.component_id,
+            agent_id: "fork-reconstruction".into(),
+        };
+        let target_fingerprint = AgentFingerprint(Uuid::from_u128(300));
+        let mut target_session = identity.invocation.clone();
+        target_session.callee = target_agent.clone();
+        target_session.callee_fingerprint = target_fingerprint;
+        let registration = registered_stream(
             OplogIndex::from_u64(2),
             identity.environment_id,
             identity.agent_id.clone(),
@@ -2490,16 +2253,27 @@ mod tests {
             let mut cut = marker(
                 vec![],
                 vec![(identity.invocation.clone(), target_session.clone())],
-                Some(registration.handle.stream_id),
+                Some(LocalStreamId(OplogIndex::from_u64(2))),
                 Some(StreamOffset::new(OplogIndex::from_u64(3), sub_index)),
             );
             cut.cut_index = OplogIndex::from_u64(1024);
-            let mut next = continuation(&registration.handle, "reconstruction");
-            next.stream_id = continuation_stream_id(&cut, registration.handle.stream_id).unwrap();
-            cut.streams.push(StreamForkStreamMapping {
-                source: registration.handle.clone(),
-                continuation: next.clone(),
-            });
+            let next = DurableStreamHandle {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                stream_id: StreamId::derive(
+                    identity.environment_id,
+                    &target_agent,
+                    target_fingerprint,
+                    OplogIndex::from_u64(2),
+                )
+                .unwrap(),
+                producer_environment_id: identity.environment_id,
+                producer: target_agent.clone(),
+                expected_producer_fingerprint: target_fingerprint,
+                producer_generation: OplogIndex::NONE,
+                source_invocation: target_session.clone(),
+                component_revision: registration.handle.component_revision,
+                element_schema_fingerprint: registration.handle.element_schema_fingerprint,
+            };
             let oplog = TestOplog::default();
             for position in 1..=1026 {
                 let timestamp = Timestamp::now_utc();
@@ -2517,23 +2291,14 @@ mod tests {
                     2 => OplogEntry::StreamRegistered {
                         timestamp,
                         entity_parent_start_index: None,
-                        record: oplog.upload_payload(&registration).await.unwrap(),
+                        record: oplog.upload_payload(&registration.record).await.unwrap(),
                     },
                     3 | 1026 => {
-                        let (stream, fingerprint, first_sequence, bytes) = if position == 3 {
-                            (
-                                registration.handle.stream_id,
-                                identity.fingerprint,
-                                0,
-                                vec![5, 6, 7],
-                            )
+                        let first_sequence = if position == 3 { 0 } else { 2 };
+                        let bytes = if position == 3 {
+                            vec![5, 6, 7]
                         } else {
-                            (
-                                next.stream_id,
-                                next.expected_producer_fingerprint,
-                                2,
-                                vec![8, 9],
-                            )
+                            vec![8, 9]
                         };
                         let offsets = (0..bytes.len())
                             .map(|index| {
@@ -2546,8 +2311,7 @@ mod tests {
                             record: oplog
                                 .upload_payload(&StreamItemsRecord {
                                     format_version: DURABLE_STREAM_FORMAT_VERSION,
-                                    stream_id: stream,
-                                    producer_fingerprint: fingerprint,
+                                    stream_id: LocalStreamId(OplogIndex::from_u64(2)),
                                     first_sequence,
                                     nested_stream_ids: vec![],
                                     newly_registered_stream_ids: vec![],
@@ -2576,8 +2340,8 @@ mod tests {
             let rebuilt = DurableStreamStore::read_complete_index(
                 &oplog,
                 identity.environment_id,
-                &target_session.callee,
-                target_session.callee_fingerprint,
+                &target_agent,
+                target_fingerprint,
                 oplog.current_oplog_index().await,
             )
             .await;
@@ -2591,6 +2355,7 @@ mod tests {
                     .registrations
                     .contains_key(&registration.handle.stream_id)
             );
+            assert!(rebuilt.registrations.contains_key(&next.stream_id));
             assert_eq!(rebuilt.streams[&next.stream_id].next_sequence, 4);
             assert_eq!(
                 rebuilt.batch_positions[&(next.stream_id, OplogIndex::from_u64(3))],
@@ -2618,7 +2383,7 @@ mod tests {
                     ),
                 ],
             },
-            source_invocation: session.clone(),
+            source_invocation: StreamRegistrationInvocation::Local(session.idempotency_key.clone()),
             entity_parent_start_index: None,
             component_revision: golem_common::base_model::component::ComponentRevision::INITIAL,
             element_schema_fingerprint: golem_schema::schema::SchemaFingerprintV1([7; 32]),

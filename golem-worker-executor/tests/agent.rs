@@ -957,6 +957,9 @@ async fn fork_publication_retry_preserves_independent_state_across_restart(
     assert_eq!(markers.len(), 1);
     assert_eq!(markers[0].0, cut.next());
     assert_eq!(markers[0].1.cut_index, cut);
-    assert_eq!(markers[0].1.target, target_id);
+    assert_eq!(
+        markers[0].1.creation_fingerprint,
+        executor.get_worker_metadata(&target_id).await?.fingerprint
+    );
     Ok(())
 }

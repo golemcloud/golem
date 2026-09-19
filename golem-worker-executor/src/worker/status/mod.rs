@@ -423,7 +423,7 @@ where
         };
         let Some(status) = baseline
             .durable_stream_sessions
-            .get(&attached.session_key.idempotency_key)
+            .get(&attached.session_key)
             .cloned()
         else {
             continue;
@@ -436,7 +436,7 @@ where
         if !status.validate_initial_attachment_reference(*attached_idx, attached) {
             baseline
                 .durable_stream_sessions
-                .insert(attached.session_key.idempotency_key.clone(), status);
+                .insert(attached.session_key.clone(), status);
             continue;
         }
         let persisted_referent;
@@ -464,7 +464,7 @@ where
                 );
                 baseline
                     .durable_stream_sessions
-                    .insert(attached.session_key.idempotency_key.clone(), status);
+                    .insert(attached.session_key.clone(), status);
             }
             _ => {
                 status.lifecycle_error = Some(
@@ -473,7 +473,7 @@ where
                 );
                 baseline
                     .durable_stream_sessions
-                    .insert(attached.session_key.idempotency_key.clone(), status);
+                    .insert(attached.session_key.clone(), status);
             }
         }
     }
@@ -605,7 +605,7 @@ fn update_status_with_precomputed_regions(
                 StreamSessionRecord::ConsumerCancelIntent(intent) => {
                     if !pending_durable_stream_cancellations.iter().any(|existing| {
                         existing.session_key == intent.session_key
-                            && existing.stream_id == intent.stream_id
+                            && existing.source == intent.source
                     }) {
                         pending_durable_stream_cancellations.insert(intent.clone());
                     }

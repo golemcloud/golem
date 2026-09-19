@@ -69,6 +69,30 @@ impl ProducerStreamIndex {
             .ok_or(StreamStoreError::UnknownStream(stream_id))
     }
 
+    pub(super) fn local_stream_id(
+        &self,
+        stream_id: StreamId,
+    ) -> Result<LocalStreamId, StreamStoreError> {
+        self.registrations
+            .get(&stream_id)
+            .map(|registration| LocalStreamId(registration.registration_oplog_index))
+            .ok_or(StreamStoreError::UnknownStream(stream_id))
+    }
+
+    pub(super) fn runtime_stream_id(
+        &self,
+        local_id: LocalStreamId,
+    ) -> Result<StreamId, StreamStoreError> {
+        self.local_stream_ids
+            .get(&local_id)
+            .copied()
+            .ok_or_else(|| {
+                StreamStoreError::CorruptHistory(
+                    "producer record references an unknown local stream registration".into(),
+                )
+            })
+    }
+
     pub(super) fn session_entity_parent_start_index(
         &self,
         session_key: &StreamSessionKey,
@@ -164,11 +188,20 @@ impl ProducerStreamIndex {
         Ok(())
     }
 
-    pub(super) fn apply_result_offset(&mut self, index: OplogIndex, record: &StreamSessionRecord) {
+    pub(super) fn apply_result_offset(
+        &mut self,
+        index: OplogIndex,
+        record: &StreamSessionRecord,
+        owner_environment_id: EnvironmentId,
+        owner: &AgentId,
+        owner_fingerprint: AgentFingerprint,
+    ) {
         if let StreamSessionRecord::InvocationResult(record) = record {
-            self.invocation_results
-                .entry(record.session_key.clone())
-                .or_insert(index);
+            let session_key =
+                record
+                    .session_key
+                    .qualify(owner_environment_id, owner, owner_fingerprint);
+            self.invocation_results.entry(session_key).or_insert(index);
         }
     }
 
@@ -176,6 +209,9 @@ impl ProducerStreamIndex {
         &mut self,
         entity_parent_start_index: Option<OplogIndex>,
         record: &StreamSessionRecord,
+        owner_environment_id: EnvironmentId,
+        owner: &AgentId,
+        owner_fingerprint: AgentFingerprint,
     ) -> Result<(), StreamStoreError> {
         if self.consumer_deleting
             && matches!(
@@ -186,44 +222,42 @@ impl ProducerStreamIndex {
         {
             return Err(StreamStoreError::ConsumerDeleting);
         }
-        if let Some(session_key) = crate::worker::stream_session_record_key(record) {
+        let session_key = crate::worker::stream_session_record_key(
+            record,
+            owner_environment_id,
+            owner,
+            owner_fingerprint,
+        );
+        if let Some(session_key) = &session_key {
             self.apply_session_attribution(session_key, entity_parent_start_index)?;
         }
-        self.apply_consumer_journal_record(record)?;
-        let (session_key, mappings): (&StreamSessionKey, &[StreamSessionMappingRecord]) =
-            match record {
-                StreamSessionRecord::Mapping(record) => {
-                    (&record.session_key, std::slice::from_ref(&record.mapping))
-                }
-                StreamSessionRecord::InvocationResult(record) => {
-                    (&record.session_key, &record.stream_mappings)
-                }
-                StreamSessionRecord::Prepared(record) => {
-                    (&record.attempt.session_key, &record.stream_mappings)
-                }
-                _ => return Ok(()),
-            };
+        self.apply_consumer_journal_record(record, owner_environment_id, owner, owner_fingerprint)?;
+        let bindings: &[StreamBindingRecord] = match record {
+            StreamSessionRecord::Mapping(record) => std::slice::from_ref(&record.mapping),
+            StreamSessionRecord::InvocationResult(record) => &record.stream_mappings,
+            StreamSessionRecord::Prepared(record) => &record.stream_mappings,
+            _ => return Ok(()),
+        };
+        let session_key = session_key
+            .as_ref()
+            .expect("binding records have a session");
         if matches!(
             record,
             StreamSessionRecord::Prepared(_) | StreamSessionRecord::InvocationResult(_)
-        ) && mappings.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE
+        ) && bindings.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE
         {
             return Err(StreamStoreError::ValueStreamLimit);
         }
         let existing_mappings = self.session_stream_mappings.get(session_key);
         let mut new_mappings = HashSet::new();
-        for mapping in mappings {
-            if mapping.handle.format_version != DURABLE_STREAM_FORMAT_VERSION {
+        for binding in bindings {
+            if !binding.source.has_supported_format() {
                 return Err(StreamStoreError::InvalidHandle);
             }
-            if let Some((existing, _)) = self.referenced_handles.get(&mapping.handle.stream_id)
-                && existing != &mapping.handle
-            {
-                return Err(StreamStoreError::CorruptHistory(
-                    "durable stream mapping relabels an existing stream handle".to_string(),
-                ));
+            if let StreamRecordReference::Local(local_id) = &binding.source {
+                self.runtime_stream_id(*local_id)?;
             }
-            let identity = (mapping.handle.clone(), mapping.role);
+            let identity = (binding.source.clone(), binding.role);
             if existing_mappings.is_none_or(|existing| !existing.contains(&identity)) {
                 new_mappings.insert(identity);
             }
@@ -240,22 +274,6 @@ impl ProducerStreamIndex {
             return Err(StreamStoreError::StreamLimit);
         }
         let new_mapping_count = new_mappings.len();
-        for mapping in mappings {
-            match self.referenced_handles.get_mut(&mapping.handle.stream_id) {
-                Some((existing, _)) if existing != &mapping.handle => {
-                    unreachable!("stream handle conflict was validated before index mutation")
-                }
-                Some((_, sessions)) => {
-                    sessions.insert(session_key.clone());
-                }
-                None => {
-                    self.referenced_handles.insert(
-                        mapping.handle.stream_id,
-                        (mapping.handle.clone(), HashSet::from([session_key.clone()])),
-                    );
-                }
-            }
-        }
         self.session_stream_mappings
             .entry(session_key.clone())
             .or_default()
@@ -272,6 +290,9 @@ impl ProducerStreamIndex {
     pub(super) fn apply_consumer_journal_record(
         &mut self,
         record: &StreamSessionRecord,
+        owner_environment_id: EnvironmentId,
+        owner: &AgentId,
+        owner_fingerprint: AgentFingerprint,
     ) -> Result<(), StreamStoreError> {
         if matches!(
             record,
@@ -284,30 +305,40 @@ impl ProducerStreamIndex {
                 "unsupported or malformed durable consumer journal record".to_string(),
             ));
         }
-        let (session_key, stream_id, ordinal, item_count, terminal) = match record {
+        let relative_session_key = match record {
+            StreamSessionRecord::ConsumerItemValue(record) => Some(&record.session_key),
+            StreamSessionRecord::ConsumerTerminal(record) => Some(&record.session_key),
+            _ => None,
+        };
+        let resolved_session_key = relative_session_key
+            .map(|key| key.qualify(owner_environment_id, owner, owner_fingerprint));
+        let (session_key, reader_id, ordinal, item_count, terminal) = match record {
             StreamSessionRecord::ConsumerItemValue(record) => (
-                &record.session_key,
-                record.stream_id,
+                resolved_session_key.as_ref().unwrap(),
+                record.reader_id,
                 record.consumer_read_ordinal,
                 record.logical_item_count(),
                 false,
             ),
             StreamSessionRecord::ConsumerTerminal(record) => (
-                &record.session_key,
-                record.stream_id,
+                resolved_session_key.as_ref().unwrap(),
+                record.reader_id,
                 record.consumer_read_ordinal,
                 1,
                 true,
             ),
             StreamSessionRecord::SourceUnavailable(record) => {
+                let session_key =
+                    record
+                        .session_key
+                        .qualify(owner_environment_id, owner, owner_fingerprint);
                 let journal = self
                     .consumer_journals
-                    .get(&(record.key.session_key.clone(), record.key.stream_id));
+                    .get(&(session_key.clone(), record.reader_id));
                 if let Some(journal) = journal
-                    && let Some((existing_key, existing_offset)) = &journal.source_unavailable
+                    && let Some(existing_offset) = journal.source_unavailable
                 {
-                    return if existing_key == &record.key
-                        && existing_offset == &record.source_offset
+                    return if existing_offset == record.source_offset
                         && record.consumer_read_ordinal == journal.next_read_ordinal
                     {
                         Ok(())
@@ -323,18 +354,18 @@ impl ProducerStreamIndex {
                 }
                 let journal = self
                     .consumer_journals
-                    .entry((record.key.session_key.clone(), record.key.stream_id))
+                    .entry((session_key.clone(), record.reader_id))
                     .or_default();
-                journal.source_unavailable = Some((record.key.clone(), record.source_offset));
+                journal.source_unavailable = Some(record.source_offset);
                 self.session_consumer_streams
-                    .entry(record.key.session_key.clone())
+                    .entry(session_key)
                     .or_default()
-                    .insert(record.key.stream_id);
+                    .insert(record.reader_id);
                 return Ok(());
             }
             _ => return Ok(()),
         };
-        let key = (session_key.clone(), stream_id);
+        let key = (session_key.clone(), reader_id);
         let journal = self.consumer_journals.get(&key);
         if journal.is_some_and(|journal| journal.terminal || journal.source_unavailable.is_some())
             || ordinal != journal.map_or(0, |journal| journal.next_read_ordinal)
@@ -364,7 +395,7 @@ impl ProducerStreamIndex {
         self.session_consumer_streams
             .entry(session_key.clone())
             .or_default()
-            .insert(stream_id);
+            .insert(reader_id);
         Ok(())
     }
 
@@ -394,21 +425,17 @@ impl ProducerStreamIndex {
         producer_fingerprint: AgentFingerprint,
     ) -> Result<(), StreamStoreError> {
         validate_version(record.format_version)?;
+        let record = RegisteredStream::resolve(
+            record,
+            oplog_index,
+            environment_id,
+            producer,
+            producer_fingerprint,
+        )?;
         if registration_coordinate_depth(&record.coordinate) > MAX_STREAM_VALUE_TRAVERSAL_DEPTH {
             return Err(StreamStoreError::CorruptHistory(
                 "stream registration coordinate exceeds the traversal-depth limit".to_string(),
             ));
-        }
-        if record.registration_oplog_index != oplog_index
-            || record.handle.format_version != DURABLE_STREAM_FORMAT_VERSION
-            || record.handle.stream_id
-                != StreamId::derive(environment_id, producer, producer_fingerprint, oplog_index)
-                    .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?
-            || record.handle.producer_environment_id != environment_id
-            || record.handle.producer != *producer
-            || record.handle.expected_producer_fingerprint != producer_fingerprint
-        {
-            return Err(StreamStoreError::InvalidHandle);
         }
         if let Some(existing_id) = self.coordinates.get(&record.coordinate) {
             let existing = self
@@ -486,7 +513,10 @@ impl ProducerStreamIndex {
                 None,
             ) => SessionStreamRole::Output,
         };
-        let mapping_identity = (record.handle.clone(), role);
+        let mapping_identity = (
+            StreamRecordReference::Local(LocalStreamId(record.registration_oplog_index)),
+            role,
+        );
         let new_session_mapping = self
             .session_stream_mappings
             .get(&session_key)
@@ -522,6 +552,10 @@ impl ProducerStreamIndex {
                 .insert(mapping_identity);
             *self.session_stream_counts.entry(session_key).or_default() += 1;
         }
+        self.local_stream_ids.insert(
+            LocalStreamId(record.registration_oplog_index),
+            record.handle.stream_id,
+        );
         self.registrations.insert(record.handle.stream_id, record);
         self.open_streams += 1;
         Ok(())
@@ -536,6 +570,7 @@ impl ProducerStreamIndex {
         environment_id: EnvironmentId,
         producer: &AgentId,
         producer_fingerprint: AgentFingerprint,
+        producer_generation: OplogIndex,
     ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         if pending_registrations.len() != record.newly_registered_stream_ids.len() {
             return Err(StreamStoreError::CorruptHistory(
@@ -547,7 +582,7 @@ impl ProducerStreamIndex {
                 oplog_index,
                 entity_parent_start_index,
                 record,
-                producer_fingerprint,
+                producer_generation,
             );
         }
         let registration_start = oplog_index
@@ -559,7 +594,7 @@ impl ProducerStreamIndex {
                 )
             })?;
         let logical_item_count = record.payload.logical_item_count() as u64;
-        for (position, ((registration_index, _, registration), expected_stream_id)) in
+        for (position, ((registration_index, _, registration), expected_local_id)) in
             pending_registrations
                 .iter()
                 .zip(&record.newly_registered_stream_ids)
@@ -567,10 +602,10 @@ impl ProducerStreamIndex {
         {
             let expected_index = OplogIndex::from_u64(registration_start + position as u64);
             if *registration_index != expected_index
-                || registration.handle.stream_id != *expected_stream_id
-                || !nested_coordinate_matches_item(
+                || LocalStreamId(*registration_index) != *expected_local_id
+                || !nested_record_coordinate_matches_item(
                     &registration.coordinate,
-                    record.stream_id,
+                    StreamRecordReference::Local(record.stream_id),
                     record.first_sequence,
                     logical_item_count,
                 )
@@ -596,7 +631,7 @@ impl ProducerStreamIndex {
             oplog_index,
             entity_parent_start_index,
             record,
-            producer_fingerprint,
+            producer_generation,
         )?;
         *self = updated;
         Ok(events)
@@ -607,13 +642,11 @@ impl ProducerStreamIndex {
         oplog_index: OplogIndex,
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamItemsRecord,
-        producer_fingerprint: AgentFingerprint,
+        producer_generation: OplogIndex,
     ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         validate_version(record.format_version)?;
-        if record.producer_fingerprint != producer_fingerprint {
-            return Err(StreamStoreError::InvalidHandle);
-        }
-        if self.entity_parent_start_index(record.stream_id)? != entity_parent_start_index {
+        let stream_id = self.runtime_stream_id(record.stream_id)?;
+        if self.entity_parent_start_index(stream_id)? != entity_parent_start_index {
             return Err(StreamStoreError::CorruptHistory(
                 "stream item attribution differs from its registration".to_string(),
             ));
@@ -621,8 +654,8 @@ impl ProducerStreamIndex {
         validate_items_payload(&record.payload)?;
         let session_key = self
             .stream_sessions
-            .get(&record.stream_id)
-            .ok_or(StreamStoreError::UnknownStream(record.stream_id))?;
+            .get(&stream_id)
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
         if self.finished_sessions.contains(session_key) {
             return Err(StreamStoreError::CorruptHistory(
                 "stream item follows its session Finished record".to_string(),
@@ -636,44 +669,65 @@ impl ProducerStreamIndex {
                 "packed-u8 stream items cannot contain nested streams".to_string(),
             ));
         }
-        for nested_stream_id in &record.nested_stream_ids {
-            if let Some(registration) = self.registrations.get(nested_stream_id) {
-                if !nested_coordinate_matches_item(
-                    &registration.coordinate,
-                    record.stream_id,
-                    record.first_sequence,
-                    logical_item_count,
-                ) && self.referenced_handles.get(nested_stream_id).is_none_or(
-                    |(_, referenced_sessions)| !referenced_sessions.contains(session_key),
-                ) {
-                    return Err(StreamStoreError::CorruptHistory(
-                        "nested stream registration does not identify its enclosing stream item"
-                            .to_string(),
-                    ));
+        let nested_stream_ids = record
+            .nested_stream_ids
+            .iter()
+            .map(|reference| match reference {
+                StreamRecordReference::Local(local_id) => self.runtime_stream_id(*local_id),
+                StreamRecordReference::Foreign(handle) => Ok(handle.stream_id),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (reference, nested_stream_id) in record.nested_stream_ids.iter().zip(&nested_stream_ids)
+        {
+            match reference {
+                StreamRecordReference::Local(_) => {
+                    let registration = self
+                        .registrations
+                        .get(nested_stream_id)
+                        .ok_or(StreamStoreError::UnknownStream(*nested_stream_id))?;
+                    if !nested_coordinate_matches_item(
+                        &registration.coordinate,
+                        stream_id,
+                        record.first_sequence,
+                        logical_item_count,
+                    ) {
+                        return Err(StreamStoreError::CorruptHistory(
+                            "nested stream registration does not identify its enclosing stream item"
+                                .to_string(),
+                        ));
+                    }
                 }
-            } else if self
-                .referenced_handles
-                .get(nested_stream_id)
-                .is_none_or(|(_, referenced_sessions)| !referenced_sessions.contains(session_key))
-            {
-                return Err(StreamStoreError::CorruptHistory(
-                    "stream item batch references an unknown durable stream handle".to_string(),
-                ));
+                StreamRecordReference::Foreign(handle) => {
+                    if handle.format_version != DURABLE_STREAM_FORMAT_VERSION
+                        || self
+                            .session_stream_mappings
+                            .get(session_key)
+                            .is_none_or(|mappings| {
+                                !mappings.contains(&(
+                                    StreamRecordReference::Foreign(handle.clone()),
+                                    SessionStreamRole::Input,
+                                )) && !mappings.contains(&(
+                                    StreamRecordReference::Foreign(handle.clone()),
+                                    SessionStreamRole::Output,
+                                ))
+                            })
+                    {
+                        return Err(StreamStoreError::InvalidHandle);
+                    }
+                }
             }
         }
         let nested_handles = record
             .nested_stream_ids
             .iter()
-            .map(|stream_id| {
-                self.registrations
+            .zip(&nested_stream_ids)
+            .map(|(reference, stream_id)| match reference {
+                StreamRecordReference::Local(_) => self
+                    .registrations
                     .get(stream_id)
-                    .map(|registration| registration.handle.clone())
-                    .or_else(|| {
-                        self.referenced_handles
-                            .get(stream_id)
-                            .map(|(handle, _)| handle.clone())
-                    })
-                    .expect("validated nested durable stream handle is missing")
+                    .map(|registration| registration.issue(producer_generation))
+                    .expect("validated nested durable stream handle is missing"),
+                StreamRecordReference::Foreign(handle) => handle.clone(),
             })
             .collect::<Vec<_>>();
         let registration_start = oplog_index
@@ -684,7 +738,7 @@ impl ProducerStreamIndex {
                     "nested registrations precede the beginning of the oplog".to_string(),
                 )
             })?;
-        let nested_ids: HashSet<_> = record.nested_stream_ids.iter().copied().collect();
+        let nested_ids: HashSet<_> = nested_stream_ids.iter().copied().collect();
         if nested_ids.len() != record.nested_stream_ids.len() {
             return Err(StreamStoreError::CorruptHistory(
                 "stream item batch contains duplicate nested stream ownership".to_string(),
@@ -692,8 +746,9 @@ impl ProducerStreamIndex {
         }
         let mut newly_registered_ids =
             HashSet::with_capacity(record.newly_registered_stream_ids.len());
-        for (position, stream_id) in record.newly_registered_stream_ids.iter().enumerate() {
-            if !newly_registered_ids.insert(*stream_id) || !nested_ids.contains(stream_id) {
+        for (position, local_stream_id) in record.newly_registered_stream_ids.iter().enumerate() {
+            let stream_id = self.runtime_stream_id(*local_stream_id)?;
+            if !newly_registered_ids.insert(stream_id) || !nested_ids.contains(&stream_id) {
                 return Err(StreamStoreError::CorruptHistory(
                     "stream item batch has an invalid newly registered stream list".to_string(),
                 ));
@@ -701,7 +756,7 @@ impl ProducerStreamIndex {
             let expected_index = OplogIndex::from_u64(registration_start + position as u64);
             if self
                 .registrations
-                .get(stream_id)
+                .get(&stream_id)
                 .is_none_or(|registration| registration.registration_oplog_index != expected_index)
             {
                 return Err(StreamStoreError::CorruptHistory(
@@ -712,10 +767,10 @@ impl ProducerStreamIndex {
         }
         let stream = self
             .streams
-            .get_mut(&record.stream_id)
-            .ok_or(StreamStoreError::UnknownStream(record.stream_id))?;
+            .get_mut(&stream_id)
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
         if stream.terminal {
-            return Err(StreamStoreError::AlreadyTerminal(record.stream_id));
+            return Err(StreamStoreError::AlreadyTerminal(stream_id));
         }
         if record.first_sequence != stream.next_sequence {
             return Err(StreamStoreError::SequenceGap {
@@ -750,12 +805,13 @@ impl ProducerStreamIndex {
                 .checked_add(sub_index as u64)
                 .ok_or(StreamStoreError::CounterOverflow)?;
             let event = CommittedProducerStreamEvent {
-                stream_id: record.stream_id,
+                stream_id,
                 producer_sequence: sequence,
                 offset,
                 packed_u8_batch_end,
                 terminal_author: None,
                 nested_handles: nested_handles.clone(),
+                nested_references: record.nested_stream_ids.clone(),
                 payload,
             };
             events.push(event);
@@ -769,7 +825,7 @@ impl ProducerStreamIndex {
         stream.last_item_offset = stream.last_offset;
         stream.batches.insert(record.first_sequence, oplog_index);
         self.batch_positions.insert(
-            (record.stream_id, oplog_index),
+            (stream_id, oplog_index),
             (record.first_sequence, events.len() as u64),
         );
         Ok(events)
@@ -780,41 +836,41 @@ impl ProducerStreamIndex {
         oplog_index: OplogIndex,
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamEndRecord,
-        producer_fingerprint: AgentFingerprint,
+        _producer_fingerprint: AgentFingerprint,
     ) -> Result<CommittedProducerStreamEvent, StreamStoreError> {
         validate_version(record.format_version)?;
-        if record.producer_fingerprint != producer_fingerprint
-            || record.offset != StreamOffset::new(oplog_index, 0)
-        {
+        if record.offset != StreamOffset::new(oplog_index, 0) {
             return Err(StreamStoreError::InvalidHandle);
         }
-        if self.entity_parent_start_index(record.stream_id)? != entity_parent_start_index {
+        let stream_id = self.runtime_stream_id(record.stream_id)?;
+        if self.entity_parent_start_index(stream_id)? != entity_parent_start_index {
             return Err(StreamStoreError::CorruptHistory(
                 "stream end attribution differs from its registration".to_string(),
             ));
         }
         let stream = self
             .streams
-            .get_mut(&record.stream_id)
-            .ok_or(StreamStoreError::UnknownStream(record.stream_id))?;
-        validate_terminal_sequence(stream, record.stream_id, record.sequence)?;
+            .get_mut(&stream_id)
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
+        validate_terminal_sequence(stream, stream_id, record.sequence)?;
         let event = CommittedProducerStreamEvent {
-            stream_id: record.stream_id,
+            stream_id,
             producer_sequence: record.sequence,
             offset: record.offset,
             packed_u8_batch_end: None,
             terminal_author: Some(record.authored_by),
             nested_handles: Vec::new(),
+            nested_references: Vec::new(),
             payload: CommittedProducerStreamEventPayload::End(record.result),
         };
         stream.first_sequence.get_or_insert(record.sequence);
         stream.last_offset = Some(record.offset);
         stream.terminal = true;
         self.open_streams -= 1;
-        if let Some(session) = self.stream_sessions.get(&record.stream_id)
+        if let Some(session) = self.stream_sessions.get(&stream_id)
             && let Some(streams) = self.open_session_streams.get_mut(session)
         {
-            streams.remove(&record.stream_id);
+            streams.remove(&stream_id);
         }
         Ok(event)
     }
@@ -822,21 +878,28 @@ impl ProducerStreamIndex {
     pub(super) fn apply_finished(
         &mut self,
         record: &StreamSessionFinishedRecord,
+        owner_environment_id: EnvironmentId,
+        owner: &AgentId,
+        owner_fingerprint: AgentFingerprint,
     ) -> Result<(), StreamStoreError> {
         validate_version(record.format_version)?;
-        if self.finished_sessions.contains(&record.session_key) {
+        let session_key =
+            record
+                .session_key
+                .qualify(owner_environment_id, owner, owner_fingerprint);
+        if self.finished_sessions.contains(&session_key) {
             return Ok(());
         }
         if self
             .open_session_streams
-            .get(&record.session_key)
+            .get(&session_key)
             .is_some_and(|streams| !streams.is_empty())
         {
             return Err(StreamStoreError::CorruptHistory(
                 "session Finished record precedes a materialized stream terminal".to_string(),
             ));
         }
-        self.finished_sessions.insert(record.session_key.clone());
+        self.finished_sessions.insert(session_key);
         Ok(())
     }
 
@@ -845,31 +908,31 @@ impl ProducerStreamIndex {
         oplog_index: OplogIndex,
         entity_parent_start_index: Option<OplogIndex>,
         record: StreamCancelRecord,
-        producer_fingerprint: AgentFingerprint,
+        _producer_fingerprint: AgentFingerprint,
     ) -> Result<CommittedProducerStreamEvent, StreamStoreError> {
         validate_version(record.format_version)?;
-        if record.producer_fingerprint != producer_fingerprint
-            || record.offset != StreamOffset::new(oplog_index, 0)
-        {
+        if record.offset != StreamOffset::new(oplog_index, 0) {
             return Err(StreamStoreError::InvalidHandle);
         }
-        if self.entity_parent_start_index(record.stream_id)? != entity_parent_start_index {
+        let stream_id = self.runtime_stream_id(record.stream_id)?;
+        if self.entity_parent_start_index(stream_id)? != entity_parent_start_index {
             return Err(StreamStoreError::CorruptHistory(
                 "stream cancellation attribution differs from its registration".to_string(),
             ));
         }
         let stream = self
             .streams
-            .get_mut(&record.stream_id)
-            .ok_or(StreamStoreError::UnknownStream(record.stream_id))?;
-        validate_terminal_sequence(stream, record.stream_id, record.sequence)?;
+            .get_mut(&stream_id)
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
+        validate_terminal_sequence(stream, stream_id, record.sequence)?;
         let event = CommittedProducerStreamEvent {
-            stream_id: record.stream_id,
+            stream_id,
             producer_sequence: record.sequence,
             offset: record.offset,
             packed_u8_batch_end: None,
             terminal_author: Some(record.authored_by),
             nested_handles: Vec::new(),
+            nested_references: Vec::new(),
             payload: CommittedProducerStreamEventPayload::Cancel {
                 role: record.role,
                 reason: record.reason,
@@ -880,10 +943,10 @@ impl ProducerStreamIndex {
         stream.last_offset = Some(record.offset);
         stream.terminal = true;
         self.open_streams -= 1;
-        if let Some(session) = self.stream_sessions.get(&record.stream_id)
+        if let Some(session) = self.stream_sessions.get(&stream_id)
             && let Some(streams) = self.open_session_streams.get_mut(session)
         {
-            streams.remove(&record.stream_id);
+            streams.remove(&stream_id);
         }
         Ok(event)
     }
@@ -1171,6 +1234,26 @@ impl ProducerStreamIndex {
             .into_iter()
             .filter(|key| !self.cascade_outbox.contains_key(key))
             .collect()
+    }
+}
+
+fn nested_record_coordinate_matches_item(
+    coordinate: &StreamRegistrationRecordCoordinate,
+    parent_stream: StreamRecordReference,
+    first_sequence: u64,
+    logical_item_count: u64,
+) -> bool {
+    match coordinate {
+        StreamRegistrationRecordCoordinate::Nested {
+            parent_stream: actual_parent,
+            parent_producer_sequence,
+            ..
+        } => {
+            *actual_parent == parent_stream
+                && *parent_producer_sequence >= first_sequence
+                && *parent_producer_sequence < first_sequence.saturating_add(logical_item_count)
+        }
+        StreamRegistrationRecordCoordinate::Root { .. } => false,
     }
 }
 

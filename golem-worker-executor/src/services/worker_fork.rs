@@ -892,13 +892,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         if let Some(candidate) = export
             && (candidate.initial.is_some() || candidate.export.closed)
         {
-            let mapping = fork_cut
-                .streams
-                .iter()
-                .find(|mapping| Some(mapping.source.stream_id) == fork_cut.selected_stream_id)
-                .ok_or_else(|| {
-                    WorkerExecutorError::runtime("Fork selected input mapping is missing")
-                })?;
+            let selected = fork_cut.selected_stream_id.ok_or_else(|| {
+                WorkerExecutorError::runtime("Fork selected input registration is missing")
+            })?;
             let producer = DurableStreamStore::load(
                 new_oplog.clone(),
                 environment_id,
@@ -908,11 +904,21 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             )
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            let mapping = producer
+                .materialize_binding(&golem_common::model::durable_stream::StreamBindingRecord {
+                    transport_stream_id: 0,
+                    source: golem_common::model::durable_stream::StreamRecordReference::Local(
+                        selected,
+                    ),
+                    role: golem_common::model::durable_stream::SessionStreamRole::Input,
+                })
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
             let result = producer
                 .append_external_input(
                     None,
-                    &mapping.continuation.source_invocation,
-                    mapping.continuation.stream_id,
+                    &mapping.handle.source_invocation,
+                    mapping.handle.stream_id,
                     candidate.initial.clone(),
                     candidate.export.closed,
                     None,

@@ -1645,10 +1645,16 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         accepted.await.map_err(|_| RpcError::RemoteInternalError {
             details: "durable streaming acceptance was not committed".to_string(),
         })?;
+        let input_mappings = worker
+            .durable_stream_producer()
+            .await?
+            .materialize_bindings(&acceptance.prepared.stream_mappings)
+            .await
+            .map_err(|error| RpcError::RemoteInternalError {
+                details: error.to_string(),
+            })?;
         let _ = accepted_inputs.send(
-            acceptance
-                .prepared
-                .stream_mappings
+            input_mappings
                 .iter()
                 .map(|mapping| durable_stream_mapping_to_proto(mapping, None))
                 .collect(),

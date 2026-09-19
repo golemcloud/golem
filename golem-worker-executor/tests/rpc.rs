@@ -2018,9 +2018,15 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    for (synchronous, cut_after_end) in [(false, false), (false, true), (true, false), (true, true)]
-    {
-        let name = format!("fork-rpc-{synchronous}-{cut_after_end}");
+    for (synchronous, cut_point) in [
+        (false, "start"),
+        (false, "caller-attempt"),
+        (false, "end"),
+        (true, "start"),
+        (true, "caller-attempt"),
+        (true, "end"),
+    ] {
+        let name = format!("fork-rpc-{synchronous}-{cut_point}");
         let caller = agent_id!("StreamingRpcCaller", name.clone());
         let provider = agent_id!("StreamingRpcTarget", name.clone());
         let caller_id = executor.start_agent(&component.id, caller.clone()).await?;
@@ -2059,8 +2065,8 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
                 _ => None,
             })
             .expect("streaming RPC Start");
-        let cut = if cut_after_end {
-            history
+        let cut = match cut_point {
+            "end" => history
                 .iter()
                 .find_map(|entry| match &entry.entry {
                     PublicOplogEntry::End(end) if end.start_index == start_index => {
@@ -2068,9 +2074,22 @@ async fn fork_and_revert_streaming_rpc_join_the_original_remote_invocation(
                     }
                     _ => None,
                 })
-                .expect("streaming RPC End")
-        } else {
-            start_index
+                .expect("streaming RPC End"),
+            "caller-attempt" => history
+                .iter()
+                .find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::StreamSession(session)
+                        if matches!(
+                            StreamSessionRecord::from_value(session.record.value()).unwrap(),
+                            StreamSessionRecord::CallerAttempt(_)
+                        ) =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                })
+                .expect("streaming RPC caller attempt"),
+            _ => start_index,
         };
         let fork =
             golem_common::phantom_agent_id!("StreamingRpcCaller", uuid::Uuid::new_v4(), name);

@@ -2791,9 +2791,9 @@ async fn exhausted_primary_read_retries_panic(_tracing: &Tracing) {
 #[test]
 async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
-        DurableStreamHandle, StreamCancelReason, StreamCancelRecord, StreamCancelRole,
-        StreamEndRecord, StreamEndResult, StreamId, StreamInvocationId, StreamItemsPayload,
-        StreamItemsRecord, StreamOffset, StreamRegisteredRecord, StreamRegistrationCoordinate,
+        LocalStreamId, StreamCancelReason, StreamCancelRecord, StreamCancelRole, StreamEndRecord,
+        StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
+        StreamRegisteredRecord, StreamRegistrationInvocation, StreamRegistrationRecordCoordinate,
         StreamRootKind, StreamSessionFinishedRecord, StreamSessionRecord, StreamSourceKind,
         StreamTerminalAuthor,
     };
@@ -2829,7 +2829,6 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
             default_execution_status(AgentMode::Durable),
         )
         .await;
-    let stream_id = StreamId(Uuid::new_v4());
     let producer_fingerprint = AgentFingerprint(Uuid::new_v4());
     let invocation_id = StreamInvocationId {
         callee_environment_id: environment_id,
@@ -2839,6 +2838,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
     };
     let added = oplog
         .add_durable_stream_batch(Box::new(move |registration_index| {
+            let stream_id = LocalStreamId(registration_index);
             let item_index = registration_index.next();
             let end_index = item_index.next();
             let cancel_index = end_index.next();
@@ -2847,24 +2847,20 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                     None,
                     StreamRegisteredRecord {
                         format_version: 1,
-                        coordinate: StreamRegistrationCoordinate::Root {
-                            invocation_id: invocation_id.clone(),
+                        coordinate: StreamRegistrationRecordCoordinate::Root {
+                            invocation: StreamRegistrationInvocation::Local(
+                                invocation_id.idempotency_key.clone(),
+                            ),
                             root_kind: StreamRootKind::MethodResult,
                             recursive_value_path: Vec::new(),
                         },
-                        registration_oplog_index: registration_index,
-                        handle: DurableStreamHandle {
-                            format_version: 1,
-                            stream_id,
-                            producer_environment_id: environment_id,
-                            producer: agent_id,
-                            expected_producer_fingerprint: producer_fingerprint,
-                            source_invocation: invocation_id.clone(),
-                            component_revision: ComponentRevision::INITIAL,
-                            element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
-                        },
+                        source_invocation: StreamRegistrationInvocation::Local(
+                            invocation_id.idempotency_key.clone(),
+                        ),
+                        component_revision: ComponentRevision::INITIAL,
+                        element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
                         source_kind: StreamSourceKind::InvocationOutput,
-                        session_mapping: None,
+                        session_role: None,
                     },
                 ),
                 DurableStreamOplogRecord::Items(
@@ -2872,7 +2868,6 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                     StreamItemsRecord {
                         format_version: 1,
                         stream_id,
-                        producer_fingerprint,
                         first_sequence: 0,
                         nested_stream_ids: Vec::new(),
                         newly_registered_stream_ids: Vec::new(),
@@ -2885,7 +2880,6 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                     StreamEndRecord {
                         format_version: 1,
                         stream_id,
-                        producer_fingerprint,
                         sequence: 1,
                         offset: StreamOffset::new(end_index, 0),
                         authored_by: StreamTerminalAuthor::Guest,
@@ -2897,7 +2891,6 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                     StreamCancelRecord {
                         format_version: 1,
                         stream_id,
-                        producer_fingerprint,
                         sequence: 1,
                         offset: StreamOffset::new(cancel_index, 0),
                         authored_by: StreamTerminalAuthor::Protocol,
@@ -2910,7 +2903,9 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                     None,
                     Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                         format_version: 1,
-                        session_key: invocation_id,
+                        session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
+                            invocation_id.idempotency_key,
+                        ),
                         result: Err(vec![57; 1024]),
                     })),
                 ),
@@ -2973,7 +2968,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
 #[test_r::timeout("30s")]
 async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
-        StreamEndRecord, StreamEndResult, StreamId, StreamInvocationId, StreamOffset,
+        LocalStreamId, StreamEndRecord, StreamEndResult, StreamInvocationId, StreamOffset,
         StreamSessionFinishedRecord, StreamSessionRecord, StreamTerminalAuthor,
     };
     use golem_common::model::component::ComponentRevision;
@@ -3032,7 +3027,6 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
             default_execution_status(AgentMode::Ephemeral),
         )
         .await;
-    let stream_id = StreamId(Uuid::new_v4());
     let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
         callee: agent_id,
@@ -3047,8 +3041,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
                     None,
                     StreamEndRecord {
                         format_version: 1,
-                        stream_id,
-                        producer_fingerprint: AgentFingerprint(Uuid::new_v4()),
+                        stream_id: LocalStreamId(first_index),
                         sequence: 0,
                         offset: StreamOffset::new(first_index, 0),
                         authored_by: StreamTerminalAuthor::Guest,
@@ -3059,7 +3052,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
                     None,
                     Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                         format_version: 1,
-                        session_key,
+                        session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(session_key.idempotency_key),
                         result: Err(vec![91; 1024]),
                     })),
                 ),
@@ -3123,7 +3116,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
 #[test_r::timeout("30s")]
 async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
-        StreamEndRecord, StreamEndResult, StreamId, StreamInvocationId, StreamOffset,
+        LocalStreamId, StreamEndRecord, StreamEndResult, StreamInvocationId, StreamOffset,
         StreamSessionFinishedRecord, StreamSessionRecord, StreamTerminalAuthor,
     };
 
@@ -3178,8 +3171,9 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
                         None,
                         StreamEndRecord {
                             format_version: 1,
-                            stream_id: StreamId(Uuid::new_v4()),
-                            producer_fingerprint: AgentFingerprint(Uuid::new_v4()),
+                            stream_id: LocalStreamId(OplogIndex::from_u64(
+                                first_index.as_u64() + position,
+                            )),
                             sequence: position,
                             offset: StreamOffset::new(
                                 OplogIndex::from_u64(first_index.as_u64() + position),
@@ -3197,7 +3191,9 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
                             None,
                             Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                                 format_version: 1,
-                                session_key,
+                                session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
+                                    session_key.idempotency_key,
+                                ),
                                 result: Err(vec![73; 1024]),
                             })),
                         )
@@ -3261,7 +3257,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     };
     use golem_common::base_model::durable_stream::{
         StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamRegistrationCoordinate,
-        StreamRootKind, StreamSourceKind,
+        StreamRegistrationInvocation, StreamRootKind, StreamSourceKind,
     };
     use golem_common::model::component::ComponentRevision;
     use golem_schema::schema::SchemaFingerprintV1;
@@ -3297,7 +3293,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
             root_kind: StreamRootKind::MethodResult,
             recursive_value_path: Vec::new(),
         },
-        source_invocation: invocation_id,
+        source_invocation: StreamRegistrationInvocation::Local(invocation_id.idempotency_key),
         component_revision: ComponentRevision::INITIAL,
         element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
         source_kind: StreamSourceKind::InvocationOutput,

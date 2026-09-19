@@ -40,8 +40,8 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::base_model::durable_stream::{
     MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE, ResumeAttemptDescriptor,
-    StreamCancelReason, StreamCancelRole, StreamItemsPayload, StreamResumeCursor,
-    StreamResumeOperation,
+    StreamCancelReason, StreamCancelRole, StreamItemsPayload, StreamRegistrationInvocation,
+    StreamResumeCursor, StreamResumeOperation,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -1021,11 +1021,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .map(|prepared| prepared.attempt.attempt_id.0.into()),
                         epoch: accepted.durable_streams.as_ref().map(StreamSession::attachment_epoch).unwrap_or_default(),
                         stream_mappings: accepted
-                            .prepared
+                            .durable_streams
                             .as_ref()
-                            .map(|prepared| {
-                                prepared
-                                    .stream_mappings
+                            .map(|streams| {
+                                streams
+                                    .materialized_mappings()
                                     .iter()
                                     .map(|mapping| {
                                         durable_stream_mapping_to_proto(
@@ -2129,7 +2129,9 @@ pub(crate) fn build_durable_streaming_request(
                             recursive_value_path: path.to_vec(),
                         },
                         source_kind: StreamSourceKind::ExternalInlineInput,
-                        source_invocation: session_key.clone(),
+                        source_invocation: StreamRegistrationInvocation::Local(
+                            session_key.idempotency_key.clone(),
+                        ),
                         component_revision,
                         element_schema_fingerprint,
                         session_mapping: Some(session_mapping.clone()),
@@ -3048,7 +3050,9 @@ mod freshness_tests {
         AgentMode, AgentTypeName, InvocationFreshnessDisposition, Principal,
     };
     use golem_common::model::invocation_context::InvocationContextStack;
-    use golem_common::model::{AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey};
+    use golem_common::model::{
+        AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OplogIndex,
+    };
     use golem_common::schema::SchemaValue;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
@@ -3447,6 +3451,7 @@ mod freshness_tests {
                 producer_environment_id: environment_id,
                 producer: callee.clone(),
                 expected_producer_fingerprint: callee_fingerprint,
+                producer_generation: OplogIndex::NONE,
                 source_invocation: StreamInvocationId {
                     callee_environment_id: environment_id,
                     callee,

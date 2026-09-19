@@ -2408,6 +2408,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(outcome)
     }
 
+    pub(crate) fn rejects_live_continuation_at_replay_tail(&self) -> bool {
+        let mode = self.entity_invocation_scope().map(|scope| scope.mode());
+        mode == Some(InvocationExecutionMode::ReplayingCompleted)
+            || (mode != Some(InvocationExecutionMode::ReplayingIncomplete)
+                && self.runtime != OwnerRuntime::Agent)
+    }
+
     pub(crate) fn prepare_live_continuation_at_replay_tail(
         &self,
         replay_ended: bool,
@@ -2417,9 +2424,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mode = self.entity_invocation_scope().map(|scope| scope.mode());
         let replaying_incomplete_entity =
             mode == Some(InvocationExecutionMode::ReplayingIncomplete);
-        let primary_replay_tail = self.runtime == OwnerRuntime::Agent && replay_ended;
-        let rejected = mode == Some(InvocationExecutionMode::ReplayingCompleted)
-            || (!replaying_incomplete_entity && !primary_replay_tail);
+        let rejected = self.rejects_live_continuation_at_replay_tail()
+            || (!replaying_incomplete_entity && !replay_ended);
         let replay_state = self.state.replay_state.clone();
         let public_state = self.public_state.clone();
         let linear_memory = self.linear_memory.clone();

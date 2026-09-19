@@ -82,6 +82,7 @@ message DurableStreamHandle {
   StreamInvocationIdentity source_invocation = 6;
   optional uint64 component_revision = 7;
   bytes element_schema_fingerprint = 8;
+  uint64 producer_generation = 9;
 }
 
 message DurableStreamMapping {

@@ -1344,6 +1344,7 @@ mod tests {
             producer_environment_id: identity.environment_id,
             producer: identity.agent_id.clone(),
             expected_producer_fingerprint: identity.fingerprint,
+            producer_generation: OplogIndex::NONE,
             source_invocation: identity.invocation.clone(),
             component_revision: ComponentRevision::INITIAL,
             element_schema_fingerprint: golem_schema::schema::SchemaFingerprintV1([7; 32]),
@@ -1568,6 +1569,7 @@ mod tests {
                 producer_environment_id: Some(caller_environment.into()),
                 producer: Some(caller.clone().into()),
                 expected_producer_fingerprint: Some(caller_fingerprint.0.into()),
+                producer_generation: 0,
                 source_invocation: Some(StreamInvocationIdentity {
                     callee_environment_id: Some(caller_environment.into()),
                     callee: Some(caller.clone().into()),

@@ -2145,6 +2145,7 @@ mod tests {
                 }),
                 producer: Some(agent_id()),
                 expected_producer_fingerprint: Some(uuid(4)),
+                producer_generation: 0,
                 source_invocation: Some(StreamInvocationIdentity {
                     callee_environment_id: Some(EnvironmentId {
                         value: Some(uuid(3)),

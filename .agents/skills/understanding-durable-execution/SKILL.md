@@ -541,19 +541,31 @@ Cursor operations and recorded-marker waits stay active; durable `Start`/`End` w
 A streaming RPC is an ordinary durable RPC whose method carries input or output streams
 (`remote_method_uses_streams`, `wasm_rpc/mod.rs`). Three facts prevent most mistakes:
 
-- **Two journals are authoritative, nothing else.** The producer's oplog holds
-  `StreamRegistered`/`StreamItems`/`StreamEnd`/`StreamCancel` (`durable_stream/mod.rs`), committed
-  *before* publication to `DurableLiveStreamBus` (a bounded live-tail optimization). The
-  consumer's `StreamSession` journal (`durable_session.rs`) holds attempts, offset mappings,
-  terminals and `Finished`. All are hints. Buses, readers, sockets and attachments are recreated.
-- **Delivery is by offset, identity is by fingerprint.** A restarted consumer replays its journal
-  by `consumer_read_ordinal`, then reads producer segments after the last `source_offset`. The
-  producer is pinned by `AgentFingerprint`; a recreated agent with the same `AgentId` is rejected
-  (`validate_forwarded_mapping`, `CorruptHistory`).
+- **Two owner-relative journals are authoritative, nothing else.** A producer records
+  `StreamRegistered`/`StreamItems`/`StreamEnd`/`StreamCancel` in its own oplog. Its persisted
+  `LocalStreamId` is the registration oplog index, not a globally meaningful handle. Every
+  cross-record source is explicit `StreamRecordReference::{Local, Foreign}`; a received handle
+  remains `Foreign` even when it happens to name the receiving oplog's owner. Consumer records
+  store bytes or a terminal plus `consumer_read_ordinal`, `source_offset`, and the
+  `LocalStreamReaderId { introducing_oplog_index, binding_slot }` that names the binding which
+  introduced that reader. Nested registrations and the enclosing item record apply atomically.
+- **Replay is owner-oplog-only.** A restarted consumer rebuilds bindings and observations from its
+  own oplog in ordinal order. Replay performs no source RPC, authorization, or attachment; only
+  the live suffix reads the source after the last journaled offset. An unread input may be
+  forwarded as its original foreign handle without first attaching or consuming it.
 - **RPC result and stream draining are separate.** The caller's durable call completes with the
   result *stripped of streams*, so the RPC `End` may be recorded while items still flow.
   Streaming keys follow the RPC identity rule above. Terminals finalize once; protocol terminals fence
   later guest terminals. Terminal outputs reconstruct from committed records without reattachment.
+  The persisted request also retains the original logical streaming origin, so retries and caller
+  forks do not rewrite who originated the logical RPC.
+
+Forks copy ordinary oplog entries and append only the cut marker. That marker clips retained stream
+history, resets live controls, and stores the creation receipt; it does not carry handle aliases or
+authorship mappings. Revert raises the generation/epoch fence before reconstruction, so handles
+issued by the discarded generation cannot control the rebuilt streams. Hidden staged publication
+and immutable retry receipts remain the separately tracked GOL-609 work; do not model staging by
+adding provenance to stream records.
 
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.
