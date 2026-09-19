@@ -17,14 +17,15 @@
  * The offsets are `u64` at the interface, so they stay `bigint` here.
  * `hostRange` wraps each offset to `u64`, because the host does the
  * same. The generated binding takes a `u64` parameter as
- * `BigIntWrapper<u64>` (wasm-rquickjs 0.4.4, `src/types.rs` lines 502
- * to 513). It reads the value with `to_i64`, then casts the result
- * (`skeleton/src/wrappers.rs` lines 199 to 205). `to_i64` calls
- * `JS_ToInt64Ext` (rquickjs-core 0.10.0, `src/value/bigint.rs` lines
- * 23 to 31). For a `BigInt`, that function calls `JS_ToBigInt64`
- * (rquickjs-sys 0.10.0, `quickjs/quickjs.c` line 13527), which calls
- * `JS_ToBigInt64Free`. That function gives the value mod 2^64 (line
- * 13517). The host thus reads `-1n` as 18446744073709551615.
+ * `BigIntWrapper<u64>` (`get_wrapped_type_internal` in
+ * `src/types.rs` of wasm-rquickjs). The `FromJs` implementation of
+ * `BigIntWrapper<u64>` reads the value with `BigInt::to_i64`, then
+ * casts the result to `u64` (`skeleton/src/wrappers.rs` of
+ * wasm-rquickjs). `to_i64` calls `JS_ToInt64Ext` (`src/value/bigint.rs`
+ * of rquickjs-core). For a `BigInt`, that function calls
+ * `JS_ToBigInt64`, which calls `JS_ToBigInt64Free`. That function
+ * gives the value mod 2^64 (`quickjs/quickjs.c` of rquickjs-sys). The
+ * host thus reads `-1n` as 18446744073709551615.
  *
  * `BigInt.asUintN(64, x)` gives a value from 0 to 2^64-1. The check
  * therefore never sees a negative offset. It sees the value that the
@@ -32,22 +33,23 @@
  * check then answers for a negative offset.
  *
  * The message is the message that a guest gets. `BlobRangeError`
- * gives the text (`golem-service-base/src/storage/blob/mod.rs` lines
- * 466 to 474). The blob store service puts that text in
- * `InvalidInput` (`golem-worker-executor/src/services/blob_store.rs`
- * lines 345 to 346), and `Display` puts the prefix in front of it
- * (lines 41 to 52). The WASI host sends the result to the guest
- * (`golem-worker-executor/src/durable_host/blobstore/container.rs`
- * line 243). `golem-worker-executor/tests/blobstore.rs` line 324
- * asserts the same message. The message says "blob" where this
- * package says "object", because the wording is the host's.
+ * gives the text (`golem-service-base/src/storage/blob/mod.rs`).
+ * `DefaultBlobStoreService::get_data` puts that text in
+ * `BlobStoreError::InvalidInput`, and the `Display` of
+ * `BlobStoreError` puts the prefix in front of it
+ * (`golem-worker-executor/src/services/blob_store.rs`). The WASI host
+ * sends the result to the guest (`HostContainer::get_data` in
+ * `golem-worker-executor/src/durable_host/blobstore/container.rs`).
+ * The test `blobstore_get_data_outside_the_object_gives_the_guest_an_error`
+ * in `golem-worker-executor/tests/blobstore.rs` asserts the same
+ * message. The message says "blob" where this package says "object",
+ * because the wording is the host's.
  *
  * The doubles do not follow the host in one point. They look for the
  * object before they look at the range. The host refuses a `start`
- * after the `end` first, and reads nothing
- * (`golem-service-base/src/storage/blob/mod.rs` lines 68 to 70). An
- * inverted range on a missing object is the one case where the two
- * disagree.
+ * after the `end` first, and reads nothing (`BlobStorage::get_raw_slice`
+ * in `golem-service-base/src/storage/blob/mod.rs`). An inverted range
+ * on a missing object is the one case where the two disagree.
  */
 
 /** A range that the host resolved: the bounds of the slice, or the error. */
