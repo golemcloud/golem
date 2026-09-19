@@ -31,10 +31,16 @@
  * host sees. The tests in `test/blobstore.test.ts` show what the
  * check then answers for a negative offset.
  *
- * The message is the one `BlobRangeError` gives in
- * `golem-service-base/src/storage/blob/mod.rs`, so a test that asserts
- * on it asserts on wording a real backend produces. It says "blob"
- * where this package says "object", because the wording is the host's.
+ * The message is the message that a guest gets. `BlobRangeError`
+ * gives the text (`golem-service-base/src/storage/blob/mod.rs` lines
+ * 466 to 474). The blob store service puts that text in
+ * `InvalidInput` (`golem-worker-executor/src/services/blob_store.rs`
+ * lines 345 to 346), and `Display` puts the prefix in front of it
+ * (lines 41 to 52). The WASI host sends the result to the guest
+ * (`golem-worker-executor/src/durable_host/blobstore/container.rs`
+ * line 243). `golem-worker-executor/tests/blobstore.rs` line 324
+ * asserts the same message. The message says "blob" where this
+ * package says "object", because the wording is the host's.
  *
  * The doubles do not follow the host in one point. They look for the
  * object before they look at the range. The host refuses a `start`
@@ -55,7 +61,7 @@ export const hostRange = (start: bigint, end: bigint, size: bigint): HostRange =
   return first > last || last >= size
     ? {
         kind: "error",
-        message: `the byte range ${first}-${last} is not in the blob`,
+        message: `Invalid input: the byte range ${first}-${last} is not in the blob`,
       }
     : { kind: "slice", first: Number(first), last: Number(last) }
 }

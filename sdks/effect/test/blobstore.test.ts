@@ -324,7 +324,7 @@ describe("Container.forSchema", () => {
       if (exit._tag === "Failure") {
         const json = JSON.stringify(exit.cause)
         expect(json).toContain("BlobstoreHostError")
-        expect(json).toContain("the byte range 0-5 is not in the blob")
+        expect(json).toContain("Invalid input: the byte range 0-5 is not in the blob")
       }
     }),
   )
@@ -343,7 +343,7 @@ describe("Container.forSchema", () => {
       if (exit._tag === "Failure") {
         const json = JSON.stringify(exit.cause)
         expect(json).toContain("BlobstoreHostError")
-        expect(json).toContain("the byte range 3-1 is not in the blob")
+        expect(json).toContain("Invalid input: the byte range 3-1 is not in the blob")
       }
     }),
   )
@@ -362,7 +362,7 @@ describe("Container.forSchema", () => {
       if (exit._tag === "Failure") {
         const json = JSON.stringify(exit.cause)
         expect(json).toContain("BlobstoreHostError")
-        expect(json).toContain("the byte range 0-0 is not in the blob")
+        expect(json).toContain("Invalid input: the byte range 0-0 is not in the blob")
       }
     }),
   )
@@ -374,12 +374,13 @@ describe("Container.forSchema", () => {
     {
       name: "a negative start is a start after the end",
       range: { start: -1n, end: 2n },
-      message: "the byte range 18446744073709551615-2 is not in the blob",
+      message: "Invalid input: the byte range 18446744073709551615-2 is not in the blob",
     },
     {
       name: "a negative end is an end past the last byte",
       range: { start: -1n, end: -1n },
-      message: "the byte range 18446744073709551615-18446744073709551615 is not in the blob",
+      message:
+        "Invalid input: the byte range 18446744073709551615-18446744073709551615 is not in the blob",
     },
   ] as const
 
