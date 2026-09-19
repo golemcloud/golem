@@ -93,9 +93,9 @@ export interface HostContainer {
 }
 
 export interface BlobstoreClientShape {
-  /** Create a new empty container. Fails if a container with the same name already exists. */
+  /** Create a new empty container. Gives an error if a container with the same name already exists. */
   createContainer(name: string): Effect.Effect<HostContainer, BlobstoreHostError, Scope.Scope>
-  /** Open an existing container by name. Fails if the container does not exist. */
+  /** Open an existing container by name. Gives an error if the container does not exist. */
   getContainer(name: string): Effect.Effect<HostContainer, BlobstoreHostError, Scope.Scope>
   /**
    * Idempotent: open the named container, creating it first if it

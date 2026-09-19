@@ -173,8 +173,8 @@ export interface ObjectMetadata {
  * Optional inclusive byte range for {@link Container.getData}.
  *
  * Both offsets are inclusive, as the WIT spec says, and every Golem
- * backend reads them the same way. A range of `{ start, end }` gives
- * `end - start + 1` bytes, so an object of `n` bytes is read whole
+ * backend reads them the same way. A range of `{ start, end }` is
+ * `end - start + 1` bytes long, so an object of `n` bytes is read whole
  * with `{ start: 0n, end: n - 1n }`.
  *
  * A range that asks for a byte the object does not have gives a
@@ -217,9 +217,9 @@ export interface Container {
 
   /** True if the named object exists in this container. */
   hasObject(name: string): Effect.Effect<boolean, BlobstoreHostError>
-  /** Metadata for the named object. Fails if the object does not exist. */
+  /** Metadata for the named object. Gives an error if the object does not exist. */
   objectInfo(name: string): Effect.Effect<ObjectMetadata, BlobstoreHostError>
-  /** Delete the named object. Does NOT fail if it does not exist. */
+  /** Delete the named object. Gives no error if it does not exist. */
   deleteObject(name: string): Effect.Effect<void, BlobstoreHostError>
   /** Delete multiple objects. */
   deleteObjects(names: ReadonlyArray<string>): Effect.Effect<void, BlobstoreHostError>
@@ -403,7 +403,7 @@ const makeContainer = (host: HostContainer): Container => {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a new empty container. Fails with {@link BlobstoreHostError}
+ * Create a new empty container. Gives a {@link BlobstoreHostError}
  * if a container with the same name already exists.
  *
  * @since 1.5.0
@@ -419,7 +419,7 @@ export const createContainer = (
   })
 
 /**
- * Open an existing container by name. Fails with {@link BlobstoreHostError}
+ * Open an existing container by name. Gives a {@link BlobstoreHostError}
  * if the container does not exist.
  *
  * @since 1.5.0

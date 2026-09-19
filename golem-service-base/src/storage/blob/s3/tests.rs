@@ -191,7 +191,8 @@ type Script = dyn Fn(&SentRequest, usize) -> Answer + Send + Sync;
 type SentRequests = Arc<Mutex<Vec<SentRequest>>>;
 
 /// An HTTP transport that records each request and sends the response that a script gives for
-/// it.
+/// it. When the script gives an error of the transport in place of a response, the transport
+/// gives that error and sends no response.
 ///
 /// The script gets the request and the number of requests before it.
 #[derive(Clone)]
@@ -931,11 +932,15 @@ async fn get_raw_slice_retries_a_server_error_but_not_a_missing_object() {
 
 #[test]
 async fn get_raw_slice_retries_a_transport_error() {
-    // The first attempt gets an I/O error of the transport, and the second a timeout of the
-    // transport. Neither has a response. The third attempt gets the full object.
+    // The first attempt gets an I/O error of the transport, with no response, and the second
+    // gets the full object. The SDK gives the error as `SdkError::DispatchFailure`, so the test
+    // holds the `_` arm of `is_get_object_error_retriable` through that variant. A
+    // `ConnectorError::timeout` takes the same path: `SdkError::TimeoutError` comes from the
+    // attempt timeout of the SDK, not from the transport. The assertion cannot tell the error
+    // from a 500, which a script could send in its place; what the test holds is that the arm
+    // keeps `true`, which a 500 does not reach.
     let (storage, requests) = scripted_storage("", |_, earlier| match earlier {
         0 => Answer::transport_error(ConnectorError::io("connection reset".into())),
-        1 => Answer::transport_error(ConnectorError::timeout("no response in time".into())),
         _ => Answer::new(200, "abcdef"),
     });
 
@@ -951,7 +956,7 @@ async fn get_raw_slice_retries_a_transport_error() {
         .await
         .unwrap();
 
-    assert_eq!((result, sent(&requests).len()), (Some(b"abc".to_vec()), 3));
+    assert_eq!((result, sent(&requests).len()), (Some(b"abc".to_vec()), 2));
 }
 
 #[test]
