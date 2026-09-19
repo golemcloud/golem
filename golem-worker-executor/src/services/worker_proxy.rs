@@ -1255,6 +1255,7 @@ mod tests {
                             callee_fingerprint: durable
                                 .then(|| start.expected_callee_fingerprint.unwrap()),
                             method_name: start.method_name.clone(),
+                            ..Default::default()
                         },
                     )),
                 };

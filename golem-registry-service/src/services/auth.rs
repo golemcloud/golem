@@ -174,6 +174,28 @@ impl AuthService {
         }
     }
 
+    pub(crate) async fn builtin_owner_auth(
+        &self,
+        account_id: AccountId,
+    ) -> Result<AuthCtx, AuthError> {
+        let account = self
+            .account_service
+            .get(account_id, &AuthCtx::System)
+            .await?;
+        let account_roles = BTreeSet::from_iter(account.roles.clone());
+        let (effective_surface, delegation_surface) =
+            self.materialize_permission_surfaces(&account).await?;
+
+        Ok(AuthCtx::User(UserAuthCtx {
+            account_id: account.id,
+            account_email: account.email,
+            account_plan_id: account.plan_id,
+            account_roles,
+            effective_surface,
+            delegation_surface: Some(delegation_surface),
+        }))
+    }
+
     async fn materialize_permission_surfaces(
         &self,
         account: &Account,

@@ -20,7 +20,8 @@ use crate::proto::golem::worker::{
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
     InvocationSessionResult, ResumeAttach, ResumeOperation, StreamCancel, StreamCancelReason,
     StreamCancelRole, StreamMappingRole, invocation_request, invocation_response,
-    invocation_session_completion, invocation_session_result,
+    invocation_session_completion, invocation_session_result, public_external_tool_result,
+    public_tool_error, public_tool_rpc_error,
 };
 use prost::Message;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -69,7 +70,7 @@ struct InputState {
 struct OutputState {
     next_offset: u64,
     resume_first_frame: bool,
-    resume_mapping_announcement_pending: bool,
+    result_mapping_announcement_pending: bool,
     terminal: bool,
     cancellation_requested: Option<u64>,
     durable_stream_id: (u64, u64),
@@ -100,6 +101,8 @@ pub struct InvocationSessionState {
     has_result: bool,
     inputs: HashMap<u64, InputState>,
     outputs: HashMap<u64, OutputState>,
+    expected_tool: Option<(String, Vec<String>, bool, bool)>,
+    allows_no_result: bool,
 }
 
 impl Default for InvocationSessionState {
@@ -122,6 +125,8 @@ impl Default for InvocationSessionState {
             has_result: false,
             inputs: HashMap::new(),
             outputs: HashMap::new(),
+            expected_tool: None,
+            allows_no_result: false,
         }
     }
 }
@@ -131,6 +136,9 @@ enum RequestMessage<'a> {
         idempotency_key: &'a Option<IdempotencyKey>,
         input: Option<&'a SchemaValue>,
         out_of_band_inputs: bool,
+        method_name: &'a Option<String>,
+        external_tool: &'a Option<crate::proto::golem::worker::ExternalToolInvocation>,
+        mode: crate::proto::golem::worker::AgentInvocationMode,
     },
     ResumeAttach {
         idempotency_key: &'a Option<IdempotencyKey>,
@@ -164,11 +172,29 @@ impl InvocationSessionState {
         accept_terminal_output_cancellation: bool,
     ) -> Result<(), String> {
         let message = match request.request.as_ref() {
-            Some(invocation_request::Request::Start(start)) => RequestMessage::Start {
-                idempotency_key: &start.idempotency_key,
-                input: start.input.as_ref(),
-                out_of_band_inputs: !start.durable_input_mappings.is_empty(),
-            },
+            Some(invocation_request::Request::Start(start)) => {
+                if start.external_tool.is_some() && start.input.is_some() {
+                    return Err(
+                        "external tool input must not use the agent-method input field".to_string(),
+                    );
+                }
+                RequestMessage::Start {
+                    idempotency_key: &start.idempotency_key,
+                    input: start
+                        .external_tool
+                        .as_ref()
+                        .and_then(|tool| tool.input.as_ref())
+                        .and_then(|input| input.value.as_ref())
+                        .or(start.input.as_ref()),
+                    out_of_band_inputs: !start.durable_input_mappings.is_empty(),
+                    method_name: &start.method_name,
+                    external_tool: &start.external_tool,
+                    mode: start
+                        .mode
+                        .try_into()
+                        .map_err(|_| "unknown invocation mode".to_string())?,
+                }
+            }
             Some(invocation_request::Request::ResumeAttach(resume)) => {
                 RequestMessage::ResumeAttach {
                     idempotency_key: &resume.idempotency_key,
@@ -416,8 +442,44 @@ impl InvocationSessionState {
                     idempotency_key,
                     input,
                     out_of_band_inputs,
+                    method_name,
+                    external_tool,
+                    mode,
                 },
-            ) => self.start(idempotency_key, input, false, out_of_band_inputs),
+            ) => {
+                self.start(idempotency_key, input, false, out_of_band_inputs)?;
+                self.allows_no_result =
+                    mode != crate::proto::golem::worker::AgentInvocationMode::Await;
+                match (method_name, external_tool) {
+                    (None, None)
+                        if mode == crate::proto::golem::worker::AgentInvocationMode::Lookup =>
+                    {
+                        Ok(())
+                    }
+                    (Some(_), Some(_)) | (None, None) => Err(
+                        "invocation start must specify exactly one of method or external tool"
+                            .to_string(),
+                    ),
+                    (Some(_), None) => Ok(()),
+                    (None, Some(tool)) => {
+                        if tool.tool_name.is_empty() {
+                            return Err("external tool name must not be empty".to_string());
+                        }
+                        if !self.inputs.is_empty() {
+                            return Err(
+                                "external tool arguments must not contain streams".to_string()
+                            );
+                        }
+                        self.expected_tool = Some((
+                            tool.tool_name.clone(),
+                            tool.command_path.clone(),
+                            tool.stdin,
+                            tool.stdout,
+                        ));
+                        Ok(())
+                    }
+                }
+            }
             (
                 SessionPhase::Initial,
                 RequestMessage::ResumeAttach {
@@ -585,6 +647,69 @@ impl InvocationSessionState {
         if agent_id.name.is_empty() {
             return Err("invocation acceptance has an empty agent name".to_string());
         }
+        if !self.resume {
+            match (&self.expected_tool, &accepted.tool_name) {
+                (None, None) => {
+                    if !accepted.command_path.is_empty() {
+                        return Err(
+                            "agent-method acceptance contains external-tool fields".to_string()
+                        );
+                    }
+                }
+                (None, Some(_)) | (Some(_), None) => {
+                    return Err("invocation acceptance kind differs from its start".to_string());
+                }
+                (Some((tool_name, command_path, stdin, stdout)), Some(accepted_name)) => {
+                    if accepted_name != tool_name || &accepted.command_path != command_path {
+                        return Err(
+                            "external-tool acceptance target differs from its start".to_string()
+                        );
+                    }
+                    if accepted
+                        .stream_mappings
+                        .iter()
+                        .filter(|m| m.role() == StreamMappingRole::Input)
+                        .count()
+                        != usize::from(*stdin)
+                        || accepted
+                            .stream_mappings
+                            .iter()
+                            .filter(|m| m.role() == StreamMappingRole::Output)
+                            .count()
+                            != usize::from(*stdout)
+                    {
+                        return Err(
+                            "external-tool acceptance byte streams differ from its start"
+                                .to_string(),
+                        );
+                    }
+                    for mapping in &accepted.stream_mappings {
+                        if mapping.role() == StreamMappingRole::Input {
+                            self.inputs
+                                .insert(mapping.transport_stream_id, InputState::default());
+                        }
+                    }
+                }
+            }
+        } else if let Some(tool_name) = &accepted.tool_name {
+            self.expected_tool = Some((
+                tool_name.clone(),
+                accepted.command_path.clone(),
+                accepted
+                    .stream_mappings
+                    .iter()
+                    .any(|m| m.role() == StreamMappingRole::Input),
+                accepted
+                    .stream_mappings
+                    .iter()
+                    .any(|m| m.role() == StreamMappingRole::Output),
+            ));
+        } else if !accepted.command_path.is_empty() {
+            return Err("agent-method acceptance contains external-tool fields".to_string());
+        }
+        if accepted.tool_name.is_some() && accepted.method_name.is_some() {
+            return Err("external-tool acceptance contains an agent method".to_string());
+        }
         if self.resume {
             required_uuid(
                 &accepted.attachment_id,
@@ -675,7 +800,7 @@ impl InvocationSessionState {
                             mapping.transport_stream_id,
                             OutputState {
                                 resume_first_frame: !terminal,
-                                resume_mapping_announcement_pending: true,
+                                result_mapping_announcement_pending: true,
                                 terminal,
                                 durable_stream_id,
                                 last_durable_offset: self
@@ -739,12 +864,7 @@ impl InvocationSessionState {
                 .filter(|mapping| mapping.role() == StreamMappingRole::Input)
                 .map(|mapping| mapping.transport_stream_id)
                 .collect::<HashSet<_>>();
-            if mapped_inputs != expected_inputs
-                || accepted
-                    .stream_mappings
-                    .iter()
-                    .any(|mapping| mapping.role() != StreamMappingRole::Input)
-            {
+            if mapped_inputs != expected_inputs {
                 return Err(
                     "fresh invocation acceptance mappings do not match its initial inputs"
                         .to_string(),
@@ -753,6 +873,7 @@ impl InvocationSessionState {
             let bindings = accepted
                 .stream_mappings
                 .iter()
+                .filter(|mapping| mapping.role() == StreamMappingRole::Input)
                 .map(|mapping| {
                     let durable_stream_id = mapping_stream_id(mapping)?;
                     let high_water = mapping
@@ -786,6 +907,18 @@ impl InvocationSessionState {
                     state.terminal = terminal;
                 }
             }
+            for mapping in &accepted.stream_mappings {
+                if mapping.role() == StreamMappingRole::Output {
+                    self.outputs.insert(
+                        mapping.transport_stream_id,
+                        OutputState {
+                            durable_stream_id: mapping_stream_id(mapping)?,
+                            result_mapping_announcement_pending: true,
+                            ..OutputState::default()
+                        },
+                    );
+                }
+            }
         }
         self.accepted_agent_id = Some(agent_id.clone());
         self.accepted_revision = accepted.component_revision;
@@ -808,9 +941,27 @@ impl InvocationSessionState {
         }
         let discovered = match result.result.as_ref() {
             Some(invocation_session_result::Result::MethodResult(value)) => {
+                if self.expected_tool.is_some() {
+                    return Err(
+                        "external-tool invocation returned an agent-method result".to_string()
+                    );
+                }
                 stream_references(value)?
             }
-            Some(invocation_session_result::Result::NoResult(_)) => Vec::new(),
+            Some(invocation_session_result::Result::NoResult(_)) => {
+                if self.expected_tool.is_some() && !self.allows_no_result {
+                    return Err("external-tool invocation returned no-result".to_string());
+                }
+                Vec::new()
+            }
+            Some(invocation_session_result::Result::ToolResult(tool_result)) => {
+                if self.expected_tool.is_none() {
+                    return Err(
+                        "agent-method invocation returned an external-tool result".to_string()
+                    );
+                }
+                external_tool_result_stream_references(tool_result)?
+            }
             None => return Err("invocation result has no value".to_string()),
         };
         let bindings = self.validate_new_mappings(
@@ -1444,19 +1595,19 @@ impl InvocationSessionState {
                 return Err(format!("stream {stream_id} is already registered"));
             }
             if let Some(state) = self.outputs.get(stream_id) {
-                if !state.resume_mapping_announcement_pending {
+                if !state.result_mapping_announcement_pending {
                     return Err(format!("stream {stream_id} is already registered"));
                 }
                 if state.durable_stream_id != *durable_stream_id {
                     return Err(format!(
-                        "resumed output stream {stream_id} durable identity differs from its acceptance mapping"
+                        "output stream {stream_id} durable identity differs from its acceptance mapping"
                     ));
                 }
             }
         }
         for (stream_id, durable_stream_id) in mappings {
             if let Some(state) = self.outputs.get_mut(&stream_id) {
-                state.resume_mapping_announcement_pending = false;
+                state.result_mapping_announcement_pending = false;
             } else {
                 self.outputs.insert(
                     stream_id,
@@ -1507,7 +1658,7 @@ impl InvocationSessionState {
     }
 
     fn validate_output_frame(
-        &self,
+        &mut self,
         transport_stream_id: u64,
         durable_stream_id: &Option<crate::proto::golem::common::Uuid>,
         durable_offset: &[u8],
@@ -1526,7 +1677,7 @@ impl InvocationSessionState {
         }
         let state = self
             .outputs
-            .get(&transport_stream_id)
+            .get_mut(&transport_stream_id)
             .ok_or_else(|| format!("output stream {transport_stream_id} is unknown"))?;
         let durable_stream_id = (durable_stream_id.high_bits, durable_stream_id.low_bits);
         if state.durable_stream_id != durable_stream_id {
@@ -1844,6 +1995,36 @@ fn input_payload_fingerprint(payload: &Payload) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+fn external_tool_result_stream_references(
+    result: &crate::proto::golem::worker::PublicExternalToolResult,
+) -> Result<Vec<u64>, String> {
+    let value = match result.result.as_ref() {
+        Some(public_external_tool_result::Result::Success(success)) => success
+            .result
+            .as_ref()
+            .and_then(|typed| typed.value.as_ref()),
+        Some(public_external_tool_result::Result::Error(error)) => match error.error.as_ref() {
+            Some(public_tool_rpc_error::Error::RemoteToolError(error)) => {
+                match error.error.as_ref() {
+                    Some(public_tool_error::Error::CustomError(error)) => error
+                        .payload
+                        .as_ref()
+                        .and_then(|typed| typed.value.as_ref()),
+                    Some(_) => None,
+                    None => return Err("external-tool error has no value".to_string()),
+                }
+            }
+            Some(_) => None,
+            None => return Err("external-tool RPC error has no value".to_string()),
+        },
+        None => return Err("external-tool result has no value".to_string()),
+    };
+    value
+        .map(stream_references)
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
 fn stream_references(value: &SchemaValue) -> Result<Vec<u64>, String> {
     fn visit(
         value: &SchemaValue,
@@ -2034,6 +2215,7 @@ mod tests {
 
     fn trusted_start(input: SchemaValue) -> InvocationRequest {
         trusted_request(invocation_request::Request::Start(InvocationStart {
+            method_name: Some("run".to_string()),
             input: Some(input),
             idempotency_key: key(),
             ..Default::default()
@@ -2531,6 +2713,42 @@ mod tests {
                 .is_err(),
             "the first frame must not select a durable identity different from the result mapping"
         );
+    }
+
+    #[test]
+    fn method_early_output_binds_the_same_handle_without_resetting_offsets() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&public_start(record(Vec::new())))
+            .unwrap();
+        let mut acceptance = accepted();
+        let Some(invocation_response::Response::Accepted(accepted)) = &mut acceptance.response
+        else {
+            unreachable!()
+        };
+        accepted
+            .stream_mappings
+            .push(mapping(9, StreamMappingRole::Output));
+        state.validate_response(&acceptance).unwrap();
+        state
+            .validate_response(&response(invocation_response::Response::OutputItem(
+                packed_output_item(9, 0, vec![17, 255]),
+            )))
+            .unwrap();
+        state.validate_response(&result(stream(9))).unwrap();
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::OutputItem(
+                    packed_output_item(9, 0, vec![17, 255]),
+                )))
+                .is_err()
+        );
+        state
+            .validate_response(&response(invocation_response::Response::OutputEnd(
+                output_end(9, 2),
+            )))
+            .unwrap();
+        state.validate_response(&success()).unwrap();
     }
 
     // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
@@ -3592,5 +3810,245 @@ mod tests {
         round_trip(success());
         round_trip(failure(InvocationFailureKind::Protocol));
         round_trip(failure(InvocationFailureKind::Execution));
+    }
+
+    #[test]
+    fn external_tool_byte_streams_flow_before_structured_result() {
+        use crate::proto::golem::schema::TypedSchemaValue;
+        use crate::proto::golem::worker::{
+            ExternalToolInvocation, PublicExternalToolResult, PublicToolInvocationResult,
+        };
+
+        let mut state = InvocationSessionState::default();
+        let start = trusted_request(invocation_request::Request::Start(InvocationStart {
+            idempotency_key: key(),
+            external_tool: Some(ExternalToolInvocation {
+                tool_name: "shell".to_string(),
+                command_path: vec!["run".to_string()],
+                input: Some(TypedSchemaValue {
+                    value: Some(record(Vec::new())),
+                    ..Default::default()
+                }),
+                stdin: true,
+                stdout: true,
+                fresh_owner: true,
+                expected_deployment_revision: None,
+            }),
+            ..Default::default()
+        }));
+        state.validate_trusted_request(&start).unwrap();
+        let mut acceptance = accepted();
+        let Some(invocation_response::Response::Accepted(accepted)) = acceptance.response.as_mut()
+        else {
+            unreachable!()
+        };
+        accepted.tool_name = Some("shell".to_string());
+        accepted.command_path = vec!["run".to_string()];
+        accepted.stream_mappings = vec![
+            mapping(70, StreamMappingRole::Input),
+            mapping(71, StreamMappingRole::Output),
+        ];
+        state.validate_response(&acceptance).unwrap();
+
+        state
+            .validate_trusted_request(&trusted_request(invocation_request::Request::InputItem(
+                InputStreamItem {
+                    transport_stream_id: 70,
+                    sequence: 0,
+                    payload: Some(Payload::PackedU8(vec![1, 2])),
+                    durable_stream_id: Some(uuid(170)),
+                    epoch: 1,
+                },
+            )))
+            .unwrap();
+        state
+            .validate_response(&response(invocation_response::Response::OutputItem(
+                packed_output_item(71, 0, vec![3, 4]),
+            )))
+            .unwrap();
+        state
+            .validate_response(&response(invocation_response::Response::OutputEnd(
+                output_end(71, 2),
+            )))
+            .unwrap();
+
+        let tool_result = PublicExternalToolResult {
+            result: Some(public_external_tool_result::Result::Success(
+                PublicToolInvocationResult { result: None },
+            )),
+        };
+        state
+            .validate_response(&response(invocation_response::Response::Result(
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::ToolResult(tool_result)),
+                    component_revision: Some(12),
+                    agent_id: Some(agent_id()),
+                    idempotency_key: key(),
+                    ..Default::default()
+                },
+            )))
+            .unwrap();
+    }
+
+    #[test]
+    fn native_no_result_is_only_valid_for_schedule_and_lookup() {
+        use crate::proto::golem::worker::{AgentInvocationMode, ExternalToolInvocation};
+
+        for mode in [
+            AgentInvocationMode::Await,
+            AgentInvocationMode::Schedule,
+            AgentInvocationMode::Lookup,
+        ] {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_trusted_request(&trusted_request(invocation_request::Request::Start(
+                    InvocationStart {
+                        idempotency_key: key(),
+                        mode: mode as i32,
+                        external_tool: Some(ExternalToolInvocation {
+                            tool_name: "shell".to_string(),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )))
+                .unwrap();
+            let mut acceptance = accepted();
+            if let Some(invocation_response::Response::Accepted(accepted)) =
+                &mut acceptance.response
+            {
+                accepted.tool_name = Some("shell".to_string());
+            }
+            state.validate_response(&acceptance).unwrap();
+            let result = response(invocation_response::Response::Result(
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::NoResult(
+                        Default::default(),
+                    )),
+                    component_revision: Some(12),
+                    agent_id: Some(agent_id()),
+                    idempotency_key: key(),
+                    ..Default::default()
+                },
+            ));
+            assert_eq!(
+                state.validate_response(&result).is_ok(),
+                mode != AgentInvocationMode::Await
+            );
+        }
+    }
+
+    #[test]
+    fn resumed_external_tool_retains_native_result_kind_and_byte_roles() {
+        use crate::proto::golem::worker::{PublicExternalToolResult, PublicToolInvocationResult};
+
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&resume_attach(Vec::new()))
+            .unwrap();
+        let mut acceptance = resumed_acceptance(vec![
+            mapping(0, StreamMappingRole::Input),
+            mapping(1, StreamMappingRole::Output),
+        ]);
+        let Some(invocation_response::Response::Accepted(accepted)) = &mut acceptance.response
+        else {
+            unreachable!()
+        };
+        accepted.tool_name = Some("shell".to_string());
+        state.validate_response(&acceptance).unwrap();
+        let mut wrong_kind = InvocationSessionState::default();
+        wrong_kind
+            .validate_public_request(&resume_attach(Vec::new()))
+            .unwrap();
+        wrong_kind.validate_response(&acceptance).unwrap();
+        assert!(wrong_kind.validate_response(&result(scalar(1))).is_err());
+        state
+            .validate_response(&response(invocation_response::Response::Result(
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::ToolResult(
+                        PublicExternalToolResult {
+                            result: Some(public_external_tool_result::Result::Success(
+                                PublicToolInvocationResult { result: None },
+                            )),
+                        },
+                    )),
+                    agent_id: Some(agent_id()),
+                    idempotency_key: key(),
+                    ..Default::default()
+                },
+            )))
+            .unwrap();
+
+        for mappings in [
+            vec![mapping(0, StreamMappingRole::Unspecified)],
+            vec![
+                mapping(0, StreamMappingRole::Output),
+                mapping(0, StreamMappingRole::Input),
+            ],
+        ] {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_public_request(&resume_attach(Vec::new()))
+                .unwrap();
+            let mut invalid = acceptance.clone();
+            let Some(invocation_response::Response::Accepted(accepted)) = &mut invalid.response
+            else {
+                unreachable!()
+            };
+            accepted.stream_mappings = mappings;
+            assert!(state.validate_response(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn external_tool_acceptance_rejects_forged_or_colliding_roles() {
+        use crate::proto::golem::schema::TypedSchemaValue;
+        use crate::proto::golem::worker::ExternalToolInvocation;
+
+        let mut start = trusted_request(invocation_request::Request::Start(InvocationStart {
+            idempotency_key: key(),
+            external_tool: Some(ExternalToolInvocation {
+                tool_name: "shell".to_string(),
+                input: Some(TypedSchemaValue {
+                    value: Some(stream(7)),
+                    ..Default::default()
+                }),
+                stdin: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }));
+        let mut state = InvocationSessionState::default();
+        assert!(state.validate_trusted_request(&start).is_err());
+        let Some(invocation_request::Request::Start(request)) = &mut start.request else {
+            unreachable!()
+        };
+        request
+            .external_tool
+            .as_mut()
+            .unwrap()
+            .input
+            .as_mut()
+            .unwrap()
+            .value = Some(record(Vec::new()));
+        let mut state = InvocationSessionState::default();
+        state.validate_trusted_request(&start).unwrap();
+        let mut acceptance = accepted_with_inputs(&[7]);
+        if let Some(invocation_response::Response::Accepted(accepted)) =
+            acceptance.response.as_mut()
+        {
+            accepted.tool_name = Some("other".to_string());
+        }
+        assert!(state.validate_response(&acceptance).is_err());
+
+        let mut state = InvocationSessionState::default();
+        state.validate_trusted_request(&start).unwrap();
+        if let Some(invocation_response::Response::Accepted(accepted)) =
+            acceptance.response.as_mut()
+        {
+            accepted.tool_name = Some("shell".to_string());
+            accepted.stream_mappings.clear();
+        }
+        assert!(state.validate_response(&acceptance).is_err());
     }
 }

@@ -6,13 +6,21 @@ use golem_rust::agentic::{
 };
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
-    self as tool_host, ByteStreamFailure, RpcError, ToolRpc,
+    self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, agent_definition, agent_implementation,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, agent_definition, agent_implementation, read_only,
 };
-use std::io::Write;
+use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
+
+#[unsafe(export_name = "_initialize")]
+pub extern "C" fn initialize_component_baseline_clock() {
+    if std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_some() {
+        // Observe the reactor initializer independently of any agent constructor.
+        std::hint::black_box(std::time::Instant::now());
+    }
+}
 
 #[derive(Debug, Clone, IntoSchema, FromSchema)]
 pub struct StreamEvidence {
@@ -59,6 +67,9 @@ struct RawCapableInput {
 pub trait ToolStreamingCaller {
     fn new(name: String) -> Self;
 
+    fn record_native_order(&self, marker: String) -> String;
+    #[read_only]
+    fn read_owner_file(&self, path: String) -> String;
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
     async fn marker_before_eof(&self, first: Vec<u8>, rest: Vec<u8>) -> StreamEvidence;
     async fn alternating_echo(&self, chunk_count: u32, chunk_size: u32) -> StreamEvidence;
@@ -255,7 +266,7 @@ fn closed_raw_stdin() -> tool_host::ToolStdin {
 
 async fn raw_result(
     future: &tool_host::FutureInvokeResult,
-) -> Result<tool_host::InvocationResult, RpcError> {
+) -> Result<tool_host::InvocationResult, ToolRpcError> {
     future.get().await
 }
 
@@ -355,7 +366,29 @@ async fn wait_at_crash_checkpoint(name: &str) {
 #[agent_implementation]
 impl ToolStreamingCaller for ToolStreamingCallerImpl {
     fn new(_name: String) -> Self {
+        assert!(
+            std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_none(),
+            "component-baseline owners must not construct an agent"
+        );
         Self
+    }
+
+    fn record_native_order(&self, marker: String) -> String {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/native-tool-order.log")
+            .and_then(|mut file| file.write_all(marker.as_bytes()))
+            .expect("append native tool invocation order");
+        marker
+    }
+
+    fn read_owner_file(&self, path: String) -> String {
+        let mut contents = String::new();
+        std::fs::File::open(path)
+            .and_then(|mut file| file.read_to_string(&mut contents))
+            .expect("read owner file");
+        contents
     }
 
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String> {
@@ -752,7 +785,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 Some(rejected_target),
             )
             .await;
-        assert!(matches!(rejected, Err(RpcError::ProtocolError(_))));
+        assert!(matches!(rejected, Err(ToolRpcError::ProtocolError(_))));
         assert!(matches!(
             rejected_stdout.next().await,
             Some(Err(ByteStreamFailure::Failed(_)))
@@ -959,7 +992,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         assert_eq!(raw_chunk(&mut cancel_stdout).await, b"marker:");
         cancelled.cancel();
         assert!(
-            matches!(raw_result(&cancelled).await, Err(RpcError::Cancelled)),
+            matches!(raw_result(&cancelled).await, Err(ToolRpcError::Cancelled)),
             "explicit future cancellation must select cancelled"
         );
         assert!(
@@ -1720,7 +1753,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         );
         assert!(matches!(
             raw_result(&result).await,
-            Err(RpcError::ResourceExhausted(_))
+            Err(ToolRpcError::ResourceExhausted(_))
         ));
         assert!(matches!(
             stdout.next().await,

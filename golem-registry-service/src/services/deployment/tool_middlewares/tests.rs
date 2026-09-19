@@ -191,11 +191,14 @@ impl CompilerFixture {
                 owner_account_email: "tool@example.com".into(),
                 metadata_version: "tool-metadata".to_string(),
                 metadata_digest: Default::default(),
+                component_bindings: BTreeMap::new(),
             },
             binding: CompiledToolBinding {
                 deployment_revision: DeploymentRevision::INITIAL,
                 release_id: None,
-                agent_type_name: agent.clone(),
+                owner: golem_common::model::tool::ToolBindingOwner::AgentType {
+                    agent_type_name: agent.clone(),
+                },
                 tool_name: tool_name.clone(),
                 version: "1.0.0".to_string(),
                 metadata_version: "tool-metadata".to_string(),
@@ -230,6 +233,7 @@ impl CompilerFixture {
             universal,
             environment,
             agent,
+            &BTreeMap::new(),
             mode,
         )
     }
@@ -315,6 +319,7 @@ fn registry_is_validated_without_bindings() {
         owner_account_id: Default::default(),
         owner_account_email: "owner@example.com".into(),
         metadata_version: String::new(),
+        component_bindings: BTreeMap::new(),
         metadata_digest: Default::default(),
     };
 
@@ -324,6 +329,7 @@ fn registry_is_validated_without_bindings() {
         &[],
         &[],
         &[],
+        &Default::default(),
         &Default::default(),
         &Default::default(),
         golem_common::schema::tool::compatibility::ToolCompatibilityMode::StructuralSubtype,
@@ -516,6 +522,7 @@ fn compiler_rejects_pin_scope_and_leaf_mismatches() {
         &[missing],
         &[],
         &[],
+        &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         ToolCompatibilityMode::StructuralSubtype,

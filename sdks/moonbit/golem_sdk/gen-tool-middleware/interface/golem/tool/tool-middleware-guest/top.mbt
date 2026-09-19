@@ -2,12 +2,12 @@
 ///|
 /// Enumerate every middleware definition exported by this component.
 #warnings("-declaration_unimplemented")
-declare pub fn discover_tool_middlewares() -> Result[Array[@common.ToolMiddleware], @common.ToolError]
+declare pub fn discover_tool_middlewares() -> Result[Array[@common.ToolMiddleware], @types.ToolError]
 ///|
 /// Look up one middleware definition by canonical name.
 #warnings("-declaration_unimplemented")
-declare pub fn get_tool_middleware(name : String) -> Result[@common.ToolMiddleware, @common.ToolError]
+declare pub fn get_tool_middleware(name : String) -> Result[@common.ToolMiddleware, @types.ToolError]
 ///|
 /// Invoke one middleware layer around its runtime-bound next inner layer.
 #warnings("-declaration_unimplemented")
-declare pub async fn invoke_tool_middleware(middleware_name : String, tool_name : String, tool_metadata : @common.Tool, command_path : Array[String], input : @types.TypedSchemaValue, stdin : @async-core.Stream[Byte]?, principal : @common0.Principal, wrapped : @common.UnderlyingTool, background_group : @async-core.TaskGroup[Unit]) -> Result[@common.InvocationResult, @common.ToolError]
+declare pub async fn invoke_tool_middleware(middleware_name : String, tool_name : String, tool_metadata : @common.Tool, command_path : Array[String], input : @types.TypedSchemaValue, stdin : @async-core.Stream[Byte]?, principal : @common0.Principal, wrapped : @common.UnderlyingTool, background_group : @async-core.TaskGroup[Unit]) -> Result[@common.InvocationResult, @types.ToolError]

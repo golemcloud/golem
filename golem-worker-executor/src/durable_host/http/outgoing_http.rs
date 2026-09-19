@@ -153,8 +153,8 @@ pub(crate) async fn maybe_enable_http_pending_status_retry<Ctx: WorkerCtx>(
     let assume_idempotence = ctx.state.assume_idempotence;
     let agent_type = ctx
         .state
-        .agent_id
-        .as_ref()
+        .owner_context
+        .agent()
         .map(|agent_id| agent_id.agent_type.to_string());
 
     let future_res = ctx

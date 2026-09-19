@@ -532,7 +532,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                         .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidResult(__err.to_string()))?;
                     ::std::result::Result::Ok(
                         golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(
-                            golem_rust::schema::tool::wit::wire::CustomToolError {
+                            golem_rust::schema::wit::wire::CustomToolError {
                                 name: __name,
                                 payload: __value,
                             }

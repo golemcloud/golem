@@ -323,6 +323,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 let latest_status = &worker_metadata.last_known_status;
                 golem_api_grpc::proto::golem::worker::AgentMetadata {
                     agent_id: Some(worker_metadata.agent_id.clone().into()),
+                    owner_kind: worker_metadata.owner_kind.into(),
                     environment_id: Some(worker_metadata.environment_id.into()),
                     env: HashMap::from_iter(worker_metadata.env.iter().cloned()),
                     config: worker_metadata
@@ -1706,9 +1707,9 @@ impl ForwardingOplogState {
         let agent_type =
             ParsedAgentId::parse_agent_type_name(&self.initial_worker_metadata.agent_id.agent_id)
                 .ok();
-        let plugin = match agent_type
-            .as_ref()
-            .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
+        let plugin = match component_metadata
+            .metadata
+            .owner_plugins(self.initial_worker_metadata.owner_kind, agent_type.as_ref())
             .and_then(|plugins| {
                 plugins
                     .iter()
@@ -1831,6 +1832,7 @@ impl ForwardingOplogState {
 
         let metadata = AgentMetadata {
             agent_id: self.initial_worker_metadata.agent_id.clone(),
+            owner_kind: self.initial_worker_metadata.owner_kind,
             env: self.initial_worker_metadata.env.clone(),
             environment_id: self.initial_worker_metadata.environment_id,
             created_by: self.initial_worker_metadata.created_by,
@@ -2185,9 +2187,9 @@ impl ForwardingOplogState {
                 &self.initial_worker_metadata.agent_id.agent_id,
             )
             .ok();
-            let plugin = match agent_type
-                .as_ref()
-                .and_then(|t| component_metadata.metadata.agent_type_plugins(t))
+            let plugin = match component_metadata
+                .metadata
+                .owner_plugins(self.initial_worker_metadata.owner_kind, agent_type.as_ref())
                 .and_then(|plugins| {
                     plugins
                         .iter()
@@ -3092,6 +3094,7 @@ mod tests {
 
         let metadata = AgentMetadata {
             agent_id,
+            owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             env: vec![],
             environment_id,
             created_by: account_id,

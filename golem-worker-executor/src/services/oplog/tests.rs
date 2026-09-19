@@ -29,7 +29,7 @@ use futures::FutureExt;
 use futures::stream::BoxStream;
 use golem_common::config::RedisConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -210,6 +210,7 @@ fn make_agent_metadata(
 ) -> AgentMetadata {
     AgentMetadata {
         agent_id,
+        owner_kind: OwnerKind::ComponentAgent,
         env: vec![],
         environment_id,
         created_by,
@@ -1164,6 +1165,7 @@ async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -1264,6 +1266,7 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -1380,6 +1383,7 @@ async fn fresh_ephemeral_create_with_compressed_layers_does_not_read_storage(_tr
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -1447,6 +1451,7 @@ async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -1789,6 +1794,7 @@ async fn fresh_ephemeral_create_with_blob_layers_does_not_read_storage(_tracing:
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -2193,6 +2199,7 @@ async fn explicit_commit_reports_threshold_commits_once_and_preserves_add_receip
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Durable,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -3013,6 +3020,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
             AgentMode::Ephemeral,
             OplogEntry::create(
                 agent_id.clone(),
+                OwnerKind::ComponentAgent,
                 AgentMode::Ephemeral,
                 ComponentRevision::INITIAL,
                 Vec::new(),
@@ -5094,6 +5102,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let timestamp = Timestamp::now_utc();
     let create_entry = OplogEntry::Create {
         timestamp,
+        owner_kind: OwnerKind::ComponentAgent,
         agent_id: AgentId {
             component_id: ComponentId(Uuid::new_v4()),
             agent_id: "test".to_string(),
@@ -5234,6 +5243,7 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
     let timestamp = Timestamp::now_utc();
     let create_entry = OplogEntry::Create {
         timestamp,
+        owner_kind: OwnerKind::ComponentAgent,
         agent_id: AgentId {
             component_id: ComponentId(Uuid::new_v4()),
             agent_id: "test".to_string(),
@@ -6549,6 +6559,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
         };
         let create_entry = OplogEntry::create(
             agent_id.clone(),
+            OwnerKind::ComponentAgent,
             AgentMode::Durable,
             ComponentRevision::new(1).unwrap(),
             Vec::new(),
@@ -6710,6 +6721,7 @@ async fn multilayer_scan_for_component_ephemeral(_tracing: &Tracing) {
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
         let create_entry = OplogEntry::create(
             agent_id.clone(),
+            OwnerKind::ComponentAgent,
             mode,
             ComponentRevision::new(1).unwrap(),
             Vec::new(),
@@ -7059,6 +7071,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
 
     let durable_create = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Durable,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -7075,6 +7088,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
     .rounded();
     let ephemeral_create = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(2).unwrap(),
         Vec::new(),
@@ -7190,6 +7204,7 @@ async fn make_workers(
         };
         let create_entry = OplogEntry::create(
             agent_id.clone(),
+            OwnerKind::ComponentAgent,
             mode,
             ComponentRevision::new(1).unwrap(),
             Vec::new(),
@@ -7996,6 +8011,7 @@ async fn ephemeral_reserved_start_uploads_payload_eagerly(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),

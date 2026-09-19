@@ -218,19 +218,6 @@ pub(all) struct ToolMiddleware {
 } derive(Debug, Eq)
 ///|
 /// Invocation contract — shared between guest and host.
-pub(all) struct CustomToolError {
-      name : String; payload : @types.TypedSchemaValue
-} derive(Debug, Eq)
-///|
-pub(all) suberror ToolError {
-      InvalidToolName(String)
-      InvalidCommandPath(Array[String])
-      InvalidInput(String)
-      ConstraintViolation(String)
-      InvalidResult(String)
-      CustomError(CustomToolError)
-} derive(Debug, Eq)
-///|
 pub(all) struct InvocationResult {
       result : @types.TypedSchemaValue?; stdout : @async-core.Stream[Byte]?
 }
@@ -245,7 +232,7 @@ pub fn UnderlyingTool::drop(self : UnderlyingTool) -> Unit {
       wasmImportResourceDropUnderlyingTool(resource)
 }
 ///|
-pub async fn UnderlyingTool::invoke(self : UnderlyingTool, command_path : Array[String], input : @types.TypedSchemaValue, stdin : @async-core.Stream[Byte]?) -> Result[InvocationResult, ToolError] {
+pub async fn UnderlyingTool::invoke(self : UnderlyingTool, command_path : Array[String], input : @types.TypedSchemaValue, stdin : @async-core.Stream[Byte]?) -> Result[InvocationResult, @types.ToolError] {
 
       let lower_ptr : Int = mbt_ffi_malloc(52)
       defer mbt_ffi_free(lower_ptr)
@@ -8066,7 +8053,7 @@ pub async fn UnderlyingTool::invoke(self : UnderlyingTool, command_path : Array[
 
                               let result233 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              ToolError::InvalidToolName(result233)
+                              @types.ToolError::InvalidToolName(result233)
                         }
                         1 => {
 
@@ -8080,25 +8067,25 @@ pub async fn UnderlyingTool::invoke(self : UnderlyingTool, command_path : Array[
                               }
                               mbt_ffi_free(mbt_ffi_load32((result_ptr) + 8))
 
-                              ToolError::InvalidCommandPath(array235)
+                              @types.ToolError::InvalidCommandPath(array235)
                         }
                         2 => {
 
                               let result237 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              ToolError::InvalidInput(result237)
+                              @types.ToolError::InvalidInput(result237)
                         }
                         3 => {
 
                               let result238 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              ToolError::ConstraintViolation(result238)
+                              @types.ToolError::ConstraintViolation(result238)
                         }
                         4 => {
 
                               let result239 = mbt_ffi_ptr2str(mbt_ffi_load32((result_ptr) + 8), mbt_ffi_load32((result_ptr) + 12))
 
-                              ToolError::InvalidResult(result239)
+                              @types.ToolError::InvalidResult(result239)
                         }
                         5 => {
 
@@ -9932,7 +9919,7 @@ pub async fn UnderlyingTool::invoke(self : UnderlyingTool, command_path : Array[
                               }
                               mbt_ffi_free(mbt_ffi_load32((result_ptr) + 36))
 
-                              ToolError::CustomError(CustomToolError::{name : result240, payload : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array437, defs : array442, root : mbt_ffi_load32((result_ptr) + 32)}, value : @types.SchemaValueTree::{value_nodes : array473, root : mbt_ffi_load32((result_ptr) + 44)}}})
+                              @types.ToolError::CustomError(@types.CustomToolError::{name : result240, payload : @types.TypedSchemaValue::{graph : @types.SchemaGraph::{type_nodes : array437, defs : array442, root : mbt_ffi_load32((result_ptr) + 32)}, value : @types.SchemaValueTree::{value_nodes : array473, root : mbt_ffi_load32((result_ptr) + 44)}}})
                         }
                         _ => panic()
                   }
