@@ -21,10 +21,10 @@
  * to 513). It reads the value with `to_i64`, then casts the result
  * (`skeleton/src/wrappers.rs` lines 199 to 205). `to_i64` calls
  * `JS_ToInt64Ext` (rquickjs-core 0.10.0, `src/value/bigint.rs` lines
- * 23 to 31). For a `BigInt`, that function calls `JS_ToBigInt64Free`,
- * which gives the value mod 2^64 (rquickjs-sys 0.10.0,
- * `quickjs/quickjs.c` line 13517). The host thus reads `-1n` as
- * 18446744073709551615.
+ * 23 to 31). For a `BigInt`, that function calls `JS_ToBigInt64`
+ * (rquickjs-sys 0.10.0, `quickjs/quickjs.c` line 13527), which calls
+ * `JS_ToBigInt64Free`. That function gives the value mod 2^64 (line
+ * 13517). The host thus reads `-1n` as 18446744073709551615.
  *
  * `BigInt.asUintN(64, x)` gives a value from 0 to 2^64-1. The check
  * therefore never sees a negative offset. It sees the value that the
