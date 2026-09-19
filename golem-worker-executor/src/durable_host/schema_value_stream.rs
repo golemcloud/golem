@@ -37,7 +37,8 @@ use std::marker::PhantomData;
 use wasmtime::StoreContextMut;
 use wasmtime::component::{Accessor, HasData, Resource, StreamReader};
 
-pub(crate) fn contains_stream(value: &SchemaValue) -> bool {
+/// Returns whether a schema value contains a stream at any nesting depth.
+pub fn contains_stream(value: &SchemaValue) -> bool {
     match value {
         SchemaValue::Stream(_) => true,
         SchemaValue::Record { fields } => fields.iter().any(contains_stream),
@@ -298,10 +299,20 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                     .with_host_endpoint::<DurableInputEndpoint, _>(|_| ())
                     .is_ok()
                 {
+                    let drop_event_sink = access
+                        .get()
+                        .state
+                        .dropped_call_event_sender()
+                        .expect("dropped-call event sender is always available");
+                    let runtime_teardown = access.get().stream_runtime_teardown_probe();
                     let endpoint = stream
                         .take_host_endpoint::<DurableInputEndpoint>()
                         .map_err(wasmtime::Error::msg)?;
-                    StreamReader::new(&mut access, DurableInputProducer::new(endpoint))
+                    StreamReader::new(
+                        &mut access,
+                        DurableInputProducer::new(endpoint)
+                            .with_drop_cleanup(drop_event_sink, runtime_teardown),
+                    )
                 } else {
                     let endpoint = stream
                         .take_host_endpoint::<LiveStreamEndpoint>()
@@ -316,12 +327,21 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
         accessor: &Accessor<T, Self>,
         rep: Resource<SchemaValueStreamHandleRep>,
     ) -> anyhow::Result<()> {
-        accessor.with(|mut access| {
-            access
+        accessor.with(|mut access| -> anyhow::Result<()> {
+            let stream = access
                 .get()
                 .table()
                 .delete(rep)
-                .map_err(|error| anyhow::anyhow!(error.to_string()))
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?
+                .into_stream();
+            let drop_event_sink = access
+                .get()
+                .state
+                .dropped_call_event_sender()
+                .expect("dropped-call event sender is always available");
+            let runtime_teardown = access.get().stream_runtime_teardown_probe();
+            DurableInputProducer::drop_unread(stream, drop_event_sink, runtime_teardown);
+            Ok(())
         })?;
         Ok(())
     }

@@ -14,17 +14,20 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanCursor, ScanResume,
 };
 use async_trait::async_trait;
+use bytes::Bytes;
+use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
-use golem_service_base::db::PoolApi;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::repo::RepoError;
 use include_dir::include_dir;
+use std::sync::Arc;
 use std::time::Duration;
 
 const DB_TYPE: &str = "sqlite";
@@ -96,6 +99,21 @@ impl SqliteIndexedStorage {
     fn classify_repo_error(err: RepoError) -> IndexedStorageError {
         if err.is_transient() {
             IndexedStorageError::Transient(err.to_string())
+        } else {
+            IndexedStorageError::Other(err.to_safe_string())
+        }
+    }
+
+    fn classify_repo_error_primary_oplog_insert(err: RepoError) -> IndexedStorageError {
+        if err.is_pool_timeout() {
+            IndexedStorageError::Transient(err.to_string())
+        } else if err.is_transient() {
+            IndexedStorageError::Indeterminate(err.to_string())
+        } else if err.is_unique_violation() {
+            IndexedStorageError::Conflict(format!(
+                "possible shard ownership mismatch while writing oplog: {}",
+                err.to_safe_string()
+            ))
         } else {
             IndexedStorageError::Other(err.to_safe_string())
         }
@@ -203,6 +221,50 @@ impl IndexedStorage for SqliteIndexedStorage {
         Ok((new_cursor, keys))
     }
 
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        // Stored keys are never empty, so `key > ''` starts the first page at the first key.
+        let after = resume
+            .map(|resume| resume.into_marker("SQLite"))
+            .transpose()?
+            .unwrap_or_default();
+        let query = match prefix {
+            Some(prefix) => {
+                let like = Self::to_like_prefix(prefix);
+                sqlx::query_as(
+                    "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? AND key LIKE ? ESCAPE '\\' ORDER BY key LIMIT ?;",
+                )
+                .bind(Self::meta_namespace(namespace))
+                .bind(after)
+                .bind(like)
+                .bind(sqlx::types::Json(count))
+            }
+            None => sqlx::query_as(
+                "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? ORDER BY key LIMIT ?;",
+            )
+            .bind(Self::meta_namespace(namespace))
+            .bind(after)
+            .bind(sqlx::types::Json(count)),
+        };
+
+        let keys = self
+            .pool
+            .with_ro(svc_name, api_name)
+            .fetch_all_as::<(String,), _>(query)
+            .await
+            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
+            .map_err(Self::classify_repo_error)?;
+
+        Ok((super::last_key_resume(&keys, count), keys))
+    }
+
     async fn append(
         &self,
         svc_name: &'static str,
@@ -214,6 +276,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         value: Vec<u8>,
     ) -> Result<(), IndexedStorageError> {
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
+        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
         let query = sqlx::query(
             r#"
                     INSERT INTO index_storage (namespace, key, id, value) VALUES (?,?,?,?);
@@ -229,7 +292,63 @@ impl IndexedStorage for SqliteIndexedStorage {
             .execute(query)
             .await
             .map(|_| ())
-            .map_err(Self::classify_repo_error)
+            .map_err(|err| {
+                if primary_oplog_insert {
+                    Self::classify_repo_error_primary_oplog_insert(err)
+                } else {
+                    Self::classify_repo_error(err)
+                }
+            })
+    }
+
+    async fn append_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: &IndexedStorageNamespace,
+        key: &str,
+        pairs: Arc<[(u64, Bytes)]>,
+    ) -> Result<(), IndexedStorageError> {
+        if pairs.is_empty() {
+            return Ok(());
+        }
+
+        let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
+        let namespace = Self::namespace((*namespace).clone());
+        let key = key.to_string();
+        for (_, value) in pairs.iter() {
+            record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
+        }
+
+        self.pool
+            .with_tx(svc_name, api_name, |tx| {
+                async move {
+                    for (id, value) in pairs.iter() {
+                        tx.execute(
+                            sqlx::query(
+                                "INSERT INTO index_storage (namespace, key, id, value) VALUES (?,?,?,?);",
+                            )
+                            .bind(namespace.as_str())
+                            .bind(key.as_str())
+                            .bind(sqlx::types::Json(*id))
+                            .bind(value.as_ref()),
+                        )
+                        .await?;
+                    }
+
+                    Ok(())
+                }
+                .boxed()
+            })
+            .await
+            .map_err(|err| {
+                if primary_oplog_insert {
+                    Self::classify_repo_error_primary_oplog_insert(err)
+                } else {
+                    Self::classify_repo_error(err)
+                }
+            })
     }
 
     async fn length(
@@ -342,6 +461,28 @@ impl IndexedStorage for SqliteIndexedStorage {
             .map_err(Self::classify_repo_error)
     }
 
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        let query = sqlx::query_as::<_, (i64,)>(
+            "SELECT id FROM index_storage WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 1;",
+        )
+        .bind(Self::namespace(namespace))
+        .bind(key);
+
+        self.pool
+            .with_ro(svc_name, api_name)
+            .fetch_optional_as::<(i64,), _>(query)
+            .await
+            .map(|op| op.map(|row| row.0 as u64))
+            .map_err(Self::classify_repo_error)
+    }
+
     async fn closest(
         &self,
         svc_name: &'static str,
@@ -398,5 +539,125 @@ struct DBIdValue {
 impl DBIdValue {
     fn into_pair(self) -> (u64, Vec<u8>) {
         (self.id as u64, self.value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::AgentId;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::component::ComponentId;
+    use test_r::test;
+
+    fn oplog_namespace(agent_id: &str) -> IndexedStorageNamespace {
+        IndexedStorageNamespace::OpLog {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: agent_id.to_string(),
+            },
+            agent_mode: AgentMode::Durable,
+        }
+    }
+
+    async fn sqlite_storage(database: String) -> SqliteIndexedStorage {
+        SqliteIndexedStorage::configured(&DbSqliteConfig {
+            database,
+            max_connections: 1,
+            foreign_keys: false,
+        })
+        .await
+        .unwrap()
+    }
+
+    #[test]
+    async fn append_many_writes_the_complete_batch() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = sqlite_storage(
+            tempdir
+                .path()
+                .join("indexed.db")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .await;
+        let namespace = oplog_namespace("sqlite-batch");
+
+        storage
+            .append_many(
+                "test",
+                "append_many",
+                "entry",
+                &namespace,
+                "oplog",
+                vec![
+                    (1, Bytes::from_static(b"first")),
+                    (2, Bytes::from_static(b"second")),
+                ]
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let mut actual = storage
+            .read("test", "read", "entry", namespace, "oplog", 1, 2)
+            .await
+            .unwrap();
+        actual.sort_unstable_by_key(|(id, _)| *id);
+        assert_eq!(
+            actual,
+            vec![(1, b"first".to_vec()), (2, b"second".to_vec())]
+        );
+    }
+
+    #[test]
+    async fn append_many_rolls_back_the_batch_on_conflict() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = sqlite_storage(
+            tempdir
+                .path()
+                .join("indexed.db")
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .await;
+        let namespace = oplog_namespace("sqlite-atomic-batch");
+
+        storage
+            .append(
+                "test",
+                "append",
+                "entry",
+                namespace.clone(),
+                "oplog",
+                2,
+                b"existing".to_vec(),
+            )
+            .await
+            .unwrap();
+
+        let result = storage
+            .append_many(
+                "test",
+                "append_many",
+                "entry",
+                &namespace,
+                "oplog",
+                vec![
+                    (1, Bytes::from_static(b"must-roll-back")),
+                    (2, Bytes::from_static(b"conflict")),
+                ]
+                .into(),
+            )
+            .await;
+
+        assert!(matches!(result, Err(IndexedStorageError::Conflict(_))));
+        assert_eq!(
+            storage
+                .read("test", "read", "entry", namespace, "oplog", 1, 2)
+                .await
+                .unwrap(),
+            vec![(2, b"existing".to_vec())]
+        );
     }
 }

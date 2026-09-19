@@ -19,13 +19,16 @@
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "build": "rollup --failAfterWarnings -c",
-    "dev": "rollup -c -w"
+    "dev": "rollup -c -w",
+    "test": "node --test test/*.test.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "SEE LICENSE IN LICENSE",
   "description": "",
   "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/ws": "^8.18.1",
     "@eslint/js": "^9.33.0",
     "@typescript-eslint/eslint-plugin": "^8.39.0",
     "@typescript-eslint/parser": "^8.39.0",
@@ -35,6 +38,9 @@
     "rollup-plugin-typescript2": "^0.36.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.39.0"
+  },
+  "dependencies": {
+    "ws": "8.18.3"
   },
   "private": false,
   "repository": "https://github.com/golemcloud/golem"

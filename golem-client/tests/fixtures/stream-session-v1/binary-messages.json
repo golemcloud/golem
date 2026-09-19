@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "vectors": [
+    {
+      "frameBase64": "AAAASnsiY2hhbm5lbCI6MSwiaXRlbUNvdW50IjoiMyIsImtpbmQiOiJpbnB1dC11OCIsInNlcXVlbmNlIjoiMCIsInZlcnNpb24iOjF9AH//",
+      "metadata": "{\"channel\":1,\"itemCount\":\"3\",\"kind\":\"input-u8\",\"sequence\":\"0\",\"version\":1}",
+      "metadataLength": 74,
+      "name": "input-u8",
+      "payloadHex": "007fff"
+    },
+    {
+      "frameBase64": "AAABgXsiY2hhbm5lbCI6MiwiY3Vyc29yVG9rZW4iOiJnYWkxX0FRTU5kR1Z6ZEMxclpYa3RNakF5TmdFQUFBQVBkR1Z6ZEMxa1pYQnNiM2x0Wlc1MEFnQUFBQlpuYjJ4bGJTMWhaMlZ1ZEMxcGJuWnZZMkYwYVc5dUF3QUFBQXRoWTJOdmRXNTBMVEV5TXdRQUFBQVFkWE5sY2pwaFkyTnZkVzUwTFRFeU13VUFBQUFJQUFBQUFHcVF6NEF3QUFBQUVCRVJFUkVSRVVFUmdSRVJFUkVSRVJFeEFBQUFFRVJFUkVSRVJFUkVoRVJFUkVSRVJFUXlBQUFBR0FBQkFnTUVCUVlIQ0FrS0N3d05EZzhRRVJJVEZCVVdGX05waWlxTXhva1lSclk5emd6aUxUZVhESVZTV3VPQldUQ3pSbDhGbXl2RCIsIml0ZW1Db3VudCI6IjUiLCJraW5kIjoib3V0cHV0LXU4Iiwic2VxdWVuY2UiOiI4IiwidmVyc2lvbiI6MX1Hb2xlbQ==",
+      "metadata": "{\"channel\":2,\"cursorToken\":\"gai1_AQMNdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AwAAAAEBEREREREUERgRERERERERExAAAAEEREREREREREhEREREREREQyAAAAGAABAgMEBQYHCAkKCwwNDg8QERITFBUWF_NpiiqMxokYRrY9zgziLTeXDIVSWuOBWTCzRl8FmyvD\",\"itemCount\":\"5\",\"kind\":\"output-u8\",\"sequence\":\"8\",\"version\":1}",
+      "metadataLength": 385,
+      "name": "output-u8",
+      "payloadHex": "476f6c656d"
+    },
+    {
+      "frameBase64": "AAAAdHsiY2hhbm5lbCI6MywiaXRlbUNvdW50IjoiMSIsImtpbmQiOiJpbnB1dC1iaW5hcnkiLCJtaW1lVHlwZSI6ImFwcGxpY2F0aW9uL29jdGV0LXN0cmVhbSIsInNlcXVlbmNlIjoiMCIsInZlcnNpb24iOjF9AAEC/f7/",
+      "metadata": "{\"channel\":3,\"itemCount\":\"1\",\"kind\":\"input-binary\",\"mimeType\":\"application/octet-stream\",\"sequence\":\"0\",\"version\":1}",
+      "metadataLength": 116,
+      "name": "input-binary",
+      "payloadHex": "000102fdfeff"
+    },
+    {
+      "frameBase64": "AAABnXsiY2hhbm5lbCI6NCwiY3Vyc29yVG9rZW4iOiJnYWkxX0FRTU5kR1Z6ZEMxclpYa3RNakF5TmdFQUFBQVBkR1Z6ZEMxa1pYQnNiM2x0Wlc1MEFnQUFBQlpuYjJ4bGJTMWhaMlZ1ZEMxcGJuWnZZMkYwYVc5dUF3QUFBQXRoWTJOdmRXNTBMVEV5TXdRQUFBQVFkWE5sY2pwaFkyTnZkVzUwTFRFeU13VUFBQUFJQUFBQUFHcVF6NEF3QUFBQUVCRVJFUkVSRVVFUmdSRVJFUkVSRVJFeEFBQUFFRVJFUkVSRVJFUkVoRVJFUkVSRVJFUXlBQUFBR0FBQkFnTUVCUVlIQ0FrS0N3d05EZzhRRVJJVEZCVVdGX05waWlxTXhva1lSclk5emd6aUxUZVhESVZTV3VPQldUQ3pSbDhGbXl2RCIsIml0ZW1Db3VudCI6IjEiLCJraW5kIjoib3V0cHV0LWJpbmFyeSIsIm1pbWVUeXBlIjoiaW1hZ2UvcG5nIiwic2VxdWVuY2UiOiIxMiIsInZlcnNpb24iOjF9iVBORw0KGgo=",
+      "metadata": "{\"channel\":4,\"cursorToken\":\"gai1_AQMNdGVzdC1rZXktMjAyNgEAAAAPdGVzdC1kZXBsb3ltZW50AgAAABZnb2xlbS1hZ2VudC1pbnZvY2F0aW9uAwAAAAthY2NvdW50LTEyMwQAAAAQdXNlcjphY2NvdW50LTEyMwUAAAAIAAAAAGqQz4AwAAAAEBEREREREUERgRERERERERExAAAAEEREREREREREhEREREREREQyAAAAGAABAgMEBQYHCAkKCwwNDg8QERITFBUWF_NpiiqMxokYRrY9zgziLTeXDIVSWuOBWTCzRl8FmyvD\",\"itemCount\":\"1\",\"kind\":\"output-binary\",\"mimeType\":\"image/png\",\"sequence\":\"12\",\"version\":1}",
+      "metadataLength": 413,
+      "name": "output-binary",
+      "payloadHex": "89504e470d0a1a0a"
+    }
+  ]
+}

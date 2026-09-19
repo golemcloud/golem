@@ -14,10 +14,11 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanCursor, ScanResume,
 };
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use async_trait::async_trait;
+use bytes::Bytes;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::AgentId;
@@ -25,14 +26,23 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+
+/// How long a cached directory listing is served. A backstop only:
+/// [`MultiSqliteIndexedStorage::storage_by_db_name`] clears the cache whenever it creates a file,
+/// so this matters only for files created outside the process.
+const LISTING_TTL: Duration = Duration::from_secs(10);
 
 /// IndexedStorage implementation that uses multiple separate SQLite databases depending
 /// on the namespace.
 pub struct MultiSqliteIndexedStorage {
     cache: Cache<String, (), SqliteIndexedStorage, IndexedStorageError>,
     hash_cache: Arc<Mutex<HashCache>>,
+    /// The `.db` files under each meta-namespace prefix, sorted, with the time they were read.
+    /// See [`MultiSqliteIndexedStorage::namespace_db_files`].
+    listing_cache: Arc<Mutex<HashMap<String, CachedListing>>>,
     root_dir: PathBuf,
     max_connections: u32,
     foreign_keys: bool,
@@ -41,6 +51,11 @@ pub struct MultiSqliteIndexedStorage {
 struct HashCache {
     hash_per_agent_id: HashMap<AgentId, String>,
     agent_id_per_hash: HashMap<String, AgentId>,
+}
+
+struct CachedListing {
+    files: Arc<Vec<String>>,
+    read_at: Instant,
 }
 
 impl MultiSqliteIndexedStorage {
@@ -63,6 +78,7 @@ impl MultiSqliteIndexedStorage {
                 hash_per_agent_id: HashMap::new(),
                 agent_id_per_hash: HashMap::new(),
             })),
+            listing_cache: Arc::new(Mutex::new(HashMap::new())),
             root_dir: root_dir.to_path_buf(),
             max_connections,
             foreign_keys,
@@ -92,6 +108,78 @@ impl MultiSqliteIndexedStorage {
         self.storage_by_db_name(db).await
     }
 
+    /// The filename prefix every `.db` file under a meta-namespace shares.
+    fn db_prefix(namespace: &IndexedStorageMetaNamespace) -> String {
+        match namespace {
+            IndexedStorageMetaNamespace::Oplog { agent_mode } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!("{mode}-oplog-")
+            }
+            IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!("{mode}-compressed-oplog-l{}-", level)
+            }
+        }
+    }
+
+    /// The `.db` files a namespace is spread over, sorted.
+    ///
+    /// A walk asks for this once per page, and the directory holds a file per agent that ever had
+    /// entries, so the listing is cached for [`LISTING_TTL`] and read on a blocking thread.
+    async fn namespace_db_files(
+        &self,
+        namespace: &IndexedStorageMetaNamespace,
+    ) -> Result<Arc<Vec<String>>, IndexedStorageError> {
+        let db_prefix = Self::db_prefix(namespace);
+        if let Some(cached) = self.listing_cache.lock().await.get(&db_prefix)
+            && cached.read_at.elapsed() < LISTING_TTL
+        {
+            return Ok(cached.files.clone());
+        }
+
+        let root_dir = self.root_dir.clone();
+        let prefix = db_prefix.clone();
+        let files = tokio::task::spawn_blocking(move || Self::read_db_files(&root_dir, &prefix))
+            .await
+            .map_err(|e| {
+                IndexedStorageError::Other(format!("Failed to list the root directory: {:?}", e))
+            })??;
+
+        let files = Arc::new(files);
+        self.listing_cache.lock().await.insert(
+            db_prefix,
+            CachedListing {
+                files: files.clone(),
+                read_at: Instant::now(),
+            },
+        );
+        Ok(files)
+    }
+
+    /// Blocking half of [`Self::namespace_db_files`].
+    fn read_db_files(root_dir: &Path, db_prefix: &str) -> Result<Vec<String>, IndexedStorageError> {
+        use std::fs;
+
+        let mut matching_files: Vec<_> = fs::read_dir(root_dir)
+            .map_err(|e| {
+                IndexedStorageError::Other(format!("Failed to read root directory: {:?}", e))
+            })?
+            .filter_map(|entry| {
+                entry.ok().and_then(|e| {
+                    let path = e.path();
+                    let file_name = path.file_name()?.to_string_lossy().to_string();
+                    if file_name.starts_with(db_prefix) && file_name.ends_with(".db") {
+                        Some(file_name)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+        matching_files.sort();
+        Ok(matching_files)
+    }
+
     async fn storage_by_db_name(
         &self,
         db: String,
@@ -99,11 +187,22 @@ impl MultiSqliteIndexedStorage {
         let max_connections = self.max_connections;
         let foreign_keys = self.foreign_keys;
         let db_path = self.root_dir.join(db.clone()).to_string_lossy().to_string();
-        self.cache
+        // Set when this call creates the file, which makes cached listings stale. Checked only on a
+        // cache miss, since a hit means the file is already open.
+        let created = Arc::new(AtomicBool::new(false));
+        let flag = created.clone();
+        let existing = db_path.clone();
+        let storage = self
+            .cache
             .get_or_insert_simple(&db, async move || {
+                flag.store(!Path::new(&existing).exists(), Ordering::SeqCst);
                 Self::init_storage(max_connections, foreign_keys, db_path).await
             })
-            .await
+            .await?;
+        if created.load(Ordering::SeqCst) {
+            self.listing_cache.lock().await.clear();
+        }
+        Ok(storage)
     }
 
     async fn namespace_to_db(&self, namespace: &IndexedStorageNamespace) -> String {
@@ -196,37 +295,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        use std::fs;
-
-        let db_prefix = match namespace {
-            IndexedStorageMetaNamespace::Oplog { agent_mode } => {
-                let mode = super::agent_mode_prefix(agent_mode);
-                format!("{mode}-oplog-")
-            }
-            IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
-                let mode = super::agent_mode_prefix(agent_mode);
-                format!("{mode}-compressed-oplog-l{}-", level)
-            }
-        };
-
-        // List all .db files matching the namespace prefix, sorted consistently
-        let mut matching_files: Vec<_> = fs::read_dir(&self.root_dir)
-            .map_err(|e| {
-                IndexedStorageError::Other(format!("Failed to read root directory: {:?}", e))
-            })?
-            .filter_map(|entry| {
-                entry.ok().and_then(|e| {
-                    let path = e.path();
-                    let file_name = path.file_name()?.to_string_lossy().to_string();
-                    if file_name.starts_with(&db_prefix) && file_name.ends_with(".db") {
-                        Some(file_name)
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect();
-        matching_files.sort();
+        let matching_files = self.namespace_db_files(&namespace).await?;
 
         // Decode cursor: upper 32 bits = file index, lower 32 bits = scan cursor within file
         let file_index = (cursor >> 32) as usize;
@@ -266,6 +335,71 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         Ok((0, results))
     }
 
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        // Walks files rather than keys: the token names the last file finished, and each file is
+        // read whole. Files are emptied, never deleted, so the token stays a valid seek position.
+        // Drained files stay listed, so a call stops after opening `count` files even if they were
+        // all empty.
+        let after = resume
+            .map(|resume| resume.into_marker("Multi-SQLite"))
+            .transpose()?;
+
+        let files = self.namespace_db_files(&namespace).await?;
+        // The listing is sorted, so the marker is found by bisection.
+        let start = match after.as_deref() {
+            Some(after) => files.partition_point(|file| file.as_str() <= after),
+            None => 0,
+        };
+
+        // A zero count still opens one file, so every call makes progress.
+        let page = count.max(1);
+        let mut keys = Vec::new();
+        let mut last_file = None;
+        let mut opened = 0;
+        for file_name in files[start..].iter().cloned() {
+            if opened >= page {
+                break;
+            }
+            opened += 1;
+            let storage = self.storage_by_db_name(file_name.clone()).await?;
+
+            // The whole file, which holds a single namespace.
+            let mut within = None;
+            loop {
+                let (next, page) = storage
+                    .scan_stable(svc_name, api_name, namespace.clone(), prefix, within, page)
+                    .await?;
+                keys.extend(page);
+                match next {
+                    Some(next) => within = Some(next),
+                    None => break,
+                }
+            }
+
+            last_file = Some(file_name);
+            if keys.len() as u64 >= count {
+                break;
+            }
+        }
+
+        // The walk ends at the end of the file list, not on a short page, since the files a page
+        // opened may simply have been empty.
+        let exhausted = opened < page && (keys.len() as u64) < count;
+        let next = match last_file {
+            Some(file) if !exhausted => Some(ScanResume::Marker(file)),
+            _ => None,
+        };
+        Ok((next, keys))
+    }
+
     async fn append(
         &self,
         svc_name: &'static str,
@@ -279,6 +413,21 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         self.storage_by_namespace(&namespace)
             .await?
             .append(svc_name, api_name, entity_name, namespace, key, id, value)
+            .await
+    }
+
+    async fn append_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: &IndexedStorageNamespace,
+        key: &str,
+        pairs: Arc<[(u64, Bytes)]>,
+    ) -> Result<(), IndexedStorageError> {
+        self.storage_by_namespace(namespace)
+            .await?
+            .append_many(svc_name, api_name, entity_name, namespace, key, pairs)
             .await
     }
 
@@ -360,6 +509,20 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             .await
     }
 
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        self.storage_by_namespace(&namespace)
+            .await?
+            .last_id(svc_name, api_name, entity_name, namespace, key)
+            .await
+    }
+
     async fn closest(
         &self,
         svc_name: &'static str,
@@ -387,5 +550,77 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             .await?
             .drop_prefix(svc_name, api_name, namespace, key, last_dropped_id)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::component::ComponentId;
+    use test_r::test;
+
+    fn oplog_namespace(agent_id: &str) -> IndexedStorageNamespace {
+        IndexedStorageNamespace::OpLog {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: agent_id.to_string(),
+            },
+            agent_mode: AgentMode::Durable,
+        }
+    }
+
+    #[test]
+    async fn append_many_preserves_per_agent_database_routing() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = MultiSqliteIndexedStorage::new(tempdir.path(), 1, false);
+        let first_namespace = oplog_namespace("first-agent");
+        let second_namespace = oplog_namespace("second-agent");
+
+        storage
+            .append_many(
+                "test",
+                "append_many",
+                "entry",
+                &first_namespace,
+                "shared-key",
+                vec![(1, Bytes::from_static(b"first-agent-value"))].into(),
+            )
+            .await
+            .unwrap();
+        storage
+            .append_many(
+                "test",
+                "append_many",
+                "entry",
+                &second_namespace,
+                "shared-key",
+                vec![(1, Bytes::from_static(b"second-agent-value"))].into(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            storage
+                .read("test", "read", "entry", first_namespace, "shared-key", 1, 1,)
+                .await
+                .unwrap(),
+            vec![(1, b"first-agent-value".to_vec())]
+        );
+        assert_eq!(
+            storage
+                .read(
+                    "test",
+                    "read",
+                    "entry",
+                    second_namespace,
+                    "shared-key",
+                    1,
+                    1,
+                )
+                .await
+                .unwrap(),
+            vec![(1, b"second-agent-value".to_vec())]
+        );
     }
 }

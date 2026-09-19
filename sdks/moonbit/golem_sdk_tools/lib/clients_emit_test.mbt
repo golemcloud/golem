@@ -632,3 +632,238 @@ test "validate_config_types - same-package qualified ref is allowed" {
       abort("same-package qualified ref should be allowed, got: " + msg)
   }
 }
+
+///|
+fn stream_client_test_method(
+  name : String,
+  params : Array[(String, @lib.ParamType)],
+  return_type : @lib.ParamType?,
+) -> @lib.MethodInfo {
+  {
+    name,
+    description: "Stream detection test method",
+    prompt_hint: None,
+    params,
+    return_type,
+    http_endpoint: None,
+    read_only: None,
+  }
+}
+
+///|
+fn stream_client_test_agent(
+  constructor_params : Array[(String, @lib.ParamType)],
+  methods : Array[@lib.MethodInfo],
+) -> @lib.AgentInfo {
+  {
+    name: "StreamAgent",
+    description: "Stream detection test agent",
+    mode: @lib.AgentMode::Durable,
+    constructor_params,
+    constructor_description: "Creates a stream detection test agent",
+    constructor_prompt_hint: None,
+    methods,
+    has_init: false,
+    has_snapshottable: false,
+    has_json_derives: false,
+    snapshotting: Disabled,
+    fields: [],
+    http_mount: None,
+    config_type: None,
+  }
+}
+
+///|
+test "generate_client_code - recursively stream-bearing methods are awaited only" {
+  let direct_stream = @lib.ParamType::Parameterized("AgentStream", [
+    @lib.ParamType::Simple("String"),
+  ])
+  let qualified_stream = @lib.ParamType::Parameterized("@schema.AgentStream", [
+    @lib.ParamType::Simple("UInt64"),
+  ])
+  let value_types : Array[@lib.ValueTypeInfo] = [
+    {
+      name: "NestedRecord",
+      kind: @lib.ValueTypeKind::Record([
+        ("items", @lib.ParamType::Optional(@lib.ParamType::List(direct_stream))),
+      ]),
+    },
+    {
+      name: "NestedVariant",
+      kind: @lib.ValueTypeKind::VariantEnum([
+        ("Empty", @lib.VariantPayload::None),
+        (
+          "One",
+          @lib.VariantPayload::Single(
+            @lib.ParamType::ResultType(
+              @lib.ParamType::Simple("String"),
+              qualified_stream,
+            ),
+          ),
+        ),
+        (
+          "Many",
+          @lib.VariantPayload::Multi(
+            [
+              (
+                "payload",
+                @lib.ParamType::Tuple([
+                  @lib.ParamType::Simple("Bool"),
+                  direct_stream,
+                ]),
+              ),
+            ],
+            true,
+          ),
+        ),
+      ]),
+    },
+    {
+      name: "RecursiveStart",
+      kind: @lib.ValueTypeKind::Record([
+        ("cycle", @lib.ParamType::Simple("RecursiveCycle")),
+        ("streaming_sibling", @lib.ParamType::Simple("NestedRecord")),
+      ]),
+    },
+    {
+      name: "RecursiveCycle",
+      kind: @lib.ValueTypeKind::VariantEnum([
+        (
+          "Again",
+          @lib.VariantPayload::Single(
+            @lib.ParamType::Optional(@lib.ParamType::Simple("RecursiveStart")),
+          ),
+        ),
+      ]),
+    },
+    {
+      name: "SafeRecursiveA",
+      kind: @lib.ValueTypeKind::Record([
+        (
+          "next",
+          @lib.ParamType::Optional(@lib.ParamType::Simple("SafeRecursiveB")),
+        ),
+      ]),
+    },
+    {
+      name: "SafeRecursiveB",
+      kind: @lib.ValueTypeKind::Record([
+        (
+          "next",
+          @lib.ParamType::Optional(@lib.ParamType::Simple("SafeRecursiveA")),
+        ),
+      ]),
+    },
+  ]
+  let methods = [
+    stream_client_test_method("direct", [("input", direct_stream)], None),
+    stream_client_test_method("qualified", [], Some(qualified_stream)),
+    stream_client_test_method(
+      "nested_record",
+      [("input", @lib.ParamType::Simple("NestedRecord"))],
+      None,
+    ),
+    stream_client_test_method(
+      "nested_variant",
+      [],
+      Some(@lib.ParamType::Simple("NestedVariant")),
+    ),
+    stream_client_test_method(
+      "tuple",
+      [
+        (
+          "input",
+          @lib.ParamType::Tuple([
+            @lib.ParamType::Simple("String"),
+            direct_stream,
+          ]),
+        ),
+      ],
+      None,
+    ),
+    stream_client_test_method(
+      "generic",
+      [("input", @lib.ParamType::Parameterized("Box", [direct_stream]))],
+      None,
+    ),
+    stream_client_test_method(
+      "multimodal",
+      [("input", @lib.ParamType::MultimodalType(direct_stream))],
+      None,
+    ),
+    stream_client_test_method(
+      "recursive_sibling",
+      [("input", @lib.ParamType::Simple("RecursiveStart"))],
+      None,
+    ),
+    stream_client_test_method(
+      "stream_free_recursive",
+      [("input", @lib.ParamType::Simple("SafeRecursiveA"))],
+      Some(@lib.ParamType::Simple("String")),
+    ),
+    stream_client_test_method(
+      "scalar",
+      [("input", @lib.ParamType::Simple("String"))],
+      Some(@lib.ParamType::Simple("UInt64")),
+    ),
+  ]
+  let output = @formatter.impls_to_string(
+    @lib.generate_client_code(
+      [stream_client_test_agent([], methods)],
+      value_types~,
+    ),
+  )
+  let awaited_only = [
+    "direct", "qualified", "nested_record", "nested_variant", "tuple", "generic",
+    "multimodal", "recursive_sibling",
+  ]
+  for name in awaited_only {
+    assert_true(output.contains("pub async fn StreamAgentClient::\{name}"))
+    assert_false(output.contains("StreamAgentClient::trigger_\{name}"))
+    assert_false(output.contains("StreamAgentClient::schedule_\{name}"))
+    assert_false(
+      output.contains("StreamAgentClient::schedule_cancelable_\{name}"),
+    )
+  }
+  for name in ["stream_free_recursive", "scalar"] {
+    assert_true(output.contains("pub async fn StreamAgentClient::\{name}"))
+    assert_true(output.contains("StreamAgentClient::trigger_\{name}"))
+    assert_true(output.contains("StreamAgentClient::schedule_\{name}"))
+    assert_true(
+      output.contains("StreamAgentClient::schedule_cancelable_\{name}"),
+    )
+  }
+}
+
+///|
+test "generate_client_code - stream-bearing constructor is rejected" {
+  let value_types : Array[@lib.ValueTypeInfo] = [
+    {
+      name: "ConstructorInput",
+      kind: @lib.ValueTypeKind::Record([
+        (
+          "stream",
+          @lib.ParamType::Parameterized("AgentStream", [
+            @lib.ParamType::Simple("String"),
+          ]),
+        ),
+      ]),
+    },
+  ]
+  let agent = stream_client_test_agent(
+    [("input", @lib.ParamType::Simple("ConstructorInput"))],
+    [],
+  )
+  match
+    capture_agent_parse_error(fn() raise @lib.AgentParseError {
+      @lib.generate_client_code([agent], value_types~)
+    }) {
+    Err(@lib.AgentParseError(msg)) => {
+      assert_true(msg.contains("agent 'StreamAgent'"))
+      assert_true(msg.contains("constructor parameter 'input'"))
+      assert_true(msg.contains("native client construction is synchronous"))
+      assert_true(msg.contains("move the stream to an agent method"))
+    }
+    Ok(_) => abort("expected stream-bearing constructor to be rejected")
+  }
+}

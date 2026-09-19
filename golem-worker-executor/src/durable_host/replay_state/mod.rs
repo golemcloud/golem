@@ -18,6 +18,9 @@ use crate::durable_host::concurrent::{
 use crate::services::oplog::{Oplog, OplogOps};
 use golem_common::model::card::{CardHolder, CardId, InvocationWalletPin, StoredCard};
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::entity::{
+    EntityInvocationRequest, EntityInvocationRequestIdentity, ToolInvocationClaimIdentity,
+};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
@@ -35,7 +38,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::hash::Hasher;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use tokio::sync::oneshot;
 use tokio::sync::{Mutex, MutexGuard, Notify};
 use tracing::{debug, warn};
@@ -125,13 +128,18 @@ pub(crate) enum ScopeStartClaimOutcome {
         handle: ReplayCallHandle,
     },
     Missing,
-    MissingSwitchedToLive,
+    MissingSettling {
+        replay_target: OplogIndex,
+    },
 }
 
+/// Internal claim result. `Missing` is a completed semantic search with no matching `Start`;
+/// payload loading and decoding failures remain errors and must not enter missing-claim recovery.
 enum StartClaimAttempt {
     Claimed(ReplayCallHandle, Box<OplogEntry>),
     Blocked,
     Missing,
+    MissingSettling { replay_target: OplogIndex },
 }
 
 mod abandoned;
@@ -140,10 +148,40 @@ mod cursor;
 mod resolution;
 
 use abandoned::AbandonedStarts;
+pub(crate) use claims::{ReplayStartClaimOutcome, StartClaim};
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {
     cursor: Arc<ReplayCursor>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplayToLiveRole {
+    PrimaryAgent,
+    NonPrimary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplayToLiveOutcome {
+    Live { replay_target: OplogIndex },
+    ReplayResumed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LivePublicationOutcome {
+    Published,
+    AlreadyLiveAtSameTarget,
+    ReconstructionClaimsActive,
+    OwnerFailed,
+    ReplayResumed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum ReplayTransitionPhase {
+    Replaying = 0,
+    Settling = 1,
+    Live = 2,
 }
 
 /// The shared replay cursor: the position reached in the oplog, the target it replays up to, and
@@ -164,6 +202,7 @@ pub struct ReplayState {
 struct ReplayCursor {
     owned_agent_id: OwnedAgentId,
     oplog: Arc<dyn Oplog>,
+    owner_tool_operations: Arc<crate::durable_host::tool::operation::OwnerToolOperations>,
     /// Serializes every cursor-advance transaction. A transaction that consumes a
     /// `CompletionDelivered` marker transfers this guard to the matching replay delivery token;
     /// no later oplog entry can be consumed until the actual guest-delivery boundary acknowledges
@@ -179,12 +218,20 @@ struct ReplayCursor {
     /// [`ReplayState::set_replay_target`] (and clamped to the current head when switching to live),
     /// not as part of a cursor-advance transaction.
     replay_target: AtomicOplogIndex,
+    /// Cursor exhaustion is published before historical reconstruction validation so resolver
+    /// incompletes can wake without exposing live owner admission. Only the primary transition
+    /// publishes `Live`, after every completed reconstruction fence validates.
+    transition_phase: AtomicU8,
     /// The cursor lock. Guards every piece of state a cursor-advance transaction touches, including
     /// the concurrent-replay resolver. Held across the transaction's internal `await`s (oplog reads,
     /// payload downloads), but never while a call is parked on its resolution / cursor progress — an
     /// awaiter releases it before sleeping (see [`ReplayState::await_resolution_outcome`]) — and no
     /// operation performed while it is held re-acquires it.
     state: Mutex<CursorState>,
+    /// Resolver-owned reconstruction population registered atomically with entity `Start` claims.
+    /// This shared view is used only for waiting and active-body subscriptions outside the cursor
+    /// lock; resolver registration, incomplete release, and guard settlement own all mutations.
+    reconstruction_claims: Arc<crate::durable_host::concurrent::ReconstructionClaimState>,
     /// Guest-delivery outcomes for successful durable calls, keyed by the call's `Start` index.
     /// `CompletionDiscarded` prevents replay from delivering the response; `CompletionDelivered`
     /// delays delivery until the cursor reaches the marker's physical position. The marker always
@@ -223,6 +270,9 @@ struct ReplayCursor {
     /// re-drive the cursor. Resolver delivery is the primary wakeup; this covers the "another
     /// consumer advanced the cursor past my blocker" case that a oneshot alone cannot.
     progress: Notify,
+    #[cfg(test)]
+    primary_publication_gate:
+        std::sync::Mutex<Option<(Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>)>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -19,9 +19,9 @@ package golem.runtime.tool.host
 import golem.host.ToolWireInterop
 import golem.host.js.JsComponentId
 import golem.host.js.schema.JsTypedSchemaValue
-import golem.host.js.tool.{JsInvocationResult, JsTool, JsToolError, JsWasiInputStream}
+import golem.host.js.tool.{JsInvocationResult, JsTool, JsToolError}
 import golem.runtime.tool.ToolImplementationRuntime
-import golem.tool.ToolRpcFailure
+import golem.tool.{ByteStreamCloseCause, ByteStreamFailure, StreamWriteError, ToolRpcFailure}
 import golem.tool.wire.WitTool
 
 import scala.annotation.unused
@@ -52,6 +52,7 @@ sealed trait JsToolRpcErrorTool extends JsToolRpcError {
 /** JS shape of the host `registered-tool` record. */
 @js.native
 sealed trait JsRegisteredTool extends js.Object {
+  def lookupName: String           = js.native
   def definition: JsTool           = js.native
   def implementedBy: JsComponentId = js.native
 }
@@ -68,7 +69,7 @@ private[golem] object ToolHostApi {
    * A tool registered in the environment: its decoded wire descriptor and the
    * component that implements it.
    */
-  final case class RegisteredTool(definition: WitTool, implementedBy: JsComponentId)
+  final case class RegisteredTool(lookupName: String, definition: WitTool, implementedBy: JsComponentId)
 
   /**
    * Every tool the calling agent has access to in the current environment
@@ -86,13 +87,65 @@ private[golem] object ToolHostApi {
     ToolHostModule.getTool(name).toOption.map(decodeRegisteredTool)
 
   private def decodeRegisteredTool(raw: JsRegisteredTool): RegisteredTool =
-    RegisteredTool(ToolWireInterop.toolFromJs(raw.definition), raw.implementedBy)
+    RegisteredTool(raw.lookupName, ToolWireInterop.toolFromJs(raw.definition), raw.implementedBy)
 
   @js.native
   @JSImport("golem:tool/host@0.1.0", JSImport.Namespace)
   private object ToolHostModule extends js.Object {
     def getAllTools(): js.Array[JsRegisteredTool]           = js.native
     def getTool(name: String): js.UndefOr[JsRegisteredTool] = js.native
+    def createStdin(): js.Array[js.Any]                     = js.native
+    def createStdout(): js.Array[js.Any]                    = js.native
+  }
+
+  def createStdin(): (RawToolStdinWriter, RawToolStdin, RawToolStdinClosed) = {
+    val endpoints = ToolHostModule.createStdin()
+    (
+      endpoints(0).asInstanceOf[RawToolStdinWriter],
+      endpoints(1).asInstanceOf[RawToolStdin],
+      endpoints(2).asInstanceOf[RawToolStdinClosed]
+    )
+  }
+
+  def createStdout(): (RawToolStdout, RawByteStream) = {
+    val endpoints = ToolHostModule.createStdout()
+    (endpoints(0).asInstanceOf[RawToolStdout], endpoints(1).asInstanceOf[RawByteStream])
+  }
+
+  @js.native
+  sealed trait RawByteIteratorResult extends js.Object {
+    def done: Boolean = js.native
+    def value: js.Any = js.native
+  }
+  @js.native
+  sealed trait RawByteIterator extends js.Object {
+    def next(): js.Promise[RawByteIteratorResult]                             = js.native
+    @JSName("return") def returnIterator(): js.Promise[RawByteIteratorResult] = js.native
+  }
+  @js.native
+  sealed trait RawByteStream extends js.Object {
+    @JSName(js.Symbol.asyncIterator) def asyncIterator(): RawByteIterator = js.native
+  }
+
+  @js.native
+  sealed trait RawToolStdin extends js.Object
+  @js.native
+  sealed trait RawToolStdout extends js.Object
+  @js.native
+  sealed trait RawToolStdinWriter extends js.Object {
+    def write(bytes: js.typedarray.Uint8Array): js.Promise[Unit] = js.native
+    def finish(): js.Promise[Unit]                               = js.native
+    def fail(reason: js.Any): js.Promise[Unit]                   = js.native
+  }
+  @js.native
+  sealed trait RawToolStdinClosed extends js.Object {
+    @JSName("wait") def waitClosed(): js.Promise[js.Any] = js.native
+  }
+  @js.native
+  sealed trait RawToolStdoutWriter extends js.Object {
+    def write(bytes: js.typedarray.Uint8Array): js.Promise[Unit] = js.native
+    def finish(): js.Promise[Unit]                               = js.native
+    def fail(reason: js.Any): js.Promise[Unit]                   = js.native
   }
 
   @js.native
@@ -101,19 +154,21 @@ private[golem] object ToolHostApi {
     def invokeAndAwait(
       commandPath: js.Array[String],
       input: JsTypedSchemaValue,
-      stdin: js.UndefOr[JsWasiInputStream]
+      stdin: js.UndefOr[RawToolStdin],
+      stdout: js.UndefOr[RawToolStdout]
     ): js.Promise[JsInvocationResult] = js.native
 
     def invoke(
       commandPath: js.Array[String],
       input: JsTypedSchemaValue,
-      stdin: js.UndefOr[JsWasiInputStream]
+      stdin: js.UndefOr[RawToolStdin]
     ): Unit = js.native
 
     def asyncInvokeAndAwait(
       commandPath: js.Array[String],
       input: JsTypedSchemaValue,
-      stdin: js.UndefOr[JsWasiInputStream]
+      stdin: js.UndefOr[RawToolStdin],
+      stdout: js.UndefOr[RawToolStdout]
     ): RawToolFutureInvokeResult = js.native
   }
 
@@ -123,6 +178,45 @@ private[golem] object ToolHostApi {
     def get(): js.Promise[JsInvocationResult] = js.native
     def cancel(): Unit                        = js.native
   }
+
+  /** Decodes a rejected `stream-write-error` Promise value when recognized. */
+  def decodeStreamWriteError(thrown: Any): Option[StreamWriteError] =
+    variantTag(thrown).flatMap {
+      case "concurrent-operation" => Some(StreamWriteError.ConcurrentOperation)
+      case "closed"               =>
+        variantValue(thrown).flatMap(decodeByteStreamCloseCause).map(StreamWriteError.Closed(_))
+      case _ => None
+    }
+
+  private def decodeByteStreamCloseCause(value: Any): Option[ByteStreamCloseCause] =
+    variantTag(value).flatMap {
+      case "finished"           => Some(ByteStreamCloseCause.Finished)
+      case "consumer-cancelled" => Some(ByteStreamCloseCause.ConsumerCancelled)
+      case "failed"             =>
+        variantValue(value).flatMap(decodeByteStreamFailure).map(ByteStreamCloseCause.Failed(_))
+      case _ => None
+    }
+
+  private def decodeByteStreamFailure(value: Any): Option[ByteStreamFailure] =
+    variantTag(value).flatMap {
+      case "cancelled"          => Some(ByteStreamFailure.Cancelled)
+      case "abandoned"          => Some(ByteStreamFailure.Abandoned)
+      case "resource-exhausted" => Some(ByteStreamFailure.ResourceExhausted)
+      case "failed"             => variantValue(value).collect { case message: String => ByteStreamFailure.Failed(message) }
+      case _                    => None
+    }
+
+  private def variantTag(value: Any): Option[String] =
+    try {
+      val tag = value.asInstanceOf[js.Dynamic].selectDynamic("tag")
+      if (js.typeOf(tag) == "string") Some(tag.asInstanceOf[String]) else None
+    } catch { case _: Throwable => None }
+
+  private def variantValue(value: Any): Option[Any] =
+    try {
+      val nested = value.asInstanceOf[js.Dynamic].selectDynamic("val")
+      if (js.isUndefined(nested)) None else Some(nested)
+    } catch { case _: Throwable => None }
 
   /**
    * Decodes a thrown or returned `rpc-error` value. A value that is not the
@@ -154,6 +248,9 @@ private[golem] object ToolHostApi {
                 s"failed to decode remote tool error: ${String.valueOf(t.getMessage)}"
               )
           }
+        case "cancelled"          => ToolRpcFailure.Cancelled
+        case "resource-exhausted" =>
+          ToolRpcFailure.ResourceExhausted(thrown.asInstanceOf[JsToolRpcErrorString].value)
         case other =>
           ToolRpcFailure.ProtocolError(s"unknown rpc error `$other`")
       }

@@ -36,6 +36,8 @@ import scala.meta.parsers._
  */
 object AutoRegisterCodegen {
 
+  private val MaxRegistrationsPerMethod = 8
+
   final case class SourceInput(path: String, content: String)
 
   final case class Warning(path: Option[String], message: String)
@@ -205,7 +207,7 @@ object AutoRegisterCodegen {
         case (middleware, index) =>
           val method = Term.Name(s"__golemRegisterToolMiddleware$index")
           val call   = buildToolMiddlewareRegistrationCall(middleware)
-          q"def $method(): Unit = $call"
+          q"private def $method(): Unit = $call"
       }
     var middlewareIndex               = 0
     val registrationCalls: List[Stat] = registrations.map {
@@ -216,7 +218,25 @@ object AutoRegisterCodegen {
         middlewareIndex += 1
         q"$method()"
     }
-    val registrationStats = middlewareRegistrationMethods ++ registrationCalls
+    val registrationMethods: List[Stat] =
+      registrationCalls
+        .grouped(MaxRegistrationsPerMethod)
+        .zipWithIndex
+        .map { case (stats, index) =>
+          val methodName = Term.Name(s"__golemRegisterBatch$index")
+          q"""
+          private def $methodName(): Unit = {
+            ..$stats
+            ()
+          }
+        """
+        }
+        .toList
+
+    val registrationMethodCalls: List[Stat] = registrationMethods.indices.toList.map { index =>
+      val methodName = Term.Name(s"__golemRegisterBatch$index")
+      q"$methodName()"
+    }
 
     val imports: List[Stat] =
       List(
@@ -239,8 +259,12 @@ object AutoRegisterCodegen {
         private[golem] object $objName {
           private val __golemSurfaceVersion = ${Lit.String(surfaceFingerprint)}
 
+          ..$middlewareRegistrationMethods;
+
+          ..$registrationMethods;
+
           def register(): Unit = {
-            ..$registrationStats
+            ..$registrationMethodCalls
             ()
           }
         }

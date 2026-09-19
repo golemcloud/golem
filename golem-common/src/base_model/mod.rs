@@ -15,6 +15,7 @@
 pub mod account;
 pub mod account_usage;
 pub mod agent;
+pub mod agent_config;
 pub mod agent_secret;
 pub mod api;
 pub mod application;
@@ -32,7 +33,10 @@ pub mod domain_registration;
 pub mod durable_stream;
 pub mod environment;
 pub mod environment_plugin_grant;
+pub mod environment_tool_grant;
+pub mod environment_tool_middleware_grant;
 pub mod error;
+pub mod external_agent_secret;
 pub mod http_api_deployment;
 pub mod invocation_context;
 pub mod json;
@@ -49,7 +53,11 @@ pub mod regions;
 pub mod reports;
 pub mod retry_policy;
 pub mod security_scheme;
+pub mod shard_lease;
 pub mod tool;
+pub mod tool_middleware;
+pub mod tool_middleware_release;
+pub mod tool_release;
 pub mod worker;
 pub mod worker_filter;
 
@@ -529,7 +537,9 @@ pub fn validate_lower_kebab_case_identifier(
     Debug,
     Eq,
     Hash,
+    Ord,
     PartialEq,
+    PartialOrd,
     golem_schema_derive::IntoSchema,
     golem_schema_derive::FromSchema,
 )]
@@ -847,4 +857,12 @@ mod sql {
 
 pub fn render_config_path(path: &[String]) -> String {
     path.join(".")
+}
+
+#[cfg(feature = "full")]
+fn canonicalize_agent_path(path: &[String]) -> Vec<String> {
+    use heck::ToLowerCamelCase;
+    path.iter()
+        .map(|segment| segment.to_lower_camel_case())
+        .collect()
 }

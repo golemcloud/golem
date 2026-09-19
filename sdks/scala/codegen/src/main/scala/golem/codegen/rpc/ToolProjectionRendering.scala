@@ -43,7 +43,11 @@ object ToolProjectionRendering {
 
   def paramType(param: Param, policy: Policy): String =
     if (param.isPrincipal) "_root_.golem.Principal"
+    else if (param.isStdin && policy == InvocationUnderlying)
+      "_root_.golem.tool.ToolMiddlewareInputHandle"
     else if (param.isStdin) "_root_.golem.tool.ToolInputStream"
+    else if (param.isStdout && policy == InvocationUnderlying)
+      "_root_.golem.tool.ToolMiddlewareOutputHandle"
     else if (param.isStdout) "_root_.golem.tool.ToolOutputStream"
     else if (policy.useProjectedTypes) param.projectedTypeExpr
     else param.typeExpr
@@ -63,10 +67,13 @@ object ToolProjectionRendering {
   }
 
   def successType(codec: LeafReturn, policy: Policy): String = {
-    val okType = if (policy.useProjectedTypes) codec.projectedOkType else codec.okType
+    val okType     = if (policy.useProjectedTypes) codec.projectedOkType else codec.okType
+    val stdoutType =
+      if (policy == InvocationUnderlying) "_root_.golem.tool.ToolMiddlewareOutputHandle"
+      else "_root_.golem.tool.ToolOutputStream"
     (okType, codec.hasStdout) match {
-      case (Some(ok), true)  => s"($ok, _root_.golem.tool.ToolOutputStream)"
-      case (None, true)      => "_root_.golem.tool.ToolOutputStream"
+      case (Some(ok), true)  => s"($ok, $stdoutType)"
+      case (None, true)      => stdoutType
       case (Some(ok), false) => ok
       case (None, false)     => "_root_.scala.Unit"
     }
@@ -106,7 +113,7 @@ object ToolProjectionRendering {
     }
     errorType match {
       case Some(error) =>
-        s"${policy.runtime}.run[$error]($arguments, ${errorSchema.get}.fromErrorPayloadValue(_))"
+        s"${policy.runtime}.run[$error]($arguments, ${errorSchema.get}.fromErrorValue(_))"
       case None =>
         s"${policy.runtime}.runInfallible($arguments)"
     }
@@ -120,11 +127,11 @@ object ToolProjectionRendering {
     val okType = if (policy.useProjectedTypes) codec.projectedOkType else codec.okType
     (okType, codec.hasStdout) match {
       case (Some(ok), true) =>
-        s"${policy.runtime}.decodeValueStdoutResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
+        s"${policy.runtime}.decodeValueStdoutResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]], _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[$ok]].graph)"
       case (None, true) =>
         s"${policy.runtime}.decodeStdoutResult($result)"
       case (Some(ok), false) =>
-        s"${policy.runtime}.decodeValueResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
+        s"${policy.runtime}.decodeValueResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]], _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[$ok]].graph)"
       case (None, false) =>
         s"${policy.runtime}.decodeUnitResult($result)"
     }

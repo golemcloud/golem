@@ -28,6 +28,7 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Write;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use uuid::uuid;
 
@@ -44,6 +45,8 @@ pub struct RegistryServiceConfig {
     pub cors_origin_regex: String,
     pub domain_registration: DomainRegistrationConfig,
     pub component_compilation: ComponentCompilationConfig,
+    #[serde(default)]
+    pub component_file_upload: ComponentFileUploadConfig,
     pub initial_accounts: HashMap<String, PrecreatedAccount>,
     pub initial_plans: HashMap<String, PrecreatedPlan>,
     #[serde(default)]
@@ -95,6 +98,13 @@ impl SafeDisplay for RegistryServiceConfig {
             self.component_compilation.to_safe_string_indented()
         );
 
+        let _ = writeln!(&mut result, "component file upload:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.component_file_upload.to_safe_string_indented()
+        );
+
         let _ = writeln!(
             &mut result,
             "builtin plugins: enabled={}",
@@ -125,7 +135,7 @@ impl SafeDisplay for RegistryServiceConfig {
 
 impl Default for RegistryServiceConfig {
     fn default() -> Self {
-        let mut initial_accounts = HashMap::with_capacity(3);
+        let mut initial_accounts = HashMap::with_capacity(4);
         initial_accounts.insert(
             "root".to_string(),
             PrecreatedAccount {
@@ -158,6 +168,17 @@ impl Default for RegistryServiceConfig {
                 id: AccountId(uuid!("adb2694f-cd9f-425d-905d-ca2888c9c5de")),
                 name: "Builtin Plugin Owner".to_string(),
                 email: AccountEmail::new("builtin-plugin-owner@golem.cloud"),
+                token: None,
+                role: AccountRole::BuiltinPluginOwner,
+                plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
+            },
+        );
+        initial_accounts.insert(
+            "builtin_tool_owner".to_string(),
+            PrecreatedAccount {
+                id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
+                name: "Builtin Tool Owner".to_string(),
+                email: AccountEmail::new("builtin-tool-owner@golem.cloud"),
                 token: None,
                 role: AccountRole::BuiltinPluginOwner,
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),
@@ -204,11 +225,13 @@ impl Default for RegistryServiceConfig {
             grpc: GrpcApiConfig::default(),
             db: DbConfig::Sqlite(DbSqliteConfig {
                 database: "golem_registry_service.db".to_string(),
+                foreign_keys: true,
                 ..Default::default()
             }),
             login: LoginConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
             component_compilation: ComponentCompilationConfig::default(),
+            component_file_upload: ComponentFileUploadConfig::default(),
             blob_storage: BlobStorageConfig::default(),
             domain_registration: DomainRegistrationConfig::default(),
             initial_accounts,
@@ -217,6 +240,35 @@ impl Default for RegistryServiceConfig {
             deployment_events: DeploymentEventsConfig::default(),
             security_scheme: SecuritySchemeConfig::default(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ComponentFileUploadConfig {
+    pub max_concurrent_files: NonZeroUsize,
+    pub max_uncompressed_file_size: u64,
+    pub max_uncompressed_archive_size: u64,
+}
+
+impl Default for ComponentFileUploadConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_files: NonZeroUsize::new(16).unwrap(),
+            max_uncompressed_file_size: 536_870_912,
+            max_uncompressed_archive_size: 1_073_741_824,
+        }
+    }
+}
+
+impl SafeDisplay for ComponentFileUploadConfig {
+    fn to_safe_string(&self) -> String {
+        format!(
+            "max concurrent files: {}, max uncompressed file size: {}, max uncompressed archive size: {}",
+            self.max_concurrent_files,
+            self.max_uncompressed_file_size,
+            self.max_uncompressed_archive_size,
+        )
     }
 }
 
@@ -575,11 +627,19 @@ pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {
 mod tests {
     use test_r::test;
 
-    use crate::config::{RegistryServiceConfig, make_config_loader};
+    use crate::config::{ComponentFileUploadConfig, RegistryServiceConfig, make_config_loader};
 
     #[test]
     pub fn config_is_loadable() {
         make_config_loader().load().expect("Failed to load config");
+    }
+
+    #[test]
+    pub fn component_file_upload_parallelism_rejects_zero() {
+        let result = serde_json::from_value::<ComponentFileUploadConfig>(serde_json::json!({
+            "max_concurrent_files": 0
+        }));
+        assert!(result.is_err());
     }
 
     /// A plan that raises the per-agent disk limit without declaring a ceiling must not

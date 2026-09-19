@@ -138,12 +138,7 @@ impl GetKeyValueStorage for SqliteKeyValueStorageWrapper {
             max_connections: 10,
             foreign_keys: false,
         };
-        let kvs = SqliteKeyValueStorage::configured(
-            &config,
-            golem_common::model::RetryConfig::max_attempts_3(),
-        )
-        .await
-        .unwrap();
+        let kvs = SqliteKeyValueStorage::configured(&config).await.unwrap();
         Arc::new(kvs)
     }
 }
@@ -173,12 +168,7 @@ impl GetKeyValueStorage for MultiSqliteKeyValueStorageWrapper {
         let path = tempdir.path().to_path_buf();
         self.tempdirs.lock().unwrap().push(tempdir);
 
-        let kvs = MultiSqliteKeyValueStorage::new(
-            &path,
-            10,
-            true,
-            golem_common::model::RetryConfig::max_attempts_3(),
-        );
+        let kvs = MultiSqliteKeyValueStorage::new(&path, 10, true);
         Arc::new(kvs)
     }
 }
@@ -234,16 +224,14 @@ impl GetKeyValueStorage for PostgresKeyValueStorageWrapper {
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
+            acquire_timeout: None,
         };
 
         let config = KeyValueStoragePostgresConfig { postgres };
 
-        let kvs = PostgresKeyValueStorage::configured(
-            &config,
-            golem_common::model::RetryConfig::max_attempts_3(),
-        )
-        .await
-        .expect("Cannot create postgres key value storage");
+        let kvs = PostgresKeyValueStorage::configured(&config)
+            .await
+            .expect("Cannot create postgres key value storage");
         Arc::new(kvs)
     }
 }
@@ -312,15 +300,13 @@ impl GetKeyValueStorage for NamespaceRoutedKeyValueStorageWrapper {
                 .expect("Postgres connection string missing port"),
             max_connections: 10,
             schema: None,
+            acquire_timeout: None,
         };
         let postgres_config = KeyValueStoragePostgresConfig { postgres };
         let postgres_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
-            PostgresKeyValueStorage::configured(
-                &postgres_config,
-                golem_common::model::RetryConfig::max_attempts_3(),
-            )
-            .await
-            .expect("Cannot create postgres key value storage for routed kvs"),
+            PostgresKeyValueStorage::configured(&postgres_config)
+                .await
+                .expect("Cannot create postgres key value storage for routed kvs"),
         );
 
         Arc::new(NamespaceRoutedKeyValueStorage::new(
@@ -355,14 +341,14 @@ struct Namespaces {
 fn ns() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::Worker {
-            agent_id: AgentId {
+            agent_id: Arc::new(AgentId {
                 component_id: ComponentId::new(),
                 agent_id: "test".to_string(),
-            },
+            }),
         },
         ns2: KeyValueStorageNamespace::UserDefined {
             environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
-            bucket: "test-bucket".to_string(),
+            bucket: "test-bucket".into(),
         },
     }
 }
@@ -372,13 +358,13 @@ fn ns2() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::UserDefined {
             environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
-            bucket: "test-bucket".to_string(),
+            bucket: "test-bucket".into(),
         },
         ns2: KeyValueStorageNamespace::Worker {
-            agent_id: AgentId {
+            agent_id: Arc::new(AgentId {
                 component_id: ComponentId::new(),
                 agent_id: "test".to_string(),
-            },
+            }),
         },
     }
 }
@@ -389,6 +375,22 @@ fn ns2() -> Namespaces {
 fn ns3() -> Namespaces {
     Namespaces {
         ns: KeyValueStorageNamespace::AgentStatus {
+            agent_id: Arc::new(AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "test".to_string(),
+            }),
+        },
+        ns2: KeyValueStorageNamespace::UserDefined {
+            environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
+            bucket: "test-bucket-2".into(),
+        },
+    }
+}
+
+#[test_dep(scope = PerWorker, tagged_as = "ns4")]
+fn ns4() -> Namespaces {
+    Namespaces {
+        ns: KeyValueStorageNamespace::AgentInvocationResultIndex {
             agent_id: AgentId {
                 component_id: ComponentId::new(),
                 agent_id: "test".to_string(),
@@ -396,7 +398,7 @@ fn ns3() -> Namespaces {
         },
         ns2: KeyValueStorageNamespace::UserDefined {
             environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
-            bucket: "test-bucket-2".to_string(),
+            bucket: "test-bucket-3".into(),
         },
     }
 }
@@ -404,7 +406,7 @@ fn ns3() -> Namespaces {
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
 define_matrix_dimension!(kvs: Arc<dyn GetKeyValueStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres", "namespace_routed");
-define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2", "ns3");
+define_matrix_dimension!(nss: Namespaces -> "ns1", "ns2", "ns3", "ns4");
 
 #[test]
 #[tracing::instrument]
@@ -490,7 +492,7 @@ async fn get_set_get_many(
             "api",
             "entity",
             ns.clone(),
-            vec![key1.to_string(), key2.to_string(), key3.to_string()],
+            [key1.to_string(), key2.to_string(), key3.to_string()].into(),
         )
         .await
         .unwrap();
@@ -509,7 +511,7 @@ async fn get_set_get_many(
             "api",
             "entity",
             ns,
-            vec![key1.to_string(), key2.to_string(), key3.to_string()],
+            [key1.to_string(), key2.to_string(), key3.to_string()].into(),
         )
         .await
         .unwrap();
@@ -535,9 +537,11 @@ async fn get_all_returns_namespace_snapshot(
         component_id: ComponentId::new(),
         agent_id: "other".to_string(),
     };
-    let ns = KeyValueStorageNamespace::AgentStatus { agent_id };
+    let ns = KeyValueStorageNamespace::AgentStatus {
+        agent_id: Arc::new(agent_id),
+    };
     let other_ns = KeyValueStorageNamespace::AgentStatus {
-        agent_id: other_agent_id,
+        agent_id: Arc::new(other_agent_id),
     };
 
     kvs.set_many(
@@ -567,6 +571,57 @@ async fn get_all_returns_namespace_snapshot(
 
 #[test]
 #[tracing::instrument]
+async fn agent_invocation_result_index_is_separate_from_agent_status(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
+) {
+    let kvs = kvs.get_key_value_storage().await;
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "test".to_string(),
+    };
+    let status_ns = KeyValueStorageNamespace::AgentStatus {
+        agent_id: std::sync::Arc::new(agent_id.clone()),
+    };
+    let result_index_ns = KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id };
+
+    kvs.set(
+        "test",
+        "api",
+        "entity",
+        status_ns.clone(),
+        "same-key",
+        b"status-value",
+    )
+    .await
+    .unwrap();
+    kvs.set(
+        "test",
+        "api",
+        "entity",
+        result_index_ns.clone(),
+        "same-key",
+        b"result-index-value",
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        kvs.get("test", "api", "entity", status_ns, "same-key")
+            .await
+            .unwrap(),
+        Some(bytes::Bytes::from_static(b"status-value"))
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", result_index_ns, "same-key",)
+            .await
+            .unwrap(),
+        Some(bytes::Bytes::from_static(b"result-index-value"))
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn set_if_not_exists(
     _deps: &WorkerExecutorTestDependencies,
     #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
@@ -591,6 +646,193 @@ async fn set_if_not_exists(
     assert!(result1);
     assert!(!result2);
     assert_eq!(result3, Some(value1.into()));
+}
+
+fn cas_namespace() -> KeyValueStorageNamespace {
+    KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: Uuid::new_v4().to_string(),
+        },
+    }
+}
+
+#[test]
+async fn compare_and_set_many_contract(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
+) {
+    let kvs = kvs.get_key_value_storage().await;
+    let ns = cas_namespace();
+
+    assert!(
+        kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "coverage",
+            None,
+            &[("coverage", b"one"), ("row", b"first")]
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        !kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "coverage",
+            Some(b"wrong"),
+            &[
+                ("coverage", b"bad"),
+                ("row", b"bad"),
+                ("loser-only", b"bad")
+            ]
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "row")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(b"first".as_slice())
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "loser-only")
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "coverage",
+            Some(b"one"),
+            &[("coverage", b"two"), ("row", b"second")]
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "row")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(b"second".as_slice())
+    );
+    assert!(
+        kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "absent-guard",
+            None,
+            &[("other-row", b"value")],
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "absent-guard")
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "empty-guard",
+            None,
+            &[("empty-guard", b"")],
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        !kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns.clone(),
+            "empty-guard",
+            None,
+            &[("other-row", b"bad")],
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        kvs.compare_and_set_many(
+            "test",
+            "api",
+            "entity",
+            ns,
+            "empty-guard",
+            Some(b""),
+            &[("other-row", b"updated")],
+        )
+        .await
+        .unwrap()
+    );
+}
+
+#[test]
+async fn concurrent_compare_and_set_many_has_one_winner(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(kvs)] kvs: &Arc<dyn GetKeyValueStorage + Send + Sync>,
+) {
+    let kvs = kvs.get_key_value_storage().await;
+    let ns = cas_namespace();
+    let barrier = Arc::new(tokio::sync::Barrier::new(16));
+    let tasks = (0..16).map(|writer| {
+        let kvs = kvs.clone();
+        let ns = ns.clone();
+        let barrier = barrier.clone();
+        tokio::spawn(async move {
+            let value = [writer];
+            barrier.wait().await;
+            kvs.compare_and_set_many(
+                "test",
+                "api",
+                "entity",
+                ns,
+                "coverage",
+                None,
+                &[("coverage", &value), ("winner", &value)],
+            )
+            .await
+            .unwrap()
+        })
+    });
+    let results = futures::future::join_all(tasks).await;
+    assert_eq!(
+        results
+            .into_iter()
+            .map(Result::unwrap)
+            .filter(|won| *won)
+            .count(),
+        1
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "coverage")
+            .await
+            .unwrap(),
+        kvs.get("test", "api", "entity", ns, "winner")
+            .await
+            .unwrap()
+    );
 }
 
 #[test]
@@ -640,7 +882,7 @@ async fn del_many(
         "test",
         "api",
         ns.clone(),
-        vec![key1.to_string(), key2.to_string()],
+        [key1.to_string(), key2.to_string()].into(),
     )
     .await
     .unwrap(); // deleting non-existing key must succeed
@@ -662,7 +904,7 @@ async fn del_many(
         "test",
         "api",
         ns.clone(),
-        vec![key1.to_string(), key2.to_string()],
+        [key1.to_string(), key2.to_string()].into(),
     )
     .await
     .unwrap();

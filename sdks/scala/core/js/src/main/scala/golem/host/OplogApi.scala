@@ -134,8 +134,15 @@ object OplogApi {
     consumedFuel: Long
   )
 
+  sealed trait OplogErrorKind extends Product with Serializable
+  object OplogErrorKind {
+    case object Invocation extends OplogErrorKind
+    case object Recovery   extends OplogErrorKind
+  }
+
   final case class ErrorParameters(
     timestamp: ContextApi.DateTime,
+    kind: OplogErrorKind,
     error: String,
     retryFrom: OplogIndex
   )
@@ -158,11 +165,6 @@ object OplogApi {
   final case class RemoveRetryPolicyParameters(
     timestamp: ContextApi.DateTime,
     name: String
-  )
-
-  final case class FilesystemStorageUsageUpdateParameters(
-    timestamp: ContextApi.DateTime,
-    delta: BigInt
   )
 
   final case class EndAtomicRegionParameters(
@@ -361,6 +363,9 @@ object OplogApi {
     final case class Error(params: ErrorParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
+    final case class RecoverySucceeded(ts: ContextApi.DateTime) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = ts
+    }
     final case class NoOp(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
@@ -377,9 +382,6 @@ object OplogApi {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class RemoveRetryPolicy(params: RemoveRetryPolicyParameters) extends OplogEntry {
-      def timestamp: ContextApi.DateTime = params.timestamp
-    }
-    final case class FilesystemStorageUsageUpdate(params: FilesystemStorageUsageUpdateParameters) extends OplogEntry {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class BeginAtomicRegion(ts: ContextApi.DateTime) extends OplogEntry {
@@ -419,6 +421,9 @@ object OplogApi {
       def timestamp: ContextApi.DateTime = params.timestamp
     }
     final case class Restart(ts: ContextApi.DateTime) extends OplogEntry {
+      def timestamp: ContextApi.DateTime = ts
+    }
+    final case class Resumed(ts: ContextApi.DateTime) extends OplogEntry {
       def timestamp: ContextApi.DateTime = ts
     }
     final case class ActivatePlugin(params: ActivatePluginParameters) extends OplogEntry {
@@ -508,20 +513,17 @@ object OplogApi {
           AgentInvocationFinished(
             parseAgentInvocationFinishedParameters(v.asInstanceOf[JsAgentInvocationFinishedParameters])
           )
-        case "suspend"          => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "error"            => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
-        case "no-op"            => NoOp(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "jump"             => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
-        case "interrupted"      => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "exited"           => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
-        case "set-retry-policy" =>
+        case "suspend"            => Suspend(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "error"              => Error(parseErrorParameters(v.asInstanceOf[JsErrorParameters]))
+        case "recovery-succeeded" => RecoverySucceeded(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "no-op"              => NoOp(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "jump"               => Jump(parseJumpParameters(v.asInstanceOf[JsJumpParameters]))
+        case "interrupted"        => Interrupted(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "exited"             => Exited(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "set-retry-policy"   =>
           SetRetryPolicy(parseSetRetryPolicyParameters(v.asInstanceOf[JsSetRetryPolicyParameters]))
         case "remove-retry-policy" =>
           RemoveRetryPolicy(parseRemoveRetryPolicyParameters(v.asInstanceOf[JsRemoveRetryPolicyParameters]))
-        case "filesystem-storage-usage-update" =>
-          FilesystemStorageUsageUpdate(
-            parseFilesystemStorageUsageUpdateParameters(v.asInstanceOf[JsFilesystemStorageUsageUpdateParameters])
-          )
         case "begin-atomic-region" => BeginAtomicRegion(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "end-atomic-region"   =>
           EndAtomicRegion(parseEndAtomicRegionParameters(v.asInstanceOf[JsEndAtomicRegionParameters]))
@@ -542,6 +544,7 @@ object OplogApi {
         case "drop-resource"   => DropResource(parseDropResourceParameters(v.asInstanceOf[JsDropResourceParameters]))
         case "log"             => Log(parseLogParameters(v.asInstanceOf[JsLogParameters]))
         case "restart"         => Restart(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
+        case "resumed"         => Resumed(parseTimestamp(v.asInstanceOf[JsOplogTimestamp]))
         case "activate-plugin" =>
           ActivatePlugin(parseActivatePluginParameters(v.asInstanceOf[JsActivatePluginParameters]))
         case "deactivate-plugin" =>
@@ -806,6 +809,11 @@ object OplogApi {
   private def parseErrorParameters(raw: JsErrorParameters): ErrorParameters =
     ErrorParameters(
       timestamp = parseDateTime(raw.timestamp),
+      kind = raw.kind match {
+        case "invocation" => OplogErrorKind.Invocation
+        case "recovery"   => OplogErrorKind.Recovery
+        case other        => throw new IllegalArgumentException(s"Unknown oplog error kind: $other")
+      },
       error = raw.error,
       retryFrom = BigInt(raw.retryFrom.toString)
     )
@@ -838,14 +846,6 @@ object OplogApi {
     RemoveRetryPolicyParameters(
       timestamp = parseDateTime(raw.timestamp),
       name = raw.name
-    )
-
-  private def parseFilesystemStorageUsageUpdateParameters(
-    raw: JsFilesystemStorageUsageUpdateParameters
-  ): FilesystemStorageUsageUpdateParameters =
-    FilesystemStorageUsageUpdateParameters(
-      timestamp = parseDateTime(raw.timestamp),
-      delta = BigInt(raw.delta.toString)
     )
 
   private def parseEndAtomicRegionParameters(raw: JsEndAtomicRegionParameters): EndAtomicRegionParameters =

@@ -20,12 +20,17 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolDeploymentState, ToolName,
+    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolDeploymentState, ToolName,
     ToolProvisionConfig, ToolSource,
+};
+use golem_common::model::tool_middleware::{
+    CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
+    ToolMiddlewareName, ToolMiddlewareSource,
 };
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{
-    CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
+    CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool, ToolMiddleware,
+    ToolMiddlewareScope,
 };
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -52,10 +57,12 @@ type ToolSummary = (String, String, String, Vec<String>, u64, u64);
 fn registered_tool(
     name: &str,
     component_id: ComponentId,
+    component_revision: ComponentRevision,
     deployment_revision: DeploymentRevision,
 ) -> RegisteredTool {
     RegisteredTool {
         deployment_revision,
+        release_id: None,
         definition: Tool {
             version: "1.0.0".to_string(),
             commands: CommandTree {
@@ -86,12 +93,13 @@ fn registered_tool(
         provision: ToolProvisionConfig::default(),
         source: ToolSource::Component {
             component_id,
-            component_revision: ComponentRevision::try_from(1_u64).unwrap(),
+            component_revision,
             component_name: ComponentName("tool-component".to_string()),
         },
         owner_account_id: AccountId::new(),
         owner_account_email: AccountEmail::new("test@golem"),
         metadata_version: "0.1.0".to_string(),
+        metadata_digest: Default::default(),
     }
 }
 
@@ -102,13 +110,16 @@ fn binding(
 ) -> CompiledToolBinding {
     CompiledToolBinding {
         deployment_revision: tool.deployment_revision,
+        release_id: tool.release_id,
         agent_type_name: agent_type.clone(),
         tool_name: tool_name.clone(),
         version: tool.definition.version.clone(),
         metadata_version: tool.metadata_version.clone(),
+        metadata_digest: tool.metadata_digest,
         account_id: tool.owner_account_id,
         account_email: tool.owner_account_email.clone(),
         parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
@@ -119,6 +130,7 @@ fn binding(
 pub(crate) fn deployment_state(
     agent_type: &AgentTypeName,
     deployment_revision: u64,
+    component_revision: ComponentRevision,
     tools: &[(&str, ComponentId, bool)],
 ) -> ToolDeploymentState {
     let deployment_revision = DeploymentRevision::try_from(deployment_revision).unwrap();
@@ -126,7 +138,12 @@ pub(crate) fn deployment_state(
         .iter()
         .map(|(name, component_id, _)| {
             let name = ToolName::try_from(*name).unwrap();
-            let tool = registered_tool(name.as_str(), *component_id, deployment_revision);
+            let tool = registered_tool(
+                name.as_str(),
+                *component_id,
+                component_revision,
+                deployment_revision,
+            );
             (name, tool)
         })
         .collect::<BTreeMap<_, _>>();
@@ -144,6 +161,8 @@ pub(crate) fn deployment_state(
         deployment_revision,
         registered_tools,
         agent_tool_bindings: BTreeMap::from([(agent_type.clone(), bindings)]),
+        registered_tool_middlewares: BTreeMap::new(),
+        tool_middleware_chains: BTreeMap::new(),
     }
 }
 
@@ -163,6 +182,65 @@ fn set_agent_bindings(
     deployment
         .agent_tool_bindings
         .insert(agent_type.clone(), bindings);
+}
+
+fn add_unimplemented_middleware(
+    deployment: &mut ToolDeploymentState,
+    agent_type: &AgentTypeName,
+    tool_name: &ToolName,
+    component_revision: ComponentRevision,
+) {
+    let middleware_name = ToolMiddlewareName::try_from("test-middleware").unwrap();
+    let registered = RegisteredToolMiddleware {
+        deployment_revision: deployment.deployment_revision,
+        release_id: None,
+        definition: ToolMiddleware {
+            name: middleware_name.to_string(),
+            version: "1.0.0".to_string(),
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            scope: ToolMiddlewareScope::Universal,
+        },
+        provision: ToolProvisionConfig::default(),
+        source: ToolMiddlewareSource::Component {
+            component_id: ComponentId::new(),
+            component_revision,
+            component_name: ComponentName("test-middleware-component".to_string()),
+        },
+        owner_account_id: AccountId::new(),
+        owner_account_email: AccountEmail::new("middleware@example.com"),
+        metadata_version: "0.1.0".to_string(),
+        metadata_digest: Default::default(),
+    };
+    let effective_definition = deployment.registered_tools[tool_name].definition.clone();
+    let occurrence = CompiledToolMiddlewareOccurrence {
+        middleware: registered.clone(),
+        parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        provision: ToolProvisionConfig::default(),
+        secret_keys_readable: SecretKeyScope::All,
+        secret_keys_revealable: SecretKeyScope::All,
+        filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
+        expected_definition: None,
+        presented_definition: None,
+        next_effective_definition: effective_definition.clone(),
+        compatibility: None,
+    };
+    deployment
+        .registered_tool_middlewares
+        .insert(middleware_name, registered);
+    deployment.tool_middleware_chains.insert(
+        agent_type.clone(),
+        BTreeMap::from([(
+            tool_name.clone(),
+            CompiledToolMiddlewareChain {
+                deployment_revision: deployment.deployment_revision,
+                agent_type_name: agent_type.clone(),
+                tool_name: tool_name.clone(),
+                effective_definition,
+                occurrences: vec![occurrence],
+            },
+        )]),
+    );
 }
 
 fn summary(name: &str, component_id: ComponentId) -> ToolSummary {
@@ -196,6 +274,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
     let mut initial_deployment = deployment_state(
         &agent_type,
         1,
+        ComponentRevision::try_from(1_u64).unwrap(),
         &[
             ("beta", beta_component, true),
             ("unbound", unbound_component, false),
@@ -232,6 +311,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
         Some(deployment_state(
             &agent_type,
             1,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("other-component", other_component_tool, true)],
         )),
     );
@@ -293,6 +373,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
         Some(deployment_state(
             &agent_type,
             1,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("other-environment", other_environment_tool_component, true)],
         )),
     );
@@ -365,6 +446,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
         Some(deployment_state(
             &agent_type,
             2,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("gamma", gamma_component, true)],
         )),
     );
@@ -385,6 +467,7 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
         Some(deployment_state(
             &agent_type,
             3,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("epsilon", epsilon_component, true)],
         )),
     );
@@ -431,6 +514,230 @@ async fn tool_discovery_host_filters_and_uses_caller_deployment_scope(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let service = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(service.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_type = AgentTypeName("GolemHostApi".to_string());
+    let tool_name = ToolName::try_from("remote-search").unwrap();
+    let publisher_account_id = AccountId::new();
+    let publisher_account_email = AccountEmail::new("publisher@example.com");
+    assert_ne!(publisher_account_id, context.account_id);
+
+    let mut component_deployment = deployment_state(
+        &agent_type,
+        1,
+        component.revision,
+        &[(tool_name.as_str(), component.id, true)],
+    );
+    let registered = component_deployment
+        .registered_tools
+        .get_mut(&tool_name)
+        .unwrap();
+    registered.owner_account_id = publisher_account_id;
+    registered.owner_account_email = publisher_account_email.clone();
+    let binding = component_deployment
+        .agent_tool_bindings
+        .get_mut(&agent_type)
+        .unwrap()
+        .get_mut(&tool_name)
+        .unwrap();
+    binding.account_id = publisher_account_id;
+    binding.account_email = publisher_account_email.clone();
+    service.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(component_deployment),
+    );
+
+    let component_caller = agent_id!("GolemHostApi", "component-snapshot-dispatch");
+    executor
+        .start_agent(&component.id, component_caller.clone())
+        .await?;
+    let component_result = executor
+        .invoke_and_await_agent(
+            &component,
+            &component_caller,
+            "tool_rpc_invoke_and_await_result",
+            data_value!(tool_name.as_str(), Vec::<String>::new(), String::new()),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert!(
+        component_result.as_ref().is_err_and(|error| {
+            error.contains("InvalidToolName")
+                && error.contains(tool_name.as_str())
+                && !error.contains("Denied")
+        }),
+        "cross-account component source must pass caller-owned authorization and reach dispatch: {component_result:?}"
+    );
+
+    let updated_component = executor
+        .update_component(&component.id, &host_api_tests.wasm_name)
+        .await?;
+    let mut host_deployment = deployment_state(
+        &agent_type,
+        2,
+        updated_component.revision,
+        &[(tool_name.as_str(), ComponentId::new(), true)],
+    );
+    let host_source = ToolSource::Host {
+        host_tool_id: HostToolId::try_from("native-search".to_string()).unwrap(),
+        implementation_version: "2026.08.28".to_string(),
+    };
+    let registered = host_deployment
+        .registered_tools
+        .get_mut(&tool_name)
+        .unwrap();
+    registered.owner_account_id = publisher_account_id;
+    registered.owner_account_email = publisher_account_email.clone();
+    registered.source = host_source.clone();
+    let binding = host_deployment
+        .agent_tool_bindings
+        .get_mut(&agent_type)
+        .unwrap()
+        .get_mut(&tool_name)
+        .unwrap();
+    binding.account_id = publisher_account_id;
+    binding.account_email = publisher_account_email;
+    binding.source = host_source;
+    service.set_tool_deployment(
+        context.default_environment_id,
+        updated_component.id,
+        updated_component.revision,
+        Some(host_deployment),
+    );
+
+    let host_caller = agent_id!("GolemHostApi", "host-snapshot-dispatch");
+    executor
+        .start_agent(&updated_component.id, host_caller.clone())
+        .await?;
+    let host_result = executor
+        .invoke_and_await_agent(
+            &updated_component,
+            &host_caller,
+            "tool_rpc_invoke_and_await_result",
+            data_value!(tool_name.as_str(), Vec::<String>::new(), String::new()),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        host_result.contains("native-search")
+            && host_result.contains("2026.08.28")
+            && host_result.contains("is not installed")
+            && !host_result.contains("Denied")
+            && !host_result.contains("panicked"),
+        "host source must pass shared admission and reach tagged dispatch: {host_result:?}"
+    );
+    assert_eq!(service.tool_activation_calls(), 2);
+    assert_eq!(
+        service.tool_activation_lookups(),
+        vec![
+            (
+                context.default_environment_id,
+                component.id,
+                component.revision,
+            ),
+            (
+                context.default_environment_id,
+                updated_component.id,
+                updated_component.revision,
+            ),
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn durable_tool_invocation_rejects_nonempty_middleware_chain(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let service = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(service.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_type = AgentTypeName("GolemHostApi".to_string());
+    let tool_name = ToolName::try_from("middleware-search").unwrap();
+    let mut deployment = deployment_state(
+        &agent_type,
+        1,
+        component.revision,
+        &[(tool_name.as_str(), component.id, true)],
+    );
+    add_unimplemented_middleware(&mut deployment, &agent_type, &tool_name, component.revision);
+    service.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(deployment),
+    );
+    let agent_id = agent_id!("GolemHostApi", "middleware-fail-closed");
+    executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "tool_rpc_invoke_and_await_result",
+            data_value!(tool_name.as_str(), Vec::<String>::new(), String::new()),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+
+    assert!(
+        result.as_ref().is_err_and(|error| {
+            error.contains("RemoteInternalError")
+                && error.contains("tool middleware invocation is not implemented by the executor")
+                && !error.contains("InvalidToolName")
+        }),
+        "a nonempty middleware chain must fail closed before base tool dispatch: {result:?}"
+    );
+    assert_eq!(service.tool_activation_calls(), 1);
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn tool_discovery_replay_uses_persisted_result_without_environment_lookup(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -457,6 +764,7 @@ async fn tool_discovery_replay_uses_persisted_result_without_environment_lookup(
         Some(deployment_state(
             &agent_type,
             1,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("alpha", alpha_component, true)],
         )),
     );
@@ -482,6 +790,7 @@ async fn tool_discovery_replay_uses_persisted_result_without_environment_lookup(
         Some(deployment_state(
             &agent_type,
             2,
+            ComponentRevision::try_from(1_u64).unwrap(),
             &[("beta", beta_component, true)],
         )),
     );

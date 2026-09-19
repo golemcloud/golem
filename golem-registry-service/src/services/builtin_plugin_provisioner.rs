@@ -64,7 +64,7 @@ impl BuiltinPluginDescriptor {
 static BUILTIN_PLUGINS: &[BuiltinPluginDescriptor] = &[BuiltinPluginDescriptor {
     component_name: "otlp:exporter",
     plugin_name: "golem-otlp-exporter",
-    version: "1.5.0",
+    version: "1.5.1",
     description: "Built-in OTLP exporter oplog processor plugin",
     wasm_bytes: include_bytes!("../../../plugins/otlp-exporter.wasm"),
 }];
@@ -193,6 +193,7 @@ async fn get_or_create_environment(
                     EnvironmentCreation {
                         name: env_name.clone(),
                         compatibility_check: false,
+                        tool_compatibility_mode: Default::default(),
                         version_check: false,
                         security_overrides: false,
                     },
@@ -237,6 +238,8 @@ async fn upload_or_update_component(
                 agent_type_provision_configs: BTreeMap::new(),
                 tools: Vec::new(),
                 tool_deployment_configs: BTreeMap::new(),
+                tool_middlewares: Vec::new(),
+                tool_middleware_provision_configs: BTreeMap::new(),
             },
             wasm_bytes.to_vec(),
             None,
@@ -269,6 +272,8 @@ async fn upload_or_update_component(
                             agent_type_provision_config_updates: None,
                             tools: None,
                             tool_deployment_config_updates: None,
+                            tool_middlewares: None,
+                            tool_middleware_provision_config_updates: None,
                             allow_incompatible_config: false,
                         },
                         Some(wasm_bytes.to_vec()),
@@ -311,6 +316,11 @@ async fn deploy_environment(
                 current_revision: plan.current_revision,
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion(Uuid::new_v4().to_string()),
+                publish_tools: Vec::new(),
+                remote_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
                 retry_policy_defaults: Vec::new(),
@@ -364,7 +374,8 @@ async fn register_plugin(
                 })?
                 .ok_or_else(|| {
                     anyhow::anyhow!("Plugin '{plugin_name}' exists but could not be loaded")
-                })?;
+                })?
+                .plugin;
             Ok(())
         }
         Err(other) => Err(anyhow::anyhow!(

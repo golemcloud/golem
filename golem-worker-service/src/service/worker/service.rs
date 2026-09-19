@@ -21,16 +21,22 @@ use crate::api::agents::{
     AgentInvocationMode, AgentInvocationRequest, AgentInvocationResult, CreateAgentRequest,
     CreateAgentResponse,
 };
+use crate::invocation_session_token::{SessionAgentIdentity, SessionTokenPayload};
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::{AuthService, AuthServiceError};
 use crate::service::component::ComponentService;
 use crate::service::limit::LimitService;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
+use golem_api_grpc::proto::golem::worker::invocation_request;
 use golem_api_grpc::proto::golem::worker::{
-    InvocationContext, InvocationRequest, InvocationStart, PublicInvocationStart, ResumeAttach,
-    invocation_request,
+    InvocationContext, InvocationRequest, InvocationStart, ResumeAttach,
 };
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest, ExportStreamControlResult,
+    ReadStreamSlotRequest, ReadStreamSlotSuccess,
+};
+use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -50,6 +56,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::invocation_session_public::{InvocationSelector, PublicConfigEntry};
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentConfigEntryDto;
@@ -57,10 +64,15 @@ use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
 use golem_common::schema::json_input_schema_value_to_typed_schema_value;
+use golem_common::schema::public_json::{
+    PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
+    decode_public_schema_value as decode_public_json_schema_value,
+};
 use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{
-    ResultValuePayload, SchemaType, SchemaValue, TypedSchemaValue, UnionValuePayload,
-    VariantValuePayload,
+    FieldSource, InputSchema, NamedFieldType, ResultValuePayload, SchemaGraph, SchemaType,
+    SchemaValue, TypedSchemaValue, UnionValuePayload, VariantValuePayload, find_host_managed_type,
+    schema_value_to_proto_with_streams,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -107,6 +119,41 @@ fn build_public_invocation_agent_id(
     })
 }
 
+fn public_input_graph(graph: &SchemaGraph, input_schema: &InputSchema) -> SchemaGraph {
+    let fields = input_schema
+        .fields()
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .map(|field| NamedFieldType {
+            name: field.name.clone(),
+            body: field.schema.clone(),
+            metadata: field.metadata.clone(),
+        })
+        .collect();
+    SchemaGraph {
+        defs: graph.defs.clone(),
+        root: SchemaType::record(fields),
+    }
+}
+
+fn public_invocation_graph(
+    graph: &SchemaGraph,
+    input_schema: &InputSchema,
+    output_schema: Option<&SchemaType>,
+) -> SchemaGraph {
+    let roots = input_schema
+        .fields()
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+        .map(|field| field.schema.clone())
+        .chain(output_schema.cloned())
+        .collect();
+    SchemaGraph {
+        defs: graph.defs.clone(),
+        root: SchemaType::tuple(roots),
+    }
+}
+
 fn validate_one_shot_invocation_is_stream_free(
     component: &Component,
     agent_id: &AgentId,
@@ -143,7 +190,16 @@ fn validate_one_shot_invocation_is_stream_free(
                 "Invalid input for agent method '{method_name}': {error}"
             ))
         })?;
-    if method.uses_streams(&agent_type.schema) {
+    let uses_streams = component
+        .metadata
+        .agent_method_stream_metadata(&agent_type.type_name, &method.name)
+        .ok_or_else(|| {
+            WorkerServiceError::TypeChecker(format!(
+                "Streaming classification for agent method '{method_name}' is missing"
+            ))
+        })?
+        .uses_streams();
+    if uses_streams {
         Err(WorkerServiceError::TypeChecker(
             "Streaming agent methods require an attached invocation session".to_string(),
         ))
@@ -178,19 +234,21 @@ fn invocation_method_uses_streams(
                 agent_type.type_name
             ))
         })?;
-    Ok(method.uses_streams(&agent_type.schema))
+    component
+        .metadata
+        .agent_method_stream_metadata(&agent_type.type_name, &method.name)
+        .map(|metadata| metadata.uses_streams())
+        .ok_or_else(|| {
+            WorkerServiceError::TypeChecker(format!(
+                "Streaming classification for agent method '{method_name}' is missing"
+            ))
+        })
 }
 
-fn decode_public_session_schema_value(
+pub(crate) fn decode_public_session_schema_value(
     value: golem_api_grpc::proto::golem::schema::SchemaValue,
 ) -> Result<SchemaValue, String> {
     decode_public_schema_value(value, true)
-}
-
-pub(crate) fn validate_public_session_schema_value(
-    value: &golem_api_grpc::proto::golem::schema::SchemaValue,
-) -> Result<(), String> {
-    decode_public_session_schema_value(value.clone()).map(|_| ())
 }
 
 fn decode_public_schema_value(
@@ -496,6 +554,53 @@ pub struct WorkerService {
     agent_resolution_cache: Arc<AgentResolutionCache>,
 }
 
+pub struct PublicAgentSessionStart {
+    pub selector: InvocationSelector,
+    pub config: Vec<PublicConfigEntry>,
+    pub idempotency_key: String,
+    pub attempt_id: uuid::Uuid,
+    pub method_parameters: serde_json::Value,
+}
+
+pub struct StartedPublicAgentSession {
+    pub responses: InvocationResponseStream,
+    pub initial_request: InvocationRequest,
+    pub schema: SchemaGraph,
+    pub output_schema: Option<SchemaType>,
+    pub agent_id: AgentId,
+    pub application: ApplicationName,
+    pub environment: EnvironmentName,
+    pub method: String,
+    pub agent_type: AgentTypeName,
+    pub component_revision: ComponentRevision,
+}
+
+pub struct PublicAgentSessionResume {
+    pub identity: SessionAgentIdentity,
+    pub session: SessionTokenPayload,
+    pub attempt_id: uuid::Uuid,
+    pub operation: golem_api_grpc::proto::golem::worker::ResumeOperation,
+    pub cursors: Vec<golem_api_grpc::proto::golem::worker::StreamCursor>,
+}
+
+#[derive(Debug)]
+pub enum PublicAgentSessionStartError {
+    Protocol(PublicSchemaValueError),
+    Worker(WorkerServiceError),
+}
+
+impl From<PublicSchemaValueError> for PublicAgentSessionStartError {
+    fn from(value: PublicSchemaValueError) -> Self {
+        Self::Protocol(value)
+    }
+}
+
+impl From<WorkerServiceError> for PublicAgentSessionStartError {
+    fn from(value: WorkerServiceError) -> Self {
+        Self::Worker(value)
+    }
+}
+
 impl WorkerService {
     pub fn new(
         component_service: Arc<dyn ComponentService>,
@@ -616,6 +721,48 @@ impl WorkerService {
         .await
     }
 
+    pub async fn prepare_for_invocation(
+        &self,
+        agent_id: &AgentId,
+        method_name: String,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(ComponentRevision, AgentFingerprint)> {
+        let component = self
+            .component_service
+            .get_current_by_id_uncached(agent_id.component_id)
+            .await?;
+
+        authorize_agent_permission(
+            &auth_ctx,
+            &component,
+            agent_id,
+            AgentVerb::Invoke,
+            AgentResourcePattern::Method(AgentMethodName(method_name)),
+        )?;
+
+        let (_, fingerprint) = self
+            .worker_client
+            .prepare(
+                agent_id,
+                environment_variables,
+                config,
+                ignore_already_existing,
+                component.account_id,
+                component.environment_id,
+                auth_ctx,
+                invocation_context,
+                principal,
+            )
+            .await?;
+
+        Ok((component.revision, fingerprint))
+    }
+
     // Like create, but skip fetching the component.
     pub async fn create_with_component(
         &self,
@@ -730,6 +877,18 @@ impl WorkerService {
             AgentVerb::Delete,
             AgentResourcePattern::Empty,
         )?;
+
+        // #3133 made deleting an agent that does not exist an error, and that
+        // answer has to survive the routing layer's retries. A retried *delete*
+        // cannot tell "I already deleted it" from "it was never here":
+        // `delete_worker_internal` opens with a metadata lookup and reports the
+        // agent missing either way. A read can. Reads do not change their answer
+        // by being repeated, so asking once here settles whether the agent was
+        // there when the caller asked, before any delete goes out and before any
+        // retry can muddy it.
+        self.worker_client
+            .get_metadata(agent_id, component.environment_id, auth_ctx.clone())
+            .await?;
 
         self.worker_client
             .delete(agent_id, component.environment_id, auth_ctx)
@@ -1421,23 +1580,35 @@ impl WorkerService {
         &self,
         producer_agent_id: &AgentId,
         producer_environment_id: EnvironmentId,
-        consumer_agent_id: &AgentId,
-        consumer_environment_id: EnvironmentId,
-        expected_consumer_fingerprint: AgentFingerprint,
+        consumer_agent_id: Option<&AgentId>,
+        consumer_environment_id: Option<EnvironmentId>,
+        expected_consumer_fingerprint: Option<AgentFingerprint>,
         payload: Vec<u8>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<u8>> {
-        let component = self
-            .component_service
-            .get_current_by_id_uncached(producer_agent_id.component_id)
-            .await?;
-        authorize_agent_permission(
-            &auth_ctx,
-            &component,
-            producer_agent_id,
-            AgentVerb::View,
-            AgentResourcePattern::Any,
-        )?;
+        let read: golem_common::model::durable_stream::DurableStreamReadRequest =
+            golem_common::serialization::deserialize(&payload)
+                .map_err(|error| WorkerServiceError::Internal(error.to_string()))?;
+        match read {
+            golem_common::model::durable_stream::DurableStreamReadRequest::AttachedConsumer(_) => {
+                let component = self
+                    .component_service
+                    .get_current_by_id_uncached(producer_agent_id.component_id)
+                    .await?;
+                authorize_agent_permission(
+                    &auth_ctx,
+                    &component,
+                    producer_agent_id,
+                    AgentVerb::View,
+                    AgentResourcePattern::Any,
+                )?;
+            }
+            golem_common::model::durable_stream::DurableStreamReadRequest::AuthorizedExport(_) => {
+                auth_ctx
+                    .authorize_system_only("read authorized durable stream export")
+                    .map_err(AuthServiceError::Unauthorized)?;
+            }
+        }
         self.worker_client
             .read_durable_stream_segment(
                 producer_agent_id,
@@ -1664,94 +1835,139 @@ impl WorkerService {
             .await
     }
 
-    pub async fn invoke_public_agent_session(
+    pub async fn create_stream_session(
         &self,
-        start: PublicInvocationStart,
+        agent_id: &AgentId,
+        request: InvocationStart,
+    ) -> WorkerResult<CreateStreamSessionSuccess> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("create authorized Durable Streams session")
+            .map_err(AuthServiceError::Unauthorized)?;
+
+        self.worker_client
+            .create_stream_session(agent_id, request)
+            .await
+    }
+
+    pub async fn control_export_stream(
+        &self,
+        agent_id: &AgentId,
+        request: DurableStreamAttachmentControlRequest,
+    ) -> WorkerResult<ExportStreamControlResult> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("control authorized Durable Streams export")
+            .map_err(AuthServiceError::Unauthorized)?;
+        self.worker_client
+            .control_export_stream(agent_id, request)
+            .await
+    }
+
+    pub async fn read_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: ReadStreamSlotRequest,
+    ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("access authorized Durable Streams slot")
+            .map_err(AuthServiceError::Unauthorized)?;
+
+        self.worker_client.read_stream_slot(agent_id, request).await
+    }
+
+    pub async fn append_to_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest,
+    ) -> WorkerResult<
+        golem_api_grpc::proto::golem::workerexecutor::v1::append_to_stream_slot_response::Result,
+    > {
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        auth_ctx
+            .authorize_system_only("append to authorized Durable Streams slot")
+            .map_err(AuthServiceError::Unauthorized)?;
+        self.worker_client
+            .append_to_stream_slot(agent_id, request)
+            .await
+    }
+
+    pub async fn invoke_public_agent_session_v1(
+        &self,
+        start: PublicAgentSessionStart,
         tail: InvocationRequestStream,
         auth: AuthCtx,
-    ) -> WorkerResult<InvocationResponseStream> {
-        let attempt_id = start.attempt_id;
-        let expected_callee_fingerprint = start.expected_callee_fingerprint;
-        let app_name = ApplicationName::try_from(start.application_name)
+        mut resolve_stream: impl FnMut(
+            PublicStreamReference,
+            Option<&SchemaType>,
+        ) -> Result<SchemaValueStream, PublicSchemaValueError>,
+    ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
+        let app_name = ApplicationName::try_from(start.selector.application)
             .map_err(WorkerServiceError::TypeChecker)?;
-        let env_name = EnvironmentName::try_from(start.environment_name)
+        let env_name = EnvironmentName::try_from(start.selector.environment)
             .map_err(WorkerServiceError::TypeChecker)?;
-        let agent_type_name = AgentTypeName(start.agent_type_name);
-        let method_name = start.method_name;
-        let constructor_parameters = decode_public_schema_value(
-            start.constructor_parameters.ok_or_else(|| {
-                WorkerServiceError::TypeChecker(
-                    "public invocation has no constructor parameters".to_string(),
-                )
-            })?,
-            false,
-        )
-        .map_err(|error| {
-            WorkerServiceError::TypeChecker(format!(
-                "Agent constructor parameters cannot cross the public boundary: {error}"
-            ))
-        })?;
-        let proto_method_parameters = start.method_parameters.ok_or_else(|| {
-            WorkerServiceError::TypeChecker(
-                "public invocation has no method parameters".to_string(),
-            )
-        })?;
-        let method_parameters = decode_public_session_schema_value(proto_method_parameters.clone())
-            .map_err(|error| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Agent method parameters cannot cross the public boundary: {error}"
-                ))
-            })?;
-        let phantom_id = start
-            .phantom_id
-            .map(TryInto::try_into)
-            .transpose()
-            .map_err(|error| {
-                WorkerServiceError::TypeChecker(format!("Invalid phantom id: {error}"))
-            })?;
-        let idempotency_key: IdempotencyKey = start
-            .idempotency_key
-            .ok_or_else(|| {
-                WorkerServiceError::TypeChecker(
-                    "public invocation requires an idempotency key".to_string(),
-                )
-            })?
-            .into();
+        let agent_type_name = AgentTypeName(start.selector.agent_type);
+        let method_name = start.selector.method;
+        let idempotency_key = IdempotencyKey::new(start.idempotency_key);
         let config = start
             .config
             .into_iter()
-            .map(AgentConfigEntryDto::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                WorkerServiceError::TypeChecker(format!(
-                    "Agent configuration cannot cross the public boundary: {error}"
-                ))
-            })?;
+            .map(|entry| AgentConfigEntryDto {
+                path: entry.path,
+                value: NormalizedJsonValue::new(entry.value),
+            })
+            .collect::<Vec<_>>();
 
         let resolved = self
             .agent_resolution_cache
             .resolve(&app_name, &env_name, &agent_type_name, None, &auth)
-            .await?;
+            .await
+            .map_err(WorkerServiceError::from)?;
         let registered_agent_type = &resolved.registered_agent_type;
         let environment_id = resolved.environment_id;
         let component_id = registered_agent_type.implemented_by.component_id;
         let agent_type = &registered_agent_type.agent_type;
-
+        let constructor_graph =
+            public_input_graph(&agent_type.schema, &agent_type.constructor.input_schema);
+        let constructor_parameters = decode_public_json_schema_value(
+            &constructor_graph,
+            &constructor_graph.root,
+            &start.selector.constructor_parameters,
+            PublicStreamReferencePolicy::None,
+            |_, _| unreachable!("constructor stream references are disabled by policy"),
+        )?;
         let constructor_parameters = json_input_schema_value_to_typed_schema_value(
             constructor_parameters,
             &agent_type.schema,
             &agent_type.constructor.input_schema,
         )
-        .map_err(|error| {
-            WorkerServiceError::TypeChecker(format!(
-                "Agent constructor parameters type error: {error}"
-            ))
-        })?;
+        .map_err(WorkerServiceError::TypeChecker)?;
         let agent_id = build_public_invocation_agent_id(
             component_id,
             agent_type_name.clone(),
             constructor_parameters,
-            phantom_id,
+            start.selector.phantom_id,
         )?;
         let component = self
             .component_service
@@ -1759,11 +1975,15 @@ impl WorkerService {
                 component_id,
                 registered_agent_type.implemented_by.component_revision,
             )
-            .await?;
+            .await
+            .map_err(WorkerServiceError::from)?;
         let component_owner_account_id = registered_agent_type.implemented_by.account_id;
         let component_name = registered_agent_type.implemented_by.component_name.clone();
         let component_owner_account_email =
             registered_agent_type.implemented_by.account_email.clone();
+        let owner_app_name = app_name.clone();
+        let owner_env_name = env_name.clone();
+        let authorization_method_name = method_name.clone();
         let (agent_id, idempotency_key, freshness_disposition, observation_only) = self
             .prepare_agent_invocation_identity(
                 &component,
@@ -1776,14 +1996,14 @@ impl WorkerService {
                     auth.authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
                         owner: AgentOwnerPattern::Agent {
                             account: component_owner_account_email,
-                            application: app_name,
-                            environment: env_name,
+                            application: owner_app_name,
+                            environment: owner_env_name,
                             component: ComponentName(component_name),
                             agent: AgentOwnerLeafPattern::Agent(final_agent_id.agent_id.clone()),
                         },
                         verb: Some(AgentVerb::Invoke),
                         resource: AgentResourcePattern::Method(AgentMethodName(
-                            method_name.clone(),
+                            authorization_method_name,
                         )),
                     }))
                     .map_err(AuthServiceError::from)
@@ -1818,20 +2038,37 @@ impl WorkerService {
                     "Agent method {method_name} not found in agent type {agent_type_name}"
                 ))
             })?;
-        let _validated_method_parameters = json_input_schema_value_to_typed_schema_value(
-            method_parameters,
-            &invocation_agent_type.schema,
-            &method.input_schema,
-        )
-        .map_err(|error| {
-            WorkerServiceError::TypeChecker(format!("Agent method parameters type error: {error}"))
-        })?;
+        let input_graph = public_input_graph(&invocation_agent_type.schema, &method.input_schema);
+        let method_parameters = decode_public_json_schema_value(
+            &input_graph,
+            &input_graph.root,
+            &start.method_parameters,
+            PublicStreamReferencePolicy::Provisional,
+            &mut resolve_stream,
+        )?;
+        method
+            .validate_input(&invocation_agent_type.schema, &method_parameters)
+            .map_err(WorkerServiceError::TypeChecker)?;
+        let proto_method_parameters =
+            schema_value_to_proto_with_streams(method_parameters, |stream| {
+                stream.take_host_endpoint::<u64>()
+            })
+            .map_err(WorkerServiceError::TypeChecker)?;
         let principal: golem_api_grpc::proto::golem::component::Principal =
             Principal::GolemUser(GolemUserPrincipal {
                 account_id: auth.account_id(),
             })
             .into();
-        let expected_callee_fingerprint = if method.uses_streams(&invocation_agent_type.schema) {
+        let method_uses_streams = invocation_component
+            .metadata
+            .agent_method_stream_metadata(&invocation_agent_type.type_name, &method.name)
+            .ok_or_else(|| {
+                WorkerServiceError::Internal(format!(
+                    "Streaming classification for agent method {method_name} is missing"
+                ))
+            })?
+            .uses_streams();
+        let expected_callee_fingerprint = if method_uses_streams {
             let fingerprint = self
                 .resolve_streaming_callee_fingerprint(
                     &invocation_component,
@@ -1841,16 +2078,23 @@ impl WorkerService {
                     auth.clone(),
                     None,
                     Some(principal.clone()),
-                    expected_callee_fingerprint,
+                    None,
                 )
                 .await?;
             Some(fingerprint.0.into())
         } else {
-            expected_callee_fingerprint
+            None
         };
+        let output_schema = method.output_schema.schema().cloned();
+        let schema = public_invocation_graph(
+            &invocation_agent_type.schema,
+            &method.input_schema,
+            output_schema.as_ref(),
+        );
+        let component_revision = invocation_component.revision;
         let trusted_start = InvocationStart {
             agent_id: Some(agent_id.clone().into()),
-            method_name: Some(method_name),
+            method_name: Some(method_name.clone()),
             input: Some(proto_method_parameters),
             idempotency_key: Some(idempotency_key.into()),
             context: None,
@@ -1871,20 +2115,32 @@ impl WorkerService {
                         as i32
                 }
             },
-            attempt_id: attempt_id.or_else(|| Some(uuid::Uuid::new_v4().into())),
+            attempt_id: Some(start.attempt_id.into()),
             expected_callee_fingerprint,
             durable_input_mappings: Vec::new(),
             scope_card: None,
         };
-        let request = stream::once(async move {
-            InvocationRequest {
-                request: Some(invocation_request::Request::Start(trusted_start)),
-            }
-        })
-        .chain(tail);
-        self.worker_client
+        let initial_request = InvocationRequest {
+            request: Some(invocation_request::Request::Start(trusted_start)),
+        };
+        let request = stream::once(std::future::ready(initial_request.clone())).chain(tail);
+        let responses = self
+            .worker_client
             .invoke_agent_session(&agent_id, Box::pin(request))
-            .await
+            .await?;
+
+        Ok(StartedPublicAgentSession {
+            responses,
+            initial_request,
+            schema,
+            output_schema,
+            agent_id,
+            application: app_name,
+            environment: env_name,
+            method: method_name,
+            agent_type: agent_type_name,
+            component_revision,
+        })
     }
 
     pub async fn resume_public_agent_session(
@@ -1900,6 +2156,119 @@ impl WorkerService {
             .into();
         resume.principal = Some(principal);
         self.resume_agent_session(resume, tail, auth).await
+    }
+
+    pub async fn resume_public_agent_session_v1(
+        &self,
+        resume: PublicAgentSessionResume,
+        tail: InvocationRequestStream,
+        auth: AuthCtx,
+    ) -> Result<StartedPublicAgentSession, PublicAgentSessionStartError> {
+        let app_name = ApplicationName::try_from(resume.session.application.clone())
+            .map_err(WorkerServiceError::TypeChecker)?;
+        let env_name = EnvironmentName::try_from(resume.session.environment.clone())
+            .map_err(WorkerServiceError::TypeChecker)?;
+        let agent_type_name = AgentTypeName(resume.identity.agent_type.clone());
+        let resolved = self
+            .agent_resolution_cache
+            .resolve(&app_name, &env_name, &agent_type_name, None, &auth)
+            .await
+            .map_err(WorkerServiceError::from)?;
+        let environment_id = resolved.environment_id;
+        let component_id = ComponentId(resume.identity.component_id);
+        let component_revision = ComponentRevision::new(resume.identity.component_revision)
+            .map_err(|error| WorkerServiceError::TypeChecker(error.to_string()))?;
+        let component = self
+            .component_service
+            .get_revision(component_id, component_revision)
+            .await
+            .map_err(WorkerServiceError::from)?;
+        if component.environment_id != environment_id {
+            return Err(WorkerServiceError::TypeChecker(
+                "session token environment does not own the pinned component".to_string(),
+            )
+            .into());
+        }
+        let agent_id = AgentId {
+            component_id,
+            agent_id: resume.identity.agent_id.clone(),
+        };
+        authorize_agent_permission(
+            &auth,
+            &component,
+            &agent_id,
+            AgentVerb::Invoke,
+            AgentResourcePattern::Method(AgentMethodName(resume.identity.method.clone())),
+        )?;
+        let agent_type = component
+            .metadata
+            .find_agent_type_by_name_ref(&agent_type_name)
+            .ok_or_else(|| {
+                PublicAgentSessionStartError::Protocol(PublicSchemaValueError::new(
+                    golem_common::model::invocation_session_public::PublicErrorCode::NotFound,
+                    format!(
+                        "Agent type '{agent_type_name}' is not present at the pinned component revision"
+                    ),
+                ))
+            })?;
+        let method = agent_type
+            .methods
+            .iter()
+            .find(|method| method.name == resume.identity.method)
+            .ok_or_else(|| {
+                PublicAgentSessionStartError::Protocol(PublicSchemaValueError::new(
+                    golem_common::model::invocation_session_public::PublicErrorCode::NotFound,
+                    format!(
+                        "Agent method '{}' is not present at the pinned component revision",
+                        resume.identity.method
+                    ),
+                ))
+            })?;
+        let output_schema = method.output_schema.schema().cloned();
+        let schema = public_invocation_graph(
+            &agent_type.schema,
+            &method.input_schema,
+            output_schema.as_ref(),
+        );
+        let principal: golem_api_grpc::proto::golem::component::Principal =
+            Principal::GolemUser(GolemUserPrincipal {
+                account_id: auth.account_id(),
+            })
+            .into();
+        let trusted_resume = ResumeAttach {
+            idempotency_key: Some(IdempotencyKey::new(resume.session.idempotency_key).into()),
+            agent_id: Some(agent_id.clone().into()),
+            environment_id: Some(environment_id.into()),
+            attachment_id: Some(resume.session.attachment_id.into()),
+            attempt_id: Some(resume.attempt_id.into()),
+            expected_callee_fingerprint: Some(resume.session.callee_incarnation.into()),
+            expected_epoch: resume.session.expected_attachment_generation,
+            operation: resume.operation as i32,
+            cursors: resume.cursors,
+            auth_ctx: Some(auth.into()),
+            principal: Some(principal),
+        };
+        let initial_request = InvocationRequest {
+            request: Some(invocation_request::Request::ResumeAttach(trusted_resume)),
+        };
+        let request = stream::once(std::future::ready(initial_request.clone())).chain(tail);
+        let responses = self
+            .worker_client
+            .invoke_agent_session(&agent_id, Box::pin(request))
+            .await?;
+
+        Ok(StartedPublicAgentSession {
+            responses,
+            initial_request,
+            schema,
+            output_schema,
+            agent_id,
+            application: app_name,
+            environment: env_name,
+            method: resume.identity.method,
+            agent_type: agent_type_name,
+            component_revision,
+        })
     }
 
     pub async fn resume_agent_session(
@@ -2106,7 +2475,7 @@ impl WorkerService {
                 method_parameters,
                 mode,
                 schedule_at,
-                Some(idempotency_key.clone()),
+                idempotency_key.clone(),
                 invocation_context,
                 freshness_disposition,
                 config,
@@ -2180,7 +2549,7 @@ impl WorkerService {
         let agent_type = &registered_agent_type.agent_type;
 
         let constructor_parameters = json_input_schema_value_to_typed_schema_value(
-            request.parameters,
+            request.parameters.into_inner(),
             &agent_type.schema,
             &agent_type.constructor.input_schema,
         )
@@ -2277,7 +2646,7 @@ impl WorkerService {
         let agent_type = &registered_agent_type.agent_type;
 
         let constructor_parameters = json_input_schema_value_to_typed_schema_value(
-            request.parameters,
+            request.parameters.into_inner(),
             &agent_type.schema,
             &agent_type.constructor.input_schema,
         )
@@ -2371,8 +2740,24 @@ impl WorkerService {
                 ))
             })?;
 
+        if let Some(output_schema) = method.output_schema.schema()
+            && let Some(occurrence) = find_host_managed_type(
+                &invocation_agent_type.schema,
+                output_schema,
+            )
+            .map_err(|error| {
+                WorkerServiceError::Internal(format!("Invalid agent method output schema: {error}"))
+            })?
+        {
+            return Err(WorkerServiceError::TypeChecker(format!(
+                "Agent method output schema contains host-managed capability {} at {}; this method cannot be invoked through external REST",
+                occurrence.kind.kind_name(),
+                occurrence.path,
+            )));
+        }
+
         let method_parameters = json_input_schema_value_to_typed_schema_value(
-            request.method_parameters,
+            request.method_parameters.into_inner(),
             &invocation_agent_type.schema,
             &method.input_schema,
         )
@@ -2461,6 +2846,11 @@ impl WorkerService {
                     .cloned()
                     .unwrap_or_else(|| SchemaType::tuple(Vec::new()));
                 let typed_output = TypedSchemaValue::new(output_graph, output_value);
+                let typed_output = typed_output.try_into().map_err(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "Agent method result cannot cross the external JSON boundary: {error}"
+                    ))
+                })?;
                 Ok(AgentInvocationResult {
                     agent_id: response_agent_id,
                     idempotency_key: response_idempotency_key,
@@ -2481,9 +2871,9 @@ impl WorkerService {
 #[cfg(test)]
 mod tests {
     use super::{
-        WorkerService, agent_verb_for_invocation_mode, build_public_agent_id,
-        build_public_invocation_agent_id, decode_public_schema_value,
-        normalize_agent_invocation_identity,
+        PublicAgentSessionStart, PublicAgentSessionStartError, WorkerService,
+        agent_verb_for_invocation_mode, build_public_agent_id, build_public_invocation_agent_id,
+        decode_public_schema_value, normalize_agent_invocation_identity,
     };
     use crate::api::agents::{AgentInvocationMode, AgentInvocationRequest, CreateAgentRequest};
     use crate::service::agent_resolution_cache::AgentResolutionCache;
@@ -2496,8 +2886,8 @@ mod tests {
     use chrono::Utc;
     use futures::{Stream, StreamExt, stream};
     use golem_api_grpc::proto::golem::worker::{
-        InvocationContext, InvocationStart, LogEvent, PublicInvocationStart, ResumeAttach,
-        ResumeOperation, invocation_request,
+        InvocationContext, InvocationStart, LogEvent, ResumeAttach, ResumeOperation,
+        invocation_request,
     };
     use golem_common::base_model::component_metadata::KnownExports;
     use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -2528,6 +2918,7 @@ mod tests {
     use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+    use golem_common::model::invocation_session_public::InvocationSelector;
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::worker::{
         AgentConfigEntryDto, AgentMetadataDto, AgentUpdateMode, ResolvedRevert,
@@ -2536,15 +2927,18 @@ mod tests {
     use golem_common::model::{
         AgentFilter, AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, ScanCursor, Timestamp,
     };
+    use golem_common::schema::public_json::PublicStreamReference;
+    use golem_common::schema::stream::SchemaValueStream;
     use golem_common::schema::{
-        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
-        OutputSchema, SchemaGraph, SchemaType, SchemaValue,
+        AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, ExternalSchemaValue,
+        InputSchema, NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
     };
     use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
     use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
-    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -3022,6 +3416,7 @@ mod tests {
 
     struct RecordingWorkerClient {
         created_agent_ids: Mutex<Vec<AgentId>>,
+        prepared_agent_ids: Mutex<Vec<AgentId>>,
         delivered_card_transfers: Mutex<Vec<RecordedCardTransfer>>,
         invocations: Mutex<Vec<(AgentId, IdempotencyKey, InvocationFreshnessDisposition)>>,
         invocation_environments: Mutex<Vec<EnvironmentId>>,
@@ -3030,6 +3425,7 @@ mod tests {
         effects: Mutex<Vec<&'static str>>,
         invocation_output: AgentInvocationOutput,
         metadata_component_revision: Mutex<Option<ComponentRevision>>,
+        deleted_agent_ids: Mutex<Vec<AgentId>>,
         fingerprint: AgentFingerprint,
     }
 
@@ -3037,6 +3433,7 @@ mod tests {
         fn new(invocation_output: AgentInvocationOutput) -> Self {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
+                prepared_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
                 invocation_environments: Mutex::new(Vec::new()),
@@ -3045,6 +3442,7 @@ mod tests {
                 effects: Mutex::new(Vec::new()),
                 invocation_output,
                 metadata_component_revision: Mutex::new(None),
+                deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
             }
         }
@@ -3055,6 +3453,7 @@ mod tests {
         ) -> Self {
             Self {
                 created_agent_ids: Mutex::new(Vec::new()),
+                prepared_agent_ids: Mutex::new(Vec::new()),
                 delivered_card_transfers: Mutex::new(Vec::new()),
                 invocations: Mutex::new(Vec::new()),
                 invocation_environments: Mutex::new(Vec::new()),
@@ -3063,6 +3462,7 @@ mod tests {
                 effects: Mutex::new(Vec::new()),
                 invocation_output,
                 metadata_component_revision: Mutex::new(Some(component_revision)),
+                deleted_agent_ids: Mutex::new(Vec::new()),
                 fingerprint: AgentFingerprint::new(),
             }
         }
@@ -3073,10 +3473,6 @@ mod tests {
 
         fn created_agent_id(&self) -> AgentId {
             self.created_agent_ids.lock().unwrap()[0].clone()
-        }
-
-        fn created_agent_count(&self) -> usize {
-            self.created_agent_ids.lock().unwrap().len()
         }
 
         fn invoked_agent_id(&self) -> AgentId {
@@ -3114,6 +3510,25 @@ mod tests {
 
     #[async_trait]
     impl WorkerClient for RecordingWorkerClient {
+        async fn prepare(
+            &self,
+            agent_id: &AgentId,
+            _: HashMap<String, String>,
+            _: Vec<AgentConfigEntryDto>,
+            _: bool,
+            _: AccountId,
+            _: EnvironmentId,
+            _: AuthCtx,
+            _: Option<InvocationContext>,
+            _: Option<golem_api_grpc::proto::golem::component::Principal>,
+        ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+            self.prepared_agent_ids
+                .lock()
+                .unwrap()
+                .push(agent_id.clone());
+            Ok((agent_id.clone(), self.fingerprint))
+        }
+
         async fn create(
             &self,
             agent_id: &AgentId,
@@ -3143,8 +3558,17 @@ mod tests {
             unimplemented!()
         }
 
-        async fn delete(&self, _: &AgentId, _: EnvironmentId, _: AuthCtx) -> WorkerResult<()> {
+        async fn delete(
+            &self,
+            agent_id: &AgentId,
+            _: EnvironmentId,
+            _: AuthCtx,
+        ) -> WorkerResult<()> {
             self.effects.lock().unwrap().push("delete");
+            self.deleted_agent_ids
+                .lock()
+                .unwrap()
+                .push(agent_id.clone());
             Ok(())
         }
 
@@ -3191,6 +3615,7 @@ mod tests {
                     updates: Vec::new(),
                     created_at: Timestamp::now_utc(),
                     last_error: None,
+                    last_error_kind: None,
                     component_size: 0,
                     total_linear_memory_size: 0,
                     exported_resource_instances: Vec::new(),
@@ -3391,7 +3816,7 @@ mod tests {
             _: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
             _: i32,
             _: Option<::prost_types::Timestamp>,
-            idempotency_key: Option<IdempotencyKey>,
+            idempotency_key: IdempotencyKey,
             _: Option<InvocationContext>,
             freshness_disposition: InvocationFreshnessDisposition,
             _: Vec<AgentConfigEntryDto>,
@@ -3403,7 +3828,7 @@ mod tests {
         ) -> WorkerResult<AgentInvocationOutput> {
             self.invocations.lock().unwrap().push((
                 agent_id.clone(),
-                idempotency_key.expect("worker service should supply an idempotency key"),
+                idempotency_key,
                 freshness_disposition,
             ));
             self.invocation_environments
@@ -3655,6 +4080,15 @@ mod tests {
             }
         }
 
+        /// Any well-formed id in this harness's component. The delete path never
+        /// resolves it against the registry, so the name is arbitrary.
+        fn some_agent_id(&self) -> AgentId {
+            AgentId {
+                component_id: self.component_id,
+                agent_id: "weather-agent(\"oslo\")".to_string(),
+            }
+        }
+
         fn create_request(&self) -> CreateAgentRequest {
             CreateAgentRequest {
                 app_name: ApplicationName::try_from("weather-app".to_string()).unwrap(),
@@ -3687,19 +4121,20 @@ mod tests {
         fn public_invocation_start(
             &self,
             idempotency_key: IdempotencyKey,
-        ) -> PublicInvocationStart {
-            PublicInvocationStart {
-                application_name: "weather-app".to_string(),
-                environment_name: "prod".to_string(),
-                agent_type_name: self.agent_type_name.0.clone(),
-                constructor_parameters: Some(empty_json_tuple().try_into().unwrap()),
-                phantom_id: None,
+        ) -> PublicAgentSessionStart {
+            PublicAgentSessionStart {
+                selector: InvocationSelector {
+                    application: "weather-app".to_string(),
+                    environment: "prod".to_string(),
+                    agent_type: self.agent_type_name.0.clone(),
+                    constructor_parameters: serde_json::json!({}),
+                    method: "run".to_string(),
+                    phantom_id: None,
+                },
                 config: vec![],
-                method_name: "run".to_string(),
-                method_parameters: Some(empty_json_tuple().try_into().unwrap()),
-                idempotency_key: Some(idempotency_key.into()),
-                attempt_id: Some(Uuid::new_v4().into()),
-                expected_callee_fingerprint: None,
+                method_parameters: serde_json::json!({}),
+                idempotency_key: idempotency_key.value,
+                attempt_id: Uuid::new_v4(),
             }
         }
 
@@ -3826,8 +4261,8 @@ mod tests {
         }
     }
 
-    fn empty_json_tuple() -> SchemaValue {
-        SchemaValue::Record { fields: vec![] }
+    fn empty_json_tuple() -> ExternalSchemaValue {
+        ExternalSchemaValue::try_from(SchemaValue::Record { fields: vec![] }).unwrap()
     }
 
     fn test_card() -> StoredCard {
@@ -3949,7 +4384,22 @@ mod tests {
                 HashMap::new(),
                 Vec::new(),
                 true,
-                auth_ctx_with_permissions(vec![run_permission]),
+                auth_ctx_with_permissions(vec![run_permission.clone()]),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        harness
+            .worker_service
+            .prepare_for_invocation(
+                &agent_id,
+                "run".to_string(),
+                HashMap::new(),
+                Vec::new(),
+                true,
+                auth_ctx_with_permissions(vec![run_permission.clone()]),
                 None,
                 None,
             )
@@ -3965,6 +4415,22 @@ mod tests {
             harness
                 .worker_service
                 .create_for_invocation(
+                    &agent_id,
+                    "run".to_string(),
+                    HashMap::new(),
+                    Vec::new(),
+                    true,
+                    auth_ctx_with_permissions(vec![other_method_permission.clone()]),
+                    None,
+                    None,
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            harness
+                .worker_service
+                .prepare_for_invocation(
                     &agent_id,
                     "run".to_string(),
                     HashMap::new(),
@@ -3987,11 +4453,26 @@ mod tests {
             1,
             "denied target activation reached the worker client"
         );
+        assert_eq!(
+            harness
+                .worker_client
+                .prepared_agent_ids
+                .lock()
+                .unwrap()
+                .as_slice(),
+            std::slice::from_ref(&agent_id),
+            "denied prepare reached the worker client"
+        );
     }
 
     #[test]
     async fn service_operations_use_exact_agent_oplog_and_filesystem_resources() {
         let harness = RestHarness::new(AgentMode::Durable);
+        // `delete` settles existence with a read before dispatching anything,
+        // so the agent has to be there for the delete leg to run at all.
+        harness
+            .worker_client
+            .set_metadata_component_revision(ComponentRevision::INITIAL);
         let agent_id = AgentId {
             component_id: harness.component_id,
             agent_id: "weather-agent()".to_string(),
@@ -4098,6 +4579,8 @@ mod tests {
         assert_eq!(
             *harness.worker_client.effects.lock().unwrap(),
             vec![
+                // The read `delete` does before dispatching.
+                "metadata",
                 "delete",
                 "interrupt",
                 "resume",
@@ -4453,10 +4936,11 @@ mod tests {
 
         let _responses = harness
             .worker_service
-            .invoke_public_agent_session(
+            .invoke_public_agent_session_v1(
                 harness.public_invocation_start(idempotency_key.clone()),
                 Box::pin(stream::empty()),
                 AuthCtx::system(),
+                |_, _| panic!("stream resolver called for a stream-free input"),
             )
             .await
             .unwrap();
@@ -4507,7 +4991,7 @@ mod tests {
                 SchemaType::stream(Some(SchemaType::u32())),
             )]),
         );
-        let method_parameters = ProtoSchemaValue {
+        let expected_method_parameters = ProtoSchemaValue {
             value: Some(schema_value::Value::RecordValue(RecordValue {
                 fields: vec![ProtoSchemaValue {
                     value: Some(schema_value::Value::StreamReference(
@@ -4517,16 +5001,31 @@ mod tests {
             })),
         };
         let mut start = harness.public_invocation_start(IdempotencyKey::fresh());
-        start.method_parameters = Some(method_parameters.clone());
+        let provisional_ref = Uuid::new_v4();
+        start.method_parameters = serde_json::json!({
+            "input": {"$stream": {"provisionalRef": provisional_ref}}
+        });
 
         let _responses = harness
             .worker_service
-            .invoke_public_agent_session(start, Box::pin(stream::empty()), AuthCtx::system())
+            .invoke_public_agent_session_v1(
+                start,
+                Box::pin(stream::empty()),
+                AuthCtx::system(),
+                |reference, schema| {
+                    assert_eq!(
+                        reference,
+                        PublicStreamReference::Provisional(provisional_ref)
+                    );
+                    assert_eq!(schema, Some(&SchemaType::u32()));
+                    Ok(SchemaValueStream::from_host_endpoint(1_u64))
+                },
+            )
             .await
             .unwrap();
 
         let (_, trusted_start) = harness.worker_client.invocation_session_start();
-        assert_eq!(trusted_start.input, Some(method_parameters));
+        assert_eq!(trusted_start.input, Some(expected_method_parameters));
         assert_eq!(
             trusted_start.expected_callee_fingerprint.map(Uuid::from),
             Some(harness.worker_client.fingerprint.0)
@@ -4538,26 +5037,28 @@ mod tests {
     }
 
     #[test]
-    async fn public_streaming_invocation_rejects_stale_callee_fingerprint() {
+    async fn public_streaming_invocation_pins_the_resolved_callee_fingerprint() {
         let harness = RestHarness::new_with_output(
             AgentMode::Durable,
             OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u32())))),
         );
-        let mut start = harness.public_invocation_start(IdempotencyKey::fresh());
-        start.expected_callee_fingerprint = Some(Uuid::new_v4().into());
 
-        let result = harness
+        harness
             .worker_service
-            .invoke_public_agent_session(start, Box::pin(stream::empty()), AuthCtx::system())
-            .await;
-        let error = match result {
-            Ok(_) => panic!("stale callee fingerprint was accepted"),
-            Err(error) => error,
-        };
+            .invoke_public_agent_session_v1(
+                harness.public_invocation_start(IdempotencyKey::fresh()),
+                Box::pin(stream::empty()),
+                AuthCtx::system(),
+                |_, _| panic!("stream resolver called for a stream-free input"),
+            )
+            .await
+            .unwrap();
 
-        assert!(error.to_string().contains("does not match"));
-        assert_eq!(harness.worker_client.created_agent_count(), 0);
-        assert_eq!(harness.worker_client.invocation_session_start_count(), 0);
+        let (_, trusted_start) = harness.worker_client.invocation_session_start();
+        assert_eq!(
+            trusted_start.expected_callee_fingerprint.map(Uuid::from),
+            Some(harness.worker_client.fingerprint.0)
+        );
     }
 
     #[test]
@@ -4735,10 +5236,11 @@ mod tests {
 
         let error = match harness
             .worker_service
-            .invoke_public_agent_session(
+            .invoke_public_agent_session_v1(
                 harness.public_invocation_start(idempotency_key),
                 Box::pin(stream::empty()),
                 auth,
+                |_, _| panic!("stream resolver called before authorization"),
             )
             .await
         {
@@ -4746,7 +5248,10 @@ mod tests {
             Ok(_) => panic!("an empty permission surface must reject the resolved agent selector"),
         };
 
-        assert!(matches!(error, WorkerServiceError::AuthError(_)));
+        assert!(matches!(
+            error,
+            PublicAgentSessionStartError::Worker(WorkerServiceError::AuthError(_))
+        ));
         assert_eq!(harness.worker_client.invocation_session_start_count(), 0);
     }
 
@@ -4804,6 +5309,70 @@ mod tests {
         }
 
         assert_eq!(harness.worker_client.invocations().len(), 3);
+    }
+
+    #[test]
+    async fn rest_capability_outputs_are_rejected_before_worker_dispatch() {
+        for capability in [
+            SchemaType::secret(Default::default()),
+            SchemaType::quota_token(Default::default()),
+            SchemaType::permission_card(Default::default()),
+        ] {
+            for output in [capability.clone(), SchemaType::option(capability)] {
+                let harness = RestHarness::new_with_output(
+                    AgentMode::Durable,
+                    OutputSchema::Single(Box::new(output)),
+                );
+                for (mode, schedule_at) in [
+                    (AgentInvocationMode::Await, None),
+                    (AgentInvocationMode::Schedule, None),
+                    (AgentInvocationMode::Schedule, Some(Utc::now())),
+                ] {
+                    let mut request = harness.invoke_request();
+                    request.mode = mode;
+                    request.schedule_at = schedule_at;
+                    request.idempotency_key = None;
+                    let error = harness
+                        .worker_service
+                        .invoke_agent_rest(request, AuthCtx::system())
+                        .await
+                        .expect_err("capability outputs must be rejected before execution");
+                    assert!(matches!(error, WorkerServiceError::TypeChecker(_)));
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("output schema contains host-managed capability")
+                    );
+                }
+                assert!(harness.worker_client.invocations().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    async fn rest_capability_output_preflight_uses_existing_worker_revision() {
+        let capability_output =
+            OutputSchema::Single(Box::new(SchemaType::secret(Default::default())));
+        let pinned_capability = RestHarness::new_with_pinned_and_latest_output(
+            capability_output.clone(),
+            OutputSchema::Unit,
+        );
+        let error = pinned_capability
+            .worker_service
+            .invoke_agent_rest(pinned_capability.invoke_request(), AuthCtx::system())
+            .await
+            .expect_err("the pinned capability-bearing revision must be rejected");
+        assert!(matches!(error, WorkerServiceError::TypeChecker(_)));
+        assert!(pinned_capability.worker_client.invocations().is_empty());
+
+        let pinned_plain =
+            RestHarness::new_with_pinned_and_latest_output(OutputSchema::Unit, capability_output);
+        pinned_plain
+            .worker_service
+            .invoke_agent_rest(pinned_plain.invoke_request(), AuthCtx::system())
+            .await
+            .expect("the pinned ordinary output must remain dispatchable");
+        assert_eq!(pinned_plain.worker_client.invocations().len(), 1);
     }
 
     #[test]
@@ -4959,6 +5528,61 @@ mod tests {
         assert_eq!(invocations[0].2, InvocationFreshnessDisposition::MayExist);
     }
 
+    /// A keyless invocation is given a key, and never a shared one.
+    ///
+    /// `call_worker_executor` retries on `InvalidShardId` and on transport
+    /// failure, re-sending the request as it stands, and `invoke_agent_internal`
+    /// mints a fresh key for any request that arrives without one. So a keyless
+    /// invocation that got retried used to look like work nobody had started and
+    /// run a second time on its new owner. `WorkerClient::invoke_agent` no longer
+    /// accepts an absent key, so the decision happens once, in
+    /// `normalize_agent_invocation_identity`, above the retry loop.
+    ///
+    /// What this checks is that a key is always minted and that unrelated
+    /// invocations never share one. That every *attempt* of a single invocation
+    /// carries the same key is structural rather than covered here: the key is
+    /// bound before the retry closure is built and the closure only clones what
+    /// it captured. `RecordingWorkerClient` stands above `call_worker_executor`,
+    /// so no test at this seam can see a second attempt at all.
+    ///
+    /// Both REST invocation modes go through the same mint and both are checked,
+    /// since a mint that covered only `Await` would look correct from one call.
+    #[test]
+    async fn keyless_invocations_are_each_given_their_own_key() {
+        let harness = RestHarness::new(AgentMode::Durable);
+
+        // Twice per mode, not once each: a mint that handed every request of one
+        // mode the same constant would still look fine across two different
+        // modes, and only collides with itself.
+        for mode in [AgentInvocationMode::Await, AgentInvocationMode::Schedule] {
+            for _ in 0..2 {
+                let mut request = harness.invoke_request();
+                request.mode = mode.clone();
+                harness
+                    .worker_service
+                    .invoke_agent_rest(request, AuthCtx::system())
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let keys: Vec<IdempotencyKey> = harness
+            .worker_client
+            .invocations()
+            .into_iter()
+            .map(|(_, key, _)| key)
+            .collect();
+
+        assert_eq!(keys.len(), 4);
+        let distinct: BTreeSet<&str> = keys.iter().map(|key| key.value.as_str()).collect();
+        assert_eq!(
+            distinct.len(),
+            4,
+            "unrelated invocations must not be handed the same key, or one would \
+             join another instead of running: {keys:?}"
+        );
+    }
+
     #[test]
     async fn durable_rest_paths_keep_non_phantom_agent_ids() {
         let harness = RestHarness::new(AgentMode::Durable);
@@ -4984,5 +5608,73 @@ mod tests {
         );
         assert!(phantom_id(&create_response.agent_id).is_none());
         assert!(phantom_id(&invoke_response.agent_id).is_none());
+    }
+
+    /// #3133's answer survives the routing layer, which is the whole point of
+    /// settling existence with a read.
+    ///
+    /// Issue #2404 was a user deleting an agent that did not exist and being
+    /// told it worked. #3133 made that an error. A retried *delete* cannot keep
+    /// that promise — `delete_worker_internal` opens with a metadata lookup, so
+    /// "I already deleted it" and "it was never here" arrive identically — so
+    /// `delete` asks first, with a read, and refuses before dispatching
+    /// anything.
+    ///
+    /// The second assertion is the load-bearing one: it is not enough to return
+    /// the right error, nothing may go out at all. A dispatched delete is a
+    /// delete that can be retried, and a retry is what turns this answer into a
+    /// success.
+    #[test]
+    async fn deleting_an_agent_that_never_existed_still_reports_it_missing() {
+        let harness = RestHarness::new(AgentMode::Durable);
+
+        let err = harness
+            .worker_service
+            .delete(&harness.some_agent_id(), AuthCtx::system())
+            .await
+            .expect_err("deleting an agent that is not there must fail");
+
+        // Both spellings of the same condition: `RecordingWorkerClient` reports a
+        // missing agent as `AgentNotFound`, while the real client maps the
+        // executor's failure through `err.into()` and lands on `GolemError`.
+        assert!(
+            matches!(
+                err,
+                WorkerServiceError::AgentNotFound(_)
+                    | WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. })
+            ),
+            "expected AgentNotFound, got {err:?}"
+        );
+        assert!(
+            harness
+                .worker_client
+                .deleted_agent_ids
+                .lock()
+                .unwrap()
+                .is_empty(),
+            "the read already answered, so no delete may be dispatched to be retried"
+        );
+    }
+
+    /// The other half: an agent that is there is still deleted, and the delete
+    /// really does reach the client rather than being swallowed by the check.
+    #[test]
+    async fn deleting_an_existing_agent_dispatches_the_delete() {
+        let harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(ComponentRevision::INITIAL);
+        let agent_id = harness.some_agent_id();
+
+        harness
+            .worker_service
+            .delete(&agent_id, AuthCtx::system())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *harness.worker_client.deleted_agent_ids.lock().unwrap(),
+            vec![agent_id]
+        );
     }
 }

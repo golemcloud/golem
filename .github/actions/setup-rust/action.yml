@@ -25,6 +25,9 @@ inputs:
   install-cargo-binstall:
     description: 'Whether to install cargo-binstall'
     default: 'false'
+  install-protoc:
+    description: 'Install protoc when building etcd-client (via golem-shard-manager or golem)'
+    default: 'false'
 runs:
   using: 'composite'
   steps:
@@ -39,6 +42,14 @@ runs:
         for target in ${{ inputs.rust-targets }}; do
           rustup target add "$target"
         done
+    - name: Install protoc
+      if: inputs.install-protoc == 'true'
+      # `etcd-client`'s build script compiles its protos with tonic-prost-build, which shells out
+      # to `protoc`. The workspace's own protos are compiled with protox (pure Rust) and need no
+      # binary, so this is the only thing that requires it.
+      uses: arduino/setup-protoc@v3
+      with:
+        repo-token: ${{ github.token }}
     - name: Setup Rust cache
       if: inputs.use-cache == 'true'
       uses: Swatinem/rust-cache@v2
@@ -49,7 +60,9 @@ runs:
         save-if: ${{ inputs.cache-save-if }}
     - name: Install cargo-make
       if: inputs.install-cargo-make == 'true'
-      uses: davidB/rust-cargo-make@v1
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-make
     - name: Install cargo-binstall
       if: inputs.install-cargo-binstall == 'true'
       uses: cargo-bins/cargo-binstall@main

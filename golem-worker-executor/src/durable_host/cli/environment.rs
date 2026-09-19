@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::authorization::targets::{agent_owner, env_target};
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::model::AgentConfig;
 use crate::services::HasWorker;
@@ -65,7 +67,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 agent_id: current_agent_name,
             },
             &self.state.agent_id.as_ref().map(|id| id.agent_type.clone()),
-            self.state.component_metadata.revision,
+            self.owner_component_metadata().revision,
         );
 
         Ok(env)
@@ -149,29 +151,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             |ctx| ctx.build_filtered_environment(),
         )
         .await?;
-        let (mut call, live_environment) = if begun.is_live() {
-            let (environment, decisions) = captured.ok_or_else(|| {
-                wasmtime::Error::msg("live environment call has no authority view")
-            })??;
-            for (target, allowed) in decisions {
-                crate::durable_host::record_permission_decisions(
-                    std::slice::from_ref(&target),
-                    allowed,
-                );
+        let (mut call, live_environment) = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                let (environment, decisions) = match captured {
+                    Some(captured) => captured?,
+                    None => self.build_filtered_environment()?,
+                };
+                for (target, allowed) in decisions {
+                    crate::durable_host::record_permission_decisions(
+                        std::slice::from_ref(&target),
+                        allowed,
+                    );
+                }
+                // The request carries the admitted view so an incomplete call can finish after
+                // recovery without rebuilding the environment or consulting current authority.
+                let call = begun
+                    .start_live(
+                        self,
+                        HostRequestCliEnvironmentGetEnvironment {
+                            environment: environment.clone(),
+                        },
+                    )
+                    .await?;
+                (call, Some(environment))
             }
-            // The request carries the admitted view so an incomplete call can finish after
-            // recovery without rebuilding the environment or consulting current authority.
-            let call = begun
-                .start_live(
-                    self,
-                    HostRequestCliEnvironmentGetEnvironment {
-                        environment: environment.clone(),
-                    },
-                )
-                .await?;
-            (call, Some(environment))
-        } else {
-            (begun.start_replay(self).await?, None)
+            ResolvedCall::Replay(call) => (call, None),
         };
         if !call.is_live() {
             match call.replay(self).await? {

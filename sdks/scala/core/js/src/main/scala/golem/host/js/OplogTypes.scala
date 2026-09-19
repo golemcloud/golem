@@ -169,6 +169,7 @@ sealed trait JsExternalSpanData extends js.Object {
 @js.native
 sealed trait JsErrorParameters extends js.Object {
   def timestamp: JsDatetime = js.native
+  def kind: String          = js.native
   def error: String         = js.native
   def retryFrom: js.BigInt  = js.native
 }
@@ -203,14 +204,6 @@ sealed trait JsSetRetryPolicyParameters extends js.Object {
 sealed trait JsRemoveRetryPolicyParameters extends js.Object {
   def timestamp: JsDatetime = js.native
   def name: String          = js.native
-}
-
-// --- FilesystemStorageUsageUpdateParameters ---
-
-@js.native
-sealed trait JsFilesystemStorageUsageUpdateParameters extends js.Object {
-  def timestamp: JsDatetime = js.native
-  def delta: js.BigInt      = js.native
 }
 
 // --- EndAtomicRegionParameters ---

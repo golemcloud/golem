@@ -9,7 +9,12 @@ steps:
 
   - id: "create-agent"
     invoke:
-      agent: 'CounterAgent("c1")'
+      agent: &counter-agent
+        effect: 'Counter("c1")'
+        rust: &non-effect-counter-agent 'CounterAgent("c1")'
+        ts: *non-effect-counter-agent
+        scala: *non-effect-counter-agent
+        moonbit: *non-effect-counter-agent
       method: "increment"
     expect:
       stdout_contains: "1"
@@ -17,22 +22,31 @@ steps:
   - id: "verify-agent-exists"
     shell:
       command: "golem"
-      args: ["agent", "get", "CounterAgent(\"c1\")"]
+      args: &get-counter-args
+        effect: ["agent", "get", "Counter(\"c1\")"]
+        rust: &get-counter-agent-args ["agent", "get", "CounterAgent(\"c1\")"]
+        ts: *get-counter-agent-args
+        scala: *get-counter-agent-args
+        moonbit: *get-counter-agent-args
       cwd: "test-app"
     expect:
       exit_code: 0
       stdout_contains: "c1"
 
   - id: "delete-agent-via-prompt"
-    prompt: >
-      Use the CLI to delete the CounterAgent instance named "c1".
+    prompt:
+      effect: 'Use the CLI to delete the Counter instance named "c1".'
+      rust: &delete-counter-prompt 'Use the CLI to delete the CounterAgent instance named "c1".'
+      ts: *delete-counter-prompt
+      scala: *delete-counter-prompt
+      moonbit: *delete-counter-prompt
     expectedSkills:
       - "golem-delete-agent"
 
   - id: "verify-agent-deleted"
     shell:
       command: "golem"
-      args: ["agent", "get", "CounterAgent(\"c1\")"]
+      args: *get-counter-args
       cwd: "test-app"
     expect:
       exit_code: 1

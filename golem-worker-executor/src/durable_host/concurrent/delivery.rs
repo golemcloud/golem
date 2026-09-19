@@ -13,8 +13,41 @@
 // limitations under the License.
 
 use super::*;
+use crate::durable_host::tail_work::TailActivity;
 
-pub(super) type MarkerReceipt = tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>;
+#[derive(Debug)]
+pub enum MarkerReceipt {
+    Pending(tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>),
+    Ready(Option<Result<(), WorkerExecutorError>>),
+}
+
+impl MarkerReceipt {
+    pub(super) fn pending(
+        receiver: tokio::sync::oneshot::Receiver<Result<(), WorkerExecutorError>>,
+    ) -> Self {
+        Self::Pending(receiver)
+    }
+
+    pub(super) fn try_succeeded(&mut self) -> bool {
+        let result = match self {
+            Self::Pending(receiver) => match receiver.try_recv() {
+                Ok(result) => Some(result),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => return false,
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    Some(Err(marker_recorder_closed_error()))
+                }
+            },
+            Self::Ready(result) => return result.as_ref().is_some_and(Result::is_ok),
+        };
+        let succeeded = result.as_ref().is_some_and(Result::is_ok);
+        *self = Self::Ready(result);
+        succeeded
+    }
+}
+
+fn marker_recorder_closed_error() -> WorkerExecutorError {
+    WorkerExecutorError::runtime("completion-marker recorder dropped a command without replying")
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum CompletionMarkerKind {
@@ -98,7 +131,7 @@ impl CompletionMarkerRecorder {
             }
             let _ = done.send(Ok(()));
         });
-        receipt
+        MarkerReceipt::pending(receipt)
     }
 }
 
@@ -120,11 +153,14 @@ impl CompletionMarkerRecord {
 pub(super) async fn await_marker_receipt(
     receipt: &mut MarkerReceipt,
 ) -> Result<(), WorkerExecutorError> {
-    receipt.await.map_err(|_| {
-        WorkerExecutorError::runtime(
-            "completion-marker recorder dropped a command without replying",
-        )
-    })?
+    match receipt {
+        MarkerReceipt::Pending(receiver) => {
+            receiver.await.map_err(|_| marker_recorder_closed_error())?
+        }
+        MarkerReceipt::Ready(result) => result
+            .take()
+            .expect("completion-marker receipt awaited more than once"),
+    }
 }
 
 fn receipt_for_pending_append(append: OrderedAppend) -> MarkerReceipt {
@@ -132,7 +168,52 @@ fn receipt_for_pending_append(append: OrderedAppend) -> MarkerReceipt {
     tokio::spawn(async move {
         let _ = done.send(append.wait().await);
     });
-    receipt
+    MarkerReceipt::pending(receipt)
+}
+
+#[cfg(test)]
+mod marker_receipt_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    async fn synchronous_probe_preserves_pending_success_and_error_results() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mut receipt = MarkerReceipt::pending(receiver);
+        assert!(!receipt.try_succeeded());
+        sender.send(Ok(())).unwrap();
+        assert!(receipt.try_succeeded());
+        await_marker_receipt(&mut receipt).await.unwrap();
+
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mut receipt = MarkerReceipt::pending(receiver);
+        sender
+            .send(Err(WorkerExecutorError::runtime("marker failed")))
+            .unwrap();
+        assert!(!receipt.try_succeeded());
+        assert!(
+            await_marker_receipt(&mut receipt)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("marker failed")
+        );
+    }
+
+    #[test]
+    async fn synchronous_probe_preserves_closed_sender_error() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        drop(sender);
+        let mut receipt = MarkerReceipt::pending(receiver);
+        assert!(!receipt.try_succeeded());
+        assert!(
+            await_marker_receipt(&mut receipt)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("completion-marker recorder dropped a command without replying")
+        );
+    }
 }
 
 pub(super) fn task_for_marker_receipt(
@@ -353,8 +434,13 @@ impl CompletionDelivery {
     /// token tail-gated and settles it silently, keeping the `End` markerless for the next
     /// recovery.
     ///
-    /// Live and immediate replay are no-ops.
-    pub async fn prepare_delivery(&mut self) -> Result<(), WorkerExecutorError> {
+    /// Tracked background tasks supply their activity so only the passive markerless tail wait
+    /// can park across invocation settlement. Cursor transactions and marker-bearing waits stay
+    /// active. Live and immediate replay are no-ops.
+    pub async fn prepare_delivery(
+        &mut self,
+        activity: Option<&TailActivity>,
+    ) -> Result<(), WorkerExecutorError> {
         match &self.state {
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtMarker {
                 replay_state,
@@ -371,7 +457,7 @@ impl CompletionDelivery {
             }
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(live)) => {
                 let replay_state = live.marker.recorder.replay_state.clone();
-                replay_state.await_natural_tail_end().await?;
+                replay_state.await_natural_tail_end(activity).await?;
                 if let CompletionDeliveryState::ReplayDelivered(ReplayDelivery::AtReplayTail(
                     live,
                 )) = std::mem::replace(&mut self.state, CompletionDeliveryState::Done)
@@ -501,7 +587,7 @@ impl CompletionDelivery {
             self.state = CompletionDeliveryState::Done;
             return Ok(());
         }
-        self.prepare_delivery().await?;
+        self.prepare_delivery(None).await?;
         let replay_barrier = matches!(
             self.state,
             CompletionDeliveryState::ReplayDelivered(ReplayDelivery::Armed(_))
@@ -619,7 +705,7 @@ impl CompletionDelivery {
         oplog: Arc<dyn Oplog>,
         start_idx: OplogIndex,
     ) -> Result<Self, WorkerExecutorError> {
-        let replay_state = ReplayState::new(
+        let replay_state = ReplayState::new_for_owner(
             golem_common::model::OwnedAgentId {
                 environment_id: golem_common::model::environment::EnvironmentId::new(),
                 agent_id: golem_common::model::AgentId {
@@ -630,6 +716,7 @@ impl CompletionDelivery {
             oplog.clone(),
             golem_common::model::regions::DeletedRegions::default(),
             None,
+            crate::durable_host::tool::operation::OwnerToolOperations::new(),
         )
         .await?;
         let recorder = CompletionMarkerRecorder::new(oplog, replay_state);

@@ -218,6 +218,11 @@ impl RegistryServiceGrpcApi {
                         ephemeral_storage_byte_seconds_delta: u
                             .ephemeral_storage_byte_seconds_delta,
                         memory_gb_seconds_delta: u.memory_gb_seconds_delta,
+                        metering: golem_service_base::clients::registry::ResourceUsageMetering {
+                            compute: u.compute_metering_enabled,
+                            memory: u.memory_metering_enabled,
+                            filesystem: u.filesystem_metering_enabled,
+                        },
                     },
                 ))
             })

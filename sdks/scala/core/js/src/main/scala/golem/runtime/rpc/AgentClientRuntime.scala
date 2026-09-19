@@ -28,8 +28,7 @@ import scala.scalajs.js
 import scala.util.control.NonFatal
 
 object AgentClientRuntime {
-  @volatile private var remoteResolverOverride
-    : Option[(String, JsSchemaValueTree) => Either[String, RemoteAgentClient]] =
+  private var remoteResolverOverride: Option[(String, JsSchemaValueTree) => Either[String, RemoteAgentClient]] =
     None
 
   def resolve[Trait, Constructor](

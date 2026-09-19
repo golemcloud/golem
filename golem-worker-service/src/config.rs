@@ -48,8 +48,11 @@ pub struct WorkerServiceConfig {
     pub component_service: ComponentServiceConfig,
     pub auth_service: AuthServiceConfig,
     pub webhook_callback_handler: WebhookCallbackHandlerConfig,
+    pub invocation_session_tokens: InvocationSessionTokenConfig,
     #[serde(default)]
     pub agent_resolution_cache: AgentResolutionCacheConfig,
+    #[serde(default)]
+    pub durable_streams: DurableStreamsConfig,
 }
 
 impl WorkerServiceConfig {
@@ -134,11 +137,25 @@ impl SafeDisplay for WorkerServiceConfig {
             self.webhook_callback_handler.to_safe_string_indented()
         );
 
+        let _ = writeln!(&mut result, "invocation session tokens:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.invocation_session_tokens.to_safe_string_indented()
+        );
+
         let _ = writeln!(&mut result, "agent resolution cache:");
         let _ = writeln!(
             &mut result,
             "{}",
             self.agent_resolution_cache.to_safe_string_indented()
+        );
+
+        let _ = writeln!(&mut result, "durable streams:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.durable_streams.to_safe_string_indented()
         );
 
         result
@@ -165,7 +182,9 @@ impl Default for WorkerServiceConfig {
             component_service: ComponentServiceConfig::default(),
             auth_service: AuthServiceConfig::default(),
             webhook_callback_handler: WebhookCallbackHandlerConfig::default(),
+            invocation_session_tokens: InvocationSessionTokenConfig::default(),
             agent_resolution_cache: AgentResolutionCacheConfig::default(),
+            durable_streams: DurableStreamsConfig::default(),
         }
     }
 }
@@ -357,6 +376,89 @@ impl Default for AgentResolutionCacheConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DurableStreamsConfig {
+    #[serde(with = "humantime_serde")]
+    pub long_poll_timeout: Duration,
+    pub max_append_body_bytes: usize,
+    pub load: DurableStreamsLoadConfig,
+}
+
+impl SafeDisplay for DurableStreamsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "long_poll_timeout: {:?}",
+            self.long_poll_timeout
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_append_body_bytes: {}",
+            self.max_append_body_bytes
+        );
+        let _ = writeln!(&mut result, "load:");
+        let _ = writeln!(&mut result, "{}", self.load.to_safe_string_indented());
+        result
+    }
+}
+
+impl Default for DurableStreamsConfig {
+    fn default() -> Self {
+        Self {
+            long_poll_timeout: Duration::from_secs(30),
+            max_append_body_bytes: 1024 * 1024,
+            load: DurableStreamsLoadConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DurableStreamsLoadConfig {
+    pub max_concurrent_readers_per_stream: usize,
+    pub max_concurrent_readers_per_node: usize,
+    pub max_catch_up_requests_per_second_per_stream: u32,
+    pub max_append_requests_per_second_per_stream: u32,
+}
+
+impl SafeDisplay for DurableStreamsLoadConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "max_concurrent_readers_per_stream: {}",
+            self.max_concurrent_readers_per_stream
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_concurrent_readers_per_node: {}",
+            self.max_concurrent_readers_per_node
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_catch_up_requests_per_second_per_stream: {}",
+            self.max_catch_up_requests_per_second_per_stream
+        );
+        let _ = writeln!(
+            &mut result,
+            "max_append_requests_per_second_per_stream: {}",
+            self.max_append_requests_per_second_per_stream
+        );
+        result
+    }
+}
+
+impl Default for DurableStreamsLoadConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_readers_per_stream: 16,
+            max_concurrent_readers_per_node: 4096,
+            max_catch_up_requests_per_second_per_stream: 100,
+            max_append_requests_per_second_per_stream: 100,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
     pub component_cache_max_capacity: usize,
 }
@@ -518,6 +620,53 @@ impl Default for WebhookCallbackHandlerConfig {
             ]),
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvocationSessionTokenConfig {
+    pub issuer: String,
+    pub active_key: InvocationSessionTokenKeyConfig,
+    #[serde(default)]
+    pub verify_only_keys: Vec<InvocationSessionTokenKeyConfig>,
+}
+
+impl SafeDisplay for InvocationSessionTokenConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "issuer: {}", self.issuer);
+        let _ = writeln!(&mut result, "active_key_id: {}", self.active_key.id);
+        let verify_only_ids = self
+            .verify_only_keys
+            .iter()
+            .map(|key| key.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(&mut result, "verify_only_key_ids: [{verify_only_ids}]");
+        result
+    }
+}
+
+impl Default for InvocationSessionTokenConfig {
+    fn default() -> Self {
+        Self {
+            issuer: "local-worker-service".to_string(),
+            active_key: InvocationSessionTokenKeyConfig {
+                id: "local-development".to_string(),
+                key: Base64(vec![
+                    0xd2, 0xe7, 0x40, 0x2d, 0xe4, 0x91, 0x72, 0x29, 0x81, 0x9a, 0x62, 0xd7, 0x9b,
+                    0xa8, 0x8a, 0x63, 0x58, 0xe0, 0xe3, 0xe2, 0x19, 0x35, 0x7b, 0xfa, 0x2d, 0xa1,
+                    0x64, 0x74, 0x84, 0x38, 0x84, 0xb0,
+                ]),
+            },
+            verify_only_keys: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvocationSessionTokenKeyConfig {
+    pub id: String,
+    pub key: Base64,
 }
 
 const CONFIG_FILE_NAME: &str = "config/worker-service.toml";

@@ -23,7 +23,7 @@ import golem.runtime.guest.ToolMiddlewareGuest
 import golem.schema.{SchemaValue, TypedSchemaValue}
 import golem.schema.wire.{SchemaWire, WitTypedSchemaValue}
 import golem.tool._
-import golem.tool.wire.WitToolError
+import golem.tool.wire.{WitCustomToolError, WitToolError}
 import golem.{FutureInterop, Principal}
 import zio.test._
 import zio.ZIO
@@ -115,7 +115,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
     def invoke(
       invocation: UniversalToolMiddlewareInvocation,
       underlying: UniversalToolUnderlying
-    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] = {
+    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] = {
       UniversalCaptured.toolName = invocation.toolName
       UniversalCaptured.toolMetadata = Some(invocation.toolMetadata)
       UniversalCaptured.principal = invocation.principal
@@ -134,7 +134,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
     var stdinPresent: Boolean = false
   }
 
-  private final class CountingNonJsOutput extends ToolOutputStream {
+  private final class CountingNonJsOutput extends ToolMiddlewareOutputHandle {
     var closeCount = 0
 
     override private[golem] def close(): Future[Unit] = {
@@ -143,12 +143,12 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
     }
   }
 
-  private final class InvalidStdoutUniversal(stdout: ToolOutputStream) extends UniversalToolMiddleware {
+  private final class InvalidStdoutUniversal(stdout: ToolMiddlewareOutputHandle) extends UniversalToolMiddleware {
     def invoke(
       invocation: UniversalToolMiddlewareInvocation,
       underlying: UniversalToolUnderlying
-    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]] =
-      Future.successful(Right(ToolInvokeResult(None, Some(stdout))))
+    ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
+      Future.successful(Right(ToolMiddlewareResult(None, Some(stdout))))
   }
 
   private lazy val registered: Unit = {
@@ -323,7 +323,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
           WitToolError.InvalidInput("bad input"),
           WitToolError.ConstraintViolation("constraint"),
           WitToolError.InvalidResult("bad result"),
-          WitToolError.CustomError(typed("custom"))
+          WitToolError.CustomError(WitCustomToolError("failure", typed("custom")))
         )
         ZIO
           .foreach(errors) { expected =>

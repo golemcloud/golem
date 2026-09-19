@@ -20,8 +20,8 @@ use crate::base_model::agent::AgentMode;
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
-    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
-    StreamSessionRecordV1,
+    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
+    StreamSessionRecord,
 };
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::invocation_context::SpanId;
@@ -235,6 +235,8 @@ oplog_entry! {
         wit_raw_type: "raw-error-parameters"
         wit_public_type: "error-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
+            kind: OplogErrorKind,
             error: AgentError,
             /// Points to the oplog index where the retry should start from. Normally this can be just the
             /// current oplog index (after the last persisted side-effect). When failing in an atomic region
@@ -249,11 +251,20 @@ oplog_entry! {
             retry_policy_state: Option<RetryPolicyState>,
         }
         public {
+            kind: OplogErrorKind,
             error: String,
             retry_from: OplogIndex,
             inside_atomic_region: bool,
             retry_policy_state: Option<PublicRetryPolicyState>,
         }
+    },
+    /// A previously failed startup or replay completed successfully.
+    RecoverySucceeded {
+        hint: true
+        wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
+        raw {}
+        public {}
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
     /// more predictable.
@@ -261,7 +272,9 @@ oplog_entry! {
         hint: false
         wit_raw_type: "timestamp"
         wit_public_type: "timestamp"
-        raw {}
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+        }
         public {}
     },
     /// The worker needs to recover up to the given target oplog index and continue running from
@@ -273,6 +286,7 @@ oplog_entry! {
         wit_raw_type: "jump-parameters"
         wit_public_type: "jump-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             jump: OplogRegion,
         }
         public {
@@ -302,7 +316,9 @@ oplog_entry! {
         hint: false
         wit_raw_type: "timestamp"
         wit_public_type: "timestamp"
-        raw {}
+        raw {
+            entity_parent_start_index: Option<OplogIndex>,
+        }
         public {}
     },
     /// Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
@@ -313,6 +329,7 @@ oplog_entry! {
         wit_raw_type: "end-atomic-region-parameters"
         wit_public_type: "end-atomic-region-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             begin_index: OplogIndex,
         }
         public {
@@ -394,24 +411,13 @@ oplog_entry! {
             delta: u64
         }
     },
-    /// Updated storage usage by a signed delta (positive = write, negative = delete/shrink)
-    FilesystemStorageUsageUpdate {
-        hint: true
-        wit_raw_type: "filesystem-storage-usage-update-parameters"
-        wit_public_type: "filesystem-storage-usage-update-parameters"
-        raw {
-            delta: i64
-        }
-        public {
-            delta: i64
-        }
-    },
     /// Created a resource instance
     CreateResource {
         hint: true
         wit_raw_type: "raw-create-resource-parameters"
         wit_public_type: "create-resource-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             id: AgentResourceId,
             resource_type_id: ResourceTypeId,
         }
@@ -427,6 +433,7 @@ oplog_entry! {
         wit_raw_type: "raw-drop-resource-parameters"
         wit_public_type: "drop-resource-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             id: AgentResourceId,
             resource_type_id: ResourceTypeId,
         }
@@ -455,6 +462,14 @@ oplog_entry! {
     },
     /// Marks the point where the worker was restarted from clean initial state
     Restart {
+        hint: true
+        wit_raw_type: "timestamp"
+        wit_public_type: "timestamp"
+        raw {}
+        public {}
+    },
+    /// Marks that an unfinished durable invocation was admitted to resume
+    Resumed {
         hint: true
         wit_raw_type: "timestamp"
         wit_public_type: "timestamp"
@@ -664,6 +679,7 @@ oplog_entry! {
         wit_raw_type: "set-retry-policy-parameters"
         wit_public_type: "set-retry-policy-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             policy: NamedRetryPolicy,
         }
         public {
@@ -676,6 +692,7 @@ oplog_entry! {
         wit_raw_type: "remove-retry-policy-parameters"
         wit_public_type: "remove-retry-policy-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             name: String,
         }
         public {
@@ -688,6 +705,7 @@ oplog_entry! {
         wit_raw_type: "raw-card-event-queued-parameters"
         wit_public_type: "card-event-queued-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             event: QueuedCardEvent,
         }
         public {
@@ -701,6 +719,7 @@ oplog_entry! {
         wit_raw_type: "raw-card-installed-parameters"
         wit_public_type: "card-installed-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             queued_event_index: Option<OplogIndex>,
             card: StoredCard,
             wallet_generation: Option<u64>,
@@ -717,6 +736,7 @@ oplog_entry! {
         wit_raw_type: "card-install-failed-parameters"
         wit_public_type: "card-install-failed-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             queued_event_index: OplogIndex,
             card_id: CardId,
             reason: CardInstallFailure,
@@ -734,6 +754,7 @@ oplog_entry! {
         wit_raw_type: "card-revoked-parameters"
         wit_public_type: "card-revoked-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             queued_event_index: OplogIndex,
             card_id: CardId,
             wallet_generation: Option<u64>,
@@ -751,6 +772,7 @@ oplog_entry! {
         wit_raw_type: "card-expired-parameters"
         wit_public_type: "card-expired-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             card_id: CardId,
             wallet_generation: Option<u64>,
         }
@@ -766,6 +788,7 @@ oplog_entry! {
         wit_raw_type: "raw-card-derived-parameters"
         wit_public_type: "card-derived-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             card: StoredCard,
             wallet_generation: Option<u64>,
         }
@@ -794,6 +817,7 @@ oplog_entry! {
         wit_raw_type: "raw-card-transfer-started-parameters"
         wit_public_type: "card-transfer-started-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             transfer_id: Uuid,
             card_id: CardId,
             source_holder: Option<CardHolder>,
@@ -824,6 +848,7 @@ oplog_entry! {
         wit_raw_type: "raw-card-transferred-parameters"
         wit_public_type: "card-transferred-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             transfer_id: Uuid,
             source_card_id: Option<CardId>,
             installed_card_id: CardId,
@@ -856,6 +881,7 @@ oplog_entry! {
         wit_raw_type: "raw-card-revoked-cascade-parameters"
         wit_public_type: "card-revoked-cascade-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             revoked_card_ids: Vec<CardId>,
             affected_wallets: Vec<CardHolder>,
             local_wallet_generation: Option<u64>,
@@ -876,6 +902,7 @@ oplog_entry! {
         wit_raw_type: "raw-card-transfer-confirmed-parameters"
         wit_public_type: "card-transfer-confirmed-parameters"
         raw {
+            entity_parent_start_index: Option<OplogIndex>,
             transfer_id: Uuid,
             source_card_id: CardId,
             installed_card_id: CardId,
@@ -919,7 +946,8 @@ oplog_entry! {
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
-            record: payload::OplogPayload<StreamRegisteredRecordV1>,
+            entity_parent_start_index: Option<OplogIndex>,
+            record: payload::OplogPayload<StreamRegisteredRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -931,7 +959,8 @@ oplog_entry! {
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
-            record: payload::OplogPayload<StreamItemsRecordV1>,
+            entity_parent_start_index: Option<OplogIndex>,
+            record: payload::OplogPayload<StreamItemsRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -943,7 +972,8 @@ oplog_entry! {
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
-            record: payload::OplogPayload<StreamEndRecordV1>,
+            entity_parent_start_index: Option<OplogIndex>,
+            record: payload::OplogPayload<StreamEndRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -955,7 +985,8 @@ oplog_entry! {
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
-            record: payload::OplogPayload<StreamCancelRecordV1>,
+            entity_parent_start_index: Option<OplogIndex>,
+            record: payload::OplogPayload<StreamCancelRecord>,
         }
         public {
             record: TypedSchemaValue,
@@ -968,7 +999,8 @@ oplog_entry! {
         wit_raw_type: "raw-durable-stream-record-parameters"
         wit_public_type: "durable-stream-record-parameters"
         raw {
-            record: payload::OplogPayload<StreamSessionRecordV1>,
+            entity_parent_start_index: Option<OplogIndex>,
+            record: payload::OplogPayload<StreamSessionRecord>,
         }
         public {
             record: TypedSchemaValue,

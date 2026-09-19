@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use std::fmt::{self, Debug, Display, Formatter};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
@@ -31,15 +33,17 @@ pub type ScanCursor = u64;
 
 /// Typed error for [`IndexedStorage`] operations.
 ///
-/// `Transient` errors (pool exhaustion, connection resets) are retriable;
-/// `Other` errors (data issues, schema problems) are not.
+/// `Transient` errors are safe to retry. `Indeterminate` errors can only be retried by callers
+/// that reconcile a possibly committed write. `Conflict` and `Other` errors are not retriable.
 #[derive(Debug, Clone)]
 pub enum IndexedStorageError {
-    /// Transient error — pool exhaustion, connection reset, broken pipe.
-    /// Caller may retry.
+    /// The operation did not take effect, or is idempotent, so the caller may retry it.
     Transient(String),
-    /// Permanent error — data issue, unique violation, schema error.
-    /// Caller should not retry.
+    /// A write may have taken effect, so a retry must reconcile the stored value on conflict.
+    Indeterminate(String),
+    /// The requested index already exists.
+    Conflict(String),
+    /// Permanent error — data issue or schema error. Caller should not retry.
     Other(String),
 }
 
@@ -53,6 +57,10 @@ impl Display for IndexedStorageError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             IndexedStorageError::Transient(msg) => write!(f, "Transient storage error: {msg}"),
+            IndexedStorageError::Indeterminate(msg) => {
+                write!(f, "Indeterminate storage error: {msg}")
+            }
+            IndexedStorageError::Conflict(msg) => write!(f, "Storage conflict: {msg}"),
             IndexedStorageError::Other(msg) => write!(f, "Storage error: {msg}"),
         }
     }
@@ -66,13 +74,49 @@ impl From<String> for IndexedStorageError {
     }
 }
 
+/// Where a [`IndexedStorage::scan_stable`] walk left off. Only the backend that produced it can
+/// read it; a caller passes it back unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScanResume {
+    /// The last position reached in the backend's walk order: usually the last key handed back,
+    /// but the multi-SQLite backend names the last file it finished.
+    Marker(String),
+    /// The iteration cursor of a backend with no key order to seek in.
+    Cursor(ScanCursor),
+}
+
+impl ScanResume {
+    /// The marker this token carries, or an error if `backend` was handed a token it did not
+    /// produce.
+    pub fn into_marker(self, backend: &str) -> Result<String, IndexedStorageError> {
+        match self {
+            ScanResume::Marker(marker) => Ok(marker),
+            ScanResume::Cursor(_) => Err(Self::foreign(backend)),
+        }
+    }
+
+    /// The cursor this token carries, or an error if `backend` was handed a token it did not
+    /// produce.
+    pub fn into_cursor(self, backend: &str) -> Result<ScanCursor, IndexedStorageError> {
+        match self {
+            ScanResume::Cursor(cursor) => Ok(cursor),
+            ScanResume::Marker(_) => Err(Self::foreign(backend)),
+        }
+    }
+
+    fn foreign(backend: &str) -> IndexedStorageError {
+        IndexedStorageError::Other(format!(
+            "{backend} indexed storage was handed a resume token it did not produce"
+        ))
+    }
+}
+
 /// Generic indexed storage interface
 ///
 /// The storage holds indexes identified by keys. Each index is a sequence of entries,
 /// where each entry has a numeric identifier and an arbitrary binary payload. The numeric
 /// identifiers are unique and monotonically increasing within each index, but not necessarily
 /// contiguous.
-///
 #[async_trait]
 pub trait IndexedStorage: Debug + Sync {
     /// Gets the number of available replicas in the storage cluster
@@ -113,6 +157,24 @@ pub trait IndexedStorage: Debug + Sync {
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError>;
 
+    /// Pages the keys of a namespace so that the caller can delete the keys it was handed without
+    /// the walk skipping any. [`Self::scan`] cannot: its cursor is a position, so a delete behind
+    /// it makes the next page step over keys nothing has seen.
+    ///
+    /// `resume` is `None` for the first page, then whatever the previous call returned; the
+    /// returned token is `None` once the walk is done. A backend that pages in key order only
+    /// learns that from a short page, so it may take one extra, empty call. A key present for the
+    /// whole walk is returned at least once; a key the caller deletes may or may not be.
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError>;
+
     /// Appends an entry to the given key with the given id
     async fn append(
         &self,
@@ -131,19 +193,19 @@ pub trait IndexedStorage: Debug + Sync {
         svc_name: &'static str,
         api_name: &'static str,
         entity_name: &'static str,
-        namespace: IndexedStorageNamespace,
+        namespace: &IndexedStorageNamespace,
         key: &str,
-        pairs: Vec<(u64, Vec<u8>)>,
+        pairs: Arc<[(u64, Bytes)]>,
     ) -> Result<(), IndexedStorageError> {
-        for (id, value) in pairs {
+        for (id, value) in pairs.iter() {
             self.append(
                 svc_name,
                 api_name,
                 entity_name,
-                namespace.clone(),
+                (*namespace).clone(),
                 key,
-                id,
-                value,
+                *id,
+                value.to_vec(),
             )
             .await?;
         }
@@ -199,6 +261,17 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError>;
+
+    /// Gets the id of the last entry in the index of the given key, without reading its payload,
+    /// which can be arbitrarily large.
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError>;
 
     /// Gets the entry with the closest id to the given id in the index of the given key,
     /// in a way that `id` is less or equal to the id of the returned entry.
@@ -314,6 +387,25 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
             .await
     }
 
+    pub async fn scan_stable(
+        &self,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        self.storage
+            .scan_stable(
+                self.svc_name,
+                self.api_name,
+                namespace,
+                prefix,
+                resume,
+                count,
+            )
+            .await
+    }
+
     pub async fn length(
         &self,
         namespace: IndexedStorageNamespace,
@@ -420,7 +512,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
     /// Returns the total number of bytes written to storage.
     pub async fn append_many<V: BinarySerializer>(
         &self,
-        namespace: IndexedStorageNamespace,
+        namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: &[(u64, &V)],
     ) -> Result<u64, IndexedStorageError> {
@@ -429,8 +521,20 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         for (id, value) in pairs {
             let bytes = serialize(value).map_err(IndexedStorageError::Other)?;
             total_bytes += bytes.len() as u64;
-            serialized_pairs.push((*id, bytes));
+            serialized_pairs.push((*id, Bytes::from(bytes)));
         }
+        self.append_many_raw(namespace, key, serialized_pairs.into())
+            .await?;
+        Ok(total_bytes)
+    }
+
+    /// Appends an already serialized batch without repeating serialization in a retry loop.
+    pub async fn append_many_raw(
+        &self,
+        namespace: &IndexedStorageNamespace,
+        key: &str,
+        pairs: Arc<[(u64, Bytes)]>,
+    ) -> Result<(), IndexedStorageError> {
         self.storage
             .append_many(
                 self.svc_name,
@@ -438,10 +542,9 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 self.entity_name,
                 namespace,
                 key,
-                serialized_pairs,
+                pairs,
             )
-            .await?;
-        Ok(total_bytes)
+            .await
     }
 
     /// Reads a closed range of entries from the index of the given key, deserializing each entry
@@ -544,23 +647,6 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         self.first_raw(namespace, key).await.map(|r| r.map(|p| p.0))
     }
 
-    /// Gets the last entry in the index of the given key, returning as raw bytes
-    pub async fn last_raw(
-        &self,
-        namespace: IndexedStorageNamespace,
-        key: &str,
-    ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
-        self.storage
-            .last(
-                self.svc_name,
-                self.api_name,
-                self.entity_name,
-                namespace,
-                key,
-            )
-            .await
-    }
-
     /// Gets the last entry in the index of the given key, deserializing the value
     pub async fn last<V: BinaryDeserializer>(
         &self,
@@ -593,7 +679,15 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
-        self.last_raw(namespace, key).await.map(|r| r.map(|p| p.0))
+        self.storage
+            .last_id(
+                self.svc_name,
+                self.api_name,
+                self.entity_name,
+                namespace,
+                key,
+            )
+            .await
     }
 
     /// Gets the entry with the closest id to the given id in the index of the given key,
@@ -678,6 +772,16 @@ pub enum IndexedStorageNamespace {
 pub enum IndexedStorageMetaNamespace {
     Oplog { agent_mode: AgentMode },
     CompressedOplog { agent_mode: AgentMode, level: usize },
+}
+
+/// The resume token for a page of an ordered walk: the last key handed back, or `None` once a
+/// short page shows the namespace is exhausted. Shared by every backend that pages in key order.
+pub fn last_key_resume(keys: &[String], count: u64) -> Option<ScanResume> {
+    if (keys.len() as u64) < count {
+        None
+    } else {
+        keys.last().map(|key| ScanResume::Marker(key.clone()))
+    }
 }
 
 /// Returns the symmetric per-mode prefix used by all indexed-storage backends.

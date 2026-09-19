@@ -25,12 +25,19 @@ use super::model::deployment::{
     DeploymentComponentRevisionRecord, DeploymentHttpApiDeploymentRevisionRecord,
     DeploymentMcpDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
     DeploymentRegisteredAgentTypeScopedRecord, DeploymentRegisteredToolRecord,
-    ToolDeploymentStateRecord,
+    DeploymentToolIdentityRecord, ToolDeploymentStateRecord,
+};
+use super::model::deployment::{
+    DeploymentMiddlewareIdentity, DeploymentToolMiddlewareBindingRecord,
+    DeploymentToolMiddlewareInstallationRecord, DeploymentToolMiddlewareNameRecord,
+    DeploymentToolMiddlewareSnapshotRecord,
 };
 use super::model::resource_definition::ResourceDefinitionRepoError;
 use super::model::retry_policy::RetryPolicyRepoError;
 use super::resource_definition::DbResourceDefinitionRepo;
 use super::retry_policy::DbRetryPolicyRepo;
+use super::tool_middleware_release::{DbToolMiddlewareReleaseRepo, ToolMiddlewareReleaseRepoError};
+use super::tool_release::{DbToolReleaseRepo, ToolReleaseRepoError};
 use crate::repo::model::audit::RevisionAuditFields;
 use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::deployment::{
@@ -47,12 +54,15 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::model::tool::ToolName;
+use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
-use golem_service_base::repo::{BindingsStack, RepoError, RepoResult, ResultExt};
+use golem_service_base::repo::{BindingsStack, Blob, RepoError, RepoResult, ResultExt};
 use indoc::{formatdoc, indoc};
 use sqlx::{Database, Row};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use tap::Pipe;
 use tracing::{Instrument, Span, info_span};
@@ -765,19 +775,8 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
     }
 
     async fn get_staged_identity(&self, environment_id: Uuid) -> RepoResult<DeploymentIdentity> {
-        // TODO: maybe add helper for readonly tx helpers OR create common abstraction on top
-        //      of transactions and pool, so both cna be used for selects
-        let mut tx = self.with_ro("get_staged_identity").begin().await?;
-        match Self::get_staged_deployment(&mut tx, environment_id).await {
-            Ok(result) => {
-                tx.commit().await?;
-                Ok(result)
-            }
-            Err(err) => {
-                let _ = tx.rollback().await;
-                Err(err)
-            }
-        }
+        let mut api = self.with_ro("get_staged_identity");
+        Self::get_staged_deployment(&mut api, environment_id).await
     }
 
     async fn get_deployment_identity(
@@ -794,18 +793,39 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         };
 
         let revision_id = deployment_revision.revision_id;
+        let components = self
+            .get_deployed_components(environment_id, revision_id)
+            .await?;
+        let tools: Vec<DeploymentToolIdentityRecord> = self
+            .with_ro("get_deployment_tool_identities")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT tool_name, tool_release_id, published, deployment_hash
+                    FROM deployment_registered_tools
+                    WHERE environment_id = $1 AND deployment_revision_id = $2
+                    ORDER BY tool_name
+                "#})
+                .bind(environment_id)
+                .bind(revision_id),
+            )
+            .await?;
         Ok(Some(DeployedDeploymentIdentity {
             deployment_revision,
             identity: DeploymentIdentity {
-                components: self
-                    .get_deployed_components(environment_id, revision_id)
-                    .await?,
+                components,
                 http_api_deployments: self
                     .get_deployed_http_api_deployments(environment_id, revision_id)
                     .await?,
                 mcp_deployments: self
                     .get_deployed_mcp_deployments(environment_id, revision_id)
                     .await?,
+                tools,
+                middleware: Self::get_middleware_identity(
+                    &mut self.with_ro("get_deployment_middleware_identity"),
+                    environment_id,
+                    revision_id,
+                )
+                .await?,
             },
         }))
     }
@@ -832,6 +852,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         let result = self
             .with_tx_err("deploy", |tx| {
                 async move {
+                    let mut deployment_creation = deployment_creation;
                     let environment_id = deployment_creation.environment_id;
                     let deployment_revision_id = deployment_creation.deployment_revision_id;
 
@@ -872,12 +893,126 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                             .await?;
                     }
 
+                    let mut resolved_release_ids = HashMap::new();
+                    for tool_release in &deployment_creation.tool_releases {
+                        let persisted =
+                            DbToolReleaseRepo::<PostgresPool>::create_or_restore_within_transaction(
+                                tx,
+                                tool_release,
+                            )
+                            .await
+                            .map_err(|err| match err {
+                                ToolReleaseRepoError::ImmutableConflict => {
+                                    DeployRepoError::ToolReleaseImmutableConflict
+                                }
+                                ToolReleaseRepoError::DePublishedConflict => {
+                                    DeployRepoError::ToolReleaseDePublishedConflict
+                                }
+                                ToolReleaseRepoError::ConcurrentModification => {
+                                    DeployRepoError::ConcurrentModification
+                                }
+                                other => DeployRepoError::InternalError(anyhow::Error::new(other)),
+                            })?;
+                        resolved_release_ids.insert(
+                            tool_release.tool_release_id,
+                            persisted.release.tool_release_id,
+                        );
+                    }
+
+                    let mut resolved_middleware_release_ids = HashMap::new();
+                    for release in &deployment_creation.tool_middleware_releases {
+                        let persisted = DbToolMiddlewareReleaseRepo::<PostgresPool>::create_or_restore_within_transaction(tx, release)
+                            .await
+                            .map_err(|err| match err {
+                                ToolMiddlewareReleaseRepoError::ImmutableConflict => DeployRepoError::ToolMiddlewareReleaseImmutableConflict,
+                                ToolMiddlewareReleaseRepoError::DePublishedConflict => DeployRepoError::ToolMiddlewareReleaseDePublishedConflict,
+                                ToolMiddlewareReleaseRepoError::ConcurrentModification => DeployRepoError::ConcurrentModification,
+                                other => DeployRepoError::InternalError(anyhow::Error::new(other)),
+                            })?;
+                        resolved_middleware_release_ids.insert(release.tool_middleware_release_id, persisted.release.tool_middleware_release_id);
+                    }
+                    for middleware in &mut deployment_creation.registered_tool_middlewares {
+                        if let Some(actual) = middleware.release_id.and_then(|id| resolved_middleware_release_ids.get(&id.0)) {
+                            middleware.release_id = Some(golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId(*actual));
+                        }
+                    }
+                    for chain in &mut deployment_creation.tool_middleware_chains {
+                        for occurrence in &mut chain.occurrences {
+                            if let Some(actual) = occurrence.middleware.release_id.and_then(|id| resolved_middleware_release_ids.get(&id.0)) {
+                                occurrence.middleware.release_id = Some(golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId(*actual));
+                            }
+                        }
+                    }
+
+                    for registered_tool in &mut deployment_creation.registered_tools {
+                        if let Some(actual) = registered_tool
+                            .tool_release_id
+                            .and_then(|candidate| resolved_release_ids.get(&candidate))
+                        {
+                            registered_tool.tool_release_id = Some(*actual);
+                        }
+                    }
+                    for agent_tool_binding in &mut deployment_creation.agent_tool_bindings {
+                        let binding = agent_tool_binding.compiled_binding.value();
+                        if let Some(actual) = binding
+                            .release_id
+                            .and_then(|candidate| resolved_release_ids.get(&candidate.0))
+                        {
+                            let mut binding = binding.clone();
+                            binding.release_id =
+                                Some(golem_common::model::tool_release::ToolReleaseId(*actual));
+                            agent_tool_binding.compiled_binding = Blob::new(binding);
+                        }
+                    }
+
                     for registered_tool in &deployment_creation.registered_tools {
                         Self::create_deployment_registered_tool(tx, registered_tool).await?;
                     }
 
                     for agent_tool_binding in &deployment_creation.agent_tool_bindings {
                         Self::create_deployment_agent_tool_binding(tx, agent_tool_binding).await?;
+                    }
+
+                    tx.execute(
+                        sqlx::query(indoc! { r#"
+                            INSERT INTO deployment_tool_middleware_snapshots
+                                (environment_id, deployment_revision_id, registered_middlewares,
+                                 compiled_chains, compatibility_mode)
+                            VALUES ($1, $2, $3, $4, $5)
+                        "#})
+                        .bind(environment_id)
+                        .bind(deployment_revision_id)
+                        .bind(Blob::new(deployment_creation.registered_tool_middlewares))
+                        .bind(Blob::new(deployment_creation.tool_middleware_chains))
+                        .bind(match deployment_creation.tool_compatibility_mode { golem_common::schema::tool::compatibility::ToolCompatibilityMode::StrictEquality => "strict-equality", golem_common::schema::tool::compatibility::ToolCompatibilityMode::StructuralSubtype => "structural-subtype", golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal => "nominal" }),
+                    ).await?;
+
+                    for (kind, names) in [("published", &deployment_creation.published_tool_middlewares), ("remote", &deployment_creation.remote_tool_middlewares)] {
+                        for name in names {
+                            tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_names (environment_id, deployment_revision_id, middleware_name, kind) VALUES ($1, $2, $3, $4)").bind(environment_id).bind(deployment_revision_id).bind(name.to_string()).bind(kind)).await?;
+                        }
+                    }
+                    let mut bindings = Vec::new();
+                    bindings.push(("universal", "", "", None, Some(&deployment_creation.universal_tool_middlewares)));
+                    for (tool, binding) in &deployment_creation.environment_tool_middleware_bindings {
+                        if binding.middleware.is_some() || binding.middleware_merge_mode.is_some() {
+                            bindings.push(("environment", "", tool.as_str(), binding.middleware_merge_mode, binding.middleware.as_ref()));
+                        }
+                    }
+                    for (agent, agent_bindings) in &deployment_creation.agent_tool_middleware_bindings {
+                        for (tool, binding) in agent_bindings {
+                            if binding.middleware.is_some() || binding.middleware_merge_mode.is_some() {
+                                bindings.push(("agent", agent.0.as_str(), tool.as_str(), binding.middleware_merge_mode, binding.middleware.as_ref()));
+                            }
+                        }
+                    }
+                    for (scope, agent, tool, mode, installations) in bindings {
+                        let mode = mode.map(|mode| match mode { golem_common::model::tool_middleware::ToolMiddlewareMergeMode::Prepend => "prepend", golem_common::model::tool_middleware::ToolMiddlewareMergeMode::Append => "append", golem_common::model::tool_middleware::ToolMiddlewareMergeMode::Replace => "replace" });
+                        tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_bindings (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, merge_mode, has_installations) VALUES ($1, $2, $3, $4, $5, $6, $7)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(mode).bind(installations.is_some())).await?;
+                        for (index, installation) in installations.into_iter().flatten().enumerate() {
+                            let filesystem_access = match installation.filesystem_access { golem_common::model::tool::ToolFilesystemAccess::Unset => "unset", golem_common::model::tool::ToolFilesystemAccess::Allowed => "allowed", golem_common::model::tool::ToolFilesystemAccess::Denied => "denied" };
+                            tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_installations (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, installation_index, middleware_name, middleware_version, parameters, account_email, filesystem_access) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(index as i64).bind(installation.name.to_string()).bind(&installation.version).bind(Blob::new(installation.parameters.clone())).bind(installation.account.as_ref().map(ToString::to_string)).bind(filesystem_access)).await?;
+                        }
                     }
 
                     for compiled_mcp in &deployment_creation.compiled_mcp {
@@ -1282,24 +1417,22 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.tool_name,
+                        r.tool_release_id,
+                        r.source_kind,
                         r.component_id,
                         r.component_revision_id,
-                        c.name AS component_name,
-                        a.account_id AS owner_account_id,
-                        ac.email AS owner_account_email,
+                        r.component_name,
+                        r.host_tool_id,
+                        r.implementation_version,
+                        r.owner_account_id,
+                        r.owner_account_email,
                         r.tool_definition,
                         r.tool_provision_config,
-                        r.metadata_version
+                        r.metadata_version,
+                        r.metadata_digest,
+                        r.published,
+                        r.deployment_hash
                     FROM deployment_registered_tools r
-                    JOIN components c
-                        ON c.component_id = r.component_id
-                        AND c.environment_id = r.environment_id
-                    JOIN environments e
-                        ON e.environment_id = r.environment_id
-                    JOIN applications a
-                        ON a.application_id = e.application_id
-                    JOIN accounts ac
-                        ON ac.account_id = a.account_id
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                         AND r.tool_name = $3
                 "#})
@@ -1322,24 +1455,22 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.environment_id,
                         r.deployment_revision_id,
                         r.tool_name,
+                        r.tool_release_id,
+                        r.source_kind,
                         r.component_id,
                         r.component_revision_id,
-                        c.name AS component_name,
-                        a.account_id AS owner_account_id,
-                        ac.email AS owner_account_email,
+                        r.component_name,
+                        r.host_tool_id,
+                        r.implementation_version,
+                        r.owner_account_id,
+                        r.owner_account_email,
                         r.tool_definition,
                         r.tool_provision_config,
-                        r.metadata_version
+                        r.metadata_version,
+                        r.metadata_digest,
+                        r.published,
+                        r.deployment_hash
                     FROM deployment_registered_tools r
-                    JOIN components c
-                        ON c.component_id = r.component_id
-                        AND c.environment_id = r.environment_id
-                    JOIN environments e
-                        ON e.environment_id = r.environment_id
-                    JOIN applications a
-                        ON a.application_id = e.application_id
-                    JOIN accounts ac
-                        ON ac.account_id = a.account_id
                     WHERE r.environment_id = $1 AND r.deployment_revision_id = $2
                     ORDER BY r.tool_name
                 "#})
@@ -1371,10 +1502,24 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 .bind(deployment_revision_id),
             )
             .await?;
+        let middleware_snapshot = self
+            .with_ro("get_deployment_tool_middleware_snapshot")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT environment_id, deployment_revision_id, registered_middlewares,
+                           compiled_chains, compatibility_mode
+                    FROM deployment_tool_middleware_snapshots
+                    WHERE environment_id = $1 AND deployment_revision_id = $2
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id),
+            )
+            .await?;
         Ok(ToolDeploymentStateRecord {
             deployment_revision_id,
             registered_tools,
             agent_tool_bindings,
+            middleware_snapshot,
         })
     }
 
@@ -1774,6 +1919,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
 #[async_trait]
 trait DeploymentRepoInternal: DeploymentRepo {
     type Db: Database;
+    type Api: PoolApi<Db = Self::Db>;
     type Tx: LabelledPoolTransaction;
 
     async fn create_deployment_revision(
@@ -1786,24 +1932,35 @@ trait DeploymentRepoInternal: DeploymentRepo {
     ) -> Result<DeploymentRevisionRecord, DeployRepoError>;
 
     async fn get_staged_deployment(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<DeploymentIdentity>;
 
     async fn get_staged_components(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>>;
 
     async fn get_staged_http_api_deployments(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>>;
 
     async fn get_staged_mcp_deployments(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>>;
+
+    async fn get_staged_tools(
+        api: &mut Self::Api,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<DeploymentToolIdentityRecord>>;
+
+    async fn get_middleware_identity(
+        api: &mut Self::Api,
+        environment_id: Uuid,
+        revision_id: i64,
+    ) -> RepoResult<DeploymentMiddlewareIdentity>;
 
     async fn create_deployment_component_revision(
         tx: &mut Self::Tx,
@@ -1879,6 +2036,7 @@ trait DeploymentRepoInternal: DeploymentRepo {
 #[async_trait]
 impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
+    type Api = <PostgresPool as Pool>::LabelledApi;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
 
     async fn create_deployment_revision(
@@ -1915,21 +2073,139 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     }
 
     async fn get_staged_deployment(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<DeploymentIdentity> {
+        let tools = Self::get_staged_tools(api, environment_id).await?;
+        let middleware_revision = api.fetch_optional(
+            sqlx::query("SELECT cdr.deployment_revision_id FROM current_deployments cd JOIN current_deployment_revisions cdr ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id WHERE cd.environment_id = $1")
+                .bind(environment_id),
+        ).await?.map(|row| row.try_get("deployment_revision_id")).transpose()?;
         Ok(DeploymentIdentity {
-            components: Self::get_staged_components(tx, environment_id).await?,
-            http_api_deployments: Self::get_staged_http_api_deployments(tx, environment_id).await?,
-            mcp_deployments: Self::get_staged_mcp_deployments(tx, environment_id).await?,
+            components: Self::get_staged_components(api, environment_id).await?,
+            http_api_deployments: Self::get_staged_http_api_deployments(api, environment_id)
+                .await?,
+            mcp_deployments: Self::get_staged_mcp_deployments(api, environment_id).await?,
+            tools,
+            middleware: match middleware_revision {
+                Some(revision) => {
+                    Self::get_middleware_identity(api, environment_id, revision).await?
+                }
+                None => DeploymentMiddlewareIdentity::default(),
+            },
         })
     }
 
+    async fn get_middleware_identity(
+        api: &mut Self::Api,
+        environment_id: Uuid,
+        revision_id: i64,
+    ) -> RepoResult<DeploymentMiddlewareIdentity> {
+        let snapshot: Option<DeploymentToolMiddlewareSnapshotRecord> = api.fetch_optional_as(
+            sqlx::query_as("SELECT environment_id, deployment_revision_id, registered_middlewares, compiled_chains, compatibility_mode FROM deployment_tool_middleware_snapshots WHERE environment_id = $1 AND deployment_revision_id = $2")
+                .bind(environment_id).bind(revision_id),
+        ).await?;
+        let Some(snapshot) = snapshot else {
+            return Ok(Default::default());
+        };
+        let names: Vec<DeploymentToolMiddlewareNameRecord> = api.fetch_all_as(
+            sqlx::query_as("SELECT middleware_name, kind FROM deployment_tool_middleware_names WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY kind, middleware_name")
+                .bind(environment_id).bind(revision_id),
+        ).await?;
+        let bindings: Vec<DeploymentToolMiddlewareBindingRecord> = api.fetch_all_as(
+            sqlx::query_as("SELECT scope, agent_type_name, tool_name, merge_mode, has_installations FROM deployment_tool_middleware_bindings WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY scope, agent_type_name, tool_name")
+                .bind(environment_id).bind(revision_id),
+        ).await?;
+        let installations: Vec<DeploymentToolMiddlewareInstallationRecord> = api.fetch_all_as(
+            sqlx::query_as("SELECT scope, agent_type_name, tool_name, middleware_name, middleware_version, parameters, account_email, filesystem_access FROM deployment_tool_middleware_installations WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY scope, agent_type_name, tool_name, installation_index")
+                .bind(environment_id).bind(revision_id),
+        ).await?;
+        let mut grouped: std::collections::BTreeMap<(String, String, String), Vec<_>> =
+            Default::default();
+        for installation in installations {
+            let key = (
+                installation.scope.clone(),
+                installation.agent_type_name.clone(),
+                installation.tool_name.clone(),
+            );
+            grouped.entry(key).or_default().push(
+                installation.into_model().map_err(|error| {
+                    RepoError::InternalError(anyhow::anyhow!(error.to_string()))
+                })?,
+            );
+        }
+        let mut result = DeploymentMiddlewareIdentity {
+            registered: snapshot.registered_middlewares.into_value(),
+            compatibility_mode: super::model::deployment::compatibility_mode(
+                &snapshot.compatibility_mode,
+            )
+            .map_err(|error| RepoError::InternalError(anyhow::anyhow!(error.to_string())))?,
+            published: names
+                .iter()
+                .filter(|row| row.kind == "published")
+                .map(|row| {
+                    ToolMiddlewareName::try_from(row.middleware_name.as_str())
+                        .map_err(|error| RepoError::InternalError(anyhow::anyhow!(error)))
+                })
+                .collect::<Result<_, _>>()?,
+            remote: names
+                .iter()
+                .filter(|row| row.kind == "remote")
+                .map(|row| {
+                    ToolMiddlewareName::try_from(row.middleware_name.as_str())
+                        .map_err(|error| RepoError::InternalError(anyhow::anyhow!(error)))
+                })
+                .collect::<Result<_, _>>()?,
+            ..Default::default()
+        };
+        for binding in bindings {
+            let middleware = binding.has_installations.then(|| {
+                grouped
+                    .remove(&(
+                        binding.scope.clone(),
+                        binding.agent_type_name.clone(),
+                        binding.tool_name.clone(),
+                    ))
+                    .unwrap_or_default()
+            });
+            if binding.scope == "universal" {
+                result.universal = middleware.unwrap();
+                continue;
+            }
+            let input = golem_common::model::tool::ToolBindingInput {
+                middleware,
+                middleware_merge_mode: binding
+                    .merge_mode
+                    .as_deref()
+                    .map(super::model::deployment::merge_mode)
+                    .transpose()
+                    .map_err(|error| {
+                        RepoError::InternalError(anyhow::anyhow!(error.to_string()))
+                    })?,
+                ..Default::default()
+            };
+            let tool = ToolName::try_from(binding.tool_name.as_str())
+                .map_err(|error| RepoError::InternalError(anyhow::anyhow!(error)))?;
+            if binding.scope == "environment" {
+                result.environment_bindings.insert(tool, input);
+            } else if binding.scope == "agent" {
+                result
+                    .agent_bindings
+                    .entry(golem_common::model::agent::AgentTypeName(
+                        binding.agent_type_name,
+                    ))
+                    .or_default()
+                    .insert(tool, input);
+            }
+        }
+        Ok(result)
+    }
+
     async fn get_staged_components(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<ComponentRevisionIdentityRecord>> {
-        tx.fetch_all_as(
+        api.fetch_all_as(
             sqlx::query_as(indoc! { r#"
                 SELECT c.component_id, c.name, cr.revision_id, cr.hash
                 FROM components c
@@ -1944,10 +2220,10 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     }
 
     async fn get_staged_http_api_deployments(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<HttpApiDeploymentRevisionIdentityRecord>> {
-        tx.fetch_all_as(
+        api.fetch_all_as(
             sqlx::query_as(indoc! { r#"
                     SELECT d.http_api_deployment_id, d.domain, dr.revision_id, dr.hash
                     FROM http_api_deployments d
@@ -1962,10 +2238,10 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     }
 
     async fn get_staged_mcp_deployments(
-        tx: &mut Self::Tx,
+        api: &mut Self::Api,
         environment_id: Uuid,
     ) -> RepoResult<Vec<McpDeploymentRevisionIdentityRecord>> {
-        tx.fetch_all_as(
+        api.fetch_all_as(
             sqlx::query_as(indoc! { r#"
                     SELECT d.mcp_deployment_id, d.domain, dr.revision_id, dr.hash
                     FROM mcp_deployments d
@@ -1974,6 +2250,28 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                         AND d.current_revision_id = dr.revision_id
                     WHERE d.environment_id = $1 AND d.deleted_at IS NULL
                 "#})
+            .bind(environment_id),
+        )
+        .await
+    }
+
+    async fn get_staged_tools(
+        api: &mut Self::Api,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<DeploymentToolIdentityRecord>> {
+        api.fetch_all_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT r.tool_name, r.tool_release_id, r.published, r.deployment_hash
+                FROM current_deployments cd
+                JOIN current_deployment_revisions cdr
+                    ON cdr.environment_id = cd.environment_id
+                    AND cdr.revision_id = cd.current_revision_id
+                JOIN deployment_registered_tools r
+                    ON r.environment_id = cdr.environment_id
+                    AND r.deployment_revision_id = cdr.deployment_revision_id
+                WHERE cd.environment_id = $1
+                ORDER BY r.tool_name
+            "#})
             .bind(environment_id),
         )
         .await
@@ -2118,18 +2416,32 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             sqlx::query(indoc! { r#"
                 INSERT INTO deployment_registered_tools
                     (environment_id, deployment_revision_id, tool_name,
-                     component_id, component_revision_id,
-                     tool_definition, tool_provision_config, metadata_version)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                     tool_release_id, source_kind,
+                     component_id, component_revision_id, component_name,
+                     host_tool_id, implementation_version,
+                     owner_account_id, owner_account_email,
+                     tool_definition, tool_provision_config, metadata_version, metadata_digest,
+                     published, deployment_hash)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
             "#})
             .bind(registered_tool.environment_id)
             .bind(registered_tool.deployment_revision_id)
             .bind(&registered_tool.tool_name)
+            .bind(registered_tool.tool_release_id)
+            .bind(registered_tool.source_kind)
             .bind(registered_tool.component_id)
             .bind(registered_tool.component_revision_id)
+            .bind(&registered_tool.component_name)
+            .bind(&registered_tool.host_tool_id)
+            .bind(&registered_tool.implementation_version)
+            .bind(registered_tool.owner_account_id)
+            .bind(&registered_tool.owner_account_email)
             .bind(&registered_tool.tool_definition)
             .bind(&registered_tool.tool_provision_config)
-            .bind(&registered_tool.metadata_version),
+            .bind(&registered_tool.metadata_version)
+            .bind(registered_tool.metadata_digest)
+            .bind(registered_tool.published)
+            .bind(registered_tool.deployment_hash),
         )
         .await?;
 

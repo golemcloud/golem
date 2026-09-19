@@ -15,30 +15,35 @@
 use crate::durable_host::authorization::targets::{
     agent_method_target, agent_owner, config_segments_target,
 };
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::secrets::secret_hold_target_for_path;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::{ConfigValueError, Host, WebhookError};
+use crate::services::HasWorkerService;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use chrono::Utc;
-use golem_common::model::PromiseId;
 use golem_common::model::agent::{
     AgentConfigSource, AgentTypeName, ParsedAgentId, typed_constructor_parameters,
 };
+use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::CanonicalAgentSecretPath;
 use golem_common::model::card::AgentVerb;
 use golem_common::model::oplog::host_functions::{
-    GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAllAgentTypes,
-    GolemAgentGetConfigValue,
+    GolemAgentCreateWebhook, GolemAgentGetAgentType, GolemAgentGetAgentTypeByAgentId,
+    GolemAgentGetAllAgentTypes, GolemAgentGetConfigValue,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequestGolemAgentGetAgentType, HostRequestGolemAgentGetConfigValue,
+    DurableFunctionType, HostRequestGolemAgentGetAgentType,
+    HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemAgentGetConfigValue,
     HostRequestGolemApiPromiseId, HostRequestNoInput, HostResponseGolemAgentAgentType,
     HostResponseGolemAgentAgentTypes, HostResponseGolemAgentGetConfigValue,
     HostResponseGolemAgentWebhookUrl,
 };
+use golem_common::model::{AgentId, OwnedAgentId, PromiseId};
 use golem_common::schema::agent::wit::{encode_registered_agent_type, wire};
 use golem_common::schema::agent::{AgentTypeSchema, RegisteredAgentTypeSchema};
 use golem_common::schema::graph::SchemaGraph;
@@ -230,7 +235,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let agent_secrets = self
                 .state
                 .environment_state_service
-                .get_agent_secrets(self.state.component_metadata.environment_id)
+                .get_agent_secrets(self.owner_component_metadata().environment_id)
                 .await?;
 
             let agent_secret = agent_secrets.get(&canonical_path);
@@ -324,7 +329,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .get_all(
                         self.owned_agent_id.environment_id,
                         self.owned_agent_id.agent_id.component_id,
-                        self.state.component_metadata.revision,
+                        self.owner_component_metadata().revision,
                     )
                     .await
                     .map_err(|err| err.to_string());
@@ -370,7 +375,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let component_revision = self.state.component_metadata.revision;
+            let component_revision = self.owner_component_metadata().revision;
             let result = loop {
                 let result = self
                     .agent_types_service()
@@ -382,6 +387,108 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     )
                     .await
                     .map_err(|err| err.to_string());
+                match handle
+                    .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
+                }
+            };
+            handle
+                .complete(self, HostResponseGolemAgentAgentType { result })
+                .await?
+        };
+
+        match response.result {
+            Ok(result) => Ok(result),
+            Err(err) => Err(anyhow!(err)),
+        }
+    }
+
+    pub(crate) async fn get_agent_type_by_agent_id(
+        &mut self,
+        agent_id: String,
+    ) -> anyhow::Result<Option<RegisteredAgentTypeSchema>> {
+        let mut handle =
+            DurableCallSession::<GolemAgentGetAgentTypeByAgentId, NotCancellable>::start(
+                self,
+                HostRequestGolemAgentGetAgentTypeByAgentId {
+                    agent_id: agent_id.clone(),
+                },
+                DurableFunctionType::ReadRemote,
+            )
+            .await?;
+
+        let response = 'result: {
+            if !handle.is_live() {
+                match handle.replay(self).await? {
+                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
+                    CallReplayOutcome::Incomplete(live) => handle = live,
+                }
+            }
+
+            let result = loop {
+                let result: anyhow::Result<Option<RegisteredAgentTypeSchema>> = async {
+                    let Ok(agent_type_name) = ParsedAgentId::parse_agent_type_name(&agent_id)
+                    else {
+                        return Ok(None);
+                    };
+                    let Some(registered_agent_type) = self
+                        .agent_types_service()
+                        .get(
+                            self.owned_agent_id.environment_id,
+                            self.owned_agent_id.agent_id.component_id,
+                            self.state.component_metadata.revision,
+                            &agent_type_name,
+                        )
+                        .await?
+                    else {
+                        return Ok(None);
+                    };
+                    let target_agent_id = AgentId {
+                        component_id: registered_agent_type.implemented_by.component_id,
+                        agent_id: agent_id.clone(),
+                    };
+                    if super::v1x::agent_operation_denied(
+                        self,
+                        &target_agent_id,
+                        AgentVerb::View,
+                        golem_common::model::card::AgentResourcePattern::Empty,
+                    )
+                    .await?
+                    {
+                        return Ok(None);
+                    }
+                    let owned_agent_id =
+                        OwnedAgentId::new(self.owned_agent_id.environment_id, &target_agent_id);
+                    let metadata = self.state.worker_service().get(&owned_agent_id).await?;
+                    let Some(metadata) = metadata else {
+                        return Ok(None);
+                    };
+                    let component_revision = metadata
+                        .last_known_status
+                        .as_ref()
+                        .map(|status| status.component_revision)
+                        .unwrap_or(
+                            metadata
+                                .initial_worker_metadata
+                                .last_known_status
+                                .component_revision,
+                        );
+                    Ok(self
+                        .agent_types_service()
+                        .get(
+                            self.owned_agent_id.environment_id,
+                            target_agent_id.component_id,
+                            component_revision,
+                            &agent_type_name,
+                        )
+                        .await?)
+                }
+                .await;
+                let result = result.map_err(|err| err.to_string());
+
                 match handle
                     .try_trigger_retry_or_loop(self, &result, |_| HostFailureKind::Transient)
                     .await?
@@ -470,6 +577,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .transpose()
     }
 
+    async fn get_agent_type_by_agent_id(
+        &mut self,
+        agent_id: String,
+    ) -> anyhow::Result<Option<wire::RegisteredAgentType>> {
+        DurableWorkerCtx::get_agent_type_by_agent_id(self, agent_id)
+            .await?
+            .map(encode_registered_agent_type_schema_wire)
+            .transpose()
+    }
+
     async fn make_agent_id(
         &mut self,
         agent_type_name: String,
@@ -517,7 +634,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     > {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
-        let component_metadata = &self.component_metadata().metadata;
+        let component_metadata = &self.owner_component_metadata().metadata;
         match ParsedAgentId::parse(agent_id, component_metadata) {
             Ok(agent_id) => {
                 let wire_typed = encode_typed(&agent_id.parameters)
@@ -573,7 +690,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .await?;
             }
 
-            if promise_id.agent_id.component_id != self.state.component_metadata.id {
+            if promise_id.agent_id.component_id != self.owner_component_metadata().id {
                 let error = "Attempted to create a webhook for a promise not created by the current component".to_string();
                 break 'result handle
                     .complete(
@@ -601,7 +718,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .state
                 .agent_webhooks_service
                 .get_agent_webhook_url_for_promise(
-                    self.state.component_metadata.environment_id,
+                    self.owner_component_metadata().environment_id,
                     &agent_type,
                     &promise_id,
                 )
@@ -652,35 +769,56 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     })
                 })
         });
-        let is_live = self.state.is_live();
-        let denied = if is_live {
-            let targets = config_segments_target(agent_owner(self), &path)
-                .map_err(|_| ())
-                .and_then(|target| {
-                    let mut targets = vec![target];
-                    if is_secret_config {
-                        targets.push(secret_hold_target_for_path(self, &path).map_err(|_| ())?);
-                    }
-                    Ok(targets)
-                });
-            match targets {
-                Ok(targets) => self.authorize_live_permissions(&targets).await?.is_err(),
-                Err(_) => true,
-            }
-        } else {
-            false
-        };
-
-        let uses_resolver = is_secret_config;
-        let handle = DurableCallSession::<GolemAgentGetConfigValue, NotCancellable>::start(
+        let begun = DurableCallSession::<GolemAgentGetConfigValue, NotCancellable>::begin(
             self,
-            HostRequestGolemAgentGetConfigValue {
-                path: path.clone(),
-                expected_type: expected_graph.clone(),
-            },
             DurableFunctionType::ReadRemote,
         )
         .await?;
+        let (handle, denied) = match begun.resolve(self).await? {
+            ResolvedCall::Replay(handle) => (handle, false),
+            ResolvedCall::Live(begun) => {
+                let binding_denied = self.entity_invocation_scope().is_some_and(|scope| {
+                    !scope.activation().policy().config_keys_readable().contains(
+                        &CanonicalAgentConfigPath::from_path_in_unknown_casing(&path),
+                    )
+                });
+                // Snapshot loading executes unpersisted calls without publishing live execution.
+                // Normal tail continuation has already published liveness during resolution.
+                let denied = if binding_denied {
+                    true
+                } else if self.state.is_live() {
+                    let targets = config_segments_target(agent_owner(self), &path)
+                        .map_err(|_| ())
+                        .and_then(|target| {
+                            let mut targets = vec![target];
+                            if is_secret_config {
+                                targets.push(
+                                    secret_hold_target_for_path(self, &path).map_err(|_| ())?,
+                                );
+                            }
+                            Ok(targets)
+                        });
+                    match targets {
+                        Ok(targets) => self.authorize_live_permissions(&targets).await?.is_err(),
+                        Err(_) => true,
+                    }
+                } else {
+                    false
+                };
+                let handle = begun
+                    .start_live(
+                        self,
+                        HostRequestGolemAgentGetConfigValue {
+                            path: path.clone(),
+                            expected_type: expected_graph.clone(),
+                        },
+                    )
+                    .await?;
+                (handle, denied)
+            }
+        };
+
+        let uses_resolver = is_secret_config;
         let response = handle
             .run(self, async move |ctx| {
                 if denied {

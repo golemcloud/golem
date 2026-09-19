@@ -108,31 +108,34 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("trait GrepClient {"))
     assert(content.contains("object GrepClient {"))
     assert(content.contains("""val toolName: _root_.scala.Predef.String = "grep""""))
-    assert(content.contains("def apply(): GrepClient = new Root()"))
+    assert(content.contains("def apply(): GrepClient = apply(toolName)"))
+    assert(content.contains("def apply(lookupName: _root_.scala.Predef.String): GrepClient = new Root(lookupName)"))
+    assert(content.contains("ToolRpcClient.transport(lookupName)"))
     assert(content.contains("_root_.golem.runtime.macros.ToolDefinitionMacro.tryMetadata[Grep]"))
   }
 
-  test("drops Principal and stdout parameters and keeps stdin; stdout moves to the result") {
+  test("drops Principal and stdout parameters and keeps stdin; stdout returns a started invocation") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
 
-    // stdout excluded from the signature but present in the result tuple
+    // stdout is excluded from parameters and exposed independently from the structured result.
     assert(
       content.contains(
         "def grep(caseSensitive: Boolean, color: String, pattern: String, files: Seq[String], " +
           "stdin: _root_.golem.tool.ToolInputStream): " +
-          "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[GrepError], " +
-          "(Long, _root_.golem.tool.ToolOutputStream)]]"
+          "_root_.scala.Either[_root_.golem.tool.ToolError[GrepError], " +
+          "_root_.golem.tool.ToolInvocation[GrepError, Long]]"
       )
     )
     assert(content.contains("_root_.scala.Some(stdin)"))
-    assert(content.contains("decodeValueStdoutResult"))
+    assert(content.contains("ToolClientRuntime.start"))
+    assert(content.contains("decodeValueResult"))
   }
 
   test("the implicit-body root command invokes with an empty command path") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
     // `grep` is the tool's root command: no path element is appended
     assert(
-      content.contains("_root_.golem.tool.ToolClientRuntime.run[GrepError](__transport, _root_.scala.Nil, __input")
+      content.contains("_root_.golem.tool.ToolClientRuntime.start(__transport, _root_.scala.Nil, __input")
     )
   }
 
@@ -140,7 +143,7 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val content = generate("Grep.scala" -> grepSource).files.head.content
     assert(content.contains("private lazy val __errorSchema_GrepError: _root_.golem.tool.ToolErrorSchema[GrepError]"))
     assert(content.contains("_root_.golem.runtime.macros.ToolErrorSchemaDerivation.derive[GrepError]"))
-    assert(content.contains("__errorSchema_GrepError.fromErrorPayloadValue(_)"))
+    assert(content.contains("__errorSchema_GrepError.fromErrorValue(_)"))
     // subcommands inherit the root global `caseSensitive`
     assert(
       content.contains(
@@ -200,9 +203,9 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val prefixIdx  = content.indexOf("""prefixValue("git-dir"""")
     val verboseIdx = content.indexOf("""prefixValue("verbose"""")
     assert(prefixIdx >= 0 && verboseIdx >= 0 && prefixIdx < verboseIdx)
-    // navigation appends the child command name and creates a fresh transport
+    // navigation appends the child command name and preserves the selected transport
     assert(content.contains("""_root_.scala.List("remote")"""))
-    assert(content.contains("_root_.golem.runtime.tool.client.ToolRpcClient.transport(GitClient.toolName)"))
+    assert(content.contains("new GitClient.RemoteClient(\n        __transport,"))
   }
 
   test("wrapper leaf methods use the dynamic input path when a prefix is inherited") {

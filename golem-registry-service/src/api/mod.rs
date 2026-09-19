@@ -22,6 +22,8 @@ pub mod cards;
 pub mod components;
 pub mod domain_registrations;
 pub mod environment_plugin_grants;
+pub mod environment_tool_grants;
+pub mod environment_tool_middleware_grants;
 pub mod environments;
 pub mod error;
 pub mod http_api_deployments;
@@ -35,6 +37,8 @@ pub mod resource_definitions;
 pub mod retry_policies;
 pub mod security_schemes;
 pub mod tokens;
+pub mod tool_middleware_releases;
+pub mod tool_releases;
 
 use self::account_usage::AccountUsageApi;
 use self::accounts::AccountsApi;
@@ -45,6 +49,8 @@ use self::cards::CardsApi;
 use self::components::ComponentsApi;
 use self::domain_registrations::DomainRegistrationsApi;
 use self::environment_plugin_grants::EnvironmentPluginGrantsApi;
+use self::environment_tool_grants::EnvironmentToolGrantsApi;
+use self::environment_tool_middleware_grants::EnvironmentToolMiddlewareGrantsApi;
 use self::environments::EnvironmentsApi;
 use self::error::ApiError;
 use self::http_api_deployments::HttpApiDeploymentsApi;
@@ -58,6 +64,8 @@ use self::resource_definitions::ResourceDefinitionsApi;
 use self::retry_policies::RetryPoliciesApi;
 use self::security_schemes::SecuritySchemesApi;
 use self::tokens::TokensApi;
+use self::tool_middleware_releases::ToolMiddlewareReleasesApi;
+use self::tool_releases::ToolReleasesApi;
 use crate::bootstrap::Services;
 use golem_service_base::api::HealthcheckApi;
 use poem_openapi::OpenApiService;
@@ -71,7 +79,13 @@ pub type Apis = (
     CardsApi,
     ComponentsApi,
     DomainRegistrationsApi,
-    (AdminApi, EnvironmentPluginGrantsApi, EnvironmentsApi),
+    (
+        AdminApi,
+        EnvironmentPluginGrantsApi,
+        EnvironmentToolGrantsApi,
+        EnvironmentToolMiddlewareGrantsApi,
+        EnvironmentsApi,
+    ),
     HttpApiDeploymentsApi,
     (LoginApi, MeApi),
     (
@@ -82,7 +96,7 @@ pub type Apis = (
     (ReportsApi, ResourceDefinitionsApi),
     RetryPoliciesApi,
     SecuritySchemesApi,
-    TokensApi,
+    (TokensApi, ToolReleasesApi, ToolMiddlewareReleasesApi),
 );
 
 pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
@@ -126,10 +140,19 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.environment_plugin_grant_service.clone(),
                     services.auth_service.clone(),
                 ),
+                EnvironmentToolGrantsApi::new(
+                    services.environment_tool_grant_service.clone(),
+                    services.auth_service.clone(),
+                ),
+                EnvironmentToolMiddlewareGrantsApi::new(
+                    services.environment_tool_middleware_grant_service.clone(),
+                    services.auth_service.clone(),
+                ),
                 EnvironmentsApi::new(
                     services.environment_service.clone(),
                     services.deployment_service.clone(),
                     services.deployment_write_service.clone(),
+                    services.component_write_service.clone(),
                     services.auth_service.clone(),
                 ),
             ),
@@ -177,9 +200,19 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.security_scheme_service.clone(),
                 services.auth_service.clone(),
             ),
-            TokensApi::new(
-                services.token_service.clone(),
-                services.auth_service.clone(),
+            (
+                TokensApi::new(
+                    services.token_service.clone(),
+                    services.auth_service.clone(),
+                ),
+                ToolReleasesApi::new(
+                    services.tool_release_service.clone(),
+                    services.auth_service.clone(),
+                ),
+                ToolMiddlewareReleasesApi::new(
+                    services.tool_middleware_release_service.clone(),
+                    services.auth_service.clone(),
+                ),
             ),
         ),
         "Golem API",

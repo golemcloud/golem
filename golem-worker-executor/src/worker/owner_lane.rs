@@ -106,6 +106,15 @@ struct LaneInvocation {
     grant: Option<oneshot::Sender<OwnerInvocationPermit>>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OwnerLaneMetadata {
+    pub holder: Option<OwnerInvocationId>,
+    pub active_invocation_count: usize,
+    pub eligible_capable_count: usize,
+    pub running_capable_count: usize,
+    pub exclusive: bool,
+}
+
 impl OwnerLane {
     pub fn new(owner_id: OwnedAgentId) -> Self {
         let (changed, _) = watch::channel(0);
@@ -304,6 +313,29 @@ impl OwnerLane {
 
     pub fn holder(&self) -> Option<OwnerInvocationId> {
         self.inner.state.lock().unwrap().holder.clone()
+    }
+
+    pub fn metadata(&self) -> OwnerLaneMetadata {
+        let state = self.inner.state.lock().unwrap();
+        OwnerLaneMetadata {
+            holder: state.holder.clone(),
+            active_invocation_count: state.invocations.len(),
+            eligible_capable_count: state
+                .invocations
+                .values()
+                .filter(|invocation| {
+                    invocation.filesystem == FilesystemCapability::Capable && invocation.eligible
+                })
+                .count(),
+            running_capable_count: state
+                .invocations
+                .values()
+                .filter(|invocation| {
+                    invocation.filesystem == FilesystemCapability::Capable && invocation.running
+                })
+                .count(),
+            exclusive: state.exclusive,
+        }
     }
 
     /// Waits until no filesystem-capable body owns the lane, then prevents a new body from being

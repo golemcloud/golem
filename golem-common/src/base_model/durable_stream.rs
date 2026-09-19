@@ -187,11 +187,11 @@ impl Display for AttemptId {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(transparent))]
 #[serde(transparent)]
-pub struct StreamOffsetV1(pub [u8; 24]);
+pub struct StreamOffset(pub [u8; 24]);
 
-impl IntoSchemaTrait for StreamOffsetV1 {
+impl IntoSchemaTrait for StreamOffset {
     fn type_id() -> TypeId {
-        TypeId::new("golem_common.base_model.StreamOffsetV1")
+        TypeId::new("golem_common.base_model.StreamOffset")
     }
 
     fn register_in(builder: &mut SchemaBuilder) -> SchemaType {
@@ -203,7 +203,7 @@ impl IntoSchemaTrait for StreamOffsetV1 {
     }
 }
 
-impl FromSchemaTrait for StreamOffsetV1 {
+impl FromSchemaTrait for StreamOffset {
     fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
         let bytes = Vec::<u8>::from_value(value)?;
         let bytes: [u8; 24] = bytes.try_into().map_err(|bytes: Vec<u8>| {
@@ -216,7 +216,7 @@ impl FromSchemaTrait for StreamOffsetV1 {
     }
 }
 
-impl StreamOffsetV1 {
+impl StreamOffset {
     pub const FORMAT_VERSION: u8 = 1;
 
     pub fn new(producer_oplog_index: OplogIndex, sub_index: u32) -> Self {
@@ -259,7 +259,7 @@ impl StreamOffsetV1 {
     }
 }
 
-impl Display for StreamOffsetV1 {
+impl Display for StreamOffset {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for byte in self.0 {
             write!(f, "{byte:02x}")?;
@@ -268,8 +268,41 @@ impl Display for StreamOffsetV1 {
     }
 }
 
+impl std::str::FromStr for StreamOffset {
+    type Err = StreamOffsetError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.len() != 48 {
+            return Err(StreamOffsetError::InvalidTextLength(value.len()));
+        }
+
+        let mut bytes = [0u8; 24];
+        for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
+            let high = decode_lowercase_hex_digit(pair[0])?;
+            let low = decode_lowercase_hex_digit(pair[1])?;
+            bytes[index] = (high << 4) | low;
+        }
+        Self::from_bytes(bytes)
+    }
+}
+
+fn decode_lowercase_hex_digit(byte: u8) -> Result<u8, StreamOffsetError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Err(StreamOffsetError::NonCanonicalHex),
+        _ => Err(StreamOffsetError::InvalidHexCharacter(byte)),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum StreamOffsetError {
+    #[error("stream offset text must have 48 characters, got {0}")]
+    InvalidTextLength(usize),
+    #[error("stream offset text must use lowercase hexadecimal characters")]
+    NonCanonicalHex,
+    #[error("invalid stream offset hexadecimal character {0:?}")]
+    InvalidHexCharacter(u8),
     #[error("unsupported stream offset format version {0}")]
     UnsupportedVersion(u8),
     #[error("stream offset reserved bits are set")]
@@ -288,26 +321,26 @@ pub enum DurableStreamIdentityError {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
-pub struct StreamInvocationIdV1 {
+pub struct StreamInvocationId {
     pub callee_environment_id: EnvironmentId,
     pub callee: AgentId,
     pub callee_fingerprint: AgentFingerprint,
     pub idempotency_key: IdempotencyKey,
 }
 
-pub type StreamSessionKeyV1 = StreamInvocationIdV1;
+pub type StreamSessionKey = StreamInvocationId;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
-pub struct DurableStreamHandleV1 {
+pub struct DurableStreamHandle {
     pub format_version: u8,
     pub stream_id: StreamId,
     pub producer_environment_id: EnvironmentId,
     pub producer: AgentId,
     pub expected_producer_fingerprint: AgentFingerprint,
-    pub source_invocation: StreamInvocationIdV1,
+    pub source_invocation: StreamInvocationId,
     pub component_revision: ComponentRevision,
     pub element_schema_fingerprint: SchemaFingerprintV1,
 }
@@ -316,16 +349,16 @@ pub struct DurableStreamHandleV1 {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
-pub enum StreamRegistrationCoordinateV1 {
+pub enum StreamRegistrationCoordinate {
     Root {
-        invocation_id: StreamInvocationIdV1,
-        root_kind: StreamRootKindV1,
-        recursive_value_path: Vec<StreamValuePathStepV1>,
+        invocation_id: StreamInvocationId,
+        root_kind: StreamRootKind,
+        recursive_value_path: Vec<StreamValuePathStep>,
     },
     Nested {
         parent_stream_id: StreamId,
         parent_producer_sequence: u64,
-        recursive_value_path: Vec<StreamValuePathStepV1>,
+        recursive_value_path: Vec<StreamValuePathStep>,
     },
 }
 
@@ -333,7 +366,7 @@ pub enum StreamRegistrationCoordinateV1 {
     Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamRootKindV1 {
+pub enum StreamRootKind {
     MethodInput,
     MethodResult,
 }
@@ -341,13 +374,13 @@ pub enum StreamRootKindV1 {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub enum StreamValuePathStepV1 {
+pub enum StreamValuePathStep {
     RecordField(u32),
     VariantCasePayload(u32),
     TupleElement(u32),
     ListElement(u32),
     FixedListElement(u32),
-    MapEntry { index: u32, side: StreamMapSideV1 },
+    MapEntry { index: u32, side: StreamMapSide },
     OptionSome,
     ResultOk,
     ResultErr,
@@ -358,7 +391,7 @@ pub enum StreamValuePathStepV1 {
     Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamMapSideV1 {
+pub enum StreamMapSide {
     Key,
     Value,
 }
@@ -367,7 +400,7 @@ pub enum StreamMapSideV1 {
     Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamSourceKindV1 {
+pub enum StreamSourceKind {
     ExternalInlineInput,
     AgentHostedInput,
     InvocationOutput,
@@ -379,7 +412,7 @@ pub enum StreamSourceKindV1 {
     Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum SessionStreamRoleV1 {
+pub enum SessionStreamRole {
     Input,
     Output,
 }
@@ -388,47 +421,47 @@ pub enum SessionStreamRoleV1 {
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
-pub struct StreamSessionMappingV1 {
-    pub session_key: StreamSessionKeyV1,
+pub struct StreamSessionMapping {
+    pub session_key: StreamSessionKey,
     pub attachment_id: AttachmentId,
-    pub role: SessionStreamRoleV1,
+    pub role: SessionStreamRole,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamRegisteredRecordV1 {
+pub struct StreamRegisteredRecord {
     pub format_version: u8,
-    pub coordinate: StreamRegistrationCoordinateV1,
+    pub coordinate: StreamRegistrationCoordinate,
     pub registration_oplog_index: OplogIndex,
-    pub handle: DurableStreamHandleV1,
-    pub source_kind: StreamSourceKindV1,
-    pub session_mapping: Option<StreamSessionMappingV1>,
+    pub handle: DurableStreamHandle,
+    pub source_kind: StreamSourceKind,
+    pub session_mapping: Option<StreamSessionMapping>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamItemsRecordV1 {
+pub struct StreamItemsRecord {
     pub format_version: u8,
     pub stream_id: StreamId,
     pub producer_fingerprint: AgentFingerprint,
     pub first_sequence: u64,
     pub nested_stream_ids: Vec<StreamId>,
     pub newly_registered_stream_ids: Vec<StreamId>,
-    pub payload: StreamItemsPayloadV1,
-    pub offsets: Vec<StreamOffsetV1>,
+    pub payload: StreamItemsPayload,
+    pub offsets: Vec<StreamOffset>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamItemsPayloadV1 {
+pub enum StreamItemsPayload {
     /// Canonically encoded complete durable values. V1 normally stores one value per entry.
     Values(Vec<Vec<u8>>),
     PackedU8(Vec<u8>),
 }
 
-impl StreamItemsPayloadV1 {
+impl StreamItemsPayload {
     pub fn logical_item_count(&self) -> usize {
         match self {
             Self::Values(values) => values.len(),
@@ -440,28 +473,28 @@ impl StreamItemsPayloadV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamEndRecordV1 {
+pub struct StreamEndRecord {
     pub format_version: u8,
     pub stream_id: StreamId,
     pub producer_fingerprint: AgentFingerprint,
     pub sequence: u64,
-    pub offset: StreamOffsetV1,
-    pub authored_by: StreamTerminalAuthorV1,
-    pub result: StreamEndResultV1,
+    pub offset: StreamOffset,
+    pub authored_by: StreamTerminalAuthor,
+    pub result: StreamEndResult,
 }
 
 #[derive(
     Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamTerminalAuthorV1 {
+pub enum StreamTerminalAuthor {
     Guest,
     Protocol,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamEndResultV1 {
+pub enum StreamEndResult {
     Ok,
     ErrorContext(Vec<u8>),
 }
@@ -469,21 +502,23 @@ pub enum StreamEndResultV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamCancelRecordV1 {
+pub struct StreamCancelRecord {
     pub format_version: u8,
     pub stream_id: StreamId,
     pub producer_fingerprint: AgentFingerprint,
     pub sequence: u64,
-    pub offset: StreamOffsetV1,
-    pub authored_by: StreamTerminalAuthorV1,
-    pub role: StreamCancelRoleV1,
-    pub reason: StreamCancelReasonV1,
+    pub offset: StreamOffset,
+    pub authored_by: StreamTerminalAuthor,
+    pub role: StreamCancelRole,
+    pub reason: StreamCancelReason,
     pub details: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamCancelRoleV1 {
+pub enum StreamCancelRole {
     InputProducer,
     InputConsumer,
     OutputProducer,
@@ -491,9 +526,11 @@ pub enum StreamCancelRoleV1 {
     System,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamCancelReasonV1 {
+pub enum StreamCancelReason {
     Cancelled,
     GuestDrop,
     Protocol,
@@ -505,15 +542,15 @@ pub enum StreamCancelReasonV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct PersistedStreamInvocationDescriptorV1 {
+pub struct PersistedStreamInvocationDescriptor {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
     pub target_component_revision: ComponentRevision,
     pub method_name: String,
     /// Canonical serialization of the complete recursive invocation value after replacing each
     /// stream leaf with its corresponding durable handle in `stream_handles`.
     pub invocation_value: Vec<u8>,
-    pub stream_handles: Vec<DurableStreamHandleV1>,
+    pub stream_handles: Vec<DurableStreamHandle>,
     /// Canonical execution-mode and configuration bytes that affect the call.
     pub execution_config: Vec<u8>,
     /// Canonical effective principal and grant identity. Credential bytes and expiry are excluded.
@@ -523,13 +560,13 @@ pub struct PersistedStreamInvocationDescriptorV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StartAttemptDescriptorV1 {
+pub struct StartAttemptDescriptor {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
     pub attachment_id: AttachmentId,
     pub expected_callee_fingerprint: AgentFingerprint,
     pub attempt_id: AttemptId,
-    pub invocation: PersistedStreamInvocationDescriptorV1,
+    pub invocation: PersistedStreamInvocationDescriptor,
     pub effective_identity: Vec<u8>,
     pub live_join_buffer_events: u32,
 }
@@ -537,49 +574,49 @@ pub struct StartAttemptDescriptorV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamSessionPreparedRecordV1 {
+pub struct StreamSessionPreparedRecord {
     pub format_version: u8,
-    pub attempt: StartAttemptDescriptorV1,
-    pub stream_mappings: Vec<StreamSessionMappingRecordV1>,
+    pub attempt: StartAttemptDescriptor,
+    pub stream_mappings: Vec<StreamSessionMappingRecord>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamSessionMappingRecordV1 {
+pub struct StreamSessionMappingRecord {
     /// Transport-local source reference used only to route frames within this attachment.
     pub transport_stream_id: u64,
-    pub handle: DurableStreamHandleV1,
-    pub role: SessionStreamRoleV1,
+    pub handle: DurableStreamHandle,
+    pub role: SessionStreamRole,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamSessionMappingUpdateRecordV1 {
+pub struct StreamSessionMappingUpdateRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
-    pub mapping: StreamSessionMappingRecordV1,
+    pub session_key: StreamSessionKey,
+    pub mapping: StreamSessionMappingRecord,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamAttachmentKeyV1 {
+pub struct StreamAttachmentKey {
     pub attachment_id: AttachmentId,
     pub stream_id: StreamId,
     pub epoch: u64,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
     pub producer_environment_id: EnvironmentId,
     pub producer: AgentId,
     pub expected_producer_fingerprint: AgentFingerprint,
     pub consumer_environment_id: EnvironmentId,
     pub consumer: AgentId,
     pub expected_consumer_fingerprint: AgentFingerprint,
-    pub consumer_invocation: StreamInvocationIdV1,
+    pub consumer_invocation: StreamInvocationId,
 }
 
-impl StreamAttachmentKeyV1 {
+impl StreamAttachmentKey {
     fn is_well_formed(&self) -> bool {
         self.epoch > 0
             && self.consumer_invocation.callee_environment_id == self.consumer_environment_id
@@ -597,9 +634,9 @@ impl StreamAttachmentKeyV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamAttachmentPreparedRecordV1 {
+pub struct StreamAttachmentPreparedRecord {
     pub format_version: u8,
-    pub key: StreamAttachmentKeyV1,
+    pub key: StreamAttachmentKey,
     pub prepared_at_millis: u64,
     pub lease_expires_at_millis: u64,
 }
@@ -607,9 +644,9 @@ pub struct StreamAttachmentPreparedRecordV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamAttachmentActivatedRecordV1 {
+pub struct StreamAttachmentActivatedRecord {
     pub format_version: u8,
-    pub key: StreamAttachmentKeyV1,
+    pub key: StreamAttachmentKey,
     pub activated_at_millis: u64,
     pub lease_expires_at_millis: u64,
 }
@@ -617,16 +654,16 @@ pub struct StreamAttachmentActivatedRecordV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamAttachmentRenewedRecordV1 {
+pub struct StreamAttachmentRenewedRecord {
     pub format_version: u8,
-    pub key: StreamAttachmentKeyV1,
+    pub key: StreamAttachmentKey,
     pub renewed_at_millis: u64,
     pub lease_expires_at_millis: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamAttachmentFinalizationReasonV1 {
+pub enum StreamAttachmentFinalizationReason {
     ConsumerFinalized,
     ConsumerDeleted,
     ConsumerIncarnationChanged,
@@ -637,13 +674,13 @@ pub enum StreamAttachmentFinalizationReasonV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamAttachmentControlRequestV1 {
+pub struct StreamAttachmentControlRequest {
     pub format_version: u8,
-    pub mapping: Option<StreamSessionMappingRecordV1>,
-    pub operation: StreamAttachmentControlOperationV1,
+    pub mapping: Option<StreamSessionMappingRecord>,
+    pub operation: StreamAttachmentControlOperation,
 }
 
-impl StreamAttachmentControlRequestV1 {
+impl StreamAttachmentControlRequest {
     pub fn is_well_formed(&self) -> bool {
         self.format_version == DURABLE_STREAM_FORMAT_VERSION
             && self.operation.key().is_well_formed()
@@ -656,16 +693,16 @@ impl StreamAttachmentControlRequestV1 {
     feature = "full",
     desert(evolution(FieldAdded("wait_for_events", false)))
 )]
-pub struct AttachedStreamSegmentRequestV1 {
+pub struct AttachedStreamSegmentRequest {
     pub format_version: u8,
-    pub attachment: StreamAttachmentKeyV1,
-    pub mapping: StreamSessionMappingRecordV1,
-    pub after: Option<StreamOffsetV1>,
-    pub through: Option<StreamOffsetV1>,
+    pub attachment: StreamAttachmentKey,
+    pub mapping: StreamSessionMappingRecord,
+    pub after: Option<StreamOffset>,
+    pub through: Option<StreamOffset>,
     pub wait_for_events: bool,
 }
 
-impl AttachedStreamSegmentRequestV1 {
+impl AttachedStreamSegmentRequest {
     pub fn is_well_formed(&self) -> bool {
         self.format_version == DURABLE_STREAM_FORMAT_VERSION
             && self.attachment.is_well_formed()
@@ -674,44 +711,62 @@ impl AttachedStreamSegmentRequestV1 {
     }
 }
 
+/// Internal delegation after the exporting worker has authorized and resolved a slot.
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamAttachmentControlOperationV1 {
+pub struct StreamHandleReadRequest {
+    pub handle: DurableStreamHandle,
+    pub after: Option<StreamOffset>,
+    pub max_items: u32,
+    pub max_bytes: u64,
+    pub wait_millis: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum DurableStreamReadRequest {
+    AttachedConsumer(Box<AttachedStreamSegmentRequest>),
+    AuthorizedExport(Box<StreamHandleReadRequest>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StreamAttachmentControlOperation {
     Prepare {
-        key: StreamAttachmentKeyV1,
+        key: StreamAttachmentKey,
         now_millis: u64,
     },
     Activate {
-        key: StreamAttachmentKeyV1,
+        key: StreamAttachmentKey,
         now_millis: u64,
     },
     Detach {
-        key: StreamAttachmentKeyV1,
+        key: StreamAttachmentKey,
     },
     Renew {
-        key: StreamAttachmentKeyV1,
+        key: StreamAttachmentKey,
         now_millis: u64,
     },
     Cancel {
-        key: StreamAttachmentKeyV1,
-        role: StreamCancelRoleV1,
-        reason: StreamCancelReasonV1,
+        key: StreamAttachmentKey,
+        role: StreamCancelRole,
+        reason: StreamCancelReason,
         details: Option<String>,
     },
     Finalize {
-        key: StreamAttachmentKeyV1,
-        reason: StreamAttachmentFinalizationReasonV1,
+        key: StreamAttachmentKey,
+        reason: StreamAttachmentFinalizationReason,
         now_millis: u64,
     },
     SourceUnavailable {
-        key: StreamAttachmentKeyV1,
-        source_offset: StreamOffsetV1,
+        key: StreamAttachmentKey,
+        source_offset: StreamOffset,
         consumer_read_ordinal: u64,
     },
 }
 
-impl StreamAttachmentControlOperationV1 {
-    pub fn key(&self) -> &StreamAttachmentKeyV1 {
+impl StreamAttachmentControlOperation {
+    pub fn key(&self) -> &StreamAttachmentKey {
         match self {
             Self::Prepare { key, .. }
             | Self::Activate { key, .. }
@@ -731,17 +786,17 @@ impl StreamAttachmentControlOperationV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamAttachmentFinalizedRecordV1 {
+pub struct StreamAttachmentFinalizedRecord {
     pub format_version: u8,
-    pub key: StreamAttachmentKeyV1,
+    pub key: StreamAttachmentKey,
     pub finalized_at_millis: u64,
-    pub reason: StreamAttachmentFinalizationReasonV1,
+    pub reason: StreamAttachmentFinalizationReason,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamProducerDeletingRecordV1 {
+pub struct StreamProducerDeletingRecord {
     pub format_version: u8,
     pub producer_environment_id: EnvironmentId,
     pub producer: AgentId,
@@ -751,10 +806,10 @@ pub struct StreamProducerDeletingRecordV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamCascadeDependentResultV1 {
+pub enum StreamCascadeDependentResult {
     ConsumerJournalComplete,
     SourceUnavailable {
-        first_unjournaled_offset: StreamOffsetV1,
+        first_unjournaled_offset: StreamOffset,
     },
     ConsumerDeleted,
     ConsumerIncarnationChanged,
@@ -763,17 +818,17 @@ pub enum StreamCascadeDependentResultV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamCascadeOutboxRecordV1 {
+pub struct StreamCascadeOutboxRecord {
     pub format_version: u8,
-    pub key: StreamAttachmentKeyV1,
+    pub key: StreamAttachmentKey,
     pub completed_at_millis: u64,
-    pub result: StreamCascadeDependentResultV1,
+    pub result: StreamCascadeDependentResult,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamConsumerDeletingRecordV1 {
+pub struct StreamConsumerDeletingRecord {
     pub format_version: u8,
     pub consumer_environment_id: EnvironmentId,
     pub consumer: AgentId,
@@ -784,39 +839,39 @@ pub struct StreamConsumerDeletingRecordV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamSourceUnavailableRecordV1 {
+pub struct StreamSourceUnavailableRecord {
     pub format_version: u8,
-    pub key: StreamAttachmentKeyV1,
-    pub source_offset: StreamOffsetV1,
+    pub key: StreamAttachmentKey,
+    pub source_offset: StreamOffset,
     pub consumer_read_ordinal: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamTopologyPreparedRecordV1 {
+pub struct StreamTopologyPreparedRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
-    pub attachment: StreamAttachmentKeyV1,
-    pub mapping: StreamSessionMappingRecordV1,
+    pub session_key: StreamSessionKey,
+    pub attachment: StreamAttachmentKey,
+    pub mapping: StreamSessionMappingRecord,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamTopologyActivatedRecordV1 {
+pub struct StreamTopologyActivatedRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
-    pub attachment: StreamAttachmentKeyV1,
-    pub mapping: StreamSessionMappingRecordV1,
+    pub session_key: StreamSessionKey,
+    pub attachment: StreamAttachmentKey,
+    pub mapping: StreamSessionMappingRecord,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamSessionAttachedRecordV1 {
+pub struct StreamSessionAttachedRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
     pub attachment_id: AttachmentId,
     pub attempt_id: AttemptId,
     pub epoch: u64,
@@ -825,7 +880,7 @@ pub struct StreamSessionAttachedRecordV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamResumeOperationV1 {
+pub enum StreamResumeOperation {
     Resume,
     Takeover,
 }
@@ -833,42 +888,42 @@ pub enum StreamResumeOperationV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamResumeCursorV1 {
+pub struct StreamResumeCursor {
     pub stream_id: StreamId,
-    pub last_observed_offset: Option<StreamOffsetV1>,
+    pub last_observed_offset: Option<StreamOffset>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct ResumeAttemptDescriptorV1 {
+pub struct ResumeAttemptDescriptor {
     pub format_version: u8,
-    pub operation: StreamResumeOperationV1,
-    pub session_key: StreamSessionKeyV1,
+    pub operation: StreamResumeOperation,
+    pub session_key: StreamSessionKey,
     pub attachment_id: AttachmentId,
     pub expected_callee_fingerprint: AgentFingerprint,
     pub attempt_id: AttemptId,
     pub expected_epoch: u64,
     pub effective_identity: Vec<u8>,
-    pub cursors: Vec<StreamResumeCursorV1>,
+    pub cursors: Vec<StreamResumeCursor>,
     pub live_join_buffer_events: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamSessionResumeAttemptRecordV1 {
+pub struct StreamSessionResumeAttemptRecord {
     pub format_version: u8,
-    pub attempt: ResumeAttemptDescriptorV1,
+    pub attempt: ResumeAttemptDescriptor,
     pub accepted_epoch: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamSessionDetachedRecordV1 {
+pub struct StreamSessionDetachedRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
     pub attachment_id: AttachmentId,
     pub owner_attempt_id: AttemptId,
     pub epoch: u64,
@@ -877,72 +932,123 @@ pub struct StreamSessionDetachedRecordV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct InputStreamHighWaterV1 {
+pub struct InputStreamHighWater {
     pub highest_contiguous_sequence: u64,
-    pub resulting_offset: StreamOffsetV1,
+    pub resulting_offset: StreamOffset,
     pub terminal: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamSessionInputHighWaterRecordV1 {
+pub struct StreamSessionInputHighWaterRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
     pub stream_id: StreamId,
     pub epoch: u64,
     pub first_sequence: u64,
-    pub payload: StreamItemsPayloadV1,
-    pub high_water: InputStreamHighWaterV1,
+    pub payload: StreamItemsPayload,
+    pub high_water: InputStreamHighWater,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamConsumerItemValueRecordV1 {
+pub struct StreamExternalProducerStateRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
     pub stream_id: StreamId,
-    pub source_offset: StreamOffsetV1,
+    pub producer_id: ExternalProducerId,
+    pub epoch: u64,
+    pub sequence: u64,
+    pub next_sequence: u64,
+    pub resulting_offset: StreamOffset,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum ExternalProducerId {
+    Client(String),
+    Attached,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamConsumerItemValueRecord {
+    pub format_version: u8,
+    pub session_key: StreamSessionKey,
+    pub stream_id: StreamId,
+    pub source_offset: StreamOffset,
     pub consumer_read_ordinal: u64,
     pub value: Vec<u8>,
     pub packed_u8: bool,
-    pub recursive_handles: Vec<DurableStreamHandleV1>,
-    pub recursive_mappings: Vec<StreamSessionMappingRecordV1>,
+    pub recursive_handles: Vec<DurableStreamHandle>,
+    pub recursive_mappings: Vec<StreamSessionMappingRecord>,
+}
+
+impl StreamConsumerItemValueRecord {
+    pub fn logical_item_count(&self) -> usize {
+        if self.packed_u8 { self.value.len() } else { 1 }
+    }
+
+    pub fn source_offset_at(&self, index: usize) -> Option<StreamOffset> {
+        if index >= self.logical_item_count() {
+            return None;
+        }
+        if !self.packed_u8 {
+            return Some(self.source_offset);
+        }
+        let index = u32::try_from(index).ok()?;
+        let sub_index = self.source_offset.sub_index().checked_add(index)?;
+        Some(StreamOffset::new(
+            self.source_offset.producer_oplog_index(),
+            sub_index,
+        ))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamConsumerTerminalRecordV1 {
+pub struct StreamConsumerTerminalRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
     pub stream_id: StreamId,
-    pub source_offset: StreamOffsetV1,
+    pub source_offset: StreamOffset,
     pub consumer_read_ordinal: u64,
-    pub terminal: StreamConsumerTerminalV1,
+    pub terminal: StreamConsumerTerminal,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamConsumerCancelIntentRecordV1 {
+pub struct StreamConsumerCancelIntentRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
     pub stream_id: StreamId,
     pub epoch: u64,
-    pub role: StreamCancelRoleV1,
-    pub reason: StreamCancelReasonV1,
+    pub role: StreamCancelRole,
+    pub reason: StreamCancelReason,
     pub details: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamConsumerTerminalV1 {
-    End(StreamEndResultV1),
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamConsumerCancelAppliedRecord {
+    pub format_version: u8,
+    pub intent: StreamConsumerCancelIntentRecord,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StreamConsumerTerminal {
+    End(StreamEndResult),
     Cancel {
-        role: StreamCancelRoleV1,
-        reason: StreamCancelReasonV1,
+        role: StreamCancelRole,
+        reason: StreamCancelReason,
         details: Option<String>,
     },
 }
@@ -950,60 +1056,82 @@ pub enum StreamConsumerTerminalV1 {
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamSessionInvocationResultRecordV1 {
+pub struct StreamSessionInvocationResultRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
     pub result: Vec<u8>,
-    pub output_streams: Vec<DurableStreamHandleV1>,
-    pub stream_mappings: Vec<StreamSessionMappingRecordV1>,
+    pub output_streams: Vec<DurableStreamHandle>,
+    pub stream_mappings: Vec<StreamSessionMappingRecord>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamSessionFinishedRecordV1 {
+pub struct StreamSessionFinishedRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
     pub result: Result<(), Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamCallerAttemptRecordV1 {
+pub struct StreamSlotTombstonedRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKeyV1,
+    pub session_key: StreamSessionKey,
+    pub slot: String,
+    pub role: SessionStreamRole,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamSessionCancelRequestedRecord {
+    pub format_version: u8,
+    pub session_key: StreamSessionKey,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamCallerAttemptRecord {
+    pub format_version: u8,
+    pub session_key: StreamSessionKey,
     pub attempt_id: AttemptId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-pub enum StreamSessionRecordV1 {
-    CallerAttempt(StreamCallerAttemptRecordV1),
-    Prepared(StreamSessionPreparedRecordV1),
-    Attached(StreamSessionAttachedRecordV1),
-    ResumeAttempt(StreamSessionResumeAttemptRecordV1),
-    Detached(StreamSessionDetachedRecordV1),
-    Mapping(StreamSessionMappingUpdateRecordV1),
-    AttachmentPrepared(StreamAttachmentPreparedRecordV1),
-    AttachmentActivated(StreamAttachmentActivatedRecordV1),
-    AttachmentRenewed(StreamAttachmentRenewedRecordV1),
-    AttachmentFinalized(StreamAttachmentFinalizedRecordV1),
-    ProducerDeleting(StreamProducerDeletingRecordV1),
-    CascadeOutbox(StreamCascadeOutboxRecordV1),
-    ConsumerDeleting(StreamConsumerDeletingRecordV1),
-    SourceUnavailable(StreamSourceUnavailableRecordV1),
-    TopologyPrepared(StreamTopologyPreparedRecordV1),
-    TopologyActivated(StreamTopologyActivatedRecordV1),
-    InputHighWater(StreamSessionInputHighWaterRecordV1),
-    ConsumerItemValue(StreamConsumerItemValueRecordV1),
-    ConsumerCancelIntent(StreamConsumerCancelIntentRecordV1),
-    ConsumerTerminal(StreamConsumerTerminalRecordV1),
-    InvocationResult(StreamSessionInvocationResultRecordV1),
-    Finished(StreamSessionFinishedRecordV1),
+pub enum StreamSessionRecord {
+    CallerAttempt(StreamCallerAttemptRecord),
+    Prepared(StreamSessionPreparedRecord),
+    Attached(StreamSessionAttachedRecord),
+    ResumeAttempt(StreamSessionResumeAttemptRecord),
+    Detached(StreamSessionDetachedRecord),
+    Mapping(StreamSessionMappingUpdateRecord),
+    AttachmentPrepared(StreamAttachmentPreparedRecord),
+    AttachmentActivated(StreamAttachmentActivatedRecord),
+    AttachmentRenewed(StreamAttachmentRenewedRecord),
+    AttachmentFinalized(StreamAttachmentFinalizedRecord),
+    ProducerDeleting(StreamProducerDeletingRecord),
+    CascadeOutbox(StreamCascadeOutboxRecord),
+    ConsumerDeleting(StreamConsumerDeletingRecord),
+    SourceUnavailable(StreamSourceUnavailableRecord),
+    TopologyPrepared(StreamTopologyPreparedRecord),
+    TopologyActivated(StreamTopologyActivatedRecord),
+    InputHighWater(StreamSessionInputHighWaterRecord),
+    ExternalProducerState(StreamExternalProducerStateRecord),
+    ConsumerItemValue(StreamConsumerItemValueRecord),
+    ConsumerCancelIntent(StreamConsumerCancelIntentRecord),
+    ConsumerCancelApplied(StreamConsumerCancelAppliedRecord),
+    ConsumerTerminal(StreamConsumerTerminalRecord),
+    InvocationResult(StreamSessionInvocationResultRecord),
+    Finished(StreamSessionFinishedRecord),
+    Tombstoned(StreamSlotTombstonedRecord),
+    CancelRequested(StreamSessionCancelRequestedRecord),
 }
 
-impl StreamSessionRecordV1 {
+impl StreamSessionRecord {
     pub fn format_version(&self) -> u8 {
         match self {
             Self::CallerAttempt(record) => record.format_version,
@@ -1023,20 +1151,24 @@ impl StreamSessionRecordV1 {
             Self::TopologyPrepared(record) => record.format_version,
             Self::TopologyActivated(record) => record.format_version,
             Self::InputHighWater(record) => record.format_version,
+            Self::ExternalProducerState(record) => record.format_version,
             Self::ConsumerItemValue(record) => record.format_version,
             Self::ConsumerCancelIntent(record) => record.format_version,
+            Self::ConsumerCancelApplied(record) => record.format_version,
             Self::ConsumerTerminal(record) => record.format_version,
             Self::InvocationResult(record) => record.format_version,
             Self::Finished(record) => record.format_version,
+            Self::Tombstoned(record) => record.format_version,
+            Self::CancelRequested(record) => record.format_version,
         }
     }
 
     pub fn has_supported_format(&self) -> bool {
-        fn supported_handle(handle: &DurableStreamHandleV1) -> bool {
+        fn supported_handle(handle: &DurableStreamHandle) -> bool {
             handle.format_version == DURABLE_STREAM_FORMAT_VERSION
         }
 
-        fn supported_attempt(attempt: &StartAttemptDescriptorV1) -> bool {
+        fn supported_attempt(attempt: &StartAttemptDescriptor) -> bool {
             attempt.format_version == DURABLE_STREAM_FORMAT_VERSION
                 && attempt.attempt_id.0.get_version() == Some(uuid::Version::Random)
                 && !attempt.attempt_id.0.is_nil()
@@ -1081,7 +1213,7 @@ impl StreamSessionRecordV1 {
                     && record.stream_mappings.len() == unique_transport_ids.len()
                     && record.stream_mappings.len() == unique_mappings.len()
                     && record.stream_mappings.iter().all(|mapping| {
-                        mapping.role == SessionStreamRoleV1::Input
+                        mapping.role == SessionStreamRole::Input
                             && supported_handle(&mapping.handle)
                     })
                     && record
@@ -1109,7 +1241,7 @@ impl StreamSessionRecordV1 {
             Self::ConsumerDeleting(record) => !record.consumer_fingerprint.0.is_nil(),
             Self::SourceUnavailable(record) => {
                 record.key.is_well_formed()
-                    && StreamOffsetV1::from_bytes(record.source_offset.0).is_ok()
+                    && StreamOffset::from_bytes(record.source_offset.0).is_ok()
             }
             Self::TopologyPrepared(record) => {
                 record.attachment.is_well_formed()
@@ -1122,7 +1254,12 @@ impl StreamSessionRecordV1 {
                     && topology_mapping_matches(&record.attachment, &record.mapping)
             }
             Self::InputHighWater(record) => {
-                StreamOffsetV1::from_bytes(record.high_water.resulting_offset.0).is_ok()
+                StreamOffset::from_bytes(record.high_water.resulting_offset.0).is_ok()
+            }
+            Self::ExternalProducerState(record) => {
+                !matches!(&record.producer_id, ExternalProducerId::Client(id) if id.is_empty())
+                    && record.next_sequence > record.sequence
+                    && StreamOffset::from_bytes(record.resulting_offset.0).is_ok()
             }
             Self::ConsumerItemValue(record) => {
                 let unique_transport_ids = record
@@ -1135,7 +1272,7 @@ impl StreamSessionRecordV1 {
                     .iter()
                     .map(|mapping| (mapping.handle.clone(), mapping.role))
                     .collect::<HashSet<_>>();
-                StreamOffsetV1::from_bytes(record.source_offset.0).is_ok()
+                StreamOffset::from_bytes(record.source_offset.0).is_ok()
                     && record.value.len() <= MAX_DURABLE_STREAM_ITEM_SIZE
                     && record.recursive_handles.len() <= MAX_NEW_STREAM_HANDLES_PER_VALUE
                     && record.recursive_handles.iter().all(supported_handle)
@@ -1152,14 +1289,22 @@ impl StreamSessionRecordV1 {
                         .map(|mapping| &mapping.handle)
                         .eq(record.recursive_handles.iter())
                     && if record.packed_u8 {
-                        record.value.len() == 1 && record.recursive_handles.is_empty()
+                        !record.value.is_empty()
+                            && record
+                                .source_offset_at(record.value.len().saturating_sub(1))
+                                .is_some()
+                            && record.recursive_handles.is_empty()
                     } else {
                         true
                     }
             }
             Self::ConsumerCancelIntent(record) => record.epoch > 0,
+            Self::ConsumerCancelApplied(record) => {
+                record.intent.format_version == DURABLE_STREAM_FORMAT_VERSION
+                    && record.intent.epoch > 0
+            }
             Self::ConsumerTerminal(record) => {
-                StreamOffsetV1::from_bytes(record.source_offset.0).is_ok()
+                StreamOffset::from_bytes(record.source_offset.0).is_ok()
             }
             Self::InvocationResult(record) => {
                 let unique_transport_ids = record
@@ -1177,7 +1322,7 @@ impl StreamSessionRecordV1 {
                     && record.stream_mappings.len() == unique_mappings.len()
                     && record.output_streams.iter().all(supported_handle)
                     && record.stream_mappings.iter().all(|mapping| {
-                        mapping.role == SessionStreamRoleV1::Output
+                        mapping.role == SessionStreamRole::Output
                             && supported_handle(&mapping.handle)
                     })
                     && record
@@ -1242,13 +1387,15 @@ impl StreamSessionRecordV1 {
                     .is_ok_and(|attachment_id| attachment_id == record.attachment_id)
             }
             Self::Finished(_) => true,
+            Self::Tombstoned(record) => !record.slot.is_empty(),
+            Self::CancelRequested(_) => true,
         }
     }
 }
 
 fn topology_mapping_matches(
-    attachment: &StreamAttachmentKeyV1,
-    mapping: &StreamSessionMappingRecordV1,
+    attachment: &StreamAttachmentKey,
+    mapping: &StreamSessionMappingRecord,
 ) -> bool {
     mapping.handle.format_version == DURABLE_STREAM_FORMAT_VERSION
         && mapping.handle.stream_id == attachment.stream_id
@@ -1260,14 +1407,16 @@ fn topology_mapping_matches(
 #[cfg(test)]
 mod tests {
     use super::{
-        AttachmentId, AttemptId, DurableStreamHandleV1, PersistedStreamInvocationDescriptorV1,
-        StartAttemptDescriptorV1, StreamAttachmentKeyV1, StreamId, StreamInvocationIdV1,
-        StreamOffsetError, StreamOffsetV1, StreamSessionPreparedRecordV1, StreamSessionRecordV1,
+        AttachmentId, AttemptId, DurableStreamHandle, PersistedStreamInvocationDescriptor,
+        StartAttemptDescriptor, StreamAttachmentKey, StreamConsumerItemValueRecord, StreamId,
+        StreamInvocationId, StreamOffset, StreamOffsetError, StreamSessionPreparedRecord,
+        StreamSessionRecord,
     };
     use crate::base_model::component::{ComponentId, ComponentRevision};
     use crate::base_model::environment::EnvironmentId;
     use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
     use golem_schema::schema::SchemaFingerprintV1;
+    use proptest::prelude::*;
     use test_r::test;
     use uuid::Uuid;
 
@@ -1311,7 +1460,7 @@ mod tests {
 
     #[test]
     fn stream_offset_layout_and_validation() {
-        let offset = StreamOffsetV1::new(OplogIndex::from_u64(0x0102_0304_0506_0708), 0x090a0b0c);
+        let offset = StreamOffset::new(OplogIndex::from_u64(0x0102_0304_0506_0708), 0x090a0b0c);
         assert_eq!(offset.as_bytes()[0], 1);
         assert_eq!(&offset.as_bytes()[1..8], &[0; 7]);
         assert_eq!(
@@ -1324,9 +1473,114 @@ mod tests {
         let mut invalid = *offset.as_bytes();
         invalid[23] = 1;
         assert_eq!(
-            StreamOffsetV1::from_bytes(invalid),
+            StreamOffset::from_bytes(invalid),
             Err(StreamOffsetError::ReservedBitsSet)
         );
+    }
+
+    proptest! {
+        #[test]
+        fn stream_offset_display_from_str_roundtrip(oplog_index: u64, sub_index: u32) {
+            let offset = StreamOffset::new(OplogIndex::from_u64(oplog_index), sub_index);
+            let displayed = offset.to_string();
+
+            prop_assert_eq!(displayed.len(), 48);
+            prop_assert!(displayed.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')));
+            prop_assert_eq!(displayed.parse::<StreamOffset>()?, offset);
+        }
+
+        #[test]
+        fn stream_offset_display_preserves_lexical_order(
+            left_oplog_index: u64,
+            left_sub_index: u32,
+            right_oplog_index: u64,
+            right_sub_index: u32,
+        ) {
+            let left = StreamOffset::new(OplogIndex::from_u64(left_oplog_index), left_sub_index);
+            let right = StreamOffset::new(OplogIndex::from_u64(right_oplog_index), right_sub_index);
+
+            prop_assert_eq!(left.cmp(&right), left.to_string().cmp(&right.to_string()));
+        }
+    }
+
+    #[test]
+    fn stream_offset_from_str_rejects_invalid_text() {
+        let canonical = StreamOffset::new(OplogIndex::from_u64(42), 7).to_string();
+
+        assert_eq!(
+            canonical[..47].parse::<StreamOffset>(),
+            Err(StreamOffsetError::InvalidTextLength(47))
+        );
+        assert_eq!(
+            format!("{canonical}0").parse::<StreamOffset>(),
+            Err(StreamOffsetError::InvalidTextLength(49))
+        );
+
+        let mut uppercase = canonical.clone().into_bytes();
+        uppercase[31] = b'A';
+        assert_eq!(
+            String::from_utf8(uppercase)
+                .unwrap()
+                .parse::<StreamOffset>(),
+            Err(StreamOffsetError::NonCanonicalHex)
+        );
+
+        let mut nonhex = canonical.clone().into_bytes();
+        nonhex[31] = b'g';
+        assert_eq!(
+            String::from_utf8(nonhex).unwrap().parse::<StreamOffset>(),
+            Err(StreamOffsetError::InvalidHexCharacter(b'g'))
+        );
+
+        let unsupported_version = format!("02{}", &canonical[2..]);
+        assert_eq!(
+            unsupported_version.parse::<StreamOffset>(),
+            Err(StreamOffsetError::UnsupportedVersion(2))
+        );
+
+        let reserved_bits = format!("0101{}", &canonical[4..]);
+        assert_eq!(
+            reserved_bits.parse::<StreamOffset>(),
+            Err(StreamOffsetError::ReservedBitsSet)
+        );
+    }
+
+    #[test]
+    fn packed_consumer_journal_record_derives_logical_offsets() {
+        let environment_id = EnvironmentId(Uuid::from_u128(1));
+        let session_key = StreamInvocationId {
+            callee_environment_id: environment_id,
+            callee: AgentId {
+                component_id: ComponentId(Uuid::from_u128(2)),
+                agent_id: "consumer".to_string(),
+            },
+            callee_fingerprint: AgentFingerprint(Uuid::from_u128(3)),
+            idempotency_key: IdempotencyKey::new("invocation".to_string()),
+        };
+        let mut record = StreamConsumerItemValueRecord {
+            format_version: 1,
+            session_key,
+            stream_id: StreamId(Uuid::from_u128(4)),
+            source_offset: StreamOffset::new(OplogIndex::from_u64(5), 7),
+            consumer_read_ordinal: 0,
+            value: vec![10, 11, 12],
+            packed_u8: true,
+            recursive_handles: Vec::new(),
+            recursive_mappings: Vec::new(),
+        };
+
+        assert_eq!(record.logical_item_count(), 3);
+        assert_eq!(record.source_offset_at(0).unwrap().sub_index(), 7);
+        assert_eq!(record.source_offset_at(2).unwrap().sub_index(), 9);
+        assert!(record.source_offset_at(3).is_none());
+        assert!(StreamSessionRecord::ConsumerItemValue(record.clone()).has_supported_format());
+
+        record.value.clear();
+        assert!(!StreamSessionRecord::ConsumerItemValue(record.clone()).has_supported_format());
+
+        record.value = vec![10, 11, 12];
+        record.source_offset = StreamOffset::new(OplogIndex::from_u64(5), u32::MAX - 1);
+        assert!(!StreamSessionRecord::ConsumerItemValue(record).has_supported_format());
     }
 
     #[test]
@@ -1342,7 +1596,7 @@ mod tests {
             component_id: ComponentId(Uuid::from_u128(12)),
             agent_id: "session-b".to_string(),
         };
-        let session_key = StreamInvocationIdV1 {
+        let session_key = StreamInvocationId {
             callee_environment_id: session_environment_id,
             callee: session_authority.clone(),
             callee_fingerprint: AgentFingerprint(Uuid::from_u128(13)),
@@ -1354,7 +1608,7 @@ mod tests {
             agent_id: "consumer-a".to_string(),
         };
         let consumer_fingerprint = AgentFingerprint(Uuid::from_u128(23));
-        let consumer_invocation = StreamInvocationIdV1 {
+        let consumer_invocation = StreamInvocationId {
             callee_environment_id: consumer_environment_id,
             callee: consumer.clone(),
             callee_fingerprint: consumer_fingerprint,
@@ -1366,7 +1620,7 @@ mod tests {
             &session_key.idempotency_key,
         )
         .unwrap();
-        let key = StreamAttachmentKeyV1 {
+        let key = StreamAttachmentKey {
             attachment_id,
             stream_id: StreamId(Uuid::from_u128(4)),
             epoch: 1,
@@ -1412,13 +1666,13 @@ mod tests {
         };
         let fingerprint = AgentFingerprint(Uuid::from_u128(3));
         let idempotency_key = IdempotencyKey::new("invocation".to_string());
-        let session_key = StreamInvocationIdV1 {
+        let session_key = StreamInvocationId {
             callee_environment_id: environment_id,
             callee: agent_id.clone(),
             callee_fingerprint: fingerprint,
             idempotency_key,
         };
-        let unsupported_handle = DurableStreamHandleV1 {
+        let unsupported_handle = DurableStreamHandle {
             format_version: 2,
             stream_id: StreamId(Uuid::from_u128(4)),
             producer_environment_id: environment_id,
@@ -1428,15 +1682,15 @@ mod tests {
             component_revision: ComponentRevision::new(1).unwrap(),
             element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
         };
-        let record = StreamSessionRecordV1::Prepared(StreamSessionPreparedRecordV1 {
+        let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
-            attempt: StartAttemptDescriptorV1 {
+            attempt: StartAttemptDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),
                 attachment_id: AttachmentId(Uuid::from_u128(5)),
                 expected_callee_fingerprint: fingerprint,
                 attempt_id: AttemptId(Uuid::from_u128(6)),
-                invocation: PersistedStreamInvocationDescriptorV1 {
+                invocation: PersistedStreamInvocationDescriptor {
                     format_version: 1,
                     session_key,
                     target_component_revision: ComponentRevision::new(1).unwrap(),

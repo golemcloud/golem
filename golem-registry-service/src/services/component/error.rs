@@ -28,6 +28,7 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::tool::ToolName;
+use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::repo::RepoError;
@@ -61,6 +62,8 @@ pub enum ComponentError {
     },
     #[error("Concurrent update of component")]
     ConcurrentUpdate,
+    #[error("Component {0} is referenced by a tool release or deployment snapshot")]
+    ComponentSourceInUse(ComponentId),
     #[error("Environment not found: {0}")]
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Deployment revision {0} not found")]
@@ -117,6 +120,25 @@ pub enum ComponentError {
     },
     #[error("Multiple files target '{target_path}' for tool '{tool}'")]
     ConflictingToolFileTarget { tool: ToolName, target_path: String },
+    #[error("Invalid tool middleware name '{name}': {message}")]
+    InvalidToolMiddlewareName { name: String, message: String },
+    #[error("Multiple tool middlewares with the same name: {0}")]
+    DuplicateToolMiddlewareName(ToolMiddlewareName),
+    #[error("Invalid tool middleware '{middleware}': {errors}", errors = errors.join(", "))]
+    InvalidToolMiddleware {
+        middleware: String,
+        errors: Vec<String>,
+    },
+    #[error(
+        "Components with tool middleware must export golem:tool/tool-middleware-guest@0.1.0 (found {found:?})"
+    )]
+    ToolMiddlewaresRequireSupportedGuestExport { found: Option<String> },
+    #[error(
+        "Tool middleware '{0}' is referenced in provision config but not defined by the component"
+    )]
+    UndeclaredToolMiddlewareInProvisionConfig(ToolMiddlewareName),
+    #[error("Tool middleware '{0}' has no provision config")]
+    MissingToolMiddlewareProvisionConfig(ToolMiddlewareName),
     #[error(
         "Update introducing new agent type '{0}' is missing initial permissions in its provision config"
     )]
@@ -187,6 +209,7 @@ impl SafeDisplay for ComponentError {
             Self::EnvironmentPluginNotFound(_) => self.to_string(),
             Self::InvalidPluginScope { .. } => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
+            Self::ComponentSourceInUse(_) => self.to_string(),
             Self::PluginInstallationNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
             Self::DeploymentRevisionNotFound(_) => self.to_string(),
@@ -208,6 +231,12 @@ impl SafeDisplay for ComponentError {
             Self::ToolDefinitionNameMismatch { .. } => self.to_string(),
             Self::ToolFileNotFoundInArchive { .. } => self.to_string(),
             Self::ConflictingToolFileTarget { .. } => self.to_string(),
+            Self::InvalidToolMiddlewareName { .. } => self.to_string(),
+            Self::DuplicateToolMiddlewareName(_) => self.to_string(),
+            Self::InvalidToolMiddleware { .. } => self.to_string(),
+            Self::ToolMiddlewaresRequireSupportedGuestExport { .. } => self.to_string(),
+            Self::UndeclaredToolMiddlewareInProvisionConfig(_) => self.to_string(),
+            Self::MissingToolMiddlewareProvisionConfig(_) => self.to_string(),
             Self::NewAgentTypeMissingInitialPermissions(_) => self.to_string(),
             Self::InvalidAgentInitialPermissionCard { .. } => self.to_string(),
             Self::AgentConfigNotDeclared { .. } => self.to_string(),

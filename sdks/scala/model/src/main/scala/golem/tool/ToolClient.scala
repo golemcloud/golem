@@ -24,25 +24,30 @@ import scala.concurrent.Future
 /** RPC-level failures reported while invoking a remote tool. */
 sealed trait RpcError extends Product with Serializable {
   def message: String = this match {
-    case RpcError.Protocol(m)       => s"protocol error: $m"
-    case RpcError.Denied(m)         => s"denied: $m"
-    case RpcError.NotFound(m)       => s"not found: $m"
-    case RpcError.RemoteInternal(m) => s"remote internal error: $m"
+    case RpcError.Protocol(m)          => s"protocol error: $m"
+    case RpcError.Denied(m)            => s"denied: $m"
+    case RpcError.NotFound(m)          => s"not found: $m"
+    case RpcError.RemoteInternal(m)    => s"remote internal error: $m"
+    case RpcError.Cancelled            => "cancelled"
+    case RpcError.ResourceExhausted(m) => s"resource exhausted: $m"
   }
 }
 
 object RpcError {
-  final case class Protocol(detail: String)       extends RpcError
-  final case class Denied(detail: String)         extends RpcError
-  final case class NotFound(detail: String)       extends RpcError
-  final case class RemoteInternal(detail: String) extends RpcError
+  final case class Protocol(detail: String)          extends RpcError
+  final case class Denied(detail: String)            extends RpcError
+  final case class NotFound(detail: String)          extends RpcError
+  final case class RemoteInternal(detail: String)    extends RpcError
+  case object Cancelled                              extends RpcError
+  final case class ResourceExhausted(detail: String) extends RpcError
 }
 
 /** Failure returned by a typed tool client. */
 sealed trait ToolError[+E] extends Product with Serializable
 object ToolError {
-  final case class Rpc(error: RpcError) extends ToolError[Nothing]
-  final case class Tool[E](error: E)    extends ToolError[E]
+  final case class Rpc(error: RpcError)                                      extends ToolError[Nothing]
+  final case class Tool[E](error: E)                                         extends ToolError[E]
+  final case class UnknownToolError(name: String, payload: TypedSchemaValue) extends ToolError[Nothing]
 }
 
 /**
@@ -57,6 +62,8 @@ object ToolRpcFailure {
   final case class NotFound(message: String)                                 extends ToolRpcFailure
   final case class RemoteInternalError(message: String)                      extends ToolRpcFailure
   final case class RemoteToolError(error: ToolInvokeError[TypedSchemaValue]) extends ToolRpcFailure
+  case object Cancelled                                                      extends ToolRpcFailure
+  final case class ResourceExhausted(message: String)                        extends ToolRpcFailure
 }
 
 /**
@@ -66,12 +73,19 @@ object ToolRpcFailure {
  * `golem:tool/host` `tool-rpc` resource); tests may use fakes.
  */
 trait ToolRpcTransport {
-  def invokeAndAwait(
+  def start(
     commandPath: List[String],
     input: TypedSchemaValue,
-    stdin: Option[ToolInputStream]
-  ): Future[Either[ToolRpcFailure, ToolInvokeResult]]
+    stdin: Option[ToolInputStream],
+    stdout: Boolean
+  ): Either[ToolRpcFailure, ToolRpcStarted]
 }
+
+final case class ToolRpcStarted(
+  stdout: Option[ToolInputStream],
+  result: Future[Either[ToolRpcFailure, ToolInvokeResult]],
+  cancel: () => Unit
+)
 
 /**
  * The runtime layer of generated typed tool clients: invocation with
@@ -95,12 +109,18 @@ object ToolClientRuntime {
     commandPath: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream],
-    decodeError: TypedSchemaValue => Either[String, E]
+    decodeError: NamedToolError => Either[String, E]
   ): Future[Either[ToolError[E], ToolInvokeResult]] =
-    rpc.invokeAndAwait(commandPath, input, stdin).map {
-      case Right(result) => Right(result)
-      case Left(failure) => Left(mapRpcFailure(failure, decodeError))
-    }
+    rpc
+      .start(commandPath, input, stdin, stdout = false)
+      .fold(
+        failure => Future.successful(Left(failure): Either[ToolRpcFailure, ToolInvokeResult]),
+        _.result
+      )
+      .map {
+        case Right(result) => Right(result)
+        case Left(failure) => Left(mapRpcFailure(failure, decodeError))
+      }
 
   /**
    * Invokes a tool whose remote custom-error payload is directly encoded as
@@ -112,7 +132,7 @@ object ToolClientRuntime {
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream]
   )(implicit from: FromSchema[E]): Future[Either[ToolError[E], ToolInvokeResult]] =
-    invokeAndAwait[E](rpc, commandPath, input, stdin, decodeCustomToolError[E](_))
+    invokeAndAwait[E](rpc, commandPath, input, stdin, error => decodeCustomToolError[E](error.payload))
 
   /**
    * Invokes a zero-error tool, treating remote custom errors as protocol
@@ -124,20 +144,28 @@ object ToolClientRuntime {
     input: TypedSchemaValue,
     stdin: Option[ToolInputStream]
   ): Future[Either[ToolError[Nothing], ToolInvokeResult]] =
-    rpc.invokeAndAwait(commandPath, input, stdin).map {
-      case Right(result) => Right(result)
-      case Left(failure) => Left(mapInfallibleFailure(failure))
-    }
+    rpc
+      .start(commandPath, input, stdin, stdout = false)
+      .fold(
+        failure => Future.successful(Left(failure): Either[ToolRpcFailure, ToolInvokeResult]),
+        _.result
+      )
+      .map {
+        case Right(result) => Right(result)
+        case Left(failure) => Left(mapInfallibleFailure(failure))
+      }
 
   private def mapRpcFailure[E](
     failure: ToolRpcFailure,
-    decodeError: TypedSchemaValue => Either[String, E]
+    decodeError: NamedToolError => Either[String, E]
   ): ToolError[E] =
     failure match {
       case ToolRpcFailure.ProtocolError(m)       => ToolError.Rpc(RpcError.Protocol(m))
       case ToolRpcFailure.Denied(m)              => ToolError.Rpc(RpcError.Denied(m))
       case ToolRpcFailure.NotFound(m)            => ToolError.Rpc(RpcError.NotFound(m))
       case ToolRpcFailure.RemoteInternalError(m) => ToolError.Rpc(RpcError.RemoteInternal(m))
+      case ToolRpcFailure.Cancelled              => ToolError.Rpc(RpcError.Cancelled)
+      case ToolRpcFailure.ResourceExhausted(m)   => ToolError.Rpc(RpcError.ResourceExhausted(m))
       case ToolRpcFailure.RemoteToolError(error) => mapRemoteToolError(error, decodeError)
     }
 
@@ -147,20 +175,24 @@ object ToolClientRuntime {
       case ToolRpcFailure.Denied(m)              => ToolError.Rpc(RpcError.Denied(m))
       case ToolRpcFailure.NotFound(m)            => ToolError.Rpc(RpcError.NotFound(m))
       case ToolRpcFailure.RemoteInternalError(m) => ToolError.Rpc(RpcError.RemoteInternal(m))
+      case ToolRpcFailure.Cancelled              => ToolError.Rpc(RpcError.Cancelled)
+      case ToolRpcFailure.ResourceExhausted(m)   => ToolError.Rpc(RpcError.ResourceExhausted(m))
       case ToolRpcFailure.RemoteToolError(error) =>
         ToolError.Rpc(RpcError.Protocol(s"remote tool error: ${remoteToolErrorLabel(error)}"))
     }
 
   private[tool] def mapRemoteToolError[E](
     error: ToolInvokeError[TypedSchemaValue],
-    decodeError: TypedSchemaValue => Either[String, E]
+    decodeError: NamedToolError => Either[String, E]
   ): ToolError[E] =
     error match {
-      case ToolInvokeError.Tool(payload) =>
-        decodeError(payload) match {
+      case ToolInvokeError.UnknownToolError(name, payload) =>
+        decodeError(NamedToolError(name, payload)) match {
           case Right(decoded) => ToolError.Tool(decoded)
-          case Left(message)  => ToolError.Rpc(RpcError.Protocol(message))
+          case Left(_)        => ToolError.UnknownToolError(name, payload)
         }
+      case ToolInvokeError.Tool(_) =>
+        ToolError.Rpc(RpcError.Protocol("remote custom error was missing its declared case name"))
       case other =>
         ToolError.Rpc(RpcError.Protocol(s"remote tool error: ${remoteToolErrorLabel(other)}"))
     }
@@ -178,6 +210,7 @@ object ToolClientRuntime {
       case ToolInvokeError.ConstraintViolation(message) => s"constraint violation: $message"
       case ToolInvokeError.InvalidResult(message)       => s"invalid result: $message"
       case ToolInvokeError.Tool(_)                      => "custom error"
+      case ToolInvokeError.UnknownToolError(name, _)    => s"custom error `$name`"
     }
 
   // -------------------------------------------------------------------------
@@ -347,11 +380,33 @@ object ToolClientRuntime {
     commandPath: List[String],
     input: Either[ToolError[Nothing], TypedSchemaValue],
     stdin: Option[ToolInputStream],
-    decodeError: TypedSchemaValue => Either[String, E]
+    decodeError: NamedToolError => Either[String, E]
   ): Future[Either[ToolError[E], ToolInvokeResult]] =
     input match {
       case Left(error)   => Future.successful(Left(error))
       case Right(record) => invokeAndAwait(rpc, commandPath, record, stdin, decodeError)
+    }
+
+  def start[E, T](
+    rpc: ToolRpcTransport,
+    commandPath: List[String],
+    input: Either[ToolError[Nothing], TypedSchemaValue],
+    stdin: Option[ToolInputStream],
+    decodeError: NamedToolError => Either[String, E]
+  )(decode: ToolInvokeResult => Either[ToolError[E], T]): Either[ToolError[E], ToolInvocation[E, T]] =
+    input.left.map(identity[ToolError[E]]).flatMap { record =>
+      rpc.start(commandPath, record, stdin, stdout = true).left.map(mapRpcFailure(_, decodeError)).flatMap { started =>
+        started.stdout.toRight {
+          started.cancel()
+          protocolError("tool invocation did not create declared stdout stream")
+        }.map { stream =>
+          ToolInvocation(
+            stream,
+            started.result.map(_.left.map(mapRpcFailure(_, decodeError)).flatMap(decode)),
+            started.cancel
+          )
+        }
+      }
     }
 
   /**
@@ -381,17 +436,16 @@ object ToolClientRuntime {
 
   def decodeUnitResult(result: ToolInvokeResult): Either[ToolError[Nothing], Unit] =
     for {
-      _ <- requireNoStdout(result)
       _ <- requireNoValue(result)
     } yield ()
 
   def decodeValueResult[T](
     result: ToolInvokeResult,
-    from: FromSchema[T]
+    from: FromSchema[T],
+    expected: golem.schema.SchemaGraph
   ): Either[ToolError[Nothing], T] =
     for {
-      _       <- requireNoStdout(result)
-      decoded <- requireValue(result, from)
+      decoded <- requireValue(result, from, expected)
     } yield decoded
 
   def decodeStdoutResult(result: ToolInvokeResult): Either[ToolError[Nothing], ToolOutputStream] =
@@ -402,29 +456,28 @@ object ToolClientRuntime {
 
   def decodeValueStdoutResult[T](
     result: ToolInvokeResult,
-    from: FromSchema[T]
+    from: FromSchema[T],
+    expected: golem.schema.SchemaGraph
   ): Either[ToolError[Nothing], (T, ToolOutputStream)] =
     for {
       stdout  <- requireStdout(result)
-      decoded <- requireValue(result, from)
+      decoded <- requireValue(result, from, expected)
     } yield (decoded, stdout)
 
   private def requireStdout(result: ToolInvokeResult): Either[ToolError[Nothing], ToolOutputStream] =
     result.stdout.toRight(protocolError("tool result did not contain declared stdout stream"))
 
-  private def requireNoStdout(result: ToolInvokeResult): Either[ToolError[Nothing], Unit] =
-    if (result.stdout.isDefined)
-      Left(protocolError("tool result unexpectedly contained stdout stream"))
-    else Right(())
-
   private def requireValue[T](
     result: ToolInvokeResult,
-    from: FromSchema[T]
+    from: FromSchema[T],
+    expected: golem.schema.SchemaGraph
   ): Either[ToolError[Nothing], T] =
     result.result match {
       case None        => Left(protocolError("tool result did not contain a value"))
       case Some(value) =>
-        from.fromValue(value.value).left.map(e => protocolError(e.message))
+        if (!ToolGraphs.schemaShapesMatch(value.graph, expected))
+          Left(protocolError("tool result schema does not match the generated client's expected result schema"))
+        else from.fromValue(value.value).left.map(e => protocolError(e.message))
     }
 
   private def requireNoValue(result: ToolInvokeResult): Either[ToolError[Nothing], Unit] =

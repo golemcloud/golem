@@ -19,6 +19,7 @@ pub mod agent_secret;
 pub mod application;
 pub mod auth;
 pub mod builtin_plugin_provisioner;
+pub mod builtin_tool_provisioner;
 pub mod card;
 pub mod component;
 pub mod component_compilation;
@@ -29,19 +30,25 @@ pub mod domain_registration;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_state;
+pub mod environment_tool_grant;
+pub mod environment_tool_middleware_grant;
 pub mod http_api_deployment;
 pub mod mcp_deployment;
+pub mod native_tool_catalog;
 pub mod oauth2;
 pub mod oauth2_github_client;
 pub mod permission_share;
 pub mod plan;
 pub mod plugin_registration;
 pub mod registry_change_notifier;
+pub(crate) mod release_grant_lifecycle;
 pub mod reports;
 pub mod resource_definition;
 pub mod retry_policy;
 pub mod security_scheme;
 pub mod token;
+pub mod tool_middleware_release;
+pub mod tool_release;
 
 /// Run CPU-heavy work on the global Rayon pool, returning a Future
 pub async fn run_cpu_bound_work<F, R>(f: F) -> R

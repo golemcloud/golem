@@ -105,11 +105,11 @@ impl StreamingClient for StreamingClientImpl {
             }
             Ok::<_, String>(result)
         };
-        let timeout = async {
-            golem_rust::wasip3::clocks::monotonic_clock::wait_for(60_000_000_000).await;
-            Err("Timeout".to_string())
-        };
-        let (Ok(result) | Err(result)) = ((r1, r2, r3, timeout)).race().await;
+        let (Ok(result) | Err(result)) = async {
+            let (r1, r2, r3) = (r1, r2, r3).join().await;
+            Ok::<_, String>(format!("{}{}{}", r1?, r2?, r3?))
+        }
+        .await;
         result
     }
 }

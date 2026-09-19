@@ -162,8 +162,13 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::Error(params) => {
             let _ = writeln!(result, "ERROR");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(result, "{pad}kind:              {:?}", params.kind);
             let _ = writeln!(result, "{pad}error:             {}", params.error);
             let _ = writeln!(result, "{pad}retry from:        {}", params.retry_from);
+        }
+        PublicOplogEntry::RecoverySucceeded(params) => {
+            let _ = writeln!(result, "RECOVERY SUCCEEDED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
         }
         PublicOplogEntry::NoOp(params) => {
             let _ = writeln!(result, "NOP");
@@ -274,11 +279,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
             let _ = writeln!(result, "{pad}increase:          {}", params.delta,);
         }
-        PublicOplogEntry::FilesystemStorageUsageUpdate(params) => {
-            let _ = writeln!(result, "STORAGE USAGE UPDATE");
-            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
-            let _ = writeln!(result, "{pad}delta:             {}", params.delta);
-        }
         PublicOplogEntry::CreateResource(params) => {
             let _ = writeln!(result, "CREATE RESOURCE");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
@@ -297,6 +297,10 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         }
         PublicOplogEntry::Restart(params) => {
             let _ = writeln!(result, "RESTART");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+        }
+        PublicOplogEntry::Resumed(params) => {
+            let _ = writeln!(result, "RESUMED");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
         }
         PublicOplogEntry::ActivatePlugin(params) => {

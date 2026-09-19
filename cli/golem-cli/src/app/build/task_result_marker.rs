@@ -16,6 +16,7 @@ use crate::app::build::task_result_marker::TaskResultMarkerHashSourceKind::{Hash
 use crate::bridge_gen::BridgeMode;
 use crate::fs;
 use crate::log::log_warn_action;
+use crate::model::app::BridgeSdkTargetSource;
 use crate::model::app_raw;
 use crate::model::app_raw::{
     GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
@@ -322,7 +323,7 @@ impl TaskResultMarkerHashSource for GetServerIfsFileHash<'_> {
 }
 
 pub struct GenerateBridgeSdkMarkerHash<'a> {
-    pub component_name: &'a ComponentName,
+    pub source: &'a BridgeSdkTargetSource,
     pub target_name: &'a str,
     pub kind: &'static str,
     pub language: &'a GuestLanguage,
@@ -340,8 +341,8 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
         Ok(HashFromString(format!(
-            "componentName={}\ntargetName={}\nkind={}\nlanguage={}\nbridgeMode={}",
-            self.component_name,
+            "source={}\ntargetName={}\nkind={}\nlanguage={}\nbridgeMode={}\ngeneratorVersion=1",
+            serde_json::to_string(self.source)?,
             self.target_name,
             self.kind,
             self.language.id(),
@@ -546,16 +547,19 @@ impl TaskResultMarker {
 mod tests {
     use super::*;
     use crate::bridge_gen::BridgeMode;
+    use golem_common::model::diff::Hash;
+    use golem_common::model::tool_release::ToolReleaseId;
     use test_r::test;
 
     #[test]
     fn bridge_sdk_marker_hash_source_includes_bridge_mode() {
         let component_name = ComponentName("app:producer".to_string());
+        let source = BridgeSdkTargetSource::local(component_name);
         let agent_type_name = AgentTypeName("AlphaAgent".to_string());
         let language = GuestLanguage::Rust;
 
         let external_source = GenerateBridgeSdkMarkerHash {
-            component_name: &component_name,
+            source: &source,
             target_name: agent_type_name.as_str(),
             kind: "agent",
             language: &language,
@@ -564,7 +568,7 @@ mod tests {
         .source()
         .unwrap();
         let guest_source = GenerateBridgeSdkMarkerHash {
-            component_name: &component_name,
+            source: &source,
             target_name: agent_type_name.as_str(),
             kind: "agent",
             language: &language,
@@ -591,11 +595,15 @@ mod tests {
         let marker_dir = tempfile::tempdir().unwrap();
         let language = GuestLanguage::Rust;
         let bridge_mode = BridgeMode::External;
+        let left_source =
+            BridgeSdkTargetSource::local(ComponentName::try_from("app:producer-a").unwrap());
+        let right_source =
+            BridgeSdkTargetSource::local(ComponentName::try_from("app:producer").unwrap());
 
         let left_marker = TaskResultMarker::new(
             marker_dir.path(),
             GenerateBridgeSdkMarkerHash {
-                component_name: &ComponentName::try_from("app:producer-a").unwrap(),
+                source: &left_source,
                 target_name: "b",
                 kind: "agent",
                 language: &language,
@@ -606,7 +614,7 @@ mod tests {
         let right_marker = TaskResultMarker::new(
             marker_dir.path(),
             GenerateBridgeSdkMarkerHash {
-                component_name: &ComponentName::try_from("app:producer").unwrap(),
+                source: &right_source,
                 target_name: "a-b",
                 kind: "agent",
                 language: &language,
@@ -617,6 +625,49 @@ mod tests {
 
         assert_ne!(left_marker.hash_hex, right_marker.hash_hex);
         assert_ne!(left_marker.marker_file_path, right_marker.marker_file_path);
+    }
+
+    #[test]
+    fn remote_release_bridge_marker_covers_release_and_metadata_identity() {
+        let release_id = ToolReleaseId::new();
+        let remote_source = |release_id, metadata_version: &str, metadata: &[u8], source: &[u8]| {
+            BridgeSdkTargetSource::RemoteRelease {
+                release_id,
+                version: "1.2.0".to_string(),
+                metadata_version: metadata_version.to_string(),
+                metadata_digest: Hash::new(blake3::hash(metadata)),
+                source_digest: Hash::new(blake3::hash(source)),
+                manifest_source: PathBuf::from("golem.yaml"),
+            }
+        };
+        let base = remote_source(release_id, "0.1.0", b"metadata-a", b"source-a");
+        let base_marker = bridge_marker_source(&base);
+
+        for changed in [
+            remote_source(ToolReleaseId::new(), "0.1.0", b"metadata-a", b"source-a"),
+            remote_source(release_id, "0.2.0", b"metadata-a", b"source-a"),
+            remote_source(release_id, "0.1.0", b"metadata-b", b"source-a"),
+            remote_source(release_id, "0.1.0", b"metadata-a", b"source-b"),
+        ] {
+            assert_ne!(base_marker, bridge_marker_source(&changed));
+        }
+    }
+
+    fn bridge_marker_source(source: &BridgeSdkTargetSource) -> String {
+        let language = GuestLanguage::Rust;
+        let marker = GenerateBridgeSdkMarkerHash {
+            source,
+            target_name: "search",
+            kind: "tool",
+            language: &language,
+            bridge_mode: BridgeMode::Guest,
+        }
+        .source()
+        .unwrap();
+        let TaskResultMarkerHashSourceKind::HashFromString(marker) = marker else {
+            panic!("expected bridge marker to hash from string");
+        };
+        marker
     }
 
     #[test]

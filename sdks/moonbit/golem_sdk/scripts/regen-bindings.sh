@@ -32,7 +32,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-readonly WIT_BINDGEN_COMMIT="ca14d9bbd6c6474dfbcdb68806fb4e30f1ee2efb"
+readonly WIT_BINDGEN_COMMIT="36866deb07e878430f61d02a28c52fac0fab5355"
 readonly WIT_BINDGEN_SHORT_COMMIT="${WIT_BINDGEN_COMMIT:0:9}"
 
 wit_bindgen_version="$(wit-bindgen --version)"

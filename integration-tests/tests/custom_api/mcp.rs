@@ -325,6 +325,11 @@ async fn list_tools(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()>
     assert!(tool_names.contains(&"WeatherAgent-get_weather_report_for_city_text".to_string()));
     assert!(tool_names.contains(&"WeatherAgent-get_snow_fall_image_for_city".to_string()));
     assert!(tool_names.contains(&"WeatherAgent-get_lat_long_for_city".to_string()));
+    assert!(
+        !tool_names.contains(&"WeatherAgent-stream_weather_report_for_city".to_string()),
+        "Streaming methods must not be exported as tools: {:?}",
+        tool_names
+    );
 
     // WeatherAgentSingleton tools (no constructor params)
     assert!(tool_names.contains(&"WeatherAgentSingleton-get_weather_report_for_city".to_string()));
@@ -338,7 +343,8 @@ async fn list_tools(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<()>
     assert!(tool_names.contains(&"WeatherAgentSingleton-get_snow_fall_image_for_city".to_string()));
     assert!(tool_names.contains(&"WeatherAgentSingleton-get_lat_long_for_city".to_string()));
 
-    // StaticResource and DynamicResource methods have no input params -> exposed as resources, not tools
+    // StaticResource and DynamicResource methods are read-only and have no input params,
+    // so they are exposed as resources, not tools.
     assert!(!tool_names.iter().any(|n| n.starts_with("StaticResource")));
     assert!(!tool_names.iter().any(|n| n.starts_with("DynamicResource")));
 
@@ -557,6 +563,9 @@ async fn list_resources(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result
     assert!(
         resource_uris.contains(&"golem://StaticResource/get_static_now_fall_image".to_string())
     );
+    assert!(
+        !resource_uris.contains(&"golem://WeatherAgent/stream_weather_report_for_city".to_string())
+    );
 
     assert!(
         !resource_uris
@@ -593,6 +602,10 @@ async fn list_resource_templates(#[dimension(db)] ctx: &McpTestContext) -> anyho
     );
     assert!(
         template_uris.contains(&"golem://DynamicResource/get_snow_fall_image/{name}".to_string())
+    );
+    assert!(
+        !template_uris
+            .contains(&"golem://WeatherAgent/stream_weather_report_for_city/{name}".to_string())
     );
 
     Ok(())
@@ -755,6 +768,11 @@ async fn list_prompts(#[dimension(db)] ctx: &McpTestContext) -> anyhow::Result<(
     assert!(
         prompt_names.contains(&"WeatherAgent-get_weather_report_for_city".to_string()),
         "Expected WeatherAgent-get_weather_report_for_city prompt in {:?}",
+        prompt_names
+    );
+    assert!(
+        !prompt_names.contains(&"WeatherAgent-stream_weather_report_for_city".to_string()),
+        "Streaming method prompts must not be exported: {:?}",
         prompt_names
     );
 

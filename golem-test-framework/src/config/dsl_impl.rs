@@ -60,7 +60,7 @@ use golem_common::model::worker::{
 use golem_common::model::{
     AgentEvent, AgentFilter, AgentId, IdempotencyKey, OplogIndex, PromiseId, ScanCursor,
 };
-use golem_common::schema::TypedSchemaValue;
+use golem_common::schema::{ExternalSchemaValue, TypedSchemaValue};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -270,6 +270,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         name: &str,
         unique: bool,
         mut agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfigCreation>,
+        tool_agent_bindings: BTreeMap<
+            ToolName,
+            BTreeMap<AgentTypeName, golem_common::model::tool::ToolBindingInput>,
+        >,
         files_for_archive: Vec<IFSEntry>,
     ) -> anyhow::Result<ComponentDto> {
         let component_directory = self.deps.component_directory();
@@ -286,6 +290,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         let extracted_metadata = extract_component_metadata(&source_path, false, true).await?;
         let agent_types = extracted_metadata.agent_types;
         let tools = extracted_metadata.tools;
+        let tool_middlewares = extracted_metadata.tool_middlewares;
         for agent_type in &agent_types {
             agent_type_provision_configs
                 .entry(agent_type.type_name.clone())
@@ -306,6 +311,14 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             (None, None)
         };
 
+        let mut tool_deployment_configs = default_tool_deployment_configs(&tools)?;
+        for (tool_name, agent_bindings) in tool_agent_bindings {
+            let config = tool_deployment_configs
+                .get_mut(&tool_name)
+                .ok_or_else(|| anyhow!("Component does not declare tool {tool_name}"))?;
+            config.agent_bindings.extend(agent_bindings);
+        }
+
         let component = client
             .create_component(
                 &environment_id.0,
@@ -313,8 +326,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     component_name,
                     agent_types,
                     agent_type_provision_configs,
-                    tool_deployment_configs: default_tool_deployment_configs(&tools)?,
+                    tool_deployment_configs,
                     tools,
+                    tool_middlewares,
+                    tool_middleware_provision_configs: BTreeMap::new(),
                 },
                 File::open(source_path).await?,
                 maybe_files_archive,
@@ -413,6 +428,10 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     tools: updated_wasm
                         .as_ref()
                         .map(|(_wasm, metadata)| metadata.tools.clone()),
+                    tool_middlewares: updated_wasm
+                        .as_ref()
+                        .map(|(_wasm, metadata)| metadata.tool_middlewares.clone()),
+                    tool_middleware_provision_config_updates: None,
                     tool_deployment_config_updates: updated_wasm
                         .as_ref()
                         .map(|(_wasm, metadata)| {
@@ -500,11 +519,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: agent_id.parameters.value().clone(),
+                    parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
+                        .map_err(anyhow::Error::msg)?,
                     phantom_id: agent_id.phantom_id,
                     config: None,
                     method_name: method_name.to_string(),
-                    method_parameters,
+                    method_parameters: ExternalSchemaValue::try_from(method_parameters)
+                        .map_err(anyhow::Error::msg)?,
                     mode: golem_client::model::AgentInvocationMode::Schedule,
                     schedule_at: None,
                     idempotency_key: None,
@@ -565,11 +586,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     app_name: app_name.0,
                     env_name: env_name.0,
                     agent_type_name: agent_id.agent_type.0.clone(),
-                    parameters: agent_id.parameters.value().clone(),
+                    parameters: ExternalSchemaValue::try_from(agent_id.parameters.value().clone())
+                        .map_err(anyhow::Error::msg)?,
                     phantom_id: agent_id.phantom_id,
                     config: None,
                     method_name: method_name.to_string(),
-                    method_parameters,
+                    method_parameters: ExternalSchemaValue::try_from(method_parameters)
+                        .map_err(anyhow::Error::msg)?,
                     mode: golem_client::model::AgentInvocationMode::Await,
                     schedule_at: None,
                     idempotency_key: None,
@@ -581,7 +604,7 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         match result.result {
             Some(typed_output) => {
-                let (_graph, value) = typed_output.into_parts();
+                let (_graph, value) = typed_output.into_inner().into_parts();
                 Ok(AgentResult::new(Some(value)))
             }
             None => Ok(AgentResult::new(None)),
@@ -964,6 +987,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
                 &EnvironmentCreation {
                     name: env_name,
                     compatibility_check: false,
+                    tool_compatibility_mode: Default::default(),
                     version_check: false,
                     security_overrides: false,
                 },
@@ -1006,6 +1030,7 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
                 &EnvironmentCreation {
                     name: env_name,
                     compatibility_check: environment_options.compatibility_check,
+                    tool_compatibility_mode: Default::default(),
                     version_check: environment_options.version_check,
                     security_overrides: environment_options.security_overrides,
                 },
@@ -1037,6 +1062,11 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             current_revision: plan.current_revision,
             expected_deployment_hash: plan.deployment_hash,
             version: DeploymentVersion(Uuid::new_v4().to_string()),
+            publish_tools: Vec::new(),
+            remote_tools: Vec::new(),
+            publish_tool_middlewares: Vec::new(),
+            remote_tool_middlewares: Vec::new(),
+            universal_tool_middlewares: Vec::new(),
             agent_secret_defaults: Vec::new(),
             quota_resource_defaults: Vec::new(),
             retry_policy_defaults: Vec::new(),

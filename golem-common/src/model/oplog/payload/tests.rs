@@ -18,6 +18,7 @@ use super::{HostRequestGolemApiRevertAgent, HostRequestGolemRpcInvoke};
 use crate::model::Timestamp;
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::{ComponentId, ComponentRevision};
+use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, SpanId};
 use crate::model::oplog::host_functions::{
@@ -26,7 +27,8 @@ use crate::model::oplog::host_functions::{
 };
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
-    SerializableDateTime, SerializableFileTimes, SerializableHttpErrorCode, SerializableHttpMethod,
+    SerializableCustomToolError, SerializableDateTime, SerializableEntityBodyExecution,
+    SerializableFileTimes, SerializableHttpErrorCode, SerializableHttpMethod,
     SerializableHttpVersion, SerializableIpAddress, SerializableIpAddresses,
     SerializableP3FileSystemError, SerializableP3FsErrorCode, SerializableP3HttpBodyChunk,
     SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
@@ -35,29 +37,32 @@ use crate::model::oplog::types::{
     SerializableP3SocketErrorCode, SerializableP3TcpChunk, SerializableP3UdpDatagram,
     SerializableResponseHeaders, SerializableRpcError, SerializableScheduleId,
     SerializableStreamError, SerializableToolError, SerializableToolInvocationResult,
-    SerializableToolRpcError,
+    SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
+    SerializableToolStructuredResult,
 };
 use crate::model::oplog::{
     HostPayloadPair, HostRequest, HostRequestCliEnvironmentGetEnvironment,
-    HostRequestEntityInvocation, HostRequestFileSystemPath, HostRequestGolemApiOplogEnrich,
+    HostRequestEntityInvocation, HostRequestFileSystemPath,
+    HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemApiOplogEnrich,
     HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
-    HostRequestGolemToolInvoke, HostRequestKVCacheKey, HostRequestKVCacheKeyAndTtl,
-    HostRequestKVCacheKeyValueAndTtl, HostRequestMonotonicClockDuration,
-    HostRequestMonotonicClockTimestamp, HostRequestNoInput,
+    HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke, HostRequestKVCacheKey,
+    HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
+    HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
     HostRequestP3SocketsConnect, HostRequestP3SocketsUdpSend, HostRequestRandomBytes, HostResponse,
     HostResponseCliEnvironmentGetEnvironment, HostResponseEntityInvocation,
-    HostResponseGolemApiOplogChunk, HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit,
-    HostResponseGolemRpcActivate, HostResponseGolemRpcScheduledInvocation,
-    HostResponseGolemRpcScheduledInvocationCompat, HostResponseGolemToolInvokeResult,
-    HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
-    HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
-    HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
-    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
-    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
-    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
-    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
+    HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
+    HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcScheduledInvocationCompat,
+    HostResponseGolemToolInvokeResult, HostResponseGolemToolTool, HostResponseGolemToolTools,
+    HostResponseGolemToolUnitOrFailure, HostResponseKVDelete, HostResponseKVGet,
+    HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
+    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
+    HostResponseP3FileSystemWriteAdmission, HostResponseP3HttpClientConsumeBodyChunk,
+    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
+    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
+    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsConnect,
+    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
     HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
@@ -67,7 +72,9 @@ use crate::model::worker::{
 };
 use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
 use crate::schema::tool::{CommandNode, CommandTree, DiscoveredTool, Doc, Globals, Tool};
-use crate::schema::{IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+use crate::schema::{
+    FromSchema, IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
+};
 use http::Version;
 use iso8601_timestamp as iso_ts;
 use proptest::collection::vec;
@@ -477,6 +484,16 @@ fn entity_invocation_host_payload_pair_roundtrips() {
         HostResponseEntityInvocation {
             result: Ok(empty_value()),
         },
+    );
+}
+
+#[test]
+fn agent_type_by_agent_id_host_payload_pair_roundtrips() {
+    assert_host_payload_pair_roundtrip::<host_functions::GolemAgentGetAgentTypeByAgentId>(
+        HostRequestGolemAgentGetAgentTypeByAgentId {
+            agent_id: "Counter(main)".to_string(),
+        },
+        HostResponseGolemAgentAgentType { result: Ok(None) },
     );
 }
 
@@ -1098,6 +1115,7 @@ where
 
 fn discovered_tool(name: &str) -> DiscoveredTool {
     DiscoveredTool {
+        lookup_name: name.to_string(),
         definition: Tool {
             version: "1.0.0".to_string(),
             commands: CommandTree {
@@ -1203,7 +1221,6 @@ fn tool_invocation_host_payload_pairs_roundtrip() {
     let response = HostResponseGolemToolInvokeResult {
         result: Ok(SerializableToolInvocationResult {
             result: Some("match".to_string().into_typed_schema_value().unwrap()),
-            stdout: Some(b"line one\nline two\n".to_vec()),
         }),
     };
 
@@ -1243,6 +1260,165 @@ fn tool_invocation_host_payload_pairs_roundtrip() {
             )),
         },
     );
+}
+
+#[test]
+fn tool_predispatch_rejection_payload_roundtrips_with_selected_error() {
+    let error = SerializableToolRpcError::RemoteToolError(Box::new(
+        SerializableToolError::InvalidInput("malformed typed value".to_string()),
+    ));
+    let terminal = SerializableToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Skipped,
+        result: Err(error.clone()),
+    };
+    let request = HostRequestGolemToolInvocationRejected {
+        attempt_ordinal: 11,
+        tool_name: "grep".to_string(),
+        command_path: vec!["files".to_string(), "search".to_string()],
+        input: None,
+        input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaValue),
+        has_stdin: true,
+        has_stdout: false,
+        call_mode: EntityCallMode::Asynchronous,
+        error,
+    };
+    let response = HostResponseEntityInvocation {
+        result: Ok(terminal.into_typed_schema_value().unwrap()),
+    };
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolInvocationRejected>(
+        request.clone(),
+        response.clone(),
+    );
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolInvocationRejected>(
+        request, response,
+    );
+}
+
+#[test]
+fn named_custom_tool_error_payload_roundtrips() {
+    let payload = ().into_typed_schema_value().unwrap();
+    let error = SerializableToolRpcError::RemoteToolError(Box::new(
+        SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+            name: "not-found".to_string(),
+            payload,
+        })),
+    ));
+    let request = HostRequestGolemToolInvocationRejected {
+        attempt_ordinal: 1,
+        tool_name: "grep".to_string(),
+        command_path: Vec::new(),
+        input: None,
+        input_decode_failure: None,
+        has_stdin: false,
+        has_stdout: false,
+        call_mode: EntityCallMode::Synchronous,
+        error: error.clone(),
+    };
+    let response = HostResponseEntityInvocation {
+        result: Ok(SerializableToolOperationTerminal {
+            body_execution: SerializableEntityBodyExecution::Executed,
+            result: Err(error),
+        }
+        .into_typed_schema_value()
+        .unwrap()),
+    };
+
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolInvocationRejected>(
+        request, response,
+    );
+}
+
+#[test]
+fn tool_operation_terminal_is_schema_native_and_excludes_stdout() {
+    let terminal = SerializableToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Skipped,
+        result: Err(SerializableToolRpcError::ResourceExhausted(
+            "max_tool_attachment_bytes".to_string(),
+        )),
+    };
+    let typed = terminal.clone().into_typed_schema_value().unwrap();
+    let decoded = SerializableToolOperationTerminal::from_value(typed.value()).unwrap();
+
+    assert_eq!(decoded, terminal);
+    let success = SerializableToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Executed,
+        result: Ok(SerializableToolStructuredResult { result: None }),
+    };
+    assert_eq!(
+        SerializableToolOperationTerminal::from_value(
+            success.clone().into_typed_schema_value().unwrap().value(),
+        )
+        .unwrap(),
+        success
+    );
+
+    let structured = "structured result"
+        .to_string()
+        .into_typed_schema_value()
+        .unwrap();
+    let success = SerializableToolOperationTerminal {
+        body_execution: SerializableEntityBodyExecution::Executed,
+        result: Ok(SerializableToolStructuredResult {
+            result: Some(SerializableToolResultValue::from_typed(&structured).unwrap()),
+        }),
+    };
+    let typed = success.into_typed_schema_value().unwrap();
+    let decoded = SerializableToolOperationTerminal::from_value(typed.value()).unwrap();
+    let decoded = decoded
+        .result
+        .unwrap()
+        .result
+        .unwrap()
+        .into_typed()
+        .unwrap();
+    assert_eq!(decoded, structured);
+}
+
+#[test]
+fn appended_tool_rpc_error_cases_preserve_legacy_discriminants() {
+    #[derive(Clone, Debug, PartialEq, desert_rust::BinaryCodec)]
+    #[desert(evolution())]
+    enum LegacyToolRpcError {
+        ProtocolError(String),
+        Denied(String),
+        NotFound(String),
+        RemoteInternalError(String),
+        RemoteToolError(Box<SerializableToolError>),
+    }
+
+    let legacy = [
+        (
+            LegacyToolRpcError::ProtocolError("protocol".to_string()),
+            SerializableToolRpcError::ProtocolError("protocol".to_string()),
+        ),
+        (
+            LegacyToolRpcError::Denied("denied".to_string()),
+            SerializableToolRpcError::Denied("denied".to_string()),
+        ),
+        (
+            LegacyToolRpcError::NotFound("missing".to_string()),
+            SerializableToolRpcError::NotFound("missing".to_string()),
+        ),
+        (
+            LegacyToolRpcError::RemoteInternalError("failed".to_string()),
+            SerializableToolRpcError::RemoteInternalError("failed".to_string()),
+        ),
+        (
+            LegacyToolRpcError::RemoteToolError(Box::new(SerializableToolError::InvalidInput(
+                "bad".to_string(),
+            ))),
+            SerializableToolRpcError::RemoteToolError(Box::new(
+                SerializableToolError::InvalidInput("bad".to_string()),
+            )),
+        ),
+    ];
+
+    for (legacy, current) in legacy {
+        assert_eq!(
+            desert_rust::serialize_to_byte_vec(&legacy).unwrap(),
+            desert_rust::serialize_to_byte_vec(&current).unwrap()
+        );
+    }
 }
 
 #[test]

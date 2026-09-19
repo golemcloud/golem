@@ -64,21 +64,17 @@ object MethodBinding {
         input: JsSchemaValueTree,
         principal: Principal
       ): js.Promise[Option[JsSchemaValueTree]] = {
-        val future =
-          SchemaPayload
-            .decode[In](input)(inputCodec)
-            .fold(
-              err =>
-                Future
-                  .failed[Option[JsSchemaValueTree]](js.JavaScriptException(JsAgentError.invalidInput(err.toString))),
-              value =>
-                handler(instance, value, principal).flatMap { out =>
-                  outputCodec.into match {
-                    case None       => Future.successful(None)
-                    case Some(into) => SchemaPayload.encodeAsync(out)(into).map(Some(_))
-                  }
-                }
-            )
+        val future = SchemaPayload.withDecodedInput[In, Option[JsSchemaValueTree]](input) {
+          case Left(err) =>
+            Future.failed(js.JavaScriptException(JsAgentError.invalidInput(err.toString)))
+          case Right(value) =>
+            handler(instance, value, principal).flatMap { out =>
+              outputCodec.into match {
+                case None       => Future.successful(None)
+                case Some(into) => SchemaPayload.encodeAsync(out)(into).map(Some(_))
+              }
+            }
+        }(inputCodec)
         FutureInterop.toPromise(future)
       }
     }

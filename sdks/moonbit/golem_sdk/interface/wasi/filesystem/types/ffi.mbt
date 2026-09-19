@@ -1105,8 +1105,7 @@ fn wasmWasiFilesystemTypes030MethodDescriptorWriteViaStreamStream0StreamCommit(h
                         }
                   }
             }
-            run_producer() catch {
-                  _ =>
+            errdefer {
                   if relay_source {
                         @async-core.protect_from_cancel(
                         () => stream.reject(cleanup_value),
@@ -1115,7 +1114,12 @@ fn wasmWasiFilesystemTypes030MethodDescriptorWriteViaStreamStream0StreamCommit(h
                               _ => ()
                         }
                   }
+                  @async-core.protect_from_cancel(
+                  () => close_writer_serialized(),
+                  resume_on_cancel=true,
+                  )
             }
+            run_producer()
             // A retained Sink may still own an in-flight canonical write after its
             // producer returns. Do not drop the writable endpoint until that write
             // has reached a terminal event and released its staging buffer.
@@ -2006,8 +2010,7 @@ fn wasmWasiFilesystemTypes030MethodDescriptorAppendViaStreamStream0StreamCommit(
                         }
                   }
             }
-            run_producer() catch {
-                  _ =>
+            errdefer {
                   if relay_source {
                         @async-core.protect_from_cancel(
                         () => stream.reject(cleanup_value),
@@ -2016,7 +2019,12 @@ fn wasmWasiFilesystemTypes030MethodDescriptorAppendViaStreamStream0StreamCommit(
                               _ => ()
                         }
                   }
+                  @async-core.protect_from_cancel(
+                  () => close_writer_serialized(),
+                  resume_on_cancel=true,
+                  )
             }
+            run_producer()
             // A retained Sink may still own an in-flight canonical write after its
             // producer returns. Do not drop the writable endpoint until that write
             // has reached a terminal event and released its staging buffer.

@@ -32,13 +32,13 @@ pub fn schema_value_from_wit(@types.SchemaValueTree, SchemaValueResourceDrops) -
 
 pub fn schema_value_to_wit(SchemaValue) -> @types.SchemaValueTree raise SchemaModelError
 
-pub async fn schema_value_to_wit_async(SchemaValue) -> @types.SchemaValueTree raise SchemaModelError
+pub async fn schema_value_to_wit_async(SchemaValue) -> @types.SchemaValueTree
 
 pub fn typed_schema_value_from_wit(@types.TypedSchemaValue, SchemaValueResourceDrops) -> TypedSchemaValue raise SchemaModelError
 
 pub fn typed_schema_value_to_wit(TypedSchemaValue) -> @types.TypedSchemaValue raise SchemaModelError
 
-pub async fn typed_schema_value_to_wit_async(TypedSchemaValue) -> @types.TypedSchemaValue raise SchemaModelError
+pub async fn typed_schema_value_to_wit_async(TypedSchemaValue) -> @types.TypedSchemaValue
 
 pub fn validate_graph(SchemaGraph) -> Array[SchemaError]
 
@@ -132,8 +132,7 @@ pub(all) struct GuestSchemaValueStreamHandle {
 pub fn GuestSchemaValueStreamHandle::from_native(@async-core.Stream[@types.SchemaValueTree]) -> Self
 pub fn GuestSchemaValueStreamHandle::from_wrapped(@types.SchemaValueStream) -> Self
 pub fn GuestSchemaValueStreamHandle::is_present(Self) -> Bool
-pub fn GuestSchemaValueStreamHandle::put_native(Self, @async-core.Stream[@types.SchemaValueTree]) -> Unit
-pub async fn GuestSchemaValueStreamHandle::take_or_unwrap_native(Self) -> @async-core.Stream[@types.SchemaValueTree] raise SchemaModelError
+pub async fn GuestSchemaValueStreamHandle::read_native(Self) -> FixedArray[@types.SchemaValueTree]?
 
 pub(all) struct GuestSecretHandle {
   // private fields

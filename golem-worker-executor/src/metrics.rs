@@ -86,6 +86,11 @@ const SCHEDULER_TICK_DURATION_BUCKETS: &[f64; 24] = &[
     2.5, 3.0, 5.0, 10.0, 15.0, 20.0, 30.0, 60.0,
 ];
 
+/// Tick-duration buckets for the oplog sweep. They reach past the shared set's one minute, so
+/// ticks against a slow store stay measurable.
+const OPLOG_SWEEP_TICK_BUCKETS: &[f64; 9] =
+    &[0.01, 0.1, 1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0];
+
 /// Buckets for the size of a single `memory.grow` allocation. Deliberately
 /// fine-grained in the 1-32 MiB band where typical guest grows cluster, so
 /// that p90/p99 quantiles are not pinned to a coarse 4-16 MiB bucket edge.
@@ -339,7 +344,7 @@ pub mod workers {
         .unwrap();
         pub static ref WORKER_ADMISSION_WAIT_SECONDS: HistogramVec = register_histogram_vec!(
             "worker_admission_wait_seconds",
-            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory, filesystem_storage). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
+            "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
             &["executor_id", "phase"],
             crate::metrics::ADMISSION_WAIT_BUCKETS.to_vec()
         )
@@ -447,6 +452,29 @@ pub mod workers {
             &["reason"]
         )
         .unwrap();
+        static ref INVOCATION_RESULT_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
+            "invocation_result_resolution_total",
+            "Invocation-result resolutions by the lookup path and outcome",
+            &["outcome"]
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_chunks_total",
+            "Physical invocation-result index catch-up chunks completed"
+        )
+        .unwrap();
+        static ref INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL: Counter = register_counter!(
+            "invocation_result_index_catch_up_entries_total",
+            "Oplog entries processed while catching up the physical invocation-result index"
+        )
+        .unwrap();
+        static ref AGENT_FILESYSTEM_LIFECYCLE_SECONDS: HistogramVec = register_histogram_vec!(
+            "golem_agent_filesystem_lifecycle_seconds",
+            "Time spent creating or deleting an agent runtime filesystem, labelled by operation and outcome",
+            &["operation", "outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
     }
 
     pub fn record_worker_call(api_name: &'static str) {
@@ -508,6 +536,27 @@ pub mod workers {
         AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL
             .with_label_values(&[reason])
             .inc();
+    }
+
+    pub fn record_invocation_result_resolution(outcome: &'static str) {
+        INVOCATION_RESULT_RESOLUTION_TOTAL
+            .with_label_values(&[outcome])
+            .inc();
+    }
+
+    pub fn record_invocation_result_index_catch_up(entries: usize) {
+        INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL.inc();
+        INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL.inc_by(entries as f64);
+    }
+
+    pub fn record_agent_filesystem_lifecycle(
+        operation: &'static str,
+        success: bool,
+        elapsed: Duration,
+    ) {
+        AGENT_FILESYSTEM_LIFECYCLE_SECONDS
+            .with_label_values(&[operation, if success { "success" } else { "failure" }])
+            .observe(elapsed.as_secs_f64());
     }
 
     pub fn set_worker_count_by_status(status: &'static str, count: f64) {
@@ -659,7 +708,6 @@ pub mod workers {
         ResolveComponentCharge,
         ConcurrencySlot,
         Memory,
-        FilesystemStorage,
     }
 
     impl AdmissionPhase {
@@ -668,7 +716,6 @@ pub mod workers {
                 AdmissionPhase::ResolveComponentCharge => "resolve_component_charge",
                 AdmissionPhase::ConcurrencySlot => "concurrency_slot",
                 AdmissionPhase::Memory => "memory",
-                AdmissionPhase::FilesystemStorage => "filesystem_storage",
             }
         }
     }
@@ -916,10 +963,55 @@ pub mod sharding {
     lazy_static! {
         static ref ASSIGNED_SHARD_COUNT: Gauge =
             register_gauge!("assigned_shard_count", "Current number of assigned shards").unwrap();
+        static ref STALE_SHARD_DELIVERY_TOTAL: CounterVec = register_counter_vec!(
+            "stale_shard_delivery_total",
+            "Number of shard deliveries dropped for naming a revision older than the last applied",
+            &["delivery"]
+        )
+        .unwrap();
     }
 
     pub fn record_assigned_shard_count(size: usize) {
         ASSIGNED_SHARD_COUNT.set(size as f64);
+    }
+
+    /// Which of the four shard deliveries a measurement is about, as the `delivery` label.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ShardDelivery {
+        Register,
+        Assign,
+        Revoke,
+        Renewal,
+    }
+
+    impl ShardDelivery {
+        fn label(self) -> &'static str {
+            match self {
+                Self::Register => "register",
+                Self::Assign => "assign",
+                Self::Revoke => "revoke",
+                Self::Renewal => "renewal",
+            }
+        }
+    }
+
+    /// A delivery was dropped for arriving older than the last one applied.
+    ///
+    /// One of these is not a fault: a push and a renewal response that cross on the network
+    /// always produce one, and dropping the older is the point of the revision gate. A sustained
+    /// rate is the fault, and a warning per occurrence does not make a rate visible.
+    pub fn record_stale_shard_delivery(delivery: ShardDelivery) {
+        STALE_SHARD_DELIVERY_TOTAL
+            .with_label_values(&[delivery.label()])
+            .inc();
+    }
+
+    /// How many deliveries of `delivery` have been dropped as stale.
+    #[cfg(test)]
+    pub fn stale_shard_delivery_count(delivery: ShardDelivery) -> f64 {
+        STALE_SHARD_DELIVERY_TOTAL
+            .with_label_values(&[delivery.label()])
+            .get()
     }
 }
 
@@ -1119,9 +1211,29 @@ pub mod oplog {
             &["account_id", "environment_id"]
         )
         .unwrap();
+        static ref OPLOG_SWEEP_OUTCOME_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_sweep_outcome_total",
+            "Keys the oplog sweep examined, by what it decided about each. One outcome per key, \
+             so the outcomes sum to what a tick decided",
+            &["route", "outcome"]
+        )
+        .unwrap();
+        static ref OPLOG_SWEEP_TICK_TIME: HistogramVec = register_histogram_vec!(
+            "oplog_sweep_tick_seconds",
+            "Time taken by one oplog sweep tick",
+            &["route"],
+            crate::metrics::OPLOG_SWEEP_TICK_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref OPLOG_SWEEP_TRUNCATED_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_sweep_truncated_total",
+            "Oplog sweep ticks that hit a budget or their deadline before reaching the end of the namespace",
+            &["route"]
+        )
+        .unwrap();
         static ref OPLOG_STORAGE_RETRY_TOTAL: CounterVec = register_counter_vec!(
             "oplog_storage_retry_total",
-            "Number of oplog storage operation retries due to transient errors",
+            "Number of oplog storage operation retries due to transient errors or indeterminate writes",
             &["op"]
         )
         .unwrap();
@@ -1141,6 +1253,25 @@ pub mod oplog {
         OPLOG_STORAGE_RETRY_TOTAL
             .with_label_values(&[op_name])
             .inc();
+    }
+
+    pub fn record_oplog_sweep_outcome(route: &str, outcome: &'static str, count: u64) {
+        if count > 0 {
+            OPLOG_SWEEP_OUTCOME_TOTAL
+                .with_label_values(&[route, outcome])
+                .inc_by(count as f64);
+        }
+    }
+
+    pub fn record_oplog_sweep_tick(route: &str, duration: std::time::Duration, truncated: bool) {
+        OPLOG_SWEEP_TICK_TIME
+            .with_label_values(&[route])
+            .observe(duration.as_secs_f64());
+        if truncated {
+            OPLOG_SWEEP_TRUNCATED_TOTAL
+                .with_label_values(&[route])
+                .inc();
+        }
     }
 
     pub fn record_scheduled_archive(duration: std::time::Duration, has_more: bool) {
@@ -1377,7 +1508,7 @@ pub mod durable_stream {
         .unwrap();
         static ref JOURNAL_LAG_EVENTS: Histogram = register_histogram!(
             "golem_durable_stream_journal_lag_events",
-            "Committed source events not yet recorded in the value-only consumer journal",
+            "Committed source events not yet recorded in the value-only consumer journal, sampled at creation, terminal, and at most every 100 ms during consumption",
             EVENT_COUNT_BUCKETS.to_vec()
         )
         .unwrap();

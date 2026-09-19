@@ -13,298 +13,812 @@
 // limitations under the License.
 
 use super::error::ShardManagerError;
-use super::healthcheck::{HealthCheck, get_unhealthy_pods};
-use super::model::{Assignments, RoutingTable};
-use super::persistence::RoutingTablePersistence;
-use super::rebalancing::Rebalance;
-use super::worker_executor::{
-    WorkerExecutorService, assign_shards, revoke_shards, set_shard_assignments,
+use super::healthcheck::{HealthCheck, get_unhealthy_executors};
+use super::model::{
+    ExecutorAddr, ExecutorAddrs, ExecutorId, RegisterAck, ShardAssignmentPush, ShardEpoch,
+    ShardLeaseGrant, ShardLeaseRevision, ShardLeaseState,
 };
+use super::persistence::{ExternalRevision, NO_REVISION, RoutingTablePersistence};
+use super::rebalancing::Rebalance;
+use super::worker_executor::{WorkerExecutorService, assign_shards, revoke_shards};
 use async_rwlock::RwLock;
-use golem_common::model::{Pod, ShardId};
+use chrono::Utc;
+use golem_common::base_model::shard_lease;
+use golem_common::model::ShardId;
 use itertools::Itertools;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinSet;
-use tracing::{Instrument, debug, info, warn};
+use tokio::time::timeout;
+use tracing::{Instrument, debug, error, info, warn};
+
+/// Bounds the startup read of the shard lease state.
+///
+/// Generous on purpose, and deliberately not the write budget below: nothing is serving yet, so a
+/// slow read costs a slow start rather than a stalled cluster, and the retry budget in the etcd
+/// backend is sized against this.
+pub(crate) const STATE_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bounds one write of the shard lease state.
+///
+/// A write holds the state lock while every [`ShardManagement::current_snapshot`] reader queues
+/// behind it and, for a lease RPC, while an executor waits on the answer. Exceeding it is a
+/// fail-stop: a standby takes over from the persisted state rather than a wedged leader serving a
+/// routing table it can no longer update.
+///
+/// The executor's per-attempt deadline is built to outlast this; the ordering is asserted in
+/// [`golem_common::base_model::shard_lease`].
+pub(crate) const STATE_WRITE_TIMEOUT: Duration = shard_lease::state_write_budget();
+
+const _: () = assert!(STATE_WRITE_TIMEOUT.as_millis() < STATE_READ_TIMEOUT.as_millis());
+
+const INITIAL_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub struct ShardManagement {
-    routing_table: Arc<RwLock<RoutingTable>>,
+    shard_state: Arc<RwLock<ShardLeaseState>>,
     change: Arc<Notify>,
     updates: Arc<Mutex<ShardManagementChanges>>,
+    persistence: Arc<dyn RoutingTablePersistence>,
+    /// Compare-and-swap token of the persisted state; see [`Self::mutate_and_persist`].
+    external_revision: Arc<Mutex<ExternalRevision>>,
+    /// How long a granted shard lease lasts. Read by every writer that grants one, so they all
+    /// use the same value.
+    lease_ttl: Duration,
+    /// The persistence failure of an out-of-loop writer, waiting to be picked up by the loop.
+    ///
+    /// A failed write means the state may or may not have been stored and, for a lost fence, that
+    /// another shard manager owns the topology. That has to end the process, but an out-of-loop
+    /// writer only ends its own request. It records the error here and wakes the loop, which
+    /// checks the slot at the top of every pass and returns it.
+    fatal: Arc<Mutex<Option<ShardManagerError>>>,
 }
 
 impl ShardManagement {
-    /// Initializes the shard management with an initial routing table and optionally
-    /// a pending rebalance, both read from the persistence service.
+    /// Initializes the shard management with the persisted shard lease state.
+    ///
+    /// Executors found in the persisted state are health checked once: unhealthy ones are
+    /// removed, healthy ones receive their authoritative full shard assignment (they might be
+    /// lagging after interleaved shard-manager and executor restarts).
     pub async fn new(
         persistence_service: Arc<dyn RoutingTablePersistence>,
         worker_executors: Arc<dyn WorkerExecutorService>,
         health_check: Arc<dyn HealthCheck>,
         threshold: f64,
+        lease_ttl: Duration,
+        number_of_shards: usize,
         join_set: &mut JoinSet<anyhow::Result<()>>,
     ) -> Result<Self, ShardManagerError> {
-        let routing_table = persistence_service.read().await?;
+        Self::new_with_initial_health_check_timeout(
+            persistence_service,
+            worker_executors,
+            health_check,
+            threshold,
+            lease_ttl,
+            number_of_shards,
+            join_set,
+            INITIAL_HEALTH_CHECK_TIMEOUT,
+        )
+        .await
+    }
+
+    /// [`Self::new`] with the startup health check bound taken as a parameter, so that a test does
+    /// not have to wait out the production budget.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_with_initial_health_check_timeout(
+        persistence_service: Arc<dyn RoutingTablePersistence>,
+        worker_executors: Arc<dyn WorkerExecutorService>,
+        health_check: Arc<dyn HealthCheck>,
+        threshold: f64,
+        lease_ttl: Duration,
+        number_of_shards: usize,
+        join_set: &mut JoinSet<anyhow::Result<()>>,
+        initial_health_check_timeout: Duration,
+    ) -> Result<Self, ShardManagerError> {
+        let (shard_state, external_revision) =
+            match timeout(STATE_READ_TIMEOUT, persistence_service.read()).await {
+                Ok(read) => read?,
+                Err(_) => {
+                    return Err(ShardManagerError::Internal(format!(
+                        "reading the shard lease state timed out after {STATE_READ_TIMEOUT:?}"
+                    )));
+                }
+            };
+
+        // Before the health check and before the worker is spawned: past this point the worker can
+        // persist state and command executors, and a replica that disagrees with the stored shard
+        // count must do neither.
+        crate::ensure_shard_count_matches(shard_state.number_of_shards, number_of_shards)?;
 
         info!("Initial healthcheck started");
 
-        let pods = routing_table.get_pods_with_names();
-
-        let unhealthy_pods = get_unhealthy_pods(&health_check, &pods).await;
-        let healthy_pods = pods
-            .into_iter()
-            .filter(|(p, _)| !unhealthy_pods.contains(p))
+        let executors: Vec<(ExecutorId, ExecutorAddr, Option<String>)> =
+            shard_state.get_executors_with_addrs();
+        let unhealthy_executors = match timeout(
+            initial_health_check_timeout,
+            get_unhealthy_executors(&health_check, &executors),
+        )
+        .await
+        {
+            Ok(unhealthy_executors) => unhealthy_executors,
+            Err(_) => {
+                // Dropping every executor because their probes were slow would empty the routing
+                // table; the periodic health check loop removes the ones that are really gone.
+                error!(
+                    "Initial healthcheck timed out after {initial_health_check_timeout:?}, treating all executors as healthy"
+                );
+                HashSet::new()
+            }
+        };
+        let healthy_executors: HashSet<ExecutorId> = executors
+            .iter()
+            .map(|(id, _, _)| *id)
+            .filter(|id| !unhealthy_executors.contains(id))
             .collect();
 
         info!("Initial healthcheck finished");
 
-        let change = Arc::new(Notify::new());
-        // NOTE: We consider all healthy pods as new pods to trigger full assigment, given they might be lagging:
-        //       this can happen with interleaved shard-manager and worker restarts
-        let updates = Arc::new(Mutex::new(ShardManagementChanges::new(
-            healthy_pods,
-            unhealthy_pods,
-        )));
-        let routing_table = Arc::new(RwLock::new(routing_table));
+        let shard_management = ShardManagement {
+            shard_state: Arc::new(RwLock::new(shard_state)),
+            change: Arc::new(Notify::new()),
+            updates: Arc::new(Mutex::new(ShardManagementChanges::new(
+                healthy_executors.clone(),
+                unhealthy_executors,
+            ))),
+            persistence: persistence_service,
+            external_revision: Arc::new(Mutex::new(external_revision)),
+            lease_ttl,
+            fatal: Arc::new(Mutex::new(None)),
+        };
+
+        // Lease expiries are persisted and absolute, so after any outage longer than one lease
+        // every stored expiry is in the past and the first pass's housekeeping would evict the
+        // whole cluster. The health check above has just proved these executors are alive, so their
+        // lease clock restarts here - in one write, before the loop can run.
+        if !healthy_executors.is_empty() {
+            let now = Utc::now();
+            let regranted = shard_management
+                .mutate_and_persist(move |shard_state| {
+                    shard_state.regrant_leases(&healthy_executors, now, lease_ttl)
+                })
+                .await?;
+            info!(
+                executors = regranted,
+                "Re-granted shard leases to the executors that answered the initial health check"
+            );
+        }
 
         {
-            let change = change.clone();
-            let updates = updates.clone();
-            let routing_table = routing_table.clone();
-
+            let shard_management = shard_management.clone();
             join_set.spawn(
                 async move {
-                    Self::worker(
-                        routing_table,
-                        change,
-                        updates,
-                        persistence_service,
-                        worker_executors,
-                        threshold,
-                    )
-                    .await;
-                    Ok(())
+                    shard_management
+                        .worker(worker_executors, threshold)
+                        .await
+                        .map_err(anyhow::Error::from)
                 }
                 .in_current_span(),
             );
+        }
+
+        shard_management.change.notify_one();
+
+        Ok(shard_management)
+    }
+
+    /// Registers the executor instance `executor_id`, listening at `addr`, and grants it a lease.
+    ///
+    /// The lease is written before this returns, so an acknowledged registration is a durable one:
+    /// an executor is never told it is registered by a leader whose write is then refused.
+    ///
+    /// Idempotent on retry. `executor_id` is generated by the executor and stable across retries of
+    /// the same registration, so the same id at the same address refreshes that lease and returns
+    /// it; it neither creates a second lease nor counts as a replacement. A *different* id at a
+    /// known address is a restarted instance, and inherits its predecessor's shards.
+    pub async fn register_executor(
+        &self,
+        executor_id: ExecutorId,
+        addr: ExecutorAddr,
+        pod_name: Option<String>,
+    ) -> Result<RegisterAck, ShardManagerError> {
+        debug!(executor_id = %executor_id, addr = %addr, "Registering executor");
+        let now = Utc::now();
+        let lease_ttl = self.lease_ttl;
+
+        let ((already_known, replaced, number_of_shards, pending), stored_at) = self
+            .persist_for_request(move |shard_state| {
+                let already_known = shard_state.has_executor(executor_id);
+                let replaced =
+                    shard_state.add_executor(executor_id, addr, pod_name, now, lease_ttl);
+                let pending = shard_state.lease_grant_for(executor_id).ok_or_else(|| {
+                    ShardManagerError::Internal(format!(
+                        "executor {executor_id} holds no lease right after being registered"
+                    ))
+                })?;
+                Ok((
+                    already_known,
+                    replaced,
+                    shard_state.number_of_shards,
+                    pending,
+                ))
+            })
+            .await?;
+        // The grant was read off the clone before the persist bumped its revision; the ack names
+        // the revision the state holding this set was actually stored under.
+        let ack = RegisterAck {
+            number_of_shards,
+            grant: pending.stamp(stored_at),
         };
 
-        change.notify_one();
+        if let Some(replaced) = replaced {
+            // A restarted instance inherited its predecessor's shards, so it has to be told the
+            // whole set it now holds.
+            info!(
+                executor_id = %executor_id,
+                replaced_executor_id = %replaced,
+                addr = %addr,
+                "Executor replaced at address"
+            );
+            self.updates.lock().await.retry_full_assignment(executor_id);
+        } else if already_known {
+            // A retried registration. The lease clock restarts and the same set comes back; the
+            // shards are not touched, so their epochs do not move.
+            info!(executor_id = %executor_id, addr = %addr, "Executor lease refreshed");
+        } else {
+            info!(executor_id = %executor_id, addr = %addr, "Executor added");
+        }
 
-        Ok(ShardManagement {
-            routing_table,
-            change,
-            updates,
+        self.change.notify_one();
+        Ok(ack)
+    }
+
+    /// Extends `executor_id`'s shard lease and returns the manager's set for it.
+    ///
+    /// The claimed shards are what the executor believes it holds. A claim that does not match -
+    /// a shard not assigned to this executor, or assigned at another epoch - is renewed all the
+    /// same and logged: the grant returned carries the manager's set, which the executor adopts,
+    /// so the renewal is the guaranteed second delivery of a push that was lost. Only a lease the
+    /// manager no longer holds is refused, with [`ShardManagerError::ShardLeaseNotFound`], and
+    /// that refusal stores nothing: the mutation runs on a clone that is dropped when the closure
+    /// refuses.
+    ///
+    /// A renewal never advances an epoch: the epoch is an ownership generation, and moving it on a
+    /// renewal would make a lost response permanently fatal for a shard the executor still owns.
+    ///
+    /// Leases that have already lapsed are reaped *before* this one is looked up, so an executor
+    /// whose lease expired while its renewal was in flight is told
+    /// [`ShardManagerError::ShardLeaseNotFound`] rather than silently resurrected. This does not
+    /// notify the loop; the shards that reaping freed are picked up by the next tick.
+    pub async fn renew_shard_lease(
+        &self,
+        executor_id: ExecutorId,
+        claimed: BTreeMap<ShardId, ShardEpoch>,
+    ) -> Result<ShardLeaseGrant, ShardManagerError> {
+        debug!(
+            executor_id = %executor_id,
+            claimed_shards = claimed.len(),
+            "Renewing shard lease"
+        );
+        let now = Utc::now();
+        let lease_ttl = self.lease_ttl;
+
+        // Reaped in a write of its own, ahead of the renewal: so that a lease which lapsed before
+        // this renewal arrived is gone by the time it is looked up, and so that a renewal refused
+        // below cannot discard the reaping along with it. `remove_executor` puts the freed shards
+        // on `pending_rebalance`. The no-op guard skips this write when nothing had lapsed, so the
+        // common path still costs a single write.
+        self.persist_for_request(move |shard_state| {
+            for (expired_id, released) in shard_state.housekeep(now) {
+                warn!(
+                    executor_id = %expired_id,
+                    released_shards = released.len(),
+                    "Shard lease expired; releasing its shards"
+                );
+            }
+            Ok(())
         })
+        .await?;
+
+        let (pending, stored_at) = self
+            .persist_for_request(move |shard_state| {
+            if !shard_state.has_executor(executor_id) {
+                return Err(ShardManagerError::ShardLeaseNotFound { executor_id });
+            }
+
+            // The claim is what the executor believes it holds, not a condition of the renewal.
+            // A claim that does not match is an executor that missed a push, and the grant this
+            // returns is the manager's set, which the executor adopts - so the renewal is the
+            // guaranteed second delivery path for a push that was lost. Refusing it would only
+            // hold the executor on a picture the manager already knows is wrong. The mismatch is
+            // logged because it is the one signal that pushes to this executor are not landing.
+            let mismatched: Vec<ShardId> = claimed
+                .iter()
+                .filter(|(shard_id, provided)| {
+                    shard_state
+                        .shard_assignments
+                        .get(*shard_id)
+                        .filter(|entry| entry.executor_id == executor_id)
+                        .map(|entry| entry.epoch)
+                        != Some(**provided)
+                })
+                .map(|(shard_id, _)| *shard_id)
+                .collect();
+            if !mismatched.is_empty() {
+                warn!(
+                    executor_id = %executor_id,
+                    mismatched_shards = mismatched.iter().join(", "),
+                    "Shard lease claim does not match the manager's view; renewing and correcting"
+                );
+            }
+
+            if !shard_state.renew_lease(executor_id, now, lease_ttl) {
+                return Err(ShardManagerError::Internal(format!(
+                    "executor {executor_id} holds no lease right after it was found"
+                )));
+            }
+
+            // Read off the mutated clone, so the grant this returns is exactly the state that is
+            // about to be stored - never a state that a failed write then rolls back.
+            shard_state.lease_grant_for(executor_id).ok_or_else(|| {
+                ShardManagerError::Internal(format!(
+                    "executor {executor_id} holds no lease right after it was renewed"
+                ))
+            })
+        })
+        .await?;
+        // Read off the clone before its revision was bumped; stamped with the revision the state
+        // was then stored at, so the grant names exactly the persisted state it describes.
+        Ok(pending.stamp(stored_at))
     }
 
-    /// Registers a new pod to be added
-    pub async fn register_pod(&self, pod: Pod, pod_name: Option<String>) {
-        debug!(pod=%pod, "Registering pod");
-        self.updates.lock().await.add_new_pod(pod, pod_name);
+    /// Releases `executor_id`'s shard lease on a graceful shutdown.
+    ///
+    /// Lenient by contract: an executor the manager does not know, and a `claimed` set that no
+    /// longer matches what it records, are both `Ok`. A shutdown must never fail on bookkeeping,
+    /// so the claim is only logged.
+    ///
+    /// Removing the lease drops its shard assignments and leaves them on `pending_rebalance`.
+    /// This does not notify the loop: the next tick re-homes them, which bounds a graceful
+    /// shutdown's hand-off by one tick without an extra wake-up.
+    pub async fn deregister_executor(
+        &self,
+        executor_id: ExecutorId,
+        claimed: BTreeMap<ShardId, ShardEpoch>,
+    ) -> Result<(), ShardManagerError> {
+        debug!(
+            executor_id = %executor_id,
+            claimed_shards = claimed.len(),
+            "Deregistering executor"
+        );
+
+        self.persist_for_request(move |shard_state| {
+            if !shard_state.has_executor(executor_id) {
+                debug!(
+                    executor_id = %executor_id,
+                    "Deregistered executor holds no lease; nothing to release"
+                );
+                return Ok(());
+            }
+
+            let stale: Vec<ShardId> = claimed
+                .iter()
+                .filter(|(shard_id, epoch)| {
+                    shard_state
+                        .shard_assignments
+                        .get(shard_id)
+                        .filter(|entry| entry.executor_id == executor_id)
+                        .map(|entry| entry.epoch)
+                        != Some(**epoch)
+                })
+                .map(|(shard_id, _)| *shard_id)
+                .collect();
+            if !stale.is_empty() {
+                warn!(
+                    executor_id = %executor_id,
+                    shards = stale.iter().join(", "),
+                    "Deregistering executor handed back shards it no longer owns; releasing its \
+                     lease anyway"
+                );
+            }
+
+            let released = shard_state.remove_executor(executor_id);
+            info!(
+                executor_id = %executor_id,
+                released_shards = released.len(),
+                "Executor deregistered"
+            );
+            Ok(())
+        })
+        .await
+        .map(|((), _stored_at)| ())
+    }
+
+    /// Marks an executor to be removed
+    pub async fn unregister_executor(&self, executor_id: ExecutorId) {
+        debug!(executor_id = %executor_id, "Unregistering executor");
+        self.updates.lock().await.remove_executor(executor_id);
         self.change.notify_one();
     }
 
-    /// Marks a pod to be removed
-    pub async fn unregister_pod(&self, pod: Pod) {
-        debug!(pod=%pod, "Unregistering pod");
-        self.updates.lock().await.remove_pod(pod);
-        self.change.notify_one();
-    }
-
-    /// Gets the current snapshot of the routing table
-    pub async fn current_snapshot(&self) -> RoutingTable {
-        self.routing_table.read().await.clone()
+    /// Gets the current snapshot of the shard lease state
+    pub async fn current_snapshot(&self) -> ShardLeaseState {
+        self.shard_state.read().await.clone()
     }
 
     async fn worker(
-        routing_table: Arc<RwLock<RoutingTable>>,
-        change: Arc<Notify>,
-        updates: Arc<Mutex<ShardManagementChanges>>,
-        persistence_service: Arc<dyn RoutingTablePersistence>,
+        self,
         worker_executors: Arc<dyn WorkerExecutorService>,
         threshold: f64,
-    ) {
+    ) -> Result<(), ShardManagerError> {
+        // The timer is what makes the pull-based half of the lease protocol work. `RenewShardLease`
+        // and `Deregister` never wake the loop - they only leave shards behind - so without a tick
+        // an expired lease in a quiet cluster would never be reaped and a graceful shutdown's
+        // shards would never be re-homed. A third of the lease is the same cadence the executors
+        // renew at, and it is derived rather than configured so there is no second knob to keep
+        // consistent with the lease duration.
+        let tick_period = shard_lease::renewal_interval(self.lease_ttl);
+        // `interval_at`, not `interval`: the latter's first tick completes immediately and would
+        // add a redundant pass on top of the startup notification. `Delay` so that a pass slower
+        // than the period cannot queue a burst of catch-up ticks behind it.
+        let mut tick =
+            tokio::time::interval_at(tokio::time::Instant::now() + tick_period, tick_period);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
         loop {
             debug!("Shard management loop awaiting changes");
-            change.notified().await;
+            tokio::select! {
+                _ = self.change.notified() => {}
+                _ = tick.tick() => {}
+            }
 
-            let (new_pods, removed_pods, retry_full_assignment_pods) = updates.lock().await.reset();
+            // An out-of-loop writer's persist failed. The store may or may not hold what it tried
+            // to write, and a refused fenced write means another shard manager owns the topology,
+            // so this process has to stop rather than command executors from here on.
+            if let Some(fatal) = self.fatal.lock().await.take() {
+                error!(
+                    error = %fatal,
+                    "Persisting the shard lease state failed outside the shard management loop; \
+                     stopping"
+                );
+                return Err(fatal);
+            }
+
+            let (removed_executors, full_assignment_requests) = self.updates.lock().await.reset();
             debug!(
-                new_pods = new_pods.keys().join(", "),
-                removed_pods = removed_pods.iter().join(", "),
-                retry_pods = retry_full_assignment_pods.iter().join(", "),
+                removed_executors = removed_executors.iter().join(", "),
+                full_assignment_requests = full_assignment_requests.iter().join(", "),
                 "Shard management loop woken up",
             );
-
-            // Getting a write lock while
-            //   - the rebalance plan is calculated,
-            //   - new and removed pods are added to the routing table and got persisted,
-            // but the rebalance plan is NOT applied yet. The lock is then release for apply.
-            let (mut rebalance, full_assignment_pods) = {
-                let mut current_routing_table = routing_table.write().await;
-
-                for pod in removed_pods {
-                    current_routing_table.remove_pod(pod);
-                    info!(pod= %pod, "Pod removed");
-                }
-
-                let mut send_full_assignment = Vec::new();
-                for (pod, pod_name) in new_pods {
-                    if current_routing_table.has_pod(pod) {
-                        // This pod has already an assignment - we have to send the full list of assigned shards to it
-                        send_full_assignment.push(pod);
-                        info!(pod= %pod, "Pod returned");
-                    } else {
-                        // New pod, adding with empty assignment
-                        current_routing_table.add_pod(pod, pod_name);
-                        info!(pod= %pod, "Pod added");
+            // The write lock is taken twice, for the plan and for its apply, and is free during the
+            // fan-out, so a renewal is never queued behind the executor round trips.
+            let now = Utc::now();
+            let (rebalance, full_assignment_executors) = self
+                .mutate_and_persist(|current_shard_state| {
+                    // Every pass begins by reaping the leases that lapsed since the last one.
+                    // Removing a lease drops its shard assignments, so the plan computed below
+                    // sees those shards as unassigned and re-homes them.
+                    for (executor_id, released) in current_shard_state.housekeep(now) {
+                        warn!(
+                            executor_id = %executor_id,
+                            released_shards = released.len(),
+                            "Shard lease expired; releasing its shards"
+                        );
                     }
-                }
-                let rebalance = Rebalance::from_routing_table(&current_routing_table, threshold);
 
-                let mut full_assignment_pods: HashSet<Pod> = HashSet::new();
-
-                for pod in send_full_assignment {
-                    full_assignment_pods.insert(pod);
-                }
-
-                for pod in retry_full_assignment_pods {
-                    if current_routing_table.has_pod(pod) {
-                        full_assignment_pods.insert(pod);
+                    // Shards orphaned by lease removals since the last pass. The rebalance plan
+                    // below recomputes all unassigned shards from scratch, so this is only logged.
+                    let pending = current_shard_state.take_pending_rebalance();
+                    if !pending.is_empty() {
+                        debug!(
+                            shards = pending.iter().join(", "),
+                            "Redistributing shards orphaned since the last pass"
+                        );
                     }
-                }
 
-                persistence_service
-                    .write(&current_routing_table)
-                    .await
-                    .expect("Failed to persist routing table after pod changes");
+                    let full_assignment_executors = apply_executor_changes(
+                        current_shard_state,
+                        removed_executors,
+                        full_assignment_requests,
+                    );
 
-                (rebalance, full_assignment_pods)
-            };
+                    let rebalance = Rebalance::from_shard_state(current_shard_state, threshold);
+
+                    (rebalance, full_assignment_executors)
+                })
+                .await?;
 
             debug!(rebalance=%rebalance, "Applying rebalance plan");
-            let rebalance_failures =
-                Self::execute_rebalance(worker_executors.clone(), &mut rebalance).await;
 
+            // The plan is applied and persisted *before* anything is sent, and every delivery
+            // below is read off the stored state. Two things rest on that order. Every delivery
+            // names a revision the store already holds, so no renewal persisting meanwhile can get
+            // ahead of it. And a renewal served while the fan-out is in flight reads that same
+            // stored state, so a losing executor is handed a set that already excludes the shard
+            // being moved.
+            self.mutate_and_persist(|current_shard_state| {
+                current_shard_state.apply_rebalance(&rebalance)
+            })
+            .await?;
+
+            // Read after the persist rather than out of the closure, so the snapshot's `revision`
+            // field is consistent with what was stored.
+            let shard_state_snapshot = self.shard_state.read().await.clone();
+            let addrs = shard_state_snapshot.executor_addrs();
+
+            // One fan-out for every reason an executor needs its set: it gained shards in this
+            // plan; it lost some - a revoke is a delta stamped with the latest revision, and only
+            // the full set sent alongside it makes the rest of that executor's picture current at
+            // that revision; or it is owed an authoritative copy after a registration or a failed
+            // delivery.
+            let push_to: BTreeSet<ExecutorId> = rebalance
+                .get_assignments()
+                .assignments
+                .keys()
+                .chain(rebalance.get_unassignments().unassignments.keys())
+                .copied()
+                .chain(full_assignment_executors.iter().copied())
+                .collect();
+
+            let failures = Self::execute_rebalance(
+                worker_executors.clone(),
+                &shard_state_snapshot,
+                &rebalance,
+                &push_to,
+                &addrs,
+            )
+            .await?;
+
+            // Both halves are repaired the same way: the store already holds the new ownership,
+            // so an executor that missed a delivery is pushed the set it is recorded as holding.
+            // Its own next renewal carries that same set, which bounds the repair even if the push
+            // fails again.
             let mut needs_retry = false;
-            if !rebalance_failures.failed_assignments.is_empty() {
-                let failed_shards: HashSet<ShardId> = rebalance_failures
-                    .failed_assignments
-                    .iter()
-                    .flat_map(|(_, shard_ids)| shard_ids.clone())
-                    .collect();
-                rebalance.remove_assignment_shards(&failed_shards);
-
+            let unreached: BTreeSet<ExecutorId> = failures
+                .failed_unassignments
+                .iter()
+                .chain(failures.failed_assignments.iter())
+                .copied()
+                .collect();
+            if !unreached.is_empty() {
                 warn!(
-                    failed_shards = failed_shards.iter().join(", "),
-                    "Some shards could not be assigned and will be left unassigned for retry"
+                    failed_executors = unreached.iter().join(", "),
+                    "Some executors could not be given their shard set and will be pushed it again"
                 );
-
                 {
-                    let mut updates_guard = updates.lock().await;
-                    for (pod, _) in &rebalance_failures.failed_assignments {
-                        if full_assignment_pods.contains(pod) {
-                            updates_guard.retry_full_assignment(*pod);
-                        }
-                    }
-                }
-                needs_retry = true;
-            }
-
-            if !rebalance_failures.failed_unassignments.is_empty() {
-                warn!(
-                    failed_pods = rebalance_failures
-                        .failed_unassignments
-                        .iter()
-                        .map(|(pod, _)| pod)
-                        .join(", "),
-                    "Some shards could not be unassigned and rebalance will be retried"
-                );
-                needs_retry = true;
-            }
-
-            routing_table.write().await.rebalance(rebalance);
-
-            let routing_table_snapshot = routing_table.read().await.clone();
-            persistence_service
-                .write(&routing_table_snapshot)
-                .await
-                .expect("Failed to persist routing table after rebalance");
-
-            let mut full_assignments = Assignments::new();
-            for pod in &full_assignment_pods {
-                if let Some(mut shard_ids) = routing_table_snapshot.get_shards(*pod) {
-                    full_assignments
-                        .assignments
-                        .entry(*pod)
-                        .or_default()
-                        .append(&mut shard_ids);
-                }
-            }
-
-            let failed_full_assignments = if full_assignments.is_empty() {
-                Vec::new()
-            } else {
-                set_shard_assignments(
-                    worker_executors.clone(),
-                    routing_table_snapshot.number_of_shards,
-                    &full_assignments,
-                )
-                .await
-            };
-
-            if !failed_full_assignments.is_empty() {
-                warn!(
-                    failed_pods = failed_full_assignments
-                        .iter()
-                        .map(|(pod, _)| pod)
-                        .join(", "),
-                    "Some pods could not receive authoritative shard assignment and will be retried"
-                );
-
-                {
-                    let mut updates_guard = updates.lock().await;
-                    for (pod, _) in &failed_full_assignments {
-                        updates_guard.retry_full_assignment(*pod);
+                    let mut updates_guard = self.updates.lock().await;
+                    for executor_id in &unreached {
+                        updates_guard.retry_full_assignment(*executor_id);
                     }
                 }
                 needs_retry = true;
             }
 
             if needs_retry {
-                change.notify_one();
+                self.change.notify_one();
+            }
+
+            // After the pass, so it never delays a rebalance. Only the leader runs this loop, so
+            // only the leader compacts, and a failure here costs history, not correctness.
+            let latest = *self.external_revision.lock().await;
+            if let Err(error) = self.persistence.compact(latest).await {
+                warn!(error = %error, "Compacting the shard lease state's history failed");
             }
         }
     }
 
+    /// Applies `mutate` to a *clone* of the shard lease state, persists it compare-and-swap style
+    /// guarded on the cached external revision, and swaps it into the live state only once the
+    /// write is durable.
+    ///
+    /// A clone rather than mutate-in-place with rollback: a caller dropped mid-persist never runs
+    /// its rollback, but the guard's `Drop` publishes the mutation anyway. The writers that run
+    /// inside a request handler - the ones a client can drop - go through
+    /// [`Self::persist_for_request`], which keeps the write itself from being dropped at all.
+    ///
+    /// The write lock is held across the persistence round-trip so that readers of
+    /// [`Self::current_snapshot`] can never observe a state that was not durably stored and then
+    /// watch it go backwards. Lock order is `shard_state`, then `external_revision`. Every writer
+    /// of the persisted state must go through here, which is what makes in-process conflicts
+    /// impossible.
+    ///
+    /// A [`ShardManagerError::ConcurrentModification`] therefore means another shard manager
+    /// *process* wrote the state. The cached revision is deliberately not refreshed on failure: it
+    /// is the fencing token, and a writer that lost it must stop, not adopt the winner's and go on.
+    async fn mutate_and_persist<T, F>(&self, mutate: F) -> Result<T, ShardManagerError>
+    where
+        F: FnOnce(&mut ShardLeaseState) -> T,
+    {
+        self.try_mutate_and_persist(|shard_state| Ok(mutate(shard_state)))
+            .await
+    }
+
+    /// [`Self::mutate_and_persist`] for a mutation that can refuse.
+    ///
+    /// When `mutate` returns `Err`, the clone is dropped: the revision is not bumped, nothing is
+    /// written, and the live state is untouched. That is what makes a validating writer atomic
+    /// without the caller having to unwind anything - the alternative, validating and then
+    /// mutating, would persist a half-applied change the moment a future edit mutates before it
+    /// decides to fail.
+    async fn try_mutate_and_persist<T, F>(&self, mutate: F) -> Result<T, ShardManagerError>
+    where
+        F: FnOnce(&mut ShardLeaseState) -> Result<T, ShardManagerError>,
+    {
+        self.try_mutate_and_persist_stamped(mutate)
+            .await
+            .map(|(outcome, _stored_at)| outcome)
+    }
+
+    /// [`Self::try_mutate_and_persist`] for a writer that runs inside a request handler.
+    ///
+    /// A handler's future is dropped when its client goes away, and a write that was already on
+    /// the wire then lands with nobody left to record its revision - after which every later
+    /// compare-and-swap fails against a cache that is one behind, and the leader stops for a
+    /// conflict that never happened. So the mutation runs on a task of its own and the handler
+    /// only awaits its outcome: dropping the handler cannot abandon the write.
+    ///
+    /// Also returns the revision the state was stored at, for the writers that hand an executor
+    /// a copy of the state and must label it with the revision it holds.
+    async fn persist_for_request<T, F>(
+        &self,
+        mutate: F,
+    ) -> Result<(T, ShardLeaseRevision), ShardManagerError>
+    where
+        F: FnOnce(&mut ShardLeaseState) -> Result<T, ShardManagerError> + Send + 'static,
+        T: Send + 'static,
+    {
+        // Must not be called while holding `shard_state`: the spawned task takes the write lock
+        // and this awaits it, so the two would wait on each other. Not checkable at runtime - the
+        // lock has no notion of which task holds it, and a `try_write` probe fails for any holder,
+        // including the loop and other requests running legitimately alongside this one.
+        let this = self.clone();
+        match tokio::spawn(async move { this.try_mutate_and_persist_stamped(mutate).await }).await {
+            Ok(outcome) => outcome,
+            // A panic must not become an ordinary error: `panic = "abort"` makes this unreachable
+            // in the shipped profiles, but under an unwinding one the mutation's own invariant
+            // assertions run, and laundering those into a `Result` would let a test assert `Err`
+            // over a genuine state corruption.
+            Err(join_error) if join_error.is_panic() => {
+                std::panic::resume_unwind(join_error.into_panic())
+            }
+            Err(join_error) => Err(ShardManagerError::Internal(format!(
+                "persisting the shard lease state did not complete: {join_error}"
+            ))),
+        }
+    }
+
+    /// The persist itself: `mutate` is applied to a clone, the clone is stored compare-and-swap
+    /// style and, once durable, swapped in. Returns the outcome with the revision the state now
+    /// carries - the one just stored, or the current one when nothing needed storing.
+    async fn try_mutate_and_persist_stamped<T, F>(
+        &self,
+        mutate: F,
+    ) -> Result<(T, ShardLeaseRevision), ShardManagerError>
+    where
+        F: FnOnce(&mut ShardLeaseState) -> Result<T, ShardManagerError>,
+    {
+        let mut current_shard_state = self.shard_state.write().await;
+        let mut external_revision = self.external_revision.lock().await;
+
+        let mut next_shard_state = current_shard_state.clone();
+        let prev_external_revision = *external_revision;
+        let outcome = mutate(&mut next_shard_state)?;
+
+        // Nothing changed, so there is nothing to store. Without this the periodic tick would
+        // write a fresh full blob for an idle cluster every period forever, each one a new
+        // revision the backend then has to compact. Draining `pending_rebalance` is a mutation
+        // like any other, so a pass that took work off it is never skipped here.
+        //
+        // The exception is the very first write against a store that holds nothing. The persisted
+        // state is also the only record of `number_of_shards`, and a replica configured for a
+        // different count is refused by comparing against it, so a cluster whose first executor has
+        // not registered yet would have nothing for that check to disagree with. One write on first
+        // boot; from then on the revision is set and an idle pass writes nothing.
+        if next_shard_state == *current_shard_state && *external_revision != NO_REVISION {
+            return Ok((outcome, current_shard_state.revision));
+        }
+
+        let written = match next_shard_state.bump_revision() {
+            Ok(_) => {
+                let write = self
+                    .persistence
+                    .write(&next_shard_state, prev_external_revision);
+
+                match timeout(STATE_WRITE_TIMEOUT, write).await {
+                    Ok(written) => written,
+                    Err(_) => Err(ShardManagerError::Internal(format!(
+                        "persisting the shard lease state timed out after {STATE_WRITE_TIMEOUT:?}"
+                    ))),
+                }
+            }
+            Err(err) => Err(err),
+        };
+
+        match written {
+            Ok(new_external_revision) => {
+                let stored_at = next_shard_state.revision;
+                *current_shard_state = next_shard_state;
+                *external_revision = new_external_revision;
+                Ok((outcome, stored_at))
+            }
+            Err(err) => {
+                match &err {
+                    ShardManagerError::ConcurrentModification => error!(
+                        prev_external_revision,
+                        "Revision conflict: another shard manager wrote the shard lease state; \
+                         the in-memory state is unchanged"
+                    ),
+                    other => error!(
+                        error = %other,
+                        "Persisting the shard lease state failed; the in-memory state is unchanged"
+                    ),
+                }
+                // Fail-stop. The loop returns this at the top of its next pass, whether the writer
+                // was the loop itself (which also gets it back here) or an out-of-loop one whose
+                // own error only ends its request.
+                self.record_fatal(err.duplicate()).await;
+                Err(err)
+            }
+        }
+    }
+
+    /// Hands a persistence failure to the loop and wakes it. The first one wins: what stops the
+    /// process is the first refused write, and a later error is a consequence of it.
+    async fn record_fatal(&self, err: ShardManagerError) {
+        let mut fatal = self.fatal.lock().await;
+        if fatal.is_none() {
+            *fatal = Some(err);
+        }
+        drop(fatal);
+        self.change.notify_one();
+    }
+
+    /// Revokes the shards that moved away from their old owners, then pushes every executor that
+    /// needs one its complete shard set.
+    ///
+    /// Both are taken from `shard_state`, the state the plan has already been persisted into, so
+    /// every delivery names a revision the store holds: a push the one its set was read at, a
+    /// revoke the one the move was stored under.
+    ///
+    /// Revokes are awaited before any push goes out, so a losing executor that could be reached
+    /// has dropped a shard before its new owner is told it holds it. One that could not be
+    /// reached is reported back and repaired with a full push; until that lands the two hold the
+    /// shard at different epochs.
     async fn execute_rebalance(
         worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
-        rebalance: &mut Rebalance,
-    ) -> RebalanceFailures {
+        shard_state: &ShardLeaseState,
+        rebalance: &Rebalance,
+        push_to: &BTreeSet<ExecutorId>,
+        addrs: &ExecutorAddrs,
+    ) -> Result<RebalanceFailures, ShardManagerError> {
+        // An idle pass reaches here with nothing planned and nobody owed a copy. Returning before
+        // the log keeps a cluster where nothing is happening from announcing a rebalance every
+        // tick for as long as it runs.
+        if rebalance.get_unassignments().is_empty() && push_to.is_empty() {
+            return Ok(RebalanceFailures {
+                failed_assignments: BTreeSet::new(),
+                failed_unassignments: BTreeSet::new(),
+            });
+        }
+
         info!("Beginning rebalance...");
 
-        if !rebalance.get_unassignments().is_empty() {
+        let failed_unassignments = if rebalance.get_unassignments().is_empty() {
+            BTreeSet::new()
+        } else {
             info!(
                 unassignments = %rebalance.get_unassignments(),
                 "Executing shard unassignments",
             );
-        }
-        let failed_unassignments =
-            revoke_shards(worker_executors.clone(), rebalance.get_unassignments()).await;
-        let failed_shards = failed_unassignments
-            .iter()
-            .flat_map(|(_, shard_ids)| shard_ids.clone())
-            .collect();
-        rebalance.remove_shards(&failed_shards);
-        if !failed_shards.is_empty() {
-            warn!(
-                failed_shards = failed_shards.iter().join(", "),
-                "Some shards could not be unassigned and have been removed from rebalance"
-            );
-        }
+            revoke_shards(
+                worker_executors.clone(),
+                rebalance.get_unassignments(),
+                shard_state.revision,
+                addrs,
+            )
+            .await
+        };
 
         if !rebalance.get_assignments().is_empty() {
             info!(
@@ -313,63 +827,274 @@ impl ShardManagement {
             );
         }
 
-        let failed_assignments =
-            assign_shards(worker_executors.clone(), rebalance.get_assignments()).await;
+        let pushes = pushes_for(shard_state, push_to.iter().copied())?;
+        let failed_assignments = if pushes.is_empty() {
+            BTreeSet::new()
+        } else {
+            assign_shards(worker_executors.clone(), &pushes, addrs).await
+        };
 
-        RebalanceFailures {
+        Ok(RebalanceFailures {
             failed_assignments,
             failed_unassignments,
-        }
+        })
     }
 }
 
-#[derive(Debug)]
-struct RebalanceFailures {
-    failed_assignments: Vec<(Pod, BTreeSet<ShardId>)>,
-    failed_unassignments: Vec<(Pod, BTreeSet<ShardId>)>,
+/// The full-replace payloads for `executor_ids`, read off `shard_state`.
+///
+/// The one place a push is built, so the never-zero `number_of_shards` guard has a single home.
+/// An executor's `set_shards` divides by that count, so a push that latched zero would make it
+/// divide by zero on its next routing decision. The count is validated against the configuration
+/// at startup, which makes a zero here an impossible state rather than a bad request - hence an
+/// error that stops the loop rather than a skipped push.
+fn pushes_for(
+    shard_state: &ShardLeaseState,
+    executor_ids: impl Iterator<Item = ExecutorId>,
+) -> Result<BTreeMap<ExecutorId, ShardAssignmentPush>, ShardManagerError> {
+    let pushes: BTreeMap<ExecutorId, ShardAssignmentPush> = executor_ids
+        .filter_map(|executor_id| {
+            shard_state
+                .assignment_push_for(executor_id)
+                .map(|push| (executor_id, push))
+        })
+        .collect();
+
+    if !pushes.is_empty() && shard_state.number_of_shards == 0 {
+        return Err(ShardManagerError::Internal(
+            "refusing to push a shard assignment with number_of_shards = 0".to_string(),
+        ));
+    }
+
+    Ok(pushes)
 }
 
+/// Applies the executor removals queued since the last pass and returns the executors that must
+/// receive their full shard assignment.
+///
+/// Registrations are not queued: since `Register` acknowledges only after its own persist, an
+/// executor is already in the state by the time the loop runs, and a replacement queues its full
+/// assignment through [`ShardManagementChanges::retry_full_assignment`] like any other repair.
+fn apply_executor_changes(
+    shard_state: &mut ShardLeaseState,
+    removed_executors: HashSet<ExecutorId>,
+    full_assignment_requests: HashSet<ExecutorId>,
+) -> HashSet<ExecutorId> {
+    let mut full_assignment_executors: HashSet<ExecutorId> = HashSet::new();
+
+    for executor_id in removed_executors {
+        if !shard_state.has_executor(executor_id) {
+            debug!(
+                executor_id = %executor_id,
+                "Executor to be removed is no longer registered"
+            );
+            continue;
+        }
+        let released = shard_state.remove_executor(executor_id);
+        info!(
+            executor_id = %executor_id,
+            released_shards = released.len(),
+            "Executor removed"
+        );
+    }
+
+    for executor_id in full_assignment_requests {
+        if shard_state.has_executor(executor_id) {
+            full_assignment_executors.insert(executor_id);
+        }
+    }
+
+    full_assignment_executors
+}
+
+/// The executors an operation of the pass did not reach. Each is queued for a full push of the
+/// set the store records for it.
+#[derive(Debug)]
+struct RebalanceFailures {
+    failed_assignments: BTreeSet<ExecutorId>,
+    failed_unassignments: BTreeSet<ExecutorId>,
+}
+
+/// Changes accumulated between two passes of the shard management loop.
 #[derive(Debug)]
 struct ShardManagementChanges {
-    new_pods: HashMap<Pod, Option<String>>,
-    removed_pods: HashSet<Pod>,
-    retry_full_assignment_pods: HashSet<Pod>,
+    removed_executors: HashSet<ExecutorId>,
+    full_assignment_requests: HashSet<ExecutorId>,
 }
 
 impl ShardManagementChanges {
-    pub fn new(new_pods: HashMap<Pod, Option<String>>, removed_pods: HashSet<Pod>) -> Self {
+    pub fn new(
+        full_assignment_requests: HashSet<ExecutorId>,
+        removed_executors: HashSet<ExecutorId>,
+    ) -> Self {
         ShardManagementChanges {
-            new_pods,
-            removed_pods,
-            retry_full_assignment_pods: HashSet::new(),
+            removed_executors,
+            full_assignment_requests,
         }
     }
 
-    pub fn add_new_pod(&mut self, pod: Pod, pod_name: Option<String>) {
-        self.removed_pods.remove(&pod);
-        self.retry_full_assignment_pods.remove(&pod);
-        self.new_pods.insert(pod, pod_name);
+    pub fn remove_executor(&mut self, executor_id: ExecutorId) {
+        self.full_assignment_requests.remove(&executor_id);
+        self.removed_executors.insert(executor_id);
     }
 
-    pub fn remove_pod(&mut self, pod: Pod) {
-        self.new_pods.remove(&pod);
-        self.retry_full_assignment_pods.remove(&pod);
-        self.removed_pods.insert(pod);
-    }
-
-    pub fn retry_full_assignment(&mut self, pod: Pod) {
-        if !self.removed_pods.contains(&pod) {
-            self.retry_full_assignment_pods.insert(pod);
+    pub fn retry_full_assignment(&mut self, executor_id: ExecutorId) {
+        if !self.removed_executors.contains(&executor_id) {
+            self.full_assignment_requests.insert(executor_id);
         }
     }
 
-    pub fn reset(&mut self) -> (HashMap<Pod, Option<String>>, HashSet<Pod>, HashSet<Pod>) {
-        let new = self.new_pods.clone();
-        let removed = self.removed_pods.clone();
-        let retry = self.retry_full_assignment_pods.clone();
-        self.new_pods.clear();
-        self.removed_pods.clear();
-        self.retry_full_assignment_pods.clear();
-        (new, removed, retry)
+    pub fn reset(&mut self) -> (HashSet<ExecutorId>, HashSet<ExecutorId>) {
+        let removed = std::mem::take(&mut self.removed_executors);
+        let full = std::mem::take(&mut self.full_assignment_requests);
+        (removed, full)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::*;
+    use crate::sharding::model::ShardEpoch;
+    use golem_common::model::ShardId;
+    use std::net::{IpAddr, Ipv4Addr};
+    use uuid::Uuid;
+
+    const TTL: Duration = Duration::from_secs(60);
+
+    fn t0() -> chrono::DateTime<Utc> {
+        chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    }
+
+    fn executor(idx: u128) -> ExecutorId {
+        ExecutorId(Uuid::from_u128(idx))
+    }
+
+    fn addr(idx: u8) -> ExecutorAddr {
+        ExecutorAddr {
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, idx)),
+            port: 9000 + idx as u16,
+        }
+    }
+
+    fn shards(ids: &[i64]) -> BTreeSet<ShardId> {
+        ids.iter().copied().map(ShardId::new).collect()
+    }
+
+    #[test]
+    // Registration is applied inline by `register_executor`, before the loop runs, so by the time
+    // the pass applies the queued removal of the instance that was replaced, that instance is
+    // already gone and the removal must not take the transferred shards away again.
+    fn a_removal_queued_for_an_instance_replaced_inline_releases_nothing() {
+        let mut shard_state = ShardLeaseState::new(4);
+        shard_state.add_executor(executor(1), addr(1), None, t0(), TTL);
+        shard_state.add_executor(executor(2), addr(2), None, t0(), TTL);
+        for shard_id in [0, 1] {
+            shard_state.assign_shard(executor(1), ShardId::new(shard_id));
+        }
+        for shard_id in [2, 3] {
+            shard_state.assign_shard(executor(2), ShardId::new(shard_id));
+        }
+
+        // the health check reported executor 1 unhealthy, and the restarted process at the same
+        // address registered (as executor 3) - which persists immediately and asks for a full
+        // assignment - before the loop woke up
+        shard_state.add_executor(executor(3), addr(1), None, t0(), TTL);
+        assert_eq!(
+            shard_state.shards_for_executor(executor(3)),
+            Some(shards(&[0, 1]))
+        );
+
+        let full = apply_executor_changes(
+            &mut shard_state,
+            HashSet::from([executor(1)]),
+            HashSet::from([executor(3)]),
+        );
+
+        assert_eq!(full, HashSet::from([executor(3)]));
+        assert!(!shard_state.has_executor(executor(1)));
+        assert_eq!(
+            shard_state.shards_for_executor(executor(3)),
+            Some(shards(&[0, 1]))
+        );
+        assert_eq!(
+            shard_state.shards_for_executor(executor(2)),
+            Some(shards(&[2, 3]))
+        );
+        assert_eq!(
+            shard_state.epoch_for_shard(ShardId::new(0)),
+            Some(ShardEpoch(1))
+        );
+        assert!(shard_state.get_unassigned_shards().is_empty());
+        assert!(shard_state.pending_rebalance.is_empty());
+        assert!(shard_state.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn removal_of_an_executor_releases_its_shards_and_full_requests_are_filtered() {
+        let mut shard_state = ShardLeaseState::new(4);
+        shard_state.add_executor(executor(1), addr(1), None, t0(), TTL);
+        shard_state.add_executor(executor(2), addr(2), None, t0(), TTL);
+        shard_state.assign_shard(executor(1), ShardId::new(0));
+        shard_state.assign_shard(executor(2), ShardId::new(1));
+
+        let full = apply_executor_changes(
+            &mut shard_state,
+            HashSet::from([executor(1)]),
+            HashSet::from([executor(1), executor(2), executor(9)]),
+        );
+
+        assert_eq!(full, HashSet::from([executor(2)]));
+        assert!(!shard_state.has_executor(executor(1)));
+        assert_eq!(shard_state.pending_rebalance, shards(&[0]));
+        assert_eq!(shard_state.get_unassigned_shards(), shards(&[0, 2, 3]));
+    }
+
+    #[test]
+    // The other interleaving: the removal is applied while the previous instance is still
+    // registered, so its shards are released and the restart that registers afterwards starts
+    // empty. Nothing is lost - the released shards are unassigned and the next plan re-homes them.
+    fn a_removal_applied_before_the_restart_registers_releases_the_shards() {
+        let mut shard_state = ShardLeaseState::new(4);
+        shard_state.add_executor(executor(1), addr(1), None, t0(), TTL);
+        shard_state.assign_shard(executor(1), ShardId::new(0));
+        shard_state.assign_shard(executor(1), ShardId::new(1));
+
+        let full = apply_executor_changes(
+            &mut shard_state,
+            HashSet::from([executor(1)]),
+            HashSet::new(),
+        );
+        assert!(full.is_empty());
+        assert_eq!(shard_state.pending_rebalance, shards(&[0, 1]));
+
+        // the restart registers at the same address afterwards: no predecessor to inherit from
+        assert_eq!(
+            shard_state.add_executor(executor(3), addr(1), None, t0(), TTL),
+            None
+        );
+        assert_eq!(
+            shard_state.shards_for_executor(executor(3)),
+            Some(BTreeSet::new())
+        );
+        assert_eq!(shard_state.get_unassigned_shards(), shards(&[0, 1, 2, 3]));
+        assert!(shard_state.check_invariants().is_ok());
+    }
+
+    #[test]
+    fn unregistering_drops_a_queued_full_assignment_of_the_same_executor() {
+        let mut changes = ShardManagementChanges::new(HashSet::new(), HashSet::new());
+        changes.retry_full_assignment(executor(3));
+        changes.remove_executor(executor(3));
+        changes.retry_full_assignment(executor(3)); // ignored: queued for removal
+        changes.retry_full_assignment(executor(4));
+
+        let (removed, full) = changes.reset();
+        assert_eq!(removed, HashSet::from([executor(3)]));
+        assert_eq!(full, HashSet::from([executor(4)]));
+
+        let (removed, full) = changes.reset();
+        assert!(removed.is_empty() && full.is_empty());
     }
 }

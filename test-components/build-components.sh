@@ -2,8 +2,10 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc")
+rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-counters-v2" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp" "tool-streaming")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts")
+scala_test_apps=("tool-streaming-scala")
+moonbit_test_apps=("tool-streaming-moonbit")
 benchmark_apps=("benchmarks")
 
 RUST_CHUNKS=3 # Number of chunks to split rust apps into for parallel CI builds
@@ -13,7 +15,7 @@ TS_CHUNKS=1   # Number of chunks to split ts apps into for parallel CI builds
 # - clean: clean all projects without building
 # - rebuild: clean all projects before building them
 # - check: run only `golem-cli build --step check` for selected projects
-# - rust / ts / benchmarks: build only the specified group
+# - rust / ts / scala / moonbit / benchmarks: build only the specified group
 # - rust-N / ts-N: build only the Nth chunk of that group (for parallel CI)
 # - list-groups: print available group names for CI matrix generation
 
@@ -59,14 +61,16 @@ print_groups_json() {
   local i sep=""
   printf '['
   for ((i=1; i<=RUST_CHUNKS; i++)); do
-    printf '%s{"name":"rust-%d","needs-node":false}' "$sep" "$i"
+    printf '%s{"name":"rust-%d","needs-node":false,"needs-moonbit":false}' "$sep" "$i"
     sep=","
   done
   for ((i=1; i<=TS_CHUNKS; i++)); do
-    printf '%s{"name":"ts-%d","needs-node":true}' "$sep" "$i"
+    printf '%s{"name":"ts-%d","needs-node":true,"needs-moonbit":true}' "$sep" "$i"
     sep=","
   done
-  printf '%s{"name":"benchmarks","needs-node":true}]\n' "$sep"
+  printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifact":"golem_it_tool_streaming_scala.wasm"}' "$sep"
+  printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true,"expected-artifact":"golem_it_tool_streaming_moonbit.wasm"}'
+  printf ',{"name":"benchmarks","needs-node":true,"needs-moonbit":false}]\n'
 }
 
 clean_only=false
@@ -85,7 +89,7 @@ for arg in "$@"; do
     check)
       check_only=true
       ;;
-    rust|ts|benchmarks)
+    rust|ts|scala|moonbit|benchmarks)
       single_group=true
       group="$arg"
       ;;
@@ -130,15 +134,89 @@ resolve_target_dir() {
   printf '%s' "$target_dir"
 }
 
-REPO_ROOT="$(cd "${TEST_COMP_DIR:-$(pwd)}/.." && pwd)"
-TARGET_DIR="$(resolve_target_dir "$REPO_ROOT")"
-GOLEM_CLI="${GOLEM_CLI:-${TARGET_DIR}/debug/golem-cli}"
-if [[ "$GOLEM_CLI" != /* ]]; then
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
+cd "$SCRIPT_DIR"
+if [[ -n "${CARGO_MAKE_CRATE_TARGET_DIRECTORY:-}" ]]; then
+  TARGET_DIR="$CARGO_MAKE_CRATE_TARGET_DIRECTORY"
+else
+  TARGET_DIR="$(resolve_target_dir "$REPO_ROOT")"
+fi
+
+if [[ -z "${GOLEM_CLI:-}" ]]; then
+  if [[ "$clean_only" = true ]]; then
+    cli_candidates=(
+      "${TARGET_DIR}/debug/golem"
+      "${TARGET_DIR}/debug/golem.exe"
+      "${TARGET_DIR}/debug/golem-cli"
+      "${TARGET_DIR}/debug/golem-cli.exe"
+      "${TARGET_DIR}/release/golem"
+      "${TARGET_DIR}/release/golem.exe"
+      "${TARGET_DIR}/release/golem-cli"
+      "${TARGET_DIR}/release/golem-cli.exe"
+    )
+    for candidate in "${cli_candidates[@]}"; do
+      if [[ -x "$candidate" ]]; then
+        GOLEM_CLI="$candidate"
+        break
+      fi
+    done
+
+    if [[ -z "${GOLEM_CLI:-}" ]]; then
+      if command -v golem >/dev/null 2>&1; then
+        GOLEM_CLI="$(command -v golem)"
+      elif command -v golem-cli >/dev/null 2>&1; then
+        GOLEM_CLI="$(command -v golem-cli)"
+      else
+        echo "Cleaning test components requires a pre-built or globally installed golem or golem-cli" >&2
+        exit 1
+      fi
+    fi
+  else
+    GOLEM_CLI="${TARGET_DIR}/debug/golem-cli"
+  fi
+fi
+
+if [[ "$GOLEM_CLI" == */* && "$GOLEM_CLI" != /* ]]; then
   GOLEM_CLI="${REPO_ROOT}/${GOLEM_CLI}"
 fi
 
 should_clean() {
   [ "$clean_only" = true ] || [ "$rebuild" = true ]
+}
+
+clean_failures=0
+
+clean_current_app() {
+  local current_dir
+  current_dir="$(pwd -P)"
+  case "${current_dir}/" in
+    "${REPO_ROOT}/test-components/"*) ;;
+    *)
+      echo "Warning: refusing to clean test component outside ${REPO_ROOT}/test-components: ${current_dir}" >&2
+      if [ "$clean_only" = true ]; then
+        clean_failures=$((clean_failures + 1))
+        return 0
+      else
+        return 1
+      fi
+      ;;
+  esac
+
+  local clean_failed=false
+  # The Cargo target resolved above is the only intentional cleanup path outside the repository.
+  if ! CARGO_TARGET_DIR="$TARGET_DIR" "$GOLEM_CLI" clean; then
+    clean_failed=true
+  fi
+
+  if [ "$clean_failed" = true ]; then
+    if [ "$clean_only" = true ]; then
+      echo "Warning: failed to clean ${current_dir}; continuing" >&2
+      clean_failures=$((clean_failures + 1))
+    else
+      return 1
+    fi
+  fi
 }
 
 build_rust_apps() {
@@ -157,7 +235,7 @@ build_rust_apps() {
 
     if should_clean; then
       echo "Cleaning $subdir..."
-      "$GOLEM_CLI" clean
+      clean_current_app
     fi
 
     if [ "$check_only" = true ]; then
@@ -189,7 +267,7 @@ build_node_apps() {
     if should_clean; then
       echo "Cleaning $subdir..."
       rm -rf node_modules
-      "$GOLEM_CLI" clean
+      clean_current_app
     fi
 
     if [ "$check_only" = true ]; then
@@ -201,6 +279,46 @@ build_node_apps() {
       npm install
       "$GOLEM_CLI" --preset "$preset" build --yes --skip-check
       "$GOLEM_CLI" --preset "$preset" exec copy
+    fi
+
+    popd || exit
+  done
+}
+
+build_sdk_apps() {
+  local label=$1
+  shift
+  local apps=("$@")
+  if [ "$clean_only" = true ]; then
+    echo "Cleaning $label test apps"
+  elif [ "$check_only" = true ]; then
+    echo "Checking $label test apps"
+  else
+    echo "Building $label test apps"
+  fi
+  for subdir in "${apps[@]}"; do
+    pushd "$subdir" || exit
+
+    if should_clean; then
+      echo "Cleaning $subdir..."
+      clean_current_app
+    fi
+
+    if [ "$check_only" = true ]; then
+      echo "Checking $subdir..."
+      "$GOLEM_CLI" build --step check --yes
+    elif [ "$clean_only" = false ]; then
+      echo "Building $subdir..."
+      "$GOLEM_CLI" --preset release build --yes --skip-check
+      "$GOLEM_CLI" --preset release exec copy
+      case "$subdir" in
+        tool-streaming-scala)
+          test -s ../golem_it_tool_streaming_scala.wasm
+          ;;
+        tool-streaming-moonbit)
+          test -s ../golem_it_tool_streaming_moonbit.wasm
+          ;;
+      esac
     fi
 
     popd || exit
@@ -235,6 +353,19 @@ elif [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
   NODE_GROUP_LABEL="TS" build_node_apps "${ts_test_apps[@]}"
 fi
 
+if [ "$single_group" = "false" ] || [ "$group" = "scala" ]; then
+  build_sdk_apps "Scala" "${scala_test_apps[@]}"
+fi
+
+if [ "$single_group" = "false" ] || [ "$group" = "moonbit" ]; then
+  build_sdk_apps "MoonBit" "${moonbit_test_apps[@]}"
+fi
+
 if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then
   GOLEM_TS_PRESET=optimized NODE_GROUP_LABEL="benchmark" build_node_apps "${benchmark_apps[@]}"
+fi
+
+if [ "$clean_only" = true ] && [ "$clean_failures" -gt 0 ]; then
+  echo "Failed to clean ${clean_failures} test component application(s)" >&2
+  exit 1
 fi

@@ -17,12 +17,14 @@ use crate::custom_api::api_definition_lookup::{
     HttpApiDefinitionsLookup, RegistryServiceApiDefinitionsLookup,
 };
 use crate::custom_api::call_agent::CallAgentHandler;
+use crate::custom_api::durable_streams::DurableStreamsHandler;
 use crate::custom_api::oidc::handler::OidcHandler;
 use crate::custom_api::oidc::session_store::{RedisSessionStore, SessionStore, SqliteSessionStore};
 use crate::custom_api::oidc::{DefaultIdentityProvider, IdentityProvider};
 use crate::custom_api::request_handler::RequestHandler;
 use crate::custom_api::route_resolver::RouteResolver;
 use crate::custom_api::webhooks::WebhookCallbackHandler;
+use crate::invocation_session_token::InvocationSessionTokenKeyring;
 use crate::mcp::{McpCapabilityLookup, RegistryServiceMcpCapabilityLookup};
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::{AuthService, RemoteAuthService};
@@ -52,10 +54,15 @@ pub struct Services {
     pub route_resolver: Arc<RouteResolver>,
     pub identity_provider: Arc<dyn IdentityProvider>,
     pub session_store: Arc<dyn SessionStore>,
+    pub invocation_session_token_keyring: Arc<InvocationSessionTokenKeyring>,
 }
 
 impl Services {
     pub async fn new(config: &WorkerServiceConfig) -> anyhow::Result<Self> {
+        let invocation_session_token_keyring = Arc::new(
+            InvocationSessionTokenKeyring::new(&config.invocation_session_tokens)
+                .map_err(anyhow::Error::msg)?,
+        );
         let registry_service_client: Arc<dyn RegistryService> =
             Arc::new(GrpcRegistryService::new(&config.registry_service));
 
@@ -127,6 +134,11 @@ impl Services {
         ));
 
         let call_agent_handler = Arc::new(CallAgentHandler::new(worker_service.clone()));
+        let durable_streams_handler = Arc::new(DurableStreamsHandler::new(
+            worker_service.clone(),
+            call_agent_handler.clone(),
+            &config.durable_streams,
+        ));
 
         let identity_provider = Arc::new(DefaultIdentityProvider);
 
@@ -171,6 +183,7 @@ impl Services {
         let request_handler = Arc::new(RequestHandler::new(
             route_resolver.clone(),
             call_agent_handler.clone(),
+            durable_streams_handler,
             oidc_handler.clone(),
             webhook_callback_handler.clone(),
         ));
@@ -187,6 +200,7 @@ impl Services {
             route_resolver,
             identity_provider,
             session_store,
+            invocation_session_token_keyring,
         })
     }
 }

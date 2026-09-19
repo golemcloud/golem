@@ -107,6 +107,42 @@ class CodegenPipelineSpec extends munit.FunSuite {
     assert(content.contains("ToolImplementation.registerClass[example.Grep, example.GrepImpl]"))
   }
 
+  test("auto-register splits registrations into bounded helper methods") {
+    val implementations = (0 until 17).map { index =>
+      s"""|@agentImplementation()
+          |final class CounterAgentImpl$index extends CounterAgent {
+          |  def increment(amount: Int): Int = amount
+          |}
+          |""".stripMargin
+    }
+      .mkString("\n")
+    val source = SourceDiscovery.SourceInput(
+      "Counters.scala",
+      s"""|package example
+          |
+          |@agentDefinition("counter-agent")
+          |trait CounterAgent {
+          |  class Id(val value: String)
+          |  def increment(amount: Int): Int
+          |}
+          |
+          |$implementations
+          |""".stripMargin
+    )
+
+    val result  = CodegenPipeline.run(discover(source), Some("example"), rpcEnabled = false)
+    val content = result.autoRegister.get.files
+      .find(_.relativePath.endsWith("__GolemAutoRegister_example.scala"))
+      .get
+      .content
+
+    assertEquals(result.autoRegister.get.implCount, 17)
+    assertEquals("private def __golemRegisterBatch".r.findAllIn(content).length, 3)
+    assert(content.contains("__golemRegisterBatch0()"))
+    assert(content.contains("__golemRegisterBatch1()"))
+    assert(content.contains("__golemRegisterBatch2()"))
+  }
+
   test("auto-register emits transparent, adapter, and universal middleware helpers") {
     val source = SourceDiscovery.SourceInput(
       "Middleware.scala",
@@ -154,6 +190,11 @@ class CodegenPipelineSpec extends munit.FunSuite {
       content.contains(
         "ToolMiddlewareImplementation.registerUniversal[example.middleware.Universal]"
       ),
+      content
+    )
+    assert(
+      content.indexOf("private def __golemRegisterToolMiddleware0") <
+        content.indexOf("private def __golemRegisterBatch0"),
       content
     )
     val initializer = autoRegister.files.find(_.relativePath.endsWith("RegisterAgents.scala")).get.content

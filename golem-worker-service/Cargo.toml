@@ -37,6 +37,7 @@ harness = false
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-schema = { workspace = true }
 golem-service-base = { workspace = true }
 
 anyhow = { workspace = true }
@@ -50,14 +51,17 @@ dashmap = { workspace = true }
 derive_more = { workspace = true }
 scc = { workspace = true }
 desert_rust = { workspace = true }
+fastrand = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }
 futures = { workspace = true }
 headers = { workspace = true }
+hmac = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
 humantime-serde.workspace = true
 hyper = { workspace = true }
+hyper-util = { workspace = true }
 include_dir = { workspace = true }
 mime = { workspace = true }
 mime_guess = { workspace = true }
@@ -79,6 +83,7 @@ rustls = { workspace = true, features = [ "ring" ] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+sha2 = { workspace = true }
 indexmap = { workspace = true }
 sqlx = { workspace = true }
 strum = { workspace = true }
@@ -104,7 +109,6 @@ golem-test-framework.workspace = true
 
 assert2 = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
-fastrand = {workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }
 rsa = { workspace = true }

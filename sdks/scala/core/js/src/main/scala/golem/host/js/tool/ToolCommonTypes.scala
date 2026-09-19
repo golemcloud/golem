@@ -30,8 +30,8 @@ import scala.scalajs.js.annotation.JSName
 // `undefined` (`js.UndefOr`) for absent options, camelCase record fields, and
 // the trailing-underscore `default_` field names emitted by wasm-rquickjs for
 // the reserved word `default`. Schema positions reuse the
-// `golem:core/types@2.0.0` facades from [[golem.host.js.schema]]; the
-// Preview 3 `stream<u8>` values use the JavaScript async-iterable protocol.
+// `golem:core/types@2.0.0` facades from [[golem.host.js.schema]]. The middleware
+// ABI still carries Preview 3 `stream<u8>` values as JavaScript async iterables.
 // ---------------------------------------------------------------------------
 
 @js.native
@@ -45,19 +45,12 @@ sealed trait JsByteStreamIterator extends js.Object {
   def next(): js.Promise[JsByteStreamIteratorResult] = js.native
 }
 
-/**
- * JavaScript representation of a Preview 3 `stream<u8>` supplied as tool stdin.
- */
 @js.native
 sealed trait JsWasiInputStream extends js.Object {
   @JSName(js.Symbol.asyncIterator)
   def asyncIterator(): JsByteStreamIterator = js.native
 }
 
-/**
- * JavaScript representation of a Preview 3 `stream<u8>` returned as tool
- * stdout.
- */
 @js.native
 sealed trait JsWasiOutputStream extends js.Object {
   @JSName(js.Symbol.asyncIterator)
@@ -598,8 +591,8 @@ object JsToolError {
     JsShape.tagged[JsToolError]("constraint-violation", message)
   def invalidResult(message: String): JsToolError =
     JsShape.tagged[JsToolError]("invalid-result", message)
-  def customError(payload: JsTypedSchemaValue): JsToolError =
-    JsShape.tagged[JsToolError]("custom-error", payload)
+  def customError(name: String, payload: JsTypedSchemaValue): JsToolError =
+    JsShape.tagged[JsToolError]("custom-error", js.Dynamic.literal("name" -> name, "payload" -> payload))
 }
 
 @js.native
@@ -610,7 +603,7 @@ sealed trait JsInvocationResult extends js.Object {
 object JsInvocationResult {
   def apply(
     result: js.UndefOr[JsTypedSchemaValue],
-    stdout: js.UndefOr[JsWasiOutputStream]
+    stdout: js.UndefOr[JsWasiOutputStream] = js.undefined
   ): JsInvocationResult = {
     val o = js.Dynamic.literal()
     result.foreach(v => o.updateDynamic("result")(v))
@@ -647,6 +640,7 @@ object JsToolMiddlewareScope {
 @js.native
 sealed trait JsToolMiddleware extends js.Object {
   def name: String                 = js.native
+  def version: String              = js.native
   def aliases: js.Array[String]    = js.native
   def doc: JsDoc                   = js.native
   def scope: JsToolMiddlewareScope = js.native
@@ -654,12 +648,13 @@ sealed trait JsToolMiddleware extends js.Object {
 object JsToolMiddleware {
   def apply(
     name: String,
+    version: String,
     aliases: js.Array[String],
     doc: JsDoc,
     scope: JsToolMiddlewareScope
   ): JsToolMiddleware =
     js.Dynamic
-      .literal("name" -> name, "aliases" -> aliases, "doc" -> doc, "scope" -> scope)
+      .literal("name" -> name, "version" -> version, "aliases" -> aliases, "doc" -> doc, "scope" -> scope)
       .asInstanceOf[JsToolMiddleware]
 }
 

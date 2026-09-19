@@ -193,10 +193,49 @@
       "$ref": "#/definitions/environment.list"
     },
     {
+      "$ref": "#/definitions/tool.grant.create"
+    },
+    {
+      "$ref": "#/definitions/tool.grant.get"
+    },
+    {
+      "$ref": "#/definitions/tool.grant.list"
+    },
+    {
+      "$ref": "#/definitions/tool.grant.delete"
+    },
+    {
+      "$ref": "#/definitions/tool.grant.restore"
+    },
+    {
       "$ref": "#/definitions/environment.sync-deployment-options"
     },
     {
+      "$ref": "#/definitions/tool.release"
+    },
+    {
+      "$ref": "#/definitions/tool.release.list"
+    },
+    {
+      "$ref": "#/definitions/tool.get"
+    },
+    {
+      "$ref": "#/definitions/tool.list"
+    },
+    { "$ref": "#/definitions/tool.middleware.get" },
+    { "$ref": "#/definitions/tool.middleware.list" },
+    { "$ref": "#/definitions/tool.middleware.release" },
+    { "$ref": "#/definitions/tool.middleware.release.list" },
+    { "$ref": "#/definitions/tool.middleware.grant.create" },
+    { "$ref": "#/definitions/tool.middleware.grant.get" },
+    { "$ref": "#/definitions/tool.middleware.grant.list" },
+    { "$ref": "#/definitions/tool.middleware.grant.delete" },
+    { "$ref": "#/definitions/tool.middleware.grant.restore" },
+    {
       "$ref": "#/definitions/deploy.environment-setup-plan"
+    },
+    {
+      "$ref": "#/definitions/deploy.environment-tool-grants"
     },
     {
       "$ref": "#/definitions/plugin.get"
@@ -709,7 +748,9 @@
         "memoryGbSeconds",
         "durableStorageGbMonth",
         "ephemeralStorageGbMonth",
-        "period"
+        "period",
+        "asOf",
+        "metering"
       ],
       "properties": {
         "$type": {
@@ -731,7 +772,15 @@
           "type": "number"
         },
         "period": {
-          "$ref": "#/definitions/StorageUsagePeriod"
+          "$ref": "#/definitions/AccountUsagePeriod"
+        },
+        "asOf": {
+          "description": "When the registry last received a usage snapshot for this period, or when it produced an empty snapshot.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "metering": {
+          "$ref": "#/definitions/AccountUsageMetering"
         }
       },
       "additionalProperties": false
@@ -751,8 +800,42 @@
         }
       ]
     },
-    "StorageUsagePeriod": {
+    "AccountUsageMetering": {
       "type": "object",
+      "description": "Collection state for each customer-visible usage dimension. Both storage dimensions use the filesystem meter.",
+      "required": [
+        "compute",
+        "memory",
+        "durableStorage",
+        "ephemeralStorage"
+      ],
+      "properties": {
+        "compute": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "memory": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "durableStorage": {
+          "$ref": "#/definitions/MeteringStatus"
+        },
+        "ephemeralStorage": {
+          "$ref": "#/definitions/MeteringStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "MeteringStatus": {
+      "type": "string",
+      "enum": [
+        "enabled",
+        "disabled",
+        "unknown"
+      ]
+    },
+    "AccountUsagePeriod": {
+      "type": "object",
+      "description": "A UTC calendar month in YYYY-MM form.",
       "required": [
         "year",
         "month"
@@ -1429,13 +1512,14 @@
     },
     "agent.delete-all": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem deploy` when it deletes all existing agents (e.g. `--reset`).",
+      "description": "Single structured output document emitted by `golem deploy` when it deletes all existing agents (e.g. `--reset`). Deleting is best-effort: `agents` lists the deleted agents, `errors` the agents that failed with their errors, and `deleted` is true only when there are no errors.",
       "x-golem-output-mode": "single",
       "x-golem-command": "deploy",
       "required": [
         "$type",
         "deleted",
-        "agents"
+        "agents",
+        "errors"
       ],
       "properties": {
         "$type": {
@@ -1448,6 +1532,12 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/AgentDeletionMeta"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentActionError"
           }
         }
       },
@@ -1708,6 +1798,7 @@
       "required": [
         "$type",
         "index",
+        "attribution",
         "entry"
       ],
       "properties": {
@@ -1717,6 +1808,9 @@
         "index": {
           "type": "integer",
           "minimum": 0
+        },
+        "attribution": {
+          "$ref": "#/definitions/PublicOplogEntryAttribution"
         },
         "entry": {
           "$ref": "#/definitions/PublicOplogEntry"
@@ -1757,14 +1851,15 @@
     },
     "agent.redeploy": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem agent redeploy`.",
+      "description": "Single structured output document emitted by `golem agent redeploy`. Redeploying is best-effort: `agents` lists the redeployed agents, `errors` the agents that failed with their errors, and `redeployed` is true only when there are no errors.",
       "x-golem-output-mode": "single",
       "x-golem-command": "agent redeploy",
       "x-golem-commands": ["agent redeploy","redeploy-agents","component redeploy-agents"],
       "required": [
         "$type",
         "redeployed",
-        "agents"
+        "agents",
+        "errors"
       ],
       "properties": {
         "$type": {
@@ -1777,6 +1872,12 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/AgentRedeploymentMeta"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentActionError"
           }
         }
       },
@@ -1929,9 +2030,9 @@
           }
         },
         "errors": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AgentActionError"
           }
         }
       },
@@ -2663,7 +2764,8 @@
       "required": [
         "$type",
         "deploymentDiff",
-        "environmentSetup"
+        "environmentSetup",
+        "toolPublications"
       ],
       "properties": {
         "$type": {
@@ -2671,6 +2773,9 @@
         },
         "deploymentDiff": {
           "$ref": "#/definitions/DeploymentDiffPayload"
+        },
+        "toolPublications": {
+          "$ref": "#/definitions/ToolPublicationPlan"
         },
         "environmentSetup": {
           "oneOf": [
@@ -3447,7 +3552,8 @@
     "ManifestComponentDependencyReference": {
       "oneOf": [
         { "type": "string" },
-        { "$ref": "#/definitions/ManifestStructuredComponentDependencyReference" }
+        { "$ref": "#/definitions/ManifestStructuredComponentDependencyReference" },
+        { "$ref": "#/definitions/ManifestSourcedComponentDependencyReference" }
       ]
     },
     "ManifestStructuredComponentDependencyReference": {
@@ -3458,6 +3564,56 @@
         "name": { "type": "string" }
       },
       "additionalProperties": false
+    },
+    "ManifestSourcedComponentDependencyReference": {
+      "type": "object",
+      "required": ["source"],
+      "properties": {
+        "source": { "$ref": "#/definitions/ManifestSubjectSource" }
+      },
+      "additionalProperties": false
+    },
+    "ManifestSubjectSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["local"],
+          "properties": {
+            "local": { "$ref": "#/definitions/ManifestStructuredComponentDependencyReference" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["registry"],
+          "properties": {
+            "registry": { "$ref": "#/definitions/ManifestRegistrySubject" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ManifestRegistrySubject": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["releaseId"],
+          "properties": {
+            "releaseId": { "type": "string", "format": "uuid" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["account", "name", "version"],
+          "properties": {
+            "account": { "type": "string" },
+            "name": { "type": "string" },
+            "version": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "ManifestCustomCommandsMap": {
       "type": "object",
@@ -4018,17 +4174,75 @@
         "version",
         "parameters",
         "account",
+        "configKeysReadable",
         "secretKeysReadable",
-        "secretKeysRevealable"
+        "secretKeysRevealable",
+        "filesystemAccess",
+        "middleware"
       ],
       "properties": {
         "version": { "type": ["string", "null"] },
         "parameters": {},
         "account": { "type": ["string", "null"] },
+        "configKeysReadable": { "$ref": "#/definitions/ConfigKeyScope" },
         "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
-        "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" }
+        "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" },
+        "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" },
+        "middleware": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/ToolMiddlewareInstallation" }
+            },
+            { "type": "null" }
+          ]
+        },
+        "middlewareMergeMode": { "$ref": "#/definitions/ToolMiddlewareMergeMode" }
       },
       "additionalProperties": false
+    },
+    "ToolFilesystemAccess": {
+      "type": "string",
+      "enum": ["unset", "allowed", "denied"]
+    },
+    "ToolMiddlewareMergeMode": {
+      "type": "string",
+      "enum": ["prepend", "append", "replace"]
+    },
+    "ToolMiddlewareInstallation": {
+      "type": "object",
+      "required": ["name", "version", "parameters", "account", "filesystemAccess"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": ["string", "null"] },
+        "parameters": {},
+        "account": { "type": ["string", "null"] },
+        "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
+      },
+      "additionalProperties": false
+    },
+    "ConfigKeyScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "all" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "keys"],
+          "properties": {
+            "kind": { "const": "keys" },
+            "keys": {
+              "type": "array",
+              "items": { "type": "array", "items": { "type": "string" } },
+              "uniqueItems": true
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "SecretKeyScope": {
       "oneOf": [
@@ -4181,6 +4395,7 @@
         "name",
         "diffModelVersion",
         "compatibilityCheck",
+        "toolCompatibilityMode",
         "versionCheck",
         "securityOverrides",
         "currentDeployment"
@@ -4191,6 +4406,10 @@
         "name": { "type": "string" },
         "diffModelVersion": { "type": "integer", "minimum": 0 },
         "compatibilityCheck": { "type": "boolean" },
+        "toolCompatibilityMode": {
+          "type": "string",
+          "enum": ["strict-equality", "structural-subtype", "nominal"]
+        },
         "versionCheck": { "type": "boolean" },
         "securityOverrides": { "type": "boolean" },
         "currentDeployment": {
@@ -4383,6 +4602,12 @@
         "updates": { "type": "array", "items": { "$ref": "#/definitions/UpdateRecord" } },
         "createdAt": { "type": "string" },
         "lastError": { "type": ["string", "null"] },
+        "lastErrorKind": {
+          "oneOf": [
+            { "type": "string", "enum": ["invocation", "recovery"] },
+            { "type": "null" }
+          ]
+        },
         "componentSize": { "type": "integer", "minimum": 0 },
         "totalLinearMemorySize": { "type": "integer", "minimum": 0 },
         "exportedResourceInstances": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentResourceDescription" } }
@@ -4443,6 +4668,78 @@
       },
       "additionalProperties": false
     },
+    "PublicOplogEntryAttribution": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "Agent" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "invocation", "ancestors"],
+          "properties": {
+            "type": { "const": "Entity" },
+            "invocation": { "$ref": "#/definitions/PublicEntityInvocation" },
+            "ancestors": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/PublicEntityInvocation" }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PublicEntityInvocation": {
+      "type": "object",
+      "required": ["entity", "startIndex", "callMode", "operation"],
+      "properties": {
+        "entity": { "$ref": "#/definitions/PublicAgentEntity" },
+        "startIndex": { "type": "integer", "minimum": 1 },
+        "callMode": { "type": "string", "enum": ["synchronous", "asynchronous", "fireAndForget"] },
+        "operation": {
+          "oneOf": [
+            { "$ref": "#/definitions/PublicEntityInvocationOperation" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PublicAgentEntity": {
+      "type": "object",
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["tool", "toolMiddleware"] },
+        "name": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "PublicEntityInvocationOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "commandPath", "hasStdin", "hasStdout", "declaresStdout"],
+          "properties": {
+            "type": { "const": "Tool" },
+            "commandPath": { "type": "array", "items": { "type": "string" } },
+            "hasStdin": { "type": "boolean" },
+            "hasStdout": {
+              "type": "boolean",
+              "description": "Whether a live stdout attachment was requested. Stdout bytes are not recorded in the oplog."
+            },
+            "declaresStdout": {
+              "type": "boolean",
+              "description": "Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog."
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "PublicOplogEntry": {
       "oneOf": [
         { "$ref": "#/definitions/PublicOplogEntryCreate" },
@@ -4453,6 +4750,7 @@
         { "$ref": "#/definitions/PublicOplogEntryAgentInvocationFinished" },
         { "$ref": "#/definitions/PublicOplogEntrySuspend" },
         { "$ref": "#/definitions/PublicOplogEntryError" },
+        { "$ref": "#/definitions/PublicOplogEntryRecoverySucceeded" },
         { "$ref": "#/definitions/PublicOplogEntryNoOp" },
         { "$ref": "#/definitions/PublicOplogEntryJump" },
         { "$ref": "#/definitions/PublicOplogEntryInterrupted" },
@@ -4464,11 +4762,11 @@
         { "$ref": "#/definitions/PublicOplogEntrySuccessfulUpdate" },
         { "$ref": "#/definitions/PublicOplogEntryFailedUpdate" },
         { "$ref": "#/definitions/PublicOplogEntryGrowMemory" },
-        { "$ref": "#/definitions/PublicOplogEntryFilesystemStorageUsageUpdate" },
         { "$ref": "#/definitions/PublicOplogEntryCreateResource" },
         { "$ref": "#/definitions/PublicOplogEntryDropResource" },
         { "$ref": "#/definitions/PublicOplogEntryLog" },
         { "$ref": "#/definitions/PublicOplogEntryRestart" },
+        { "$ref": "#/definitions/PublicOplogEntryResumed" },
         { "$ref": "#/definitions/PublicOplogEntryActivatePlugin" },
         { "$ref": "#/definitions/PublicOplogEntryDeactivatePlugin" },
         { "$ref": "#/definitions/PublicOplogEntryRevert" },
@@ -4626,17 +4924,20 @@
       "additionalProperties": false
     },
     "PublicOplogEntrySuspend": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Suspend" } } }] },
+    "PublicOplogEntryRecoverySucceeded": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "RecoverySucceeded" } } }] },
     "PublicOplogEntryNoOp": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "NoOp" } } }] },
     "PublicOplogEntryInterrupted": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Interrupted" } } }] },
     "PublicOplogEntryExited": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Exited" } } }] },
     "PublicOplogEntryBeginAtomicRegion": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "BeginAtomicRegion" } } }] },
     "PublicOplogEntryRestart": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Restart" } } }] },
+    "PublicOplogEntryResumed": { "allOf": [{ "$ref": "#/definitions/PublicOplogTimestampOnlyEntry" }, { "properties": { "type": { "const": "Resumed" } } }] },
     "PublicOplogEntryError": {
       "type": "object",
-      "required": ["type", "timestamp", "error", "retryFrom", "insideAtomicRegion"],
+      "required": ["type", "timestamp", "kind", "error", "retryFrom", "insideAtomicRegion"],
       "properties": {
         "type": { "const": "Error" },
         "timestamp": { "type": "string" },
+        "kind": { "type": "string", "enum": ["invocation", "recovery"] },
         "error": { "type": "string" },
         "retryFrom": { "type": "integer", "minimum": 0 },
         "insideAtomicRegion": { "type": "boolean" },
@@ -4684,12 +4985,6 @@
       "type": "object",
       "required": ["type", "timestamp", "delta"],
       "properties": { "type": { "const": "GrowMemory" }, "timestamp": { "type": "string" }, "delta": { "type": "integer", "minimum": 0 } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntryFilesystemStorageUsageUpdate": {
-      "type": "object",
-      "required": ["type", "timestamp", "delta"],
-      "properties": { "type": { "const": "FilesystemStorageUsageUpdate" }, "timestamp": { "type": "string" }, "delta": { "type": "integer" } },
       "additionalProperties": false
     },
     "PublicOplogEntryCreateResource": {
@@ -5066,6 +5361,16 @@
       },
       "additionalProperties": false
     },
+    "AgentActionError": {
+      "type": "object",
+      "required": ["componentName", "agentId", "error"],
+      "properties": {
+        "componentName": { "type": "string" },
+        "agentId": { "type": "string" },
+        "error": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "AgentUpdateMeta": {
       "type": "object",
       "required": ["componentName", "agentId", "fromRevision", "revision"],
@@ -5097,7 +5402,15 @@
       "properties": {
         "components": { "$ref": "#/definitions/DeploymentDiffSection" },
         "httpApiDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
-        "mcpDeployments": { "$ref": "#/definitions/DeploymentDiffSection" }
+        "mcpDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "remoteTools": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "publishedTools": { "$ref": "#/definitions/DeploymentSetDiffSection" },
+        "remoteToolMiddlewareDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "publishedToolMiddlewares": { "$ref": "#/definitions/DeploymentSetDiffSection" },
+        "universalToolMiddlewaresChanged": { "type": "boolean" },
+        "toolCompatibilityModeChanged": { "type": "boolean" },
+        "environmentToolMiddlewareBindings": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "agentToolMiddlewareBindings": { "$ref": "#/definitions/DeploymentDiffSection" }
       },
       "additionalProperties": false
     },
@@ -5124,8 +5437,65 @@
         },
         {
           "$ref": "#/definitions/McpDeploymentDiffPayload"
+        },
+        {
+          "$ref": "#/definitions/RemoteToolDeploymentDiffPayload"
         }
       ]
+    },
+    "DeploymentSetDiffSection": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["create", "delete"]
+      }
+    },
+    "RemoteToolDeploymentDiffPayload": {
+      "type": "object",
+      "required": [
+        "releaseId",
+        "version",
+        "sourceDigest",
+        "ownerAccountId",
+        "ownerAccountEmail",
+        "metadataVersion",
+        "metadataDigest",
+        "provision",
+        "bindings"
+      ],
+      "properties": {
+        "releaseId": { "type": "string", "format": "uuid" },
+        "version": { "type": "string" },
+        "sourceDigest": { "type": "string" },
+        "ownerAccountId": { "type": "string", "format": "uuid" },
+        "ownerAccountEmail": { "type": "string" },
+        "metadataVersion": { "type": "string" },
+        "metadataDigest": { "type": "string" },
+        "provision": { "$ref": "#/definitions/ToolProvisionConfig" },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/EffectiveToolBindingDiffPayload" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EffectiveToolBindingDiffPayload": {
+      "type": "object",
+      "required": [
+        "parameters",
+        "configKeysReadable",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "filesystemAccess"
+      ],
+      "properties": {
+        "parameters": {},
+        "configKeysReadable": { "$ref": "#/definitions/ConfigKeyScope" },
+        "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
+        "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" },
+        "filesystemAccess": { "type": "string", "enum": ["unset", "allowed", "denied"] }
+      },
+      "additionalProperties": false
     },
     "HashDiffPayload": {
       "type": "object",
@@ -5257,6 +5627,31 @@
           "type": "array",
           "items": { "$ref": "#/definitions/ResourceDefinitionCreation" }
         }
+      },
+      "additionalProperties": false
+    },
+    "ToolPublicationPlan": {
+      "type": "object",
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ToolPublicationPlanEntry" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolPublicationPlanEntry": {
+      "type": "object",
+      "required": ["action", "name", "version"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["noChange", "publish", "conflict"]
+        },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "reason": { "type": "string" }
       },
       "additionalProperties": false
     },
@@ -5685,7 +6080,19 @@
         },
         "mcpDeployments": {
           "$ref": "#/definitions/DeploymentDiffSection"
-        }
+        },
+        "remoteTools": {
+          "$ref": "#/definitions/DeploymentDiffSection"
+        },
+        "publishedTools": {
+          "$ref": "#/definitions/DeploymentSetDiffSection"
+        },
+        "remoteToolMiddlewareDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "publishedToolMiddlewares": { "$ref": "#/definitions/DeploymentSetDiffSection" },
+        "universalToolMiddlewaresChanged": { "type": "boolean" },
+        "toolCompatibilityModeChanged": { "type": "boolean" },
+        "environmentToolMiddlewareBindings": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "agentToolMiddlewareBindings": { "$ref": "#/definitions/DeploymentDiffSection" }
       },
       "additionalProperties": false
     },
@@ -5752,6 +6159,268 @@
       },
       "additionalProperties": false
     },
+    "EnvironmentToolGrantView": {
+      "type": "object",
+      "required": ["grantId", "releaseId", "toolName", "toolVersion", "owner", "protected", "automatic", "lifecycle"],
+      "properties": {
+        "grantId": { "type": "string", "format": "uuid" },
+        "releaseId": { "type": "string", "format": "uuid" },
+        "toolName": { "type": "string" },
+        "toolVersion": { "type": "string" },
+        "owner": { "type": "string" },
+        "protected": { "type": "boolean" },
+        "automatic": { "type": "boolean" },
+        "lifecycle": { "type": "string", "enum": ["active", "deleted"] }
+      },
+      "additionalProperties": false
+    },
+    "tool.grant.create": {
+      "type": "object",
+      "description": "Created tool grant for the selected environment.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool grant create",
+      "required": ["$type", "grant"],
+      "properties": {
+        "$type": { "const": "tool.grant.create" },
+        "grant": { "$ref": "#/definitions/EnvironmentToolGrantView" }
+      },
+      "additionalProperties": false
+    },
+    "tool.grant.get": {
+      "type": "object",
+      "description": "An active tool grant returned by `golem tool grant get`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool grant get",
+      "required": ["$type", "grant"],
+      "properties": {
+        "$type": { "const": "tool.grant.get" },
+        "grant": { "$ref": "#/definitions/EnvironmentToolGrantView" }
+      },
+      "additionalProperties": false
+    },
+    "tool.grant.list": {
+      "type": "object",
+      "description": "Active tool grants in the selected environment.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool grant list",
+      "required": ["$type", "grants"],
+      "properties": {
+        "$type": { "const": "tool.grant.list" },
+        "grants": { "type": "array", "items": { "$ref": "#/definitions/EnvironmentToolGrantView" } }
+      },
+      "additionalProperties": false
+    },
+    "tool.grant.delete": {
+      "type": "object",
+      "description": "Deleted tool grant ID emitted by `golem tool grant delete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool grant delete",
+      "required": ["$type", "grantId"],
+      "properties": {
+        "$type": { "const": "tool.grant.delete" },
+        "grantId": { "type": "string", "format": "uuid" }
+      },
+      "additionalProperties": false
+    },
+    "tool.grant.restore": {
+      "type": "object",
+      "description": "Restored tool grant emitted by `golem tool grant restore`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool grant restore",
+      "required": ["$type", "grant"],
+      "properties": {
+        "$type": { "const": "tool.grant.restore" },
+        "grant": { "$ref": "#/definitions/EnvironmentToolGrantView" }
+      },
+      "additionalProperties": false
+    },
+    "ToolRelease": {
+      "type": "object",
+      "required": ["id", "ownerAccountId", "name", "version", "source", "definition", "metadataVersion", "metadataDigest", "immutable", "lifecycle", "origin", "systemAvailability", "createdAt", "createdBy", "stateChangedAt", "stateChangedBy"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "ownerAccountId": { "type": "string", "format": "uuid" },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "source": { "$ref": "#/definitions/ToolReleaseSource" },
+        "definition": { "$ref": "#/definitions/Tool" },
+        "metadataVersion": { "type": "string" },
+        "metadataDigest": { "type": "string" },
+        "immutable": { "type": "boolean" },
+        "lifecycle": { "type": "string", "enum": ["published", "de-published", "superseded"] },
+        "origin": { "type": "string", "enum": ["ordinary", "protected-system"] },
+        "systemAvailability": {
+          "oneOf": [
+            { "type": "string", "enum": ["grantable", "auto-granted", "ambient"] },
+            { "type": "null" }
+          ]
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string", "format": "uuid" },
+        "stateChangedAt": { "type": "string", "format": "date-time" },
+        "stateChangedBy": { "type": "string", "format": "uuid" }
+      },
+      "additionalProperties": false
+    },
+    "ToolReleaseSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "componentId", "componentRevision", "componentName"],
+          "properties": {
+            "kind": { "const": "component" },
+            "componentId": { "type": "string", "format": "uuid" },
+            "componentRevision": { "type": "integer", "minimum": 0 },
+            "componentName": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "hostToolId", "implementationVersion"],
+          "properties": {
+            "kind": { "const": "host" },
+            "hostToolId": { "type": "string" },
+            "implementationVersion": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "tool.release": {
+      "type": "object",
+      "description": "A tool release returned by get, de-publish, or restore.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool release get",
+      "x-golem-commands": ["tool release get", "tool release de-publish", "tool release restore"],
+      "required": ["$type", "release"],
+      "properties": {
+        "$type": { "const": "tool.release" },
+        "release": { "$ref": "#/definitions/ToolRelease" }
+      },
+      "additionalProperties": false
+    },
+    "tool.release.list": {
+      "type": "object",
+      "description": "Tool releases owned by an account.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool release list",
+      "required": ["$type", "releases"],
+      "properties": {
+        "$type": { "const": "tool.release.list" },
+        "releases": { "type": "array", "items": { "$ref": "#/definitions/ToolRelease" } }
+      },
+      "additionalProperties": false
+    },
+    "DeployedRegisteredTool": {
+      "type": "object",
+      "required": [
+        "deploymentRevision",
+        "releaseId",
+        "definition",
+        "source",
+        "ownerAccountId",
+        "ownerAccountEmail",
+        "metadataVersion",
+        "metadataDigest"
+      ],
+      "properties": {
+        "deploymentRevision": { "type": "integer", "minimum": 0 },
+        "releaseId": {
+          "oneOf": [
+            { "type": "string", "format": "uuid" },
+            { "type": "null" }
+          ]
+        },
+        "definition": { "$ref": "#/definitions/Tool" },
+        "source": { "$ref": "#/definitions/ToolReleaseSource" },
+        "ownerAccountId": { "type": "string", "format": "uuid" },
+        "ownerAccountEmail": { "type": "string" },
+        "metadataVersion": { "type": "string" },
+        "metadataDigest": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "tool.get": {
+      "type": "object",
+      "description": "A tool from the selected environment's current deployment.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool get",
+      "required": ["$type", "tool"],
+      "properties": {
+        "$type": { "const": "tool.get" },
+        "tool": { "$ref": "#/definitions/DeployedRegisteredTool" }
+      },
+      "additionalProperties": false
+    },
+    "tool.list": {
+      "type": "object",
+      "description": "Tools in the selected environment's current deployment.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool list",
+      "required": ["$type", "tools"],
+      "properties": {
+        "$type": { "const": "tool.list" },
+        "tools": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DeployedRegisteredTool" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentToolMiddlewareGrantView": {
+      "type": "object",
+      "required": ["grantId", "releaseId", "middlewareName", "middlewareVersion", "owner", "protected", "automatic", "lifecycle"],
+      "properties": {
+        "grantId": { "type": "string", "format": "uuid" },
+        "releaseId": { "type": "string", "format": "uuid" },
+        "middlewareName": { "type": "string" }, "middlewareVersion": { "type": "string" },
+        "owner": { "type": "string" }, "protected": { "type": "boolean" }, "automatic": { "type": "boolean" },
+        "lifecycle": { "type": "string", "enum": ["active", "deleted"] }
+      },
+      "additionalProperties": false
+    },
+    "tool.middleware.get": {
+      "type": "object", "description": "A tool middleware from the selected environment's current deployment.",
+      "x-golem-output-mode": "single", "x-golem-command": "tool middleware get",
+      "required": ["$type", "middleware"], "properties": { "$type": { "const": "tool.middleware.get" }, "middleware": {} }, "additionalProperties": false
+    },
+    "tool.middleware.list": {
+      "type": "object", "description": "Tool middlewares in the selected environment's current deployment.",
+      "x-golem-output-mode": "single", "x-golem-command": "tool middleware list",
+      "required": ["$type", "middlewares"], "properties": { "$type": { "const": "tool.middleware.list" }, "middlewares": { "type": "array", "items": {} } }, "additionalProperties": false
+    },
+    "tool.middleware.release": {
+      "type": "object", "description": "A tool middleware release returned by get, de-publish, or restore.",
+      "x-golem-output-mode": "single", "x-golem-command": "tool middleware release get",
+      "x-golem-commands": ["tool middleware release get", "tool middleware release de-publish", "tool middleware release restore"],
+      "required": ["$type", "release"], "properties": { "$type": { "const": "tool.middleware.release" }, "release": {} }, "additionalProperties": false
+    },
+    "tool.middleware.release.list": {
+      "type": "object", "description": "Tool middleware releases owned by an account.",
+      "x-golem-output-mode": "single", "x-golem-command": "tool middleware release list",
+      "required": ["$type", "releases"], "properties": { "$type": { "const": "tool.middleware.release.list" }, "releases": { "type": "array", "items": {} } }, "additionalProperties": false
+    },
+    "tool.middleware.grant.create": {
+      "type": "object", "description": "Created tool middleware grant for the selected environment.", "x-golem-output-mode": "single", "x-golem-command": "tool middleware grant create",
+      "required": ["$type", "grant"], "properties": { "$type": { "const": "tool.middleware.grant.create" }, "grant": { "$ref": "#/definitions/EnvironmentToolMiddlewareGrantView" } }, "additionalProperties": false
+    },
+    "tool.middleware.grant.get": {
+      "type": "object", "description": "An active tool middleware grant.", "x-golem-output-mode": "single", "x-golem-command": "tool middleware grant get",
+      "required": ["$type", "grant"], "properties": { "$type": { "const": "tool.middleware.grant.get" }, "grant": { "$ref": "#/definitions/EnvironmentToolMiddlewareGrantView" } }, "additionalProperties": false
+    },
+    "tool.middleware.grant.list": {
+      "type": "object", "description": "Active tool middleware grants in the selected environment.", "x-golem-output-mode": "single", "x-golem-command": "tool middleware grant list",
+      "required": ["$type", "grants"], "properties": { "$type": { "const": "tool.middleware.grant.list" }, "grants": { "type": "array", "items": { "$ref": "#/definitions/EnvironmentToolMiddlewareGrantView" } } }, "additionalProperties": false
+    },
+    "tool.middleware.grant.delete": {
+      "type": "object", "description": "Deleted tool middleware grant ID.", "x-golem-output-mode": "single", "x-golem-command": "tool middleware grant delete",
+      "required": ["$type", "grantId"], "properties": { "$type": { "const": "tool.middleware.grant.delete" }, "grantId": { "type": "string", "format": "uuid" } }, "additionalProperties": false
+    },
+    "tool.middleware.grant.restore": {
+      "type": "object", "description": "Restored tool middleware grant.", "x-golem-output-mode": "single", "x-golem-command": "tool middleware grant restore",
+      "required": ["$type", "grant"], "properties": { "$type": { "const": "tool.middleware.grant.restore" }, "grant": { "$ref": "#/definitions/EnvironmentToolMiddlewareGrantView" } }, "additionalProperties": false
+    },
     "deploy.environment-setup-plan": {
       "type": "object",
       "description": "May be emitted by `golem deploy` when planning environment setup entries. Other deploy output documents may also appear in the same command run.",
@@ -5766,6 +6435,35 @@
         },
         "toBeApplied": { "$ref": "#/definitions/EnvironmentSetupDetailedSection" },
         "skippedAlreadyExists": { "$ref": "#/definitions/EnvironmentSetupKeysOnlySection" }
+      },
+      "additionalProperties": false
+    },
+    "EnvironmentToolGrantPlanEntry": {
+      "type": "object",
+      "required": ["action", "releaseId", "account", "name", "version", "grantId"],
+      "properties": {
+        "action": { "type": "string", "enum": ["create", "updateReference", "delete", "retainProtected", "retainAdministratorManaged"] },
+        "releaseId": { "type": ["string", "null"], "format": "uuid" },
+        "account": { "type": ["string", "null"] },
+        "name": { "type": ["string", "null"] },
+        "version": { "type": ["string", "null"] },
+        "grantId": { "type": ["string", "null"], "format": "uuid" }
+      },
+      "additionalProperties": false
+    },
+    "deploy.environment-tool-grants": {
+      "type": "object",
+      "description": "May be emitted by `golem deploy` or `golem build` when planning automatic environment tool grant changes. Other output documents may also appear in the same command run.",
+      "x-golem-output-mode": "multi-document",
+      "x-golem-command": "deploy",
+      "x-golem-commands": ["deploy", "build"],
+      "required": ["$type", "entries"],
+      "properties": {
+        "$type": { "const": "deploy.environment-tool-grants" },
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/EnvironmentToolGrantPlanEntry" }
+        }
       },
       "additionalProperties": false
     },
@@ -7351,6 +8049,7 @@
     },
     "SecretValuePayload": {
       "type": "object",
+      "description": "Secret handle identity and resolution metadata. Plaintext secret material is never included.",
       "required": ["secretId", "version", "resolvedAt"],
       "properties": {
         "secretId": { "type": "string" },
@@ -7832,12 +8531,61 @@
       "rustType": "EnvironmentListView"
     },
     {
+      "type": "tool.grant.create",
+      "rustType": "EnvironmentToolGrantCreateView"
+    },
+    {
+      "type": "tool.grant.get",
+      "rustType": "EnvironmentToolGrantGetView"
+    },
+    {
+      "type": "tool.grant.list",
+      "rustType": "EnvironmentToolGrantListView"
+    },
+    {
+      "type": "tool.grant.delete",
+      "rustType": "EnvironmentToolGrantDeleteView"
+    },
+    {
+      "type": "tool.grant.restore",
+      "rustType": "EnvironmentToolGrantRestoreView"
+    },
+    {
       "type": "environment.sync-deployment-options",
       "rustType": "EnvironmentSyncDeploymentOptionsResult"
     },
     {
+      "type": "tool.release",
+      "rustType": "ToolReleaseView"
+    },
+    {
+      "type": "tool.release.list",
+      "rustType": "ToolReleaseListView"
+    },
+    {
+      "type": "tool.get",
+      "rustType": "DeployedToolView"
+    },
+    {
+      "type": "tool.list",
+      "rustType": "DeployedToolListView"
+    },
+    { "type": "tool.middleware.get", "rustType": "DeployedToolMiddlewareView" },
+    { "type": "tool.middleware.list", "rustType": "DeployedToolMiddlewareListView" },
+    { "type": "tool.middleware.release", "rustType": "ToolMiddlewareReleaseView" },
+    { "type": "tool.middleware.release.list", "rustType": "ToolMiddlewareReleaseListView" },
+    { "type": "tool.middleware.grant.create", "rustType": "EnvironmentToolMiddlewareGrantCreateView" },
+    { "type": "tool.middleware.grant.get", "rustType": "EnvironmentToolMiddlewareGrantGetView" },
+    { "type": "tool.middleware.grant.list", "rustType": "EnvironmentToolMiddlewareGrantListView" },
+    { "type": "tool.middleware.grant.delete", "rustType": "EnvironmentToolMiddlewareGrantDeleteView" },
+    { "type": "tool.middleware.grant.restore", "rustType": "EnvironmentToolMiddlewareGrantRestoreView" },
+    {
       "type": "deploy.environment-setup-plan",
       "rustType": "EnvironmentSetupPlanView"
+    },
+    {
+      "type": "deploy.environment-tool-grants",
+      "rustType": "EnvironmentToolGrantPlanView"
     },
     {
       "type": "plugin.get",

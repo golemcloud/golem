@@ -23,7 +23,8 @@ use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::entity::{
-    EntityActivation, EntityInvocationScope, FilesystemCapability, OwnerRuntime,
+    EntityActivation, EntityInvocationScope, FilesystemCapability, InvocationExecutionMode,
+    OwnerRuntime,
 };
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
@@ -62,6 +63,7 @@ use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
+use golem_worker_executor::services::linear_memory::LinearMemoryTracker;
 use golem_worker_executor::services::oplog::{Oplog, OplogService};
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -80,7 +82,7 @@ use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
     CallCountManagement, EntityInvocationManagement, ExternalOperations, FileSystemReading,
     FuelManagement, InvocationContextManagement, InvocationHooks, InvocationManagement,
-    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx,
+    LogEventEmitBehaviour, StatusManagement, UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock, Weak};
@@ -117,6 +119,10 @@ impl wasmtime_wasi_http::p3::WasiHttpView for DebugContext {
 
 #[async_trait]
 impl FuelManagement for DebugContext {
+    fn fuel_metering_enabled(&self) -> bool {
+        false
+    }
+
     fn ensure_fuel(&mut self, _current_level: u64) -> Result<(), AgentError> {
         Ok(())
     }
@@ -433,6 +439,20 @@ impl HostWasmRpc for DebugContext {
             .await
     }
 
+    async fn create(
+        &mut self,
+        agent_type_name: String,
+        constructor: golem_schema::schema::wit::wire::SchemaValueTree,
+        phantom_id: Option<golem_schema::schema::wit::wire::Uuid>,
+        config: Vec<
+            golem_common::schema::agent::bindings::golem::agent::common::TypedAgentConfigValue,
+        >,
+    ) -> anyhow::Result<Result<Resource<WasmRpc>, RpcError>> {
+        self.durable_ctx
+            .create(agent_type_name, constructor, phantom_id, config)
+            .await
+    }
+
     async fn invoke_and_await(
         &mut self,
         self_: Resource<WasmRpc>,
@@ -609,8 +629,11 @@ impl WorkerCtx for DebugContext {
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        _: Arc<golem_worker_executor::native_tool::NativeToolCatalog<Self>>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
+        worker_filesystem: WorkerFilesystemContext,
+        linear_memory: LinearMemoryTracker,
         worker_config: AgentConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
@@ -625,10 +648,11 @@ impl WorkerCtx for DebugContext {
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<uuid::Uuid>,
         runtime: OwnerRuntime,
+        entity_execution_mode: Option<InvocationExecutionMode>,
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
         filesystem: FilesystemCapability,
-        executable_component: Component,
+        executable: golem_worker_executor::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         let account_resource_limits = owner_resources.resource_limits();
@@ -655,6 +679,8 @@ impl WorkerCtx for DebugContext {
             component_service,
             account_resource_limits,
             config,
+            worker_filesystem,
+            linear_memory,
             worker_config,
             execution_status,
             file_loader,
@@ -670,10 +696,12 @@ impl WorkerCtx for DebugContext {
             u64::MAX,
             u64::MAX,
             runtime,
+            entity_execution_mode,
             owner_execution,
             owner_resources,
+            None,
             filesystem,
-            executable_component,
+            executable,
             entity_activation,
         )
         .await?;
@@ -728,6 +756,10 @@ impl WorkerCtx for DebugContext {
 
     fn component_metadata(&self) -> &Component {
         self.durable_ctx.component_metadata()
+    }
+
+    fn executable_component_metadata(&self) -> Option<&Component> {
+        self.durable_ctx.executable_component_metadata()
     }
 
     fn is_exit(error: &Error) -> Option<i32> {

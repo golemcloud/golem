@@ -27,6 +27,7 @@ use std::time::Duration;
 pub struct DebugOplog {
     pub inner: Arc<dyn Oplog>,
     pub oplog_state: DebugOplogState,
+    close: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
 impl DebugOplog {
@@ -34,13 +35,18 @@ impl DebugOplog {
         inner: Arc<dyn Oplog>,
         debug_session_id: DebugSessionId,
         debug_session: Arc<dyn DebugSessions>,
+        close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
         let oplog_state = DebugOplogState {
             debug_session_id,
             debug_session,
         };
 
-        Self { inner, oplog_state }
+        Self {
+            inner,
+            oplog_state,
+            close: Some(close),
+        }
     }
 
     pub async fn get_oplog_entry_applying_overrides(
@@ -62,6 +68,14 @@ impl Debug for DebugOplog {
     }
 }
 
+impl Drop for DebugOplog {
+    fn drop(&mut self) {
+        if let Some(close) = self.close.take() {
+            close();
+        }
+    }
+}
+
 pub struct DebugOplogState {
     debug_session_id: DebugSessionId,
     debug_session: Arc<dyn DebugSessions + Send + Sync>,
@@ -69,6 +83,18 @@ pub struct DebugOplogState {
 
 #[async_trait]
 impl Oplog for DebugOplog {
+    fn retire(&self) {
+        self.inner.retire();
+    }
+
+    fn is_retired(&self) -> bool {
+        self.inner.is_retired()
+    }
+
+    fn task_owner(&self) -> Option<&golem_worker_executor::services::oplog::WorkerTasks> {
+        self.inner.task_owner()
+    }
+
     // We don't allow debugging session to add anything into oplog
     // which internally can get committed.
     //
@@ -149,16 +175,25 @@ impl Oplog for DebugOplog {
             .oplog_state
             .debug_session
             .get(&self.oplog_state.debug_session_id)
-            .await
-            .expect("Internal Error. Current Oplog Index failed. Debug session not found");
+            .await;
 
-        // If a debug session not found but hasn't been set up with a target index,
-        // it implies, we only connected to the worker and haven't started debugging yet.
-        if let Some(index) = debug_session_data.target_oplog_index {
-            index
-        } else {
-            self.inner.current_oplog_index().await
+        if let Some(debug_session_data) = debug_session_data
+            && let Some(index) = debug_session_data.target_oplog_index
+        {
+            return index;
         }
+
+        // Worker construction precedes session registration when first connecting.
+        self.inner.current_oplog_index().await
+    }
+
+    async fn raw_durable_stream_session_status(
+        &self,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
+    ) -> golem_worker_executor::services::oplog::RawDurableStreamSessionStatus {
+        self.inner
+            .raw_durable_stream_session_status(session_key)
+            .await
     }
 
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
@@ -171,18 +206,19 @@ impl Oplog for DebugOplog {
 
     // Reads never move the debug session's replay position: replay's single-entry reads are
     // speculative (progress is only committed via `on_replay_progress`), and other components
-    // (for example P3 request-body reconstruction) perform unrelated point lookups.
+    // (for example P3 request-body reconstruction) perform unrelated point lookups. Worker
+    // construction may read before session registration, when the raw oplog is the only view.
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
-        let debug_session_data = self
+        let playback_overrides = self
             .oplog_state
             .debug_session
             .get(&self.oplog_state.debug_session_id)
             .await
-            .expect("Internal Error. Read failed. Debug session not found");
-        let playback_overrides = debug_session_data.playback_overrides.clone();
+            .map(|data| data.playback_overrides.overrides)
+            .unwrap_or_default();
 
         Self::get_oplog_entry_applying_overrides(
-            playback_overrides.overrides,
+            playback_overrides,
             oplog_index,
             self.inner.clone(),
         )
@@ -221,20 +257,16 @@ impl Oplog for DebugOplog {
 
         // Like `read`, this never moves the debug session's replay position; it only applies the
         // playback overrides on top of the underlying entries.
-        let debug_session_data = self
+        let playback_overrides = self
             .oplog_state
             .debug_session
             .get(&self.oplog_state.debug_session_id)
             .await
-            .expect("Internal Error. Read failed. Debug session not found");
-        let playback_overrides = debug_session_data.playback_overrides;
+            .map(|data| data.playback_overrides.overrides)
+            .unwrap_or_default();
 
         for (idx, entry) in self.inner.read_exact(oplog_index, n).await {
-            let entry = playback_overrides
-                .overrides
-                .get(&idx)
-                .cloned()
-                .unwrap_or(entry);
+            let entry = playback_overrides.get(&idx).cloned().unwrap_or(entry);
             result.insert(idx, entry);
         }
         result

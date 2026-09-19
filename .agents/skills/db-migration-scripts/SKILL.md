@@ -30,7 +30,7 @@ root's query layer is shared:
 | Migration root | Query layer | Convention |
 |---|---|---|
 | `golem-registry-service/db/migration/` | one impl expanded per backend by `#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]` | converge by default |
-| `golem-shard-manager/db/migration/` | same `trait_gen` pattern (`src/quota/quota_repo.rs`, `src/sharding/persistence.rs`) | converge by default |
+| `golem-shard-manager/db/migration/` | same `trait_gen` pattern (`src/quota/quota_repo.rs`, `src/sharding/persistence/db.rs`) | converge by default |
 | `golem-worker-executor/db/migration/{indexed,keyvalue,scheduler}/` | separate `postgres.rs` / `sqlite.rs` under `src/storage/<subsystem>/` (alongside `multi_sqlite.rs`, `redis.rs`, `memory.rs`) | diverge where the engine calls for it |
 
 ### Shared-query roots
@@ -109,8 +109,8 @@ Examples of the relevant integration coverage:
 
 - Registry repository tests initialize PostgreSQL and SQLite from
   `golem-registry-service/db/migration/`.
-- `golem-shard-manager`'s `persistence` tests run each test through both `sqlite` and `postgres`
-  matrix dimensions.
+- `golem-shard-manager`'s `persistence` tests run each test through the `sqlite`, `postgres` and
+  `etcd` matrix dimensions.
 - Worker-executor indexed/key-value storage tests include SQLite and PostgreSQL dimensions; select
   the storage test that exercises the changed schema.
 

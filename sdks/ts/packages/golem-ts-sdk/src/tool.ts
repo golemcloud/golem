@@ -25,6 +25,15 @@ import type {
   ToolError as WireToolError,
   TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/common@0.1.0';
+import type { ByteStreamItem } from 'golem:tool/host@0.1.0';
+import {
+  mapSettledToolResult,
+  resultFromSettledToolResult,
+  startedToolInvocation,
+  type SettledToolResult,
+  type StartedToolInvocation,
+  type ToolInputStream,
+} from './internal/tool/startedToolInvocation';
 import type { Principal } from './principal';
 import {
   type ExtendedCommandBody,
@@ -55,6 +64,8 @@ import {
 } from './internal/tool';
 import {
   deepEqual,
+  preflightWitTypedSchemaValue,
+  schemaGraphFromWit,
   t,
   typedSchemaValueFromWit,
   typedSchemaValueToWit,
@@ -66,6 +77,8 @@ import { closeAsyncIterable, isAsyncIterable } from './internal/tool/asyncIterab
 import { compileSchema } from './schema/adapter';
 import type { SchemaCodec } from './schema/codec';
 import type { StandardSchemaV1 } from './schema/standardSchema';
+
+export type { ToolInputStream } from './internal/tool/startedToolInvocation';
 
 export type CamelCase<Name extends string> = Name extends `${infer Head}-${infer Tail}`
   ? `${Head}${Capitalize<CamelCase<Tail>>}`
@@ -445,7 +458,7 @@ export type ToolImplementation<Definition> = RootImplementation<ToolCommandModel
 declare const TOOL_CLIENT_ERRORS: unique symbol;
 
 export interface ToolClientMethod<Args, Result, Errors = never> {
-  (args: Simplify<Args>): Promise<Result>;
+  (args: Simplify<Args>): Result;
   readonly [TOOL_CLIENT_ERRORS]: Errors;
 }
 
@@ -455,20 +468,14 @@ export type ToolClientErrors<Method> = Method extends {
   ? Errors
   : never;
 
-type ClientStdin<Body> = StreamContextField<'stdin', BodyStdin<Body>, AsyncIterable<number>>;
+type ClientStdin<Body> = StreamContextField<'stdin', BodyStdin<Body>, ToolInputStream>;
 
 type ClientResult<Body> =
-  BodyStdout<Body> extends 'required'
-    ? [BodySuccess<Body>] extends [undefined]
-      ? AsyncIterable<number>
-      : { result: BodySuccess<Body>; stdout: AsyncIterable<number> }
-    : BodyStdout<Body> extends 'optional'
-      ? [BodySuccess<Body>] extends [undefined]
-        ? AsyncIterable<number> | undefined
-        : { result: BodySuccess<Body>; stdout?: AsyncIterable<number> }
-      : [BodySuccess<Body>] extends [undefined]
-        ? void
-        : BodySuccess<Body>;
+  BodyStdout<Body> extends 'required' | 'optional'
+    ? StartedToolInvocation<BodySuccess<Body>>
+    : [BodySuccess<Body>] extends [undefined]
+      ? Promise<void>
+      : Promise<BodySuccess<Body>>;
 
 type ClientMethodFor<Model, Inherited> =
   Model extends ToolCommandModel<string, infer Globals, infer Body, object>
@@ -516,7 +523,68 @@ type RootClient<Model> =
 
 export type ToolClient<Definition> = Simplify<RootClient<ToolCommandModelOf<Definition>>>;
 
-export type ToolUnderlying<Definition> = ToolClient<Definition>;
+type UnderlyingStdin<Body> = StreamContextField<'stdin', BodyStdin<Body>, AsyncIterable<number>>;
+
+type UnderlyingResult<Body> =
+  BodyStdout<Body> extends 'required'
+    ? [BodySuccess<Body>] extends [undefined]
+      ? AsyncIterable<number>
+      : { result: BodySuccess<Body>; stdout: AsyncIterable<number> }
+    : BodyStdout<Body> extends 'optional'
+      ? [BodySuccess<Body>] extends [undefined]
+        ? AsyncIterable<number> | undefined
+        : { result: BodySuccess<Body>; stdout?: AsyncIterable<number> }
+      : [BodySuccess<Body>] extends [undefined]
+        ? void
+        : BodySuccess<Body>;
+
+type UnderlyingMethodFor<Model, Inherited> =
+  Model extends ToolCommandModel<string, infer Globals, infer Body, object>
+    ? Body extends AnyToolBodyModel
+      ? ToolClientMethod<
+          GlobalArguments<MergeGlobalArguments<Inherited, Globals>> &
+            BodyArgs<Body> &
+            UnderlyingStdin<Body>,
+          Promise<UnderlyingResult<Body>>,
+          BodyErrors<Body>
+        >
+      : never
+    : never;
+
+type UnderlyingChildClients<Children, Inherited> = {
+  [Name in keyof Children]: UnderlyingNodeClient<Children[Name], Inherited>;
+};
+
+type UnderlyingNodeClient<Model, Inherited, Reconcile extends boolean = false> =
+  Model extends ToolSubtreeModel<infer Command>
+    ? UnderlyingNodeClient<Command, Inherited, true>
+    : Model extends ToolCommandModel<string, infer Globals, infer Body, infer Children>
+      ? UnderlyingNodeClientWithGlobals<
+          Model,
+          Inherited,
+          Reconcile extends true ? ReconcileGlobalArguments<Globals, Inherited> : Globals,
+          Reconcile extends true ? ReconcileBodyModel<Body, Inherited> : Body,
+          Children
+        >
+      : never;
+
+type UnderlyingNodeClientWithGlobals<Model, Inherited, Globals, Body, Children> =
+  Model extends ToolCommandModel<infer Name, unknown, AnyToolBodyModel | undefined, object>
+    ? Body extends AnyToolBodyModel
+      ? UnderlyingMethodFor<ToolCommandModel<Name, Globals, Body, Children>, Inherited> &
+          UnderlyingChildClients<Children, MergeGlobalArguments<Inherited, Globals>>
+      : UnderlyingChildClients<Children, MergeGlobalArguments<Inherited, Globals>>
+    : never;
+
+type RootUnderlyingClient<Model> =
+  Model extends ToolCommandModel<infer Name, infer Globals, infer Body, infer Children>
+    ? (Body extends AnyToolBodyModel ? { [Key in Name]: UnderlyingMethodFor<Model, {}> } : {}) &
+        UnderlyingChildClients<Children, Globals>
+    : never;
+
+export type ToolUnderlying<Definition> = Simplify<
+  RootUnderlyingClient<ToolCommandModelOf<Definition>>
+>;
 export type ToolUnderlyingErrors<Method> = ToolClientErrors<Method>;
 
 export type ToolMiddlewareInvocationContext<
@@ -539,7 +607,7 @@ type MiddlewareHandlerFor<Model, Inherited, UnderlyingDefinition> =
     ? Body extends AnyToolBodyModel
       ? ToolMiddlewareHandler<
           GlobalArguments<MergeGlobalArguments<Inherited, Globals>> & BodyArgs<Body>,
-          ClientResult<Body>,
+          UnderlyingResult<Body>,
           ToolMiddlewareInvocationContext<UnderlyingDefinition, BodyStdin<Body>>
         >
       : never
@@ -635,6 +703,7 @@ export interface ImplementedToolMiddleware<Name extends string = string> {
 
 interface ToolMiddlewareMetadataOptions<Name extends string> {
   readonly name: Name;
+  readonly version?: string;
   readonly aliases?: readonly string[];
   readonly doc?: DocInput;
 }
@@ -697,23 +766,26 @@ export type UniversalToolMiddlewareInvoke = (
 
 export interface UniversalToolMiddlewareOptions<Name extends string> {
   readonly name: Name;
+  readonly version?: string;
   readonly aliases?: readonly string[];
   readonly doc?: DocInput;
   readonly invoke: UniversalToolMiddlewareInvoke;
 }
 
 export interface ToolClientInvocationResult {
-  readonly result?: WireTypedSchemaValue;
-  readonly stdout?: AsyncIterable<number>;
+  readonly stdout?: AsyncIterable<ByteStreamItem>;
+  readonly settledResult: Promise<SettledToolResult<{ readonly result?: WireTypedSchemaValue }>>;
+  cancel(): void;
 }
 
 /** Raw WIT invocation seam used by typed tool clients. */
 export interface ToolClientTransport {
-  invokeAndAwait(
+  start(
     commandPath: readonly string[],
     input: WireTypedSchemaValue,
-    stdin: AsyncIterable<number> | undefined,
-  ): ToolClientInvocationResult | Promise<ToolClientInvocationResult>;
+    stdin: ToolInputStream | undefined,
+    stdout: boolean,
+  ): ToolClientInvocationResult;
 }
 
 export type ToolClientFailurePhase = 'input' | 'invoke' | 'result';
@@ -731,7 +803,12 @@ export type ToolClientFailureMapper = (
 
 export type ToolInvokeErrorCause<Errors> =
   | Exclude<WireToolError, { readonly tag: 'custom-error' }>
-  | { readonly tag: 'tool'; readonly error: Errors };
+  | { readonly tag: 'tool'; readonly error: Errors }
+  | {
+      readonly tag: 'unknown-error';
+      readonly name: string;
+      readonly payload: WireTypedSchemaValue;
+    };
 
 export class ToolInvokeError<Errors = never> extends Error {
   readonly cause: ToolInvokeErrorCause<Errors>;
@@ -1576,8 +1653,9 @@ function assembleToolClientNode(
   transport: ToolClientTransport,
   mapFailure: ToolClientFailureMapper,
 ): unknown {
-  const result: Record<string, unknown> | ((args: Record<string, unknown>) => Promise<unknown>) =
-    node.body ? createToolClientMethod(tool, node, commandPath, transport, mapFailure) : {};
+  const result: Record<string, unknown> | ((args: Record<string, unknown>) => unknown) = node.body
+    ? createToolClientMethod(tool, node, commandPath, transport, mapFailure)
+    : {};
 
   node.subcommands.forEach((child) => {
     defineClientMember(
@@ -1603,6 +1681,167 @@ function createToolClientMethod(
   node: ExtendedCommandNode,
   commandPath: readonly string[],
   transport: ToolClientTransport,
+  mapFailure: ToolClientFailureMapper,
+): (args: Record<string, unknown>) => unknown {
+  const body = node.body;
+  if (!body) throw new Error(`tool command "${node.name}" has no callable body`);
+  const commandBody = body;
+  const inputModel = tool.canonicalInputModel(node);
+  const callName = [tool.toolName, ...commandPath].join(' ');
+
+  return (args: Record<string, unknown>): unknown => {
+    if (!commandBody.stdout) {
+      return Promise.resolve().then(() => startToolClientCall());
+    }
+    return startToolClientCall();
+
+    function startToolClientCall(): unknown {
+      let input: WireTypedSchemaValue;
+      let stdin: ToolInputStream | undefined;
+      try {
+        if (!isImplementationObject(args)) {
+          throw new Error('tool client arguments must be an object');
+        }
+        const canonicalInput = Object.fromEntries(
+          inputModel.fields.map((field) => {
+            const projectedName = camelCase(field.name);
+            return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
+          }),
+        );
+        input = typedSchemaValueToWit(inputModel.encodeTyped(canonicalInput));
+        stdin = commandBody.stdin ? (args.stdin as ToolInputStream | undefined) : undefined;
+        if (stdin !== undefined && !isReadableStream(stdin)) {
+          throw new Error('stdin must be a readable stream');
+        }
+        if (commandBody.stdin?.required && stdin === undefined) {
+          throw new Error('required stdin stream is missing');
+        }
+      } catch (error) {
+        throw mapFailure(error, { phase: 'input', body: commandBody, callName });
+      }
+
+      let invocation: ToolClientInvocationResult;
+      try {
+        invocation = transport.start(commandPath, input, stdin, commandBody.stdout !== undefined);
+      } catch (error) {
+        throw mapFailure(error, { phase: 'invoke', body: commandBody, callName });
+      }
+
+      const settledResult = mapSettledToolResult(
+        invocation.settledResult,
+        (terminal) => {
+          try {
+            return decodeToolClientResult(commandBody, terminal, callName);
+          } catch (error) {
+            throw mapFailure(error, { phase: 'result', body: commandBody, callName });
+          }
+        },
+        (error) => mapFailure(error, { phase: 'result', body: commandBody, callName }),
+      );
+      if (!commandBody.stdout) return resultFromSettledToolResult(settledResult);
+      if (!invocation.stdout) {
+        invocation.cancel();
+        throw mapFailure(new Error('required stdout stream is missing'), {
+          phase: 'result',
+          body: commandBody,
+          callName,
+        });
+      }
+      if (!isAsyncIterable(invocation.stdout)) {
+        invocation.cancel();
+        throw mapFailure(new Error('stdout must be an async iterable'), {
+          phase: 'result',
+          body: commandBody,
+          callName,
+        });
+      }
+      return startedToolInvocation(invocation.stdout, settledResult, () => invocation.cancel());
+    }
+  };
+}
+
+function decodeToolClientResult(
+  body: ExtendedCommandBody,
+  invocation: { readonly result?: WireTypedSchemaValue },
+  callName: string,
+): unknown {
+  const hasResult = invocation.result !== undefined;
+
+  if (!body.result && hasResult) {
+    throw new Error('unit command returned an unexpected result');
+  }
+  if (body.result && !hasResult) {
+    throw new Error('structured command result is missing');
+  }
+  return body.result
+    ? decodeWireValue(body.result.codec, invocation.result!, `${callName} result`)
+    : undefined;
+}
+
+interface ToolUnderlyingInvocationResult {
+  readonly result?: WireTypedSchemaValue;
+  readonly stdout?: AsyncIterable<number>;
+}
+
+interface ToolUnderlyingTransport {
+  invokeAndAwait(
+    commandPath: readonly string[],
+    input: WireTypedSchemaValue,
+    stdin: AsyncIterable<number> | undefined,
+  ): ToolUnderlyingInvocationResult | Promise<ToolUnderlyingInvocationResult>;
+}
+
+/** @internal Assemble the completion-returning client exposed to a tool middleware. */
+export function createToolUnderlyingForExtendedTool(
+  tool: ExtendedToolType,
+  transport: ToolUnderlyingTransport,
+  mapFailure: ToolClientFailureMapper,
+): object {
+  const result: Record<string, unknown> = {};
+
+  if (tool.root.body) {
+    defineClientMember(
+      result,
+      tool.root.name,
+      createToolUnderlyingMethod(tool, tool.root, [], transport, mapFailure),
+    );
+  }
+  tool.root.subcommands.forEach((child) => {
+    defineClientMember(
+      result,
+      child.name,
+      assembleToolUnderlyingNode(tool, child, [child.name], transport, mapFailure),
+    );
+  });
+
+  return result;
+}
+
+function assembleToolUnderlyingNode(
+  tool: ExtendedToolType,
+  node: ExtendedCommandNode,
+  commandPath: readonly string[],
+  transport: ToolUnderlyingTransport,
+  mapFailure: ToolClientFailureMapper,
+): unknown {
+  const result: Record<string, unknown> | ((args: Record<string, unknown>) => Promise<unknown>) =
+    node.body ? createToolUnderlyingMethod(tool, node, commandPath, transport, mapFailure) : {};
+
+  node.subcommands.forEach((child) => {
+    defineClientMember(
+      result,
+      child.name,
+      assembleToolUnderlyingNode(tool, child, [...commandPath, child.name], transport, mapFailure),
+    );
+  });
+  return result;
+}
+
+function createToolUnderlyingMethod(
+  tool: ExtendedToolType,
+  node: ExtendedCommandNode,
+  commandPath: readonly string[],
+  transport: ToolUnderlyingTransport,
   mapFailure: ToolClientFailureMapper,
 ): (args: Record<string, unknown>) => Promise<unknown> {
   const body = node.body;
@@ -1635,7 +1874,7 @@ function createToolClientMethod(
       throw mapFailure(error, { phase: 'input', body, callName });
     }
 
-    let invocation: ToolClientInvocationResult;
+    let invocation: ToolUnderlyingInvocationResult;
     try {
       invocation = await transport.invokeAndAwait(commandPath, input, stdin);
     } catch (error) {
@@ -1643,7 +1882,7 @@ function createToolClientMethod(
     }
 
     try {
-      return decodeToolClientResult(body, invocation, callName);
+      return decodeToolUnderlyingResult(body, invocation, callName);
     } catch (error) {
       await closeAsyncIterable(invocation.stdout);
       throw mapFailure(error, { phase: 'result', body, callName });
@@ -1651,9 +1890,9 @@ function createToolClientMethod(
   };
 }
 
-function decodeToolClientResult(
+function decodeToolUnderlyingResult(
   body: ExtendedCommandBody,
-  invocation: ToolClientInvocationResult,
+  invocation: ToolUnderlyingInvocationResult,
   callName: string,
 ): unknown {
   const hasResult = invocation.result !== undefined;
@@ -1685,20 +1924,38 @@ function decodeToolClientResult(
     : { result: decodedResult };
 }
 
+function isReadableStream(value: unknown): value is ToolInputStream {
+  return (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as Record<PropertyKey, unknown>).getReader === 'function'
+  );
+}
+
 export function decodeDeclaredToolError(
   body: ExtendedCommandBody,
-  wirePayload: WireTypedSchemaValue,
+  wireError: Extract<WireToolError, { readonly tag: 'custom-error' }>['val'],
   callName: string,
-): ToolErr<string, unknown> | ToolErr<string> {
-  const payload = typedSchemaValueFromWit(wirePayload);
-  const unitGraph = { defs: new Map(), root: t.tuple([]) };
-  const errorCase = body.errors.find((errorCase) =>
-    deepEqual(payload.graph, errorCase.payloadCodec?.graph ?? unitGraph),
-  );
+):
+  | ToolErr<string, unknown>
+  | ToolErr<string>
+  | {
+      readonly tag: 'unknown-error';
+      readonly name: string;
+      readonly payload: WireTypedSchemaValue;
+    } {
+  const errorCase = body.errors.find((candidate) => candidate.name === wireError.name);
   if (!errorCase) {
-    throw new Error('remote custom error does not match any declared error schema');
+    preflightWitTypedSchemaValue(wireError.payload);
+    return { tag: 'unknown-error', name: wireError.name, payload: wireError.payload };
   }
 
+  validateWireSchema(
+    errorCase.payloadCodec?.graph ?? { defs: new Map(), root: t.tuple([]) },
+    wireError.payload,
+    `${callName} custom error "${errorCase.name}"`,
+  );
+  const payload = typedSchemaValueFromWit(wireError.payload);
   if (!errorCase.payloadCodec) {
     if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
       throw new Error(`remote custom error "${errorCase.name}" has a non-unit payload`);
@@ -1718,7 +1975,19 @@ function decodeWireValue(
   wire: WireTypedSchemaValue,
   position: string,
 ): unknown {
+  validateWireSchema(codec.graph, wire, position);
   return decodeTypedValue(codec, typedSchemaValueFromWit(wire), position);
+}
+
+function validateWireSchema(
+  expected: SchemaCodec['graph'],
+  wire: WireTypedSchemaValue,
+  position: string,
+): void {
+  preflightWitTypedSchemaValue(wire);
+  if (!deepEqual(schemaGraphFromWit(wire.graph), expected)) {
+    throw new Error(`${position} schema does not match the local definition`);
+  }
 }
 
 function decodeTypedValue(codec: SchemaCodec, typed: TypedSchemaValue, position: string): unknown {
@@ -1749,6 +2018,8 @@ function formatToolInvokeError(cause: ToolInvokeErrorCause<unknown>): string {
         ? `Underlying tool returned declared error "${name}"`
         : 'Underlying tool returned a declared error';
     }
+    case 'unknown-error':
+      return `Underlying tool returned unknown declared error "${cause.name}"`;
   }
 }
 
@@ -2187,6 +2458,7 @@ function normalizeDoc(input?: DocInput): Doc {
 
 function normalizeMiddlewareMetadata(options: ToolMiddlewareMetadataOptions<string>): {
   readonly name: string;
+  readonly version: string;
   readonly aliases: readonly string[];
   readonly doc: Doc;
 } {
@@ -2194,6 +2466,10 @@ function normalizeMiddlewareMetadata(options: ToolMiddlewareMetadataOptions<stri
     throw new Error('tool middleware name must be a string');
   }
   validateToolIdentifier('tool middleware name', options.name);
+  const version = options.version ?? '0.0.0';
+  if (typeof version !== 'string') {
+    throw new Error(`tool middleware "${options.name}" version must be a string`);
+  }
 
   if (options.aliases !== undefined && !Array.isArray(options.aliases)) {
     throw new Error(`tool middleware "${options.name}" aliases must be an array`);
@@ -2238,7 +2514,7 @@ function normalizeMiddlewareMetadata(options: ToolMiddlewareMetadataOptions<stri
     });
   }
 
-  return { name: options.name, aliases, doc: normalizeDoc(input) };
+  return { name: options.name, version, aliases, doc: normalizeDoc(input) };
 }
 
 function normalizeAnnotations(input: Partial<CommandAnnotations>): CommandAnnotations {

@@ -31,6 +31,10 @@ use crate::repo::environment::{DbEnvironmentRepo, EnvironmentRepo};
 use crate::repo::environment_plugin_grant::{
     DbEnvironmentPluginGrantRepo, EnvironmentPluginGrantRepo,
 };
+use crate::repo::environment_tool_grant::{DbEnvironmentToolGrantRepo, EnvironmentToolGrantRepo};
+use crate::repo::environment_tool_middleware_grant::{
+    DbEnvironmentToolMiddlewareGrantRepo, EnvironmentToolMiddlewareGrantRepo,
+};
 use crate::repo::http_api_deployment::{DbHttpApiDeploymentRepo, HttpApiDeploymentRepo};
 use crate::repo::mcp_deployment::{DbMcpDeploymentRepo, McpDeploymentRepo};
 use crate::repo::oauth2_token::{DbOAuth2TokenRepo, OAuth2TokenRepo};
@@ -44,6 +48,10 @@ use crate::repo::resource_definition::{DbResourceDefinitionRepo, ResourceDefinit
 use crate::repo::retry_policy::{DbRetryPolicyRepo, RetryPolicyRepo};
 use crate::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
+use crate::repo::tool_middleware_release::{
+    DbToolMiddlewareReleaseRepo, ToolMiddlewareReleaseRepo,
+};
+use crate::repo::tool_release::{DbToolReleaseRepo, ToolReleaseRepo};
 use crate::services::account::AccountService;
 use crate::services::account_resource_override::AccountResourceOverrideService;
 use crate::services::account_usage::AccountUsageService;
@@ -62,8 +70,11 @@ use crate::services::domain_registration::DomainRegistrationService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_state::EnvironmentStateService;
+use crate::services::environment_tool_grant::EnvironmentToolGrantService;
+use crate::services::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantService;
 use crate::services::http_api_deployment::HttpApiDeploymentService;
 use crate::services::mcp_deployment::McpDeploymentService;
+use crate::services::native_tool_catalog::{NativeToolCatalog, compiled_native_tools};
 use crate::services::permission_share::PermissionShareService;
 use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
@@ -75,6 +86,8 @@ use crate::services::resource_definition::ResourceDefinitionService;
 use crate::services::retry_policy::RetryPolicyService;
 use crate::services::security_scheme::SecuritySchemeService;
 use crate::services::token::TokenService;
+use crate::services::tool_middleware_release::ToolMiddlewareReleaseService;
+use crate::services::tool_release::ToolReleaseService;
 use anyhow::{Context, anyhow};
 use golem_common::IntoAnyhow;
 use golem_common::config::DbConfig;
@@ -112,10 +125,13 @@ pub struct Services {
     pub deployment_write_service: Arc<DeploymentWriteService>,
     pub domain_registration_service: Arc<DomainRegistrationService>,
     pub environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
+    pub environment_tool_grant_service: Arc<EnvironmentToolGrantService>,
+    pub environment_tool_middleware_grant_service: Arc<EnvironmentToolMiddlewareGrantService>,
     pub environment_service: Arc<EnvironmentService>,
     pub environment_state_service: Arc<EnvironmentStateService>,
     pub http_api_deployment_service: Arc<HttpApiDeploymentService>,
     pub mcp_deployment_service: Arc<McpDeploymentService>,
+    pub native_tool_catalog: Arc<NativeToolCatalog>,
     pub login_system: LoginSystem,
     pub permission_share_service: Arc<PermissionShareService>,
     pub plan_service: Arc<PlanService>,
@@ -125,6 +141,8 @@ pub struct Services {
     pub reports_service: Arc<ReportsService>,
     pub security_scheme_service: Arc<SecuritySchemeService>,
     pub token_service: Arc<TokenService>,
+    pub tool_release_service: Arc<ToolReleaseService>,
+    pub tool_middleware_release_service: Arc<ToolMiddlewareReleaseService>,
 }
 
 struct Repos {
@@ -139,6 +157,8 @@ struct Repos {
     deployment_repo: Arc<dyn DeploymentRepo>,
     domain_registration_repo: Arc<dyn DomainRegistrationRepo>,
     environment_plugin_grant_repo: Arc<dyn EnvironmentPluginGrantRepo>,
+    environment_tool_grant_repo: Arc<dyn EnvironmentToolGrantRepo>,
+    environment_tool_middleware_grant_repo: Arc<dyn EnvironmentToolMiddlewareGrantRepo>,
     environment_repo: Arc<dyn EnvironmentRepo>,
     http_api_deployment_repo: Arc<dyn HttpApiDeploymentRepo>,
     mcp_deployment_repo: Arc<dyn McpDeploymentRepo>,
@@ -152,6 +172,8 @@ struct Repos {
     reports_repo: Arc<dyn ReportRepo>,
     security_scheme_repo: Arc<dyn SecuritySchemeRepo>,
     token_repo: Arc<dyn TokenRepo>,
+    tool_release_repo: Arc<dyn ToolReleaseRepo>,
+    tool_middleware_release_repo: Arc<dyn ToolMiddlewareReleaseRepo>,
 }
 
 impl Services {
@@ -232,11 +254,18 @@ impl Services {
 
         let builtin_plugin_owner_account_id = config
             .initial_accounts
-            .values()
-            .find(|a| a.role == golem_common::model::auth::AccountRole::BuiltinPluginOwner)
-            .map(|a| a.id)
+            .get("builtin_plugin_owner")
+            .map(|account| account.id)
             .ok_or(anyhow!(
-                "No builtin-plugin-owner account found in initial_accounts"
+                "No builtin_plugin_owner account found in initial_accounts"
+            ))?;
+
+        let builtin_tool_owner_account_id = config
+            .initial_accounts
+            .get("builtin_tool_owner")
+            .map(|account| account.id)
+            .ok_or(anyhow!(
+                "No builtin_tool_owner account found in initial_accounts"
             ))?;
 
         let application_service = Arc::new(ApplicationService::new(
@@ -268,10 +297,12 @@ impl Services {
             permission_share_service.clone(),
         ));
 
+        let native_tool_catalog = Arc::new(NativeToolCatalog::default());
         let deployment_service = Arc::new(DeploymentService::new(
             environment_service.clone(),
             application_service.clone(),
             repos.deployment_repo.clone(),
+            native_tool_catalog.clone(),
         ));
 
         let component_service = Arc::new(ComponentService::new(
@@ -303,15 +334,42 @@ impl Services {
             builtin_plugin_owner_account_id,
         ));
 
+        let tool_release_service = Arc::new(ToolReleaseService::new(
+            repos.tool_release_repo.clone(),
+            account_service.clone(),
+            component_service.clone(),
+            builtin_tool_owner_account_id,
+        ));
+
+        let environment_tool_grant_service = Arc::new(EnvironmentToolGrantService::new(
+            repos.environment_tool_grant_repo.clone(),
+            environment_service.clone(),
+            tool_release_service.clone(),
+        ));
+
+        let tool_middleware_release_service = Arc::new(ToolMiddlewareReleaseService::new(
+            repos.tool_middleware_release_repo.clone(),
+            account_service.clone(),
+        ));
+        let environment_tool_middleware_grant_service =
+            Arc::new(EnvironmentToolMiddlewareGrantService::new(
+                repos.environment_tool_middleware_grant_repo.clone(),
+                environment_service.clone(),
+                tool_middleware_release_service.clone(),
+            ));
+
         let component_write_service = Arc::new(ComponentWriteService::new(
             repos.component_repo.clone(),
             component_object_store,
             component_compilation_service.clone(),
-            initial_agent_files,
+            initial_agent_files.clone(),
             account_usage_service.clone(),
             environment_service.clone(),
             environment_plugin_grant_service.clone(),
             registry_change_notifier.clone(),
+            config.component_file_upload.max_concurrent_files,
+            config.component_file_upload.max_uncompressed_file_size,
+            config.component_file_upload.max_uncompressed_archive_size,
         ));
 
         let login_system = LoginSystem::new(
@@ -388,6 +446,11 @@ impl Services {
             security_scheme_service.clone(),
             resource_definition_service.clone(),
             retry_policy_service.clone(),
+            environment_tool_grant_service.clone(),
+            tool_release_service.clone(),
+            environment_tool_middleware_grant_service.clone(),
+            tool_middleware_release_service.clone(),
+            native_tool_catalog.clone(),
         ));
 
         let deployed_routes_service =
@@ -417,7 +480,7 @@ impl Services {
             });
         }
 
-        if let Err(e) = crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
+        crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
             &config.builtin_plugins,
             builtin_plugin_owner_account_id,
             &repos.plugin_repo,
@@ -430,9 +493,34 @@ impl Services {
             &plugin_registration_service,
         )
         .await
-        {
-            tracing::warn!("Failed to provision built-in plugins: {e}");
-        }
+        .map_err(|error| anyhow::anyhow!("Failed to provision built-in plugins: {error}"))?;
+
+        crate::services::builtin_tool_provisioner::provision_builtin_tools(
+            builtin_tool_owner_account_id,
+            &application_service,
+            &environment_service,
+            &component_service,
+            &component_write_service,
+            &deployment_service,
+            &deployment_write_service,
+            &tool_release_service,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("Failed to provision built-in tools: {error}"))?;
+
+        let builtin_tool_owner = &config.initial_accounts["builtin_tool_owner"];
+        native_tool_catalog
+            .provision(
+                compiled_native_tools(),
+                golem_common::model::account::AccountSummary {
+                    id: builtin_tool_owner.id,
+                    name: builtin_tool_owner.name.clone(),
+                    email: builtin_tool_owner.email.clone(),
+                },
+                &tool_release_service,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to provision native tools: {error}"))?;
 
         Ok(Self {
             account_service,
@@ -456,10 +544,13 @@ impl Services {
             deployment_write_service,
             domain_registration_service,
             environment_plugin_grant_service,
+            environment_tool_grant_service,
+            environment_tool_middleware_grant_service,
             environment_service,
             environment_state_service,
             http_api_deployment_service,
             mcp_deployment_service,
+            native_tool_catalog,
             login_system,
             permission_share_service,
             plan_service,
@@ -467,6 +558,8 @@ impl Services {
             reports_service,
             security_scheme_service,
             token_service,
+            tool_release_service,
+            tool_middleware_release_service,
         })
     }
 }
@@ -507,6 +600,14 @@ async fn make_repos(
             let plugin_repo = Arc::new(DbPluginRepo::logged(db_pool.clone()));
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
+            let environment_tool_grant_repo =
+                Arc::new(DbEnvironmentToolGrantRepo::logged(db_pool.clone()));
+            let tool_release_repo = Arc::new(DbToolReleaseRepo::logged(db_pool.clone()));
+            let tool_middleware_release_repo =
+                Arc::new(DbToolMiddlewareReleaseRepo::logged(db_pool.clone()));
+            let environment_tool_middleware_grant_repo = Arc::new(
+                DbEnvironmentToolMiddlewareGrantRepo::logged(db_pool.clone()),
+            );
             let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
             let domain_registration_repo =
                 Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
@@ -531,6 +632,8 @@ async fn make_repos(
                 deployment_repo,
                 domain_registration_repo,
                 environment_plugin_grant_repo,
+                environment_tool_grant_repo,
+                environment_tool_middleware_grant_repo,
                 environment_repo,
                 http_api_deployment_repo,
                 mcp_deployment_repo,
@@ -544,6 +647,8 @@ async fn make_repos(
                 reports_repo,
                 security_scheme_repo,
                 token_repo,
+                tool_release_repo,
+                tool_middleware_release_repo,
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
@@ -572,6 +677,14 @@ async fn make_repos(
             let plugin_repo = Arc::new(DbPluginRepo::logged(db_pool.clone()));
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
+            let environment_tool_grant_repo =
+                Arc::new(DbEnvironmentToolGrantRepo::logged(db_pool.clone()));
+            let tool_release_repo = Arc::new(DbToolReleaseRepo::logged(db_pool.clone()));
+            let tool_middleware_release_repo =
+                Arc::new(DbToolMiddlewareReleaseRepo::logged(db_pool.clone()));
+            let environment_tool_middleware_grant_repo = Arc::new(
+                DbEnvironmentToolMiddlewareGrantRepo::logged(db_pool.clone()),
+            );
             let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
             let domain_registration_repo =
                 Arc::new(DbDomainRegistrationRepo::logged(db_pool.clone()));
@@ -596,6 +709,8 @@ async fn make_repos(
                 deployment_repo,
                 domain_registration_repo,
                 environment_plugin_grant_repo,
+                environment_tool_grant_repo,
+                environment_tool_middleware_grant_repo,
                 environment_repo,
                 http_api_deployment_repo,
                 mcp_deployment_repo,
@@ -609,6 +724,8 @@ async fn make_repos(
                 reports_repo,
                 security_scheme_repo,
                 token_repo,
+                tool_release_repo,
+                tool_middleware_release_repo,
             })
         }
     }

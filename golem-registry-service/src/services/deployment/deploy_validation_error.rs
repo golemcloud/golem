@@ -21,6 +21,7 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::ToolName;
+use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_common::schema::graph::SchemaGraph;
 use golem_service_base::custom_api::PathSegment;
 
@@ -172,6 +173,12 @@ pub enum DeployValidationError {
         tool_name: ToolName,
         errors: Vec<String>,
     },
+    #[error("Tool {tool_name} in component {component_name} could not be serialized: {error}")]
+    ToolMetadataSerialization {
+        component_name: ComponentName,
+        tool_name: ToolName,
+        error: String,
+    },
     #[error(
         "Tool {tool_name} is implemented by multiple components: {components}",
         components = components.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
@@ -179,6 +186,54 @@ pub enum DeployValidationError {
     DuplicateToolImplementation {
         tool_name: ToolName,
         components: Vec<ComponentName>,
+    },
+    #[error(
+        "Tool {tool_name} has multiple local or remote sources: {sources}",
+        sources = sources.join(", ")
+    )]
+    ToolSourceCollision {
+        tool_name: ToolName,
+        sources: Vec<String>,
+    },
+    #[error("Remote tool {tool_name} is unavailable in this environment")]
+    RemoteToolUnavailable { tool_name: ToolName },
+    #[error("Remote tool declaration {tool_name} selected a release for tool {release_name}")]
+    RemoteToolNameMismatch {
+        tool_name: ToolName,
+        release_name: ToolName,
+    },
+    #[error("Remote tool {tool_name} release definition has root name {definition_name:?}")]
+    RemoteToolDefinitionNameMismatch {
+        tool_name: ToolName,
+        definition_name: Option<String>,
+    },
+    #[error(
+        "Remote tool {tool_name} release version {release_version} does not match its definition version {definition_version}"
+    )]
+    RemoteToolVersionMismatch {
+        tool_name: ToolName,
+        release_version: String,
+        definition_version: String,
+    },
+    #[error("Remote tool {tool_name} uses unsupported metadata schema version {metadata_version}")]
+    RemoteToolUnsupportedMetadataVersion {
+        tool_name: ToolName,
+        metadata_version: String,
+    },
+    #[error("Remote tool {tool_name} has an invalid metadata digest")]
+    RemoteToolMetadataDigestMismatch { tool_name: ToolName },
+    #[error(
+        "Remote tool {tool_name} is invalid: {errors}",
+        errors = errors.join(", ")
+    )]
+    InvalidRemoteTool {
+        tool_name: ToolName,
+        errors: Vec<String>,
+    },
+    #[error("Remote tool {tool_name} has a binding for unknown agent type {agent_type}")]
+    RemoteToolBindingUnknownAgent {
+        tool_name: ToolName,
+        agent_type: AgentTypeName,
     },
     #[error(
         "Tool {tool_name} in component {component_name} has a binding for unknown agent type {agent_type}"
@@ -215,6 +270,15 @@ pub enum DeployValidationError {
     ToolBindingParametersMustBeObject {
         tool_name: ToolName,
         agent_type: Option<AgentTypeName>,
+    },
+    #[error("middleware merge mode is only valid on agent binding for tool {tool_name}")]
+    ToolBindingEnvironmentMiddlewareMergeMode { tool_name: ToolName },
+    #[error("Tool middleware{middleware}{agent_tool} is invalid: {message}", middleware = middleware_name.as_ref().map(|name| format!(" {name}")).unwrap_or_default(), agent_tool = agent_type_name.as_ref().zip(tool_name.as_ref()).map(|(agent, tool)| format!(" for agent {agent} and tool {tool}")).unwrap_or_default())]
+    ToolMiddleware {
+        middleware_name: Option<ToolMiddlewareName>,
+        agent_type_name: Option<AgentTypeName>,
+        tool_name: Option<ToolName>,
+        message: String,
     },
 }
 

@@ -38,7 +38,6 @@ import type {
   SuccessfulUpdateParameters,
   FailedUpdateParameters,
   GrowMemoryParameters,
-  FilesystemStorageUsageUpdateParameters,
   CreateResourceParameters,
   DropResourceParameters,
   LogParameters,
@@ -87,6 +86,7 @@ export type {
   SpanData,
   LocalSpanData,
   ExternalSpanData,
+  OplogErrorKind,
   ErrorParameters,
   OplogRegion,
   JumpParameters,
@@ -111,7 +111,6 @@ export type {
   SuccessfulUpdateParameters,
   FailedUpdateParameters,
   GrowMemoryParameters,
-  FilesystemStorageUsageUpdateParameters,
   AgentResourceId,
   CreateResourceParameters,
   DropResourceParameters,
@@ -196,6 +195,7 @@ export type PublicOplogEntry =
   | { tag: 'agent-invocation-finished'; val: AgentInvocationFinishedParameters }
   | { tag: 'suspend'; val: Timestamp }
   | { tag: 'error'; val: ErrorParameters }
+  | { tag: 'recovery-succeeded'; val: Timestamp }
   | { tag: 'no-op'; val: Timestamp }
   | { tag: 'jump'; val: JumpParameters }
   | { tag: 'interrupted'; val: Timestamp }
@@ -208,7 +208,6 @@ export type PublicOplogEntry =
   | { tag: 'successful-update'; val: SuccessfulUpdateParameters }
   | { tag: 'failed-update'; val: FailedUpdateParameters }
   | { tag: 'grow-memory'; val: GrowMemoryParameters }
-  | { tag: 'filesystem-storage-usage-update'; val: FilesystemStorageUsageUpdateParameters }
   | { tag: 'create-resource'; val: CreateResourceParameters }
   | { tag: 'drop-resource'; val: DropResourceParameters }
   | { tag: 'log'; val: LogParameters }

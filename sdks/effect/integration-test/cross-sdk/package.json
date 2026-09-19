@@ -1,0 +1,25 @@
+{
+  "name": "effect-cross-sdk-acceptance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p effect-provider && tsc -p effect-consumer && tsc -p ts-peer",
+    "test": "node test.mjs"
+  },
+  "dependencies": {
+    "@golemcloud/effect-golem": "file:../..",
+    "@golemcloud/golem-ts-sdk": "file:../../../ts/packages/golem-ts-sdk",
+    "effect": "4.0.0-beta.98",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-typescript": "^12.1.4",
+    "@types/node": "24.3.1",
+    "rollup": "^4.50.1",
+    "tslib": "^2.8.1",
+    "typescript": "5.9.2"
+  }
+}

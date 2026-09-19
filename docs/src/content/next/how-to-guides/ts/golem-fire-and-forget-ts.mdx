@@ -8,20 +8,19 @@ the invocation asynchronously.
 
 ## Usage
 
-Every method on a `clientFor(...)` RPC client has a `.trigger()` variant. It takes
+Every method on a definition RPC client has a `.trigger()` variant. It takes
 the same input record as the awaited call but returns `void` immediately:
 
 ```typescript
-import { clientFor } from '@golemcloud/golem-ts-sdk';
 import { Counter } from './counter-agent.js';
 
-const counter = clientFor(Counter)({ name: 'my-counter' });
+const counter = Counter.client.get({ name: 'my-counter' });
 
 // Fire-and-forget — returns immediately
 counter.increment.trigger();          // input: {}
 
 // With arguments
-const processor = clientFor(DataProcessor)({ name: 'pipeline-1' });
+const processor = DataProcessor.client.get({ name: 'pipeline-1' });
 processor.processBatch.trigger({ batch: batchData });
 ```
 
@@ -35,7 +34,7 @@ CounterAgent.get('my-counter').increment.trigger();
 ```
 
 See the [`golem-call-another-agent-ts`](/next/how-to-guides/ts/golem-call-another-agent-ts) skill for the required `golem.yaml` and
-`tsconfig.json` setup. Do not replace `clientFor` for same-component calls.
+`tsconfig.json` setup. Use the definition's `.client` for same-component calls.
 
 ## When to Use
 
@@ -47,16 +46,15 @@ See the [`golem-call-another-agent-ts`](/next/how-to-guides/ts/golem-call-anothe
 ## Example: Breaking a Deadlock
 
 ```typescript
-import { clientFor } from '@golemcloud/golem-ts-sdk';
 import { AgentA } from './agent-a.js';
 import { AgentB } from './agent-b.js';
 
 // In AgentA — calls AgentB and waits
-const b = clientFor(AgentB)({ name: 'b1' });
+const b = AgentB.client.get({ name: 'b1' });
 const result = await b.doWork({ data }); // OK: awaited call
 
 // In AgentB — notifies AgentA without waiting (would deadlock if awaited)
-const a = clientFor(AgentA)({ name: 'a1' });
+const a = AgentA.client.get({ name: 'a1' });
 a.onWorkDone.trigger({ result }); // OK: fire-and-forget
 ```
 

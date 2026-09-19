@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::sharding::leader_election::LeaseLost;
+use crate::sharding::model::ExecutorId;
 use golem_common::retriable_error::IsRetriableError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::repo::RepoError;
@@ -33,12 +35,66 @@ pub enum ShardManagerError {
     WorkerExecutionError(WorkerExecutorError),
     #[error("Persistence serialization error {0}")]
     SerializationError(String),
-    #[error("Postgres error {0}")]
+    #[error("Concurrent modification: the persisted shard state was changed by another writer")]
+    ConcurrentModification,
+    #[error("No shard lease for executor {executor_id}")]
+    ShardLeaseNotFound { executor_id: ExecutorId },
+    #[error(
+        "Leadership lost: the election key {leader_key} is no longer held at creation revision \
+         {create_revision}"
+    )]
+    LeadershipLost {
+        leader_key: String,
+        create_revision: i64,
+    },
+    #[error("Leadership lease lost while campaigning: {0}")]
+    LeaseLostWhileCampaigning(#[source] LeaseLost),
+    #[error("Shutdown requested")]
+    ShutdownRequested,
+    #[error("DB error {0}")]
     RepoError(#[from] RepoError),
+    #[error("etcd error {0}")]
+    EtcdError(#[from] etcd_client::Error),
     #[error("Migration error {0}")]
     MigrationError(#[from] anyhow::Error),
     #[error("IO error {0}")]
     IoError(#[from] std::io::Error),
+    #[error("Internal error: {0}")]
+    Internal(String),
+}
+
+impl ShardManagerError {
+    /// A second copy of this error, for the fail-stop slot: a refused write has to reach both the
+    /// caller whose request it was and the loop that must end the process because of it.
+    ///
+    /// Every variant a caller *matches* on - a lost fence, a revision conflict, a shutdown - is
+    /// reproduced exactly. The ones whose payload cannot be duplicated (`anyhow`, `io`, `RepoError`,
+    /// `etcd_client`) degrade to [`ShardManagerError::Internal`] carrying the same message, which
+    /// is what a log line or a gRPC error body would have shown of them anyway.
+    pub(crate) fn duplicate(&self) -> Self {
+        match self {
+            Self::NoSourceIpForPod => Self::NoSourceIpForPod,
+            Self::FailedAddressResolveForPod => Self::FailedAddressResolveForPod,
+            Self::Timeout => Self::Timeout,
+            Self::GrpcError(status) => Self::GrpcError(status.clone()),
+            Self::NoResult => Self::NoResult,
+            Self::SerializationError(message) => Self::SerializationError(message.clone()),
+            Self::ConcurrentModification => Self::ConcurrentModification,
+            Self::ShardLeaseNotFound { executor_id } => Self::ShardLeaseNotFound {
+                executor_id: *executor_id,
+            },
+            Self::LeadershipLost {
+                leader_key,
+                create_revision,
+            } => Self::LeadershipLost {
+                leader_key: leader_key.clone(),
+                create_revision: *create_revision,
+            },
+            Self::ShutdownRequested => Self::ShutdownRequested,
+            Self::Internal(message) => Self::Internal(message.clone()),
+            other => Self::Internal(other.to_string()),
+        }
+    }
 }
 
 impl IsRetriableError for ShardManagerError {
@@ -51,9 +107,33 @@ impl IsRetriableError for ShardManagerError {
             ShardManagerError::NoResult => true,
             ShardManagerError::WorkerExecutionError(_) => true, // TODO: can we define which ones are retryable?
             ShardManagerError::SerializationError(_) => false,
+            // Retrying a compare-and-swap with the same, now stale, previous revision can never
+            // succeed: recovery is a re-read followed by re-deriving the change, which is a
+            // different operation. Reporting this as retriable would turn a conflict into a spin.
+            ShardManagerError::ConcurrentModification => false,
+            // The executor holds no lease at all, so the same request can only be refused again;
+            // recovery is a fresh registration, which is a different call.
+            ShardManagerError::ShardLeaseNotFound { .. } => false,
+            // Another replica holds the leadership now; no retry here can take it back.
+            ShardManagerError::LeadershipLost { .. } => false,
+            // A campaigner holds nothing yet: a fresh lease and a new campaign is full recovery.
+            ShardManagerError::LeaseLostWhileCampaigning(_) => true,
+            // Retrying would be the process refusing the stop it was just asked for.
+            ShardManagerError::ShutdownRequested => false,
             ShardManagerError::RepoError(_) => false,
+            ShardManagerError::EtcdError(err) => match err {
+                etcd_client::Error::GRpcStatus(status) => status.is_retriable(),
+                etcd_client::Error::TransportError(_)
+                | etcd_client::Error::IoError(_)
+                | etcd_client::Error::EndpointError(_) => true,
+                // A catch-all is required regardless: `etcd_client::Error` has a
+                // `#[cfg(feature = "tls-openssl")]` variant. Everything else - bad URI, bad
+                // arguments, bad metadata - is a configuration bug, not a transient failure.
+                _ => false,
+            },
             ShardManagerError::MigrationError(_) => false,
             ShardManagerError::IoError(_) => false,
+            ShardManagerError::Internal(_) => false,
         }
     }
 
@@ -113,5 +193,35 @@ impl IsRetriableError for HealthCheckError {
 
     fn as_loggable(&self) -> Option<String> {
         Some(self.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::ShardManagerError;
+    use crate::sharding::model::ExecutorId;
+    use golem_common::retriable_error::IsRetriableError;
+
+    #[test]
+    // `with_retries` re-invokes with the same arguments, so a retry of any of these can only
+    // spin: the revision stays stale, the leadership stays lost, the stop stays requested.
+    fn the_fail_stop_errors_are_not_retriable() {
+        assert!(!ShardManagerError::ConcurrentModification.is_retriable());
+        assert!(
+            !ShardManagerError::LeadershipLost {
+                leader_key: "/golem/shard-manager/leader/abc".to_string(),
+                create_revision: 7,
+            }
+            .is_retriable()
+        );
+        assert!(!ShardManagerError::ShutdownRequested.is_retriable());
+        assert!(
+            !ShardManagerError::ShardLeaseNotFound {
+                executor_id: ExecutorId(uuid::Uuid::from_u128(1)),
+            }
+            .is_retriable()
+        );
     }
 }

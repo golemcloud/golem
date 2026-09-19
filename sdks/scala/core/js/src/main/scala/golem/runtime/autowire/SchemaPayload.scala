@@ -18,10 +18,20 @@ package golem.runtime.autowire
 
 import golem.host.SchemaWireInterop
 import golem.host.js.schema.{JsSchemaGraph, JsSchemaValueTree}
-import golem.schema.{FromSchema, FromSchemaError, IntoSchema, SchemaGraph}
+import golem.schema.{
+  AgentStreamOutputTransaction,
+  AgentStreamOwnership,
+  FromSchema,
+  FromSchemaError,
+  IntoSchema,
+  SchemaGraph,
+  SchemaValue
+}
 import golem.schema.wire.SchemaWire
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+import scala.util.{Failure, Success}
+import scala.util.control.NonFatal
 
 /**
  * The `golem:core/types@2.0.0` host-payload bridge: the single hub that turns
@@ -56,6 +66,61 @@ object SchemaPayload {
 
   /** Stream-aware encoding used by invocation boundaries. */
   def encodeAsync[A](value: A)(implicit ev: IntoSchema[A]): Future[JsSchemaValueTree] =
-    SchemaWireInterop.valueTreeToJsAsync(SchemaWire.schemaValueToWit(ev.toValue(value)))
+    encodeValueAsync(ev.toValue(value))
+
+  /** Includes typed conversion in the stream-transfer transaction. */
+  def encodeValueAsync(value: => SchemaValue): Future[JsSchemaValueTree] = {
+    val transaction = new AgentStreamOutputTransaction
+    val result      =
+      try {
+        val wire = AgentStreamOutputTransaction.capture(transaction) {
+          SchemaWire.schemaValueToWit(value)
+        }
+        try SchemaWireInterop.valueTreeToJsAsync(wire)
+        catch {
+          case NonFatal(error) => Future.failed(error)
+        }
+      } catch {
+        case NonFatal(error) => Future.failed(error)
+      }
+
+    result.transformWith {
+      case Success(tree)  => transaction.closeUncommitted().map(_ => tree)
+      case Failure(error) => transaction.rollback().flatMap(_ => Future.failed(error))
+    }
+  }
+
+  /**
+   * Releases partial result acquisitions on failure, but hands successful
+   * streams to the caller.
+   */
+  def decodeResultAsync[A](decode: => A): Future[A] = {
+    val ownership = new AgentStreamOwnership
+    try {
+      val result = AgentStreamOwnership.capture(ownership)(decode)
+      ownership.handoff()
+      Future.successful(result)
+    } catch {
+      case NonFatal(error) => ownership.close().flatMap(_ => Future.failed(error))
+    }
+  }
+
+  private[autowire] def withDecodedInput[A, B](tree: JsSchemaValueTree)(
+    use: Either[FromSchemaError, A] => Future[B]
+  )(implicit ev: FromSchema[A]): Future[B] = {
+    val ownership = new AgentStreamOwnership
+    val result    =
+      try {
+        val decoded = AgentStreamOwnership.capture(ownership)(decode[A](tree))
+        try use(decoded)
+        catch {
+          case NonFatal(error) => Future.failed(error)
+        }
+      } catch {
+        case NonFatal(error) => Future.failed(error)
+      }
+
+    result.transformWith(completed => ownership.close().flatMap(_ => Future.fromTry(completed)))
+  }
 
 }

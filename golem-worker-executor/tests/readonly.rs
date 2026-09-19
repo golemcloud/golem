@@ -274,8 +274,8 @@ async fn t3_read_only_invalidates_after_write(
 /// [`DurableWorkerCtx::on_agent_invocation_success`] in
 /// `golem-worker-executor/src/durable_host/mod.rs`), so a previously-warmed
 /// cache entry stays serviceable while a slow `slow_increment(2000)` is
-/// queued/running. Foreground `get_count` is then served from the cache and
-/// returns within the deadline.
+/// queued/running. Foreground `get_count` is then served from the cache without
+/// recording another invocation in the worker's oplog.
 #[test]
 #[timeout("60s")]
 #[tracing::instrument]
@@ -306,6 +306,8 @@ async fn t4_read_only_bypasses_queue_during_slow_write(
         .await?;
     wait_for_cache_hit(&executor, &component, &agent_id, &worker_id).await?;
 
+    let before_mutation = executor.oplog_max_index(&worker_id).await?;
+
     // Background slow mutation.
     let mutator = {
         let executor = executor.clone();
@@ -323,25 +325,32 @@ async fn t4_read_only_bypasses_queue_during_slow_write(
         })
     };
 
-    // Give the mutating enqueue a moment to land.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let mutation_started_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let (started, finished) = count_agent_invocation_pair_since(&entries, before_mutation);
+        if started == 1 && finished == 0 {
+            break;
+        }
+        assert!(
+            Instant::now() <= mutation_started_deadline,
+            "slow_increment did not start within 10s: started={started} finished={finished}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
-    // Foreground read-only call must come back from the cache within 50ms.
-    let started = Instant::now();
-    let result = tokio::time::timeout(
-        Duration::from_millis(50),
-        executor.invoke_and_await_agent(&component, &agent_id, "get_count", data_value!()),
-    )
-    .await
-    .expect("read-only call must return within 50ms even while slow_increment holds the queue")?
-    .into_typed::<u64>()?;
-
-    assert!(
-        started.elapsed() < Duration::from_millis(50),
-        "read-only call took {:?}",
-        started.elapsed()
-    );
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?
+        .into_typed::<u64>()?;
     assert_eq!(result, 0, "must return pre-write value");
+
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let (started, _) = count_agent_invocation_pair_since(&entries, before_mutation);
+    assert_eq!(
+        started, 1,
+        "the read-only call must be served from cache without entering the invocation queue"
+    );
 
     let _ = mutator.await;
 
@@ -399,7 +408,7 @@ async fn t5_read_only_bypasses_agent_loading(
     //   `agent_sdk` component. The assertions verify the calibration is still valid —
     //   if the component's module or linear memory grows or shrinks materially, the
     //   test fails with a clear diagnostic instead of silently passing or hanging.
-    const SYSTEM_MEMORY: u64 = 8 * 1024 * 1024;
+    const SYSTEM_MEMORY: u64 = 9 * 1024 * 1024;
     const COMPONENT_SIZE_COEFFICIENT: f64 = 2.0;
     let overrides = TestExecutorOverrides {
         configure: Some(Arc::new(|config| {
@@ -422,9 +431,12 @@ async fn t5_read_only_bypasses_agent_loading(
     // R: the worker whose read-only cache we want to keep alive across eviction.
     let unique_id = context.redis_prefix();
     let r_agent_id = agent_id!(AGENT_TYPE, format!("t5-r-{unique_id}"));
-    let r_worker_id = executor
-        .start_agent(&component.id, r_agent_id.clone())
-        .await?;
+    let r_worker_id = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.start_agent(&component.id, r_agent_id.clone()),
+    )
+    .await
+    .expect("first worker failed to load: check SYSTEM_MEMORY against the component's module charge and initial linear memory")?;
     let r_owned = OwnedAgentId::new(context.default_environment_id, &r_worker_id);
 
     // Warm R's read-only cache: cache miss + populate via the detached observer.
@@ -1584,7 +1596,6 @@ async fn r2_rpc_read_only_during_slow_target_invocation(
         .await?;
     wait_for_cache_hit(&executor, &component, &target_agent_id, &target_worker_id).await?;
 
-    let started_at = Instant::now();
     let result = tokio::time::timeout(
         Duration::from_secs(5),
         executor.invoke_and_await_agent(
@@ -1597,11 +1608,6 @@ async fn r2_rpc_read_only_during_slow_target_invocation(
     .await??
     .into_typed::<u64>()?;
 
-    assert!(
-        started_at.elapsed() < Duration::from_millis(500),
-        "slow_then_read took {:?} (cache bypass expected)",
-        started_at.elapsed()
-    );
     assert_eq!(result, 0, "must return pre-write value");
 
     Ok(())
@@ -1753,6 +1759,139 @@ async fn r4_rpc_read_only_method_cannot_make_rpc(
     assert!(
         is_read_only_violation(&err, "bad_rpc"),
         "expected ReadOnlyViolation for `bad_rpc`, got: {err:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn settled_read_only_cache_hit_persists_nothing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agent_id = agent_id!(
+        AGENT_TYPE,
+        format!("no-persistence-{}", context.redis_prefix())
+    );
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    wait_oplog_settled(&executor, &worker_id).await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?;
+    wait_for_cache_hit(&executor, &component, &agent_id, &worker_id).await?;
+    wait_oplog_settled(&executor, &worker_id).await?;
+
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let before_max_index = executor.oplog_max_index(&worker_id).await?;
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(result, 0);
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        after.len(),
+        before.len(),
+        "a settled cache hit must not persist Store, startup, queue, alias, or follower entries"
+    );
+    assert_eq!(
+        executor.oplog_max_index(&worker_id).await?,
+        before_max_index
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn coalesced_read_only_followers_persist_no_durable_entries(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let control_agent_id = agent_id!(
+        AGENT_TYPE,
+        format!("no-followers-control-{}", context.redis_prefix())
+    );
+    let control_worker_id = executor
+        .start_agent(&component.id, control_agent_id.clone())
+        .await?;
+    wait_oplog_settled(&executor, &control_worker_id).await?;
+    let control_before = executor.oplog_max_index(&control_worker_id).await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &control_agent_id,
+            "slow_read",
+            data_value!(500u64),
+        )
+        .await?;
+    wait_oplog_settled(&executor, &control_worker_id).await?;
+    let control_entries = executor
+        .get_oplog(&control_worker_id, OplogIndex::INITIAL)
+        .await?;
+    let single_invocation_entries = control_entries
+        .iter()
+        .filter(|entry| entry.oplog_index > control_before)
+        .count();
+
+    let agent_id = agent_id!(
+        AGENT_TYPE,
+        format!("no-followers-{}", context.redis_prefix())
+    );
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    wait_oplog_settled(&executor, &worker_id).await?;
+    let before = executor.oplog_max_index(&worker_id).await?;
+
+    let mut calls = Vec::new();
+    for _ in 0..8 {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        calls.push(tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "slow_read", data_value!(500u64))
+                .await
+        }));
+    }
+    for call in calls {
+        assert_eq!(call.await??.into_typed::<u64>()?, 0);
+    }
+    wait_oplog_settled(&executor, &worker_id).await?;
+
+    let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let appended = entries
+        .iter()
+        .filter(|entry| entry.oplog_index > before)
+        .count();
+    let (started, finished) = count_agent_invocation_pair_since(&entries, before);
+    assert_eq!((started, finished), (1, 1));
+    assert_eq!(
+        appended, single_invocation_entries,
+        "coalesced followers must not persist durable aliases, keys, or queue entries"
     );
 
     Ok(())

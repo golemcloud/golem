@@ -16,7 +16,11 @@ import "google/protobuf/timestamp.proto";
 
 // An oplog entry in its raw/internal representation.
 message RawOplogEntry {
+  reserved 21;
+  reserved "filesystem_storage_usage_update";
+
   google.protobuf.Timestamp timestamp = 1;
+  optional uint64 entity_parent_start_index = 3;
   oneof entry {
     RawCreateParameters create = 2;
     RawAgentInvocationStartedParameters agent_invocation_started = 4;
@@ -34,7 +38,6 @@ message RawOplogEntry {
     RawSuccessfulUpdateParameters successful_update = 18;
     RawFailedUpdateParameters failed_update = 19;
     RawGrowMemoryParameters grow_memory = 20;
-    RawFilesystemStorageUsageUpdateParameters filesystem_storage_usage_update = 21;
     RawCreateResourceParameters create_resource = 22;
     RawDropResourceParameters drop_resource = 23;
     RawLogParameters log = 24;
@@ -76,6 +79,8 @@ message RawOplogEntry {
     RawDurableStreamRecordParameters stream_end = 61;
     RawDurableStreamRecordParameters stream_cancel = 62;
     RawDurableStreamRecordParameters stream_session = 63;
+    RawTimestampOnly resumed = 64;
+    RawTimestampOnly recovery_succeeded = 65;
   }
 }
 
@@ -216,6 +221,7 @@ message RawErrorParameters {
   uint64 retry_from = 2;
   bool inside_atomic_region = 3;
   optional bytes retry_policy_state = 4;
+  OplogErrorKind kind = 5;
 }
 
 message RawJumpParameters {
@@ -252,10 +258,6 @@ message RawFailedUpdateParameters {
 
 message RawGrowMemoryParameters {
   uint64 delta = 1;
-}
-
-message RawFilesystemStorageUsageUpdateParameters {
-  int64 delta = 1;
 }
 
 message RawResourceTypeId {

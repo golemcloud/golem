@@ -36,3 +36,14 @@ test "binary dependency removal rejects another entry in the managed object" {
     content="Invalid existing tools version: 0.5.1\", \"example/other\": \"1.0.0",
   )
 }
+
+///|
+/// The transformations count how often each switched path occurs, so any edit to the
+/// example manifest that adds or drops one of them silently breaks the release script.
+/// Round-tripping the real manifest keeps those counts honest.
+test "path transformation round-trips the example manifest" {
+  let dev = @fs.read_file_to_string(golem_yaml_path)
+  let released = transform_yaml_paths(dev, true)
+  assert_not_eq(released, dev)
+  inspect(transform_yaml_paths(released, false) == dev, content="true")
+}

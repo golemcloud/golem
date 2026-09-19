@@ -18,7 +18,7 @@ use crate::model::masking::{Masked, MaskingConfig, mask_json_secret_value};
 use crate::model::text_format::*;
 
 use comfy_table::Cell;
-use golem_common::model::agent_secret::AgentSecretDto;
+use golem_client::model::AgentSecretDto;
 use golem_common::schema::{SchemaGraph, SchemaValue};
 use serde::Serialize as _;
 use serde::Serializer;
@@ -43,7 +43,7 @@ impl From<AgentSecretDto> for SecretView {
             path: value.path,
             revision: value.revision,
             secret_type: value.secret_type,
-            secret_value: value.secret_value,
+            secret_value: value.secret_value.map(|value| value.into_inner()),
         }
     }
 }
@@ -337,11 +337,12 @@ impl StructuredOutput for SecretListView {
 mod tests {
     use super::{SecretGetView, SecretListView, wrap_uuid_for_table};
     use crate::model::masking::{Masked, MaskingConfig};
+    use golem_client::model::AgentSecretDto;
     use golem_common::model::agent_secret::{
-        AgentSecretDto, AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+        AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
     };
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+    use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
     use serde_json::json;
     use test_r::test;
 
@@ -356,7 +357,10 @@ mod tests {
             path: CanonicalAgentSecretPath(vec!["token".to_string()]),
             revision: AgentSecretRevision::new(7).unwrap(),
             secret_type: SchemaGraph::anonymous(SchemaType::string()),
-            secret_value: Some(SchemaValue::String("super-secret".to_string())),
+            secret_value: Some(
+                ExternalSchemaValue::try_from(SchemaValue::String("super-secret".to_string()))
+                    .unwrap(),
+            ),
         }
         .into()
     }
