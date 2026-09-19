@@ -14,8 +14,8 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_path_is_root,
-    normalized_blob_path,
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
+    blob_copy_changes_nothing, blob_path_is_root, normalized_blob_path,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -435,6 +435,20 @@ impl BlobStorage for FileSystemBlobStorage {
     ) -> Result<(), Error> {
         let from = &*normalized_blob_path(from)?;
         let to = &*normalized_blob_path(to)?;
+
+        // A copy onto the same path writes nothing, and it still needs the blob that it reads.
+        // `async_fs::copy` opens the target for writing before it reads the source, so with one
+        // path it empties the blob.
+        if blob_copy_changes_nothing(from, to)? {
+            return match self
+                .exists(_target_label, _op_label, namespace, from)
+                .await?
+            {
+                ExistsResult::File => Ok(()),
+                _ => Err(anyhow!("Blob storage entry not found: {from:?}")),
+            };
+        }
+
         let from_full_path = self.path_of(&namespace, from);
         let to_full_path = self.path_of(&namespace, to);
         self.ensure_path_is_inside_root(&from_full_path)?;

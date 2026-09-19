@@ -33,8 +33,19 @@ pub mod memory;
 pub mod s3;
 pub mod sqlite;
 
+/// Keeps blobs at the paths of a namespace.
+///
+/// A path names a blob or a directory, and a directory is not a blob. So a read at the path of a
+/// directory finds no blob, a delete at that path removes no blob, and a write at that path is an
+/// error. A path is at the root of the namespace when it has no name in it, for example an empty
+/// path or `.`, and the root is a directory. A directory is there while a blob is below it, at
+/// any depth, and a directory that `create_dir` made is there until `delete_dir` removes it. A
+/// directory that `create_dir` made keeps a size of zero and a time, which `get_metadata` gives.
 #[async_trait]
 pub trait BlobStorage: Debug + Send + Sync {
+    /// Gives the bytes of the blob at the path, or nothing if the path has no blob.
+    ///
+    /// A directory has no blob at its path, and a root path is a directory.
     async fn get_raw(
         &self,
         target_label: &'static str,
@@ -43,6 +54,9 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error>;
 
+    /// Gives the bytes of the blob at the path as a stream, or nothing if the path has no blob.
+    ///
+    /// A directory has no blob at its path, and a root path is a directory.
     async fn get_stream(
         &self,
         target_label: &'static str,
@@ -53,10 +67,11 @@ pub trait BlobStorage: Debug + Send + Sync {
 
     /// Reads the bytes from `start` to `end` of a blob. Both offsets are inclusive.
     ///
-    /// The result has `end - start + 1` bytes. `None` means that no blob has the path. A range
-    /// with a byte that is not in the blob gives an error that downcasts to [`BlobRangeError`]:
-    /// an `end` at or after the length of the blob, a `start` after `end`, and each range of an
-    /// empty blob. A `start` after `end` gives this error before the backend reads the blob.
+    /// The result has `end - start + 1` bytes. `None` means that no blob has the path. A
+    /// directory has no blob at its path, and a root path is a directory. A range with a byte
+    /// that is not in the blob gives an error that downcasts to [`BlobRangeError`]: an `end` at
+    /// or after the length of the blob, a `start` after `end`, and each range of an empty blob.
+    /// A `start` after `end` gives this error before the backend reads the blob.
     async fn get_raw_slice(
         &self,
         target_label: &'static str,
@@ -83,6 +98,11 @@ pub trait BlobStorage: Debug + Send + Sync {
         .transpose()
     }
 
+    /// Tells the size and the time of the blob at the path, or nothing if the path has no blob.
+    ///
+    /// A directory that `create_dir` made is the one path without a blob that has metadata: it
+    /// gives a size of zero and the time of the last `create_dir`. A directory that only holds
+    /// blobs gives nothing, and so does a root path.
     async fn get_metadata(
         &self,
         target_label: &'static str,
@@ -91,6 +111,9 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error>;
 
+    /// Writes the bytes as the blob at the path, over the blob that was there.
+    ///
+    /// A blob cannot be where a directory is, so a root path is an error.
     async fn put_raw(
         &self,
         target_label: &'static str,
@@ -100,6 +123,9 @@ pub trait BlobStorage: Debug + Send + Sync {
         data: &[u8],
     ) -> Result<(), Error>;
 
+    /// Writes the bytes of the stream as the blob at the path, over the blob that was there.
+    ///
+    /// A blob cannot be where a directory is, so a root path is an error.
     async fn put_stream(
         &self,
         target_label: &'static str,
@@ -109,6 +135,10 @@ pub trait BlobStorage: Debug + Send + Sync {
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error>;
 
+    /// Removes the blob at the path.
+    ///
+    /// A path that has no blob changes nothing. A directory has no blob at its path, and a root
+    /// path is a directory.
     async fn delete(
         &self,
         target_label: &'static str,
@@ -117,6 +147,10 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<(), Error>;
 
+    /// Removes the blob at every one of the paths.
+    ///
+    /// A path that has no blob changes nothing. A directory has no blob at its path, and a root
+    /// path is a directory.
     async fn delete_many(
         &self,
         target_label: &'static str,
@@ -134,8 +168,8 @@ pub trait BlobStorage: Debug + Send + Sync {
     /// Makes a directory at the path.
     ///
     /// A root path changes nothing and leaves no entry behind. A path is at the root when it has
-    /// no name in it, for example an empty path or `.`. A second call on the same path changes
-    /// nothing.
+    /// no name in it, for example an empty path or `.`. A second call on the same path adds
+    /// nothing and removes nothing, and it gives the directory the time of that call.
     async fn create_dir(
         &self,
         target_label: &'static str,
@@ -200,6 +234,11 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<ExistsResult, Error>;
 
+    /// Writes the blob at the `from` path as the blob at the `to` path.
+    ///
+    /// A copy onto the same path writes nothing and changes nothing, and two forms of one path
+    /// are the same path. A `from` path that has no blob is an error, a copy onto the same path
+    /// as well. A blob cannot be where a directory is, so a root path at either end is an error.
     async fn copy(
         &self,
         target_label: &'static str,
@@ -208,6 +247,14 @@ pub trait BlobStorage: Debug + Send + Sync {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        // A copy onto the same path writes nothing, and it still needs the blob that it reads.
+        if blob_copy_changes_nothing(from, to)? {
+            return match self.exists(target_label, op_label, namespace, from).await? {
+                ExistsResult::File => Ok(()),
+                _ => Err(anyhow!("Blob storage entry not found: {from:?}")),
+            };
+        }
+
         match self
             .get_raw(target_label, op_label, namespace.clone(), from)
             .await?
@@ -220,6 +267,11 @@ pub trait BlobStorage: Debug + Send + Sync {
         }
     }
 
+    /// Moves the blob at the `from` path to the `to` path.
+    ///
+    /// A move onto the same path keeps the blob where it is, and two forms of one path are the
+    /// same path. A `from` path that has no blob is an error, a move onto the same path as well.
+    /// A blob cannot be where a directory is, so a root path at either end is an error.
     async fn r#move(
         &self,
         target_label: &'static str,
@@ -228,6 +280,11 @@ pub trait BlobStorage: Debug + Send + Sync {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        // A move onto the same path keeps the blob, so it is the copy and no delete.
+        if blob_copy_changes_nothing(from, to)? {
+            return self.copy(target_label, op_label, namespace, from, to).await;
+        }
+
         self.copy(target_label, op_label, namespace.clone(), from, to)
             .await?;
         self.delete(target_label, op_label, namespace, from).await
@@ -542,6 +599,33 @@ pub(crate) fn blob_path_is_root(path: &Path) -> bool {
     !path
         .components()
         .any(|component| matches!(component, Component::Normal(_)))
+}
+
+/// Gives an error if the path is at the root of a namespace.
+///
+/// A path at the root is a directory, and a blob cannot be where a directory is.
+pub(crate) fn reject_root_blob_path(path: &Path) -> Result<(), Error> {
+    if blob_path_is_root(path) {
+        Err(anyhow!(
+            "Blob path must name a blob, and a root path is a directory: {path:?}"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Tells if a copy from one path to the other changes nothing, or gives an error.
+///
+/// A copy onto the same path changes nothing, because the blob is already there. The paths get
+/// their one form first, so two forms of one path are the same path. A root path at either end
+/// is an error, because a blob cannot be where a directory is.
+pub(crate) fn blob_copy_changes_nothing(from: &Path, to: &Path) -> Result<bool, Error> {
+    let from = normalized_blob_path(from)?;
+    let to = normalized_blob_path(to)?;
+    reject_root_blob_path(&from)?;
+    reject_root_blob_path(&to)?;
+
+    Ok(from == to)
 }
 
 pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, Error> {
