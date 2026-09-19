@@ -107,6 +107,12 @@ pub trait BlobStoreService: Send + Sync {
         container_name: String,
     ) -> Result<Option<u64>, BlobStoreError>;
 
+    /// Reads the bytes from `start` to `end` of an object. Both offsets are inclusive, so the
+    /// result has `end - start + 1` bytes.
+    ///
+    /// A range with a byte that is not in the object gives [`BlobStoreError::InvalidInput`],
+    /// which is permanent, so the caller gets it on the first attempt: an `end` at or after the
+    /// size of the object, a `start` after `end`, and each range of an empty object.
     async fn get_data(
         &self,
         environment_id: EnvironmentId,
