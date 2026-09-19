@@ -1,6 +1,6 @@
 /**
  * The host's ranged-read contract. The blob test doubles share it, so
- * that they answer a ranged read in the same way as each other and as
+ * that they give the same result for a ranged read as each other and
  * the backends.
  *
  * Both offsets are inclusive. A range gives `end - start + 1` bytes.
@@ -30,7 +30,7 @@
  * `BigInt.asUintN(64, x)` gives a value from 0 to 2^64-1. The check
  * therefore never sees a negative offset. It sees the value that the
  * host sees. The tests in `test/blobstore.test.ts` show what the
- * check then answers for a negative offset.
+ * check then gives for a negative offset.
  *
  * The message is the message that a guest gets. `BlobRangeError`
  * gives the text (`golem-service-base/src/storage/blob/mod.rs`).
@@ -46,7 +46,7 @@
  * because the wording is the host's.
  *
  * The doubles do not follow the host in one point. They look for the
- * object before they look at the range. The host refuses a `start`
+ * object before they look at the range. The host rejects a `start`
  * after the `end` first, and reads nothing (`BlobStorage::get_raw_slice`
  * in `golem-service-base/src/storage/blob/mod.rs`). An inverted range
  * on a missing object is the one case where the two disagree.

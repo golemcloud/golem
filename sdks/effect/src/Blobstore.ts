@@ -177,11 +177,11 @@ export interface ObjectMetadata {
  * `end - start + 1` bytes, so an object of `n` bytes is read whole
  * with `{ start: 0n, end: n - 1n }`.
  *
- * A range that asks for a byte the object does not have fails with
+ * A range that asks for a byte the object does not have gives a
  * {@link BlobstoreHostError}. That covers an `end` at or after the
  * size, a `start` after the `end`, and every range of an empty
  * object. The host reports this as invalid input and does not retry
- * it, so the failure arrives on the first attempt.
+ * it, so the error arrives on the first attempt.
  *
  * @since 1.5.0
  * @category models

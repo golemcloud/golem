@@ -75,8 +75,8 @@ export interface HostContainer {
   readonly clear: Effect.Effect<void, BlobstoreHostError>
   /**
    * Fetch a byte range. Both offsets are inclusive, on every backend.
-   * A range that asks for a byte the object does not have fails, and
-   * the host does not retry it (see `src/Blobstore.ts` `ByteRange`).
+   * A range that asks for a byte the object does not have gives an error,
+   * and the host does not retry it (see `src/Blobstore.ts` `ByteRange`).
    */
   getData(name: string, range: HostByteRange): Effect.Effect<Uint8Array, BlobstoreHostError>
   /** Create or replace `name` with `data`. Chunked at 4096 bytes per write. */

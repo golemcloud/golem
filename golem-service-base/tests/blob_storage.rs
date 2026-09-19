@@ -1932,8 +1932,8 @@ async fn get_raw_slice_uses_inclusive_ranges(
         // A guest gives an offset as a `u64`. A negative offset reaches the host as the
         // value that it wraps to, which is at the top of the `u64` range. The Effect SDK
         // test doubles assert on these two ranges (`sdks/effect/test/blobstore.test.ts`).
-        // The wrapped start is a start after the end, which each backend refuses as it
-        // refuses `(3, 2)`, before the S3 backend sends a request. The wrapped end reaches
+        // The wrapped start is a start after the end, which each backend rejects as it
+        // rejects `(3, 2)`, before the S3 backend sends a request. The wrapped end reaches
         // the backend. The MinIO release that `S3Test` starts parses each offset of the
         // range with `strconv.ParseInt(s, 10, 64)` in `parseRequestRangeSpec`
         // (`cmd/httprange.go`), so 2^64-1 overflows `int64` and gives a parse error that

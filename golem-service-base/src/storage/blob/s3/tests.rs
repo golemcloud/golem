@@ -89,9 +89,9 @@ impl SentRequest {
     }
 }
 
-/// The answer of the scripted transport to one request.
+/// The response of the scripted transport to one request.
 ///
-/// The answer has a `Content-Length` only when `content_length` is set. The body is one frame.
+/// The response has a `Content-Length` only when `content_length` is set. The body is one frame.
 /// When `body_reads` is set, a read of that frame adds 1 to it.
 struct Answer {
     status: u16,
@@ -149,7 +149,8 @@ type Script = dyn Fn(&SentRequest, usize) -> Answer + Send + Sync;
 
 type SentRequests = Arc<Mutex<Vec<SentRequest>>>;
 
-/// An HTTP transport that records each request and answers it from a script.
+/// An HTTP transport that records each request and sends the response that a script gives for
+/// it.
 ///
 /// The script gets the request and the number of requests before it.
 #[derive(Clone)]
@@ -599,8 +600,8 @@ async fn get_raw_slice_turns_416_into_a_range_error_without_a_retry() {
 async fn get_raw_slice_keeps_a_416_and_a_missing_object_out_of_the_error_log() {
     // The 416 and the missing key are not retriable, so each of those reads makes 1 attempt.
     // The read that gets a server error is the control. The blob storage makes 3 attempts for
-    // it: the first 2 log a warning, which is not in the error log, and the last logs an error
-    // and counts a failure.
+    // it: the first 2 record a warning, which is not in the error log, and the last records an
+    // error and counts a failure.
     let (storage, requests) = scripted_storage("", |request, _| {
         if request.uri.contains("outside") {
             Answer::new(416, INVALID_RANGE)
@@ -968,7 +969,7 @@ async fn list_blobs_below_fails_when_a_key_has_no_size() {
     );
 }
 
-/// The bodies a fake S3 received, and the status it answers each `PUT` with.
+/// The bodies a fake S3 received, and the status it sends for each `PUT`.
 #[derive(Clone)]
 struct PutServerState {
     bodies: Arc<Mutex<Vec<Bytes>>>,
@@ -992,7 +993,7 @@ async fn handle_put(State(state): State<PutServerState>, body: Bytes) -> Respons
         .unwrap()
 }
 
-/// Makes a blob storage that talks to a server answering each `PUT` with the next status.
+/// Makes a blob storage that talks to a server that sends the next status for each `PUT`.
 ///
 /// The SDK's own retries are off, so each request the server sees is one Golem retry.
 async fn put_server_storage(

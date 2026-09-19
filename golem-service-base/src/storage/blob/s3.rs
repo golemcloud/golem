@@ -380,7 +380,7 @@ impl S3BlobStorage {
     /// `golem_worker_executor::services::blob_store` maps a `BlobRangeError` to
     /// `BlobStoreError::InvalidInput`. `classify_blob_store_error` in
     /// `golem_worker_executor::durable_host::blobstore` makes that permanent. Without the
-    /// check, the SDK refuses such a body (`ContentLengthEnforcingBody` in
+    /// check, the SDK rejects such a body (`ContentLengthEnforcingBody` in
     /// `aws_smithy_runtime`). `get_data` maps that error to `BlobStoreError::TransientBackend`,
     /// which `classify_blob_store_error` makes transient. The executor retries a transient
     /// error (`try_trigger_retry` in `golem_worker_executor::durable_host::durability`).
@@ -428,8 +428,8 @@ impl S3BlobStorage {
     /// Deletes objects in requests of at most [`MAX_KEYS_PER_DELETE_OBJECTS`] keys, one request
     /// at a time.
     ///
-    /// An empty list sends no request. The first request that fails after its last attempt stops
-    /// the deletion and gives its error.
+    /// An empty list sends no request. When the last attempt of a request has an error, the
+    /// deletion stops and gives that error.
     async fn delete_keys(
         &self,
         target_label: &'static str,
@@ -446,8 +446,8 @@ impl S3BlobStorage {
 
     /// Sends one `DeleteObjects` request in quiet mode, with retries.
     ///
-    /// A response that reports an error for a key is a failed attempt, so the request goes
-    /// again within the retry budget. The new attempt sends the keys that the attempt before
+    /// A response that reports an error for a key is an error of that attempt, so the request
+    /// goes again within the retry budget. The new attempt sends the keys that the attempt before
     /// deleted too. The backend relies on S3 to report such a key as deleted, not as an error.
     async fn delete_objects_request(
         &self,
@@ -597,8 +597,8 @@ impl S3BlobStorage {
     }
 
     /// Gives the text that the retry loop (`with_retries_customized` in `golem_common::retries`)
-    /// logs for a `GetObject` error, or `None` for an error that the loop does not log and does
-    /// not count as a failure.
+    /// records for a `GetObject` error, or `None` for an error that the loop does not record and
+    /// does not count as a failure.
     ///
     /// A missing key and a 416 (`is_final_get_object_error`) stay out of the error log and out
     /// of the failure counter. Every other error gets its text.

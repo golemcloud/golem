@@ -153,7 +153,7 @@ export interface Container {
   /**
    * Read an object's bytes. With no range, the whole object is read. With an
    * explicit `[start, end]` range, both offsets are inclusive, and the read
-   * fails when a byte of the range is not in the object.
+   * gives an error when a byte of the range is not in the object.
    */
   getData(name: string, start?: bigint, end?: bigint): Promise<Uint8Array>;
   /** Create or replace `name` with `data` (chunked at 4096 bytes per write). */
