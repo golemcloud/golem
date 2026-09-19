@@ -1988,6 +1988,7 @@ impl ReplayState {
         .await
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     async fn wait_for_reconstruction_fences(&self) -> Result<(), WorkerExecutorError> {
         tokio::select! {
             biased;
