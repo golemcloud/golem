@@ -24,6 +24,7 @@ use aws_sdk_s3::primitives::SdkBody;
 use aws_smithy_runtime_api::client::http::{
     HttpConnector, HttpConnectorFuture, SharedHttpConnector, http_client_fn,
 };
+use aws_smithy_runtime_api::client::result::ConnectorError;
 use aws_smithy_runtime_api::http::StatusCode;
 use axum::Router;
 use axum::body::Body;
@@ -92,13 +93,15 @@ impl SentRequest {
 /// The response of the scripted transport to one request.
 ///
 /// The response has a `Content-Length` only when `content_length` is set. The body is one frame.
-/// When `body_reads` is set, a read of that frame adds 1 to it.
+/// When `body_reads` is set, a read of that frame adds 1 to it. When `transport_error` is set,
+/// the transport gives that error and no response.
 struct Answer {
     status: u16,
     content_range: Option<&'static str>,
     content_length: Option<usize>,
     body_reads: Option<Arc<AtomicUsize>>,
     body: String,
+    transport_error: Option<ConnectorError>,
 }
 
 impl Answer {
@@ -109,6 +112,15 @@ impl Answer {
             content_length: None,
             body_reads: None,
             body: body.into(),
+            transport_error: None,
+        }
+    }
+
+    /// An error of the transport, in place of a response.
+    fn transport_error(error: ConnectorError) -> Self {
+        Self {
+            transport_error: Some(error),
+            ..Self::new(0, "")
         }
     }
 
@@ -128,6 +140,35 @@ impl Answer {
             body_reads: Some(body_reads.clone()),
             ..Self::new(200, body)
         }
+    }
+
+    /// Gives the HTTP response, or the error of the transport.
+    fn into_response(mut self) -> Result<HttpResponse, ConnectorError> {
+        match self.transport_error.take() {
+            Some(error) => Err(error),
+            None => Ok(self.into_http_response()),
+        }
+    }
+
+    fn into_http_response(self) -> HttpResponse {
+        let status = StatusCode::try_from(self.status).unwrap();
+        let content_range = self.content_range;
+        let content_length = self.content_length;
+        let mut response = HttpResponse::new(status, self.into_body());
+        response
+            .headers_mut()
+            .insert("content-type", "application/xml");
+        if let Some(content_range) = content_range {
+            response
+                .headers_mut()
+                .insert("content-range", content_range);
+        }
+        if let Some(content_length) = content_length {
+            response
+                .headers_mut()
+                .insert("content-length", content_length.to_string());
+        }
+        response
     }
 
     /// Gives the body as one frame. When `body_reads` is set, a read of that frame adds 1 to
@@ -173,25 +214,7 @@ impl HttpConnector for ScriptedTransport {
             requests.push(sent.clone());
             requests.len() - 1
         };
-        let answer = (self.script)(&sent, earlier);
-        let status = StatusCode::try_from(answer.status).unwrap();
-        let content_range = answer.content_range;
-        let content_length = answer.content_length;
-        let mut response = HttpResponse::new(status, answer.into_body());
-        response
-            .headers_mut()
-            .insert("content-type", "application/xml");
-        if let Some(content_range) = content_range {
-            response
-                .headers_mut()
-                .insert("content-range", content_range);
-        }
-        if let Some(content_length) = content_length {
-            response
-                .headers_mut()
-                .insert("content-length", content_length.to_string());
-        }
-        HttpConnectorFuture::ready(Ok(response))
+        HttpConnectorFuture::ready((self.script)(&sent, earlier).into_response())
     }
 }
 
@@ -904,6 +927,31 @@ async fn get_raw_slice_retries_a_server_error_but_not_a_missing_object() {
         (after_a_server_error, missing, sent(&requests).len()),
         (Some(b"abc".to_vec()), None, 3)
     );
+}
+
+#[test]
+async fn get_raw_slice_retries_a_transport_error() {
+    // The first attempt gets an I/O error of the transport, and the second a timeout of the
+    // transport. Neither has a response. The third attempt gets the full object.
+    let (storage, requests) = scripted_storage("", |_, earlier| match earlier {
+        0 => Answer::transport_error(ConnectorError::io("connection reset".into())),
+        1 => Answer::transport_error(ConnectorError::timeout("no response in time".into())),
+        _ => Answer::new(200, "abcdef"),
+    });
+
+    let result = storage
+        .get_raw_slice(
+            "test",
+            "get-raw-slice",
+            namespace(),
+            Path::new("blob"),
+            0,
+            2,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!((result, sent(&requests).len()), (Some(b"abc".to_vec()), 3));
 }
 
 #[test]
