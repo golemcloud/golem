@@ -367,6 +367,25 @@ describe("Container.forSchema", () => {
     }),
   )
 
+  it.effect("a negative offset fails instead of counting from the end", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeBlobFake
+      const exit = yield* Effect.exit(
+        Effect.gen(function* () {
+          const c = yield* Blobstore.createContainer("negative-range-c")
+          yield* c.writeData("k", u8("alpha"))
+          return yield* c.getData("k", { start: -1n, end: 2n })
+        }).pipe(Effect.provide(fake.layer)),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("BlobstoreHostError")
+        expect(json).toContain("the byte range -1-2 is not in the blob")
+      }
+    }),
+  )
+
   it.effect(
     "decode failure surfaces as a typed failure (Schema.SchemaError via fromJsonString)",
     () =>
