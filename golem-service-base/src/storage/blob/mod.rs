@@ -472,8 +472,9 @@ pub struct BlobRangeError {
 
 /// Gives the bytes from `start` to `end` of a whole blob. Both offsets are inclusive.
 ///
-/// A range with a byte that is not in the blob gives a [`BlobRangeError`]: an `end` at or
-/// after the length of the blob, a `start` after `end`, and each range of an empty blob.
+/// A range with a byte that is not in the blob gives a [`BlobRangeError`]. An `end` at or after
+/// the length of the blob is not in the blob. A `start` after `end` is not in the blob. No
+/// range is in an empty blob.
 pub(crate) fn blob_range(blob: &[u8], start: u64, end: u64) -> Result<&[u8], BlobRangeError> {
     (start <= end)
         .then(|| usize::try_from(start).ok().zip(usize::try_from(end).ok()))

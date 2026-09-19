@@ -73,12 +73,9 @@ pub struct S3BlobStorage {
 /// The output of a request does not hold the status of its response. The SDK runs
 /// `read_before_deserialization` with the response of an attempt, and then makes the output
 /// of that attempt from that response (`try_attempt` in
-/// `aws_smithy_runtime::client::orchestrator`). The interceptor stores the status of the
-/// response that it gets, and `get` gives the status that it stored last. When the SDK makes
-/// more than one attempt for a request, the attempt that gets a response stores its status
-/// after the attempts before it. The test
-/// `get_raw_slice_reads_the_status_of_the_attempt_that_gave_the_output` exercises this with
-/// a server error before the response that gives the output.
+/// `aws_smithy_runtime::client::orchestrator`). The interceptor stores the status of each
+/// response that it gets, and `get` gives the status that it stored last. The output comes
+/// from the last attempt, so `get` gives the status of the response of that attempt.
 #[derive(Debug, Clone, Default)]
 struct ResponseStatus(Arc<Mutex<Option<u16>>>);
 

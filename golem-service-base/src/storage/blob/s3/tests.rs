@@ -742,8 +742,6 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
 
 #[test]
 async fn get_raw_slice_retries_a_server_error_but_not_a_missing_object() {
-    // The attempt after the server error gets the whole object with the status 200, so the
-    // result also shows that the status of the attempt before it does not stay.
     let (storage, requests) = scripted_storage("", |request, earlier| {
         if request.uri.contains("missing") {
             Answer::new(404, NO_SUCH_KEY)
