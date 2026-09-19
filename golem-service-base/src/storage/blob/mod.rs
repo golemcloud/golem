@@ -322,16 +322,6 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
             .await
     }
 
-    pub async fn list_blobs_below(
-        &self,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<Box<[ListedBlob]>, Error> {
-        self.storage
-            .list_blobs_below(self.svc_name, self.api_name, namespace, path)
-            .await
-    }
-
     pub async fn delete_dir(
         &self,
         namespace: BlobStorageNamespace,
