@@ -177,9 +177,9 @@ object ToolMiddlewareGuest {
             case Left(ToolUnderlyingError.Denied(message))        => Left(ToolInvokeError.Denied(message))
             case Left(ToolUnderlyingError.InternalError(message)) => Left(ToolInvokeError.InternalError(message))
             case Left(ToolUnderlyingError.Cancelled)              =>
-              Left(ToolInvokeError.InvalidResult("underlying invocation was cancelled"))
+              Left(ToolInvokeError.Cancelled)
             case Left(ToolUnderlyingError.ResourceExhausted(message)) =>
-              Left(ToolInvokeError.InvalidResult(s"underlying invocation exhausted resources: $message"))
+              Left(ToolInvokeError.ResourceExhausted(message))
           }
         }
 
@@ -206,41 +206,50 @@ object ToolMiddlewareGuest {
                 )
               )
               .flatMap { started =>
+                var observing                  = false
                 var settled                    = false
                 var dropRequested              = false
                 var disposed                   = false
                 def disposeWhenSettled(): Unit =
-                  if (settled && dropRequested && !disposed) {
+                  if ((!observing || settled) && dropRequested && !disposed) {
                     disposed = true
                     try disposeUnderlyingObserver(started._1)
                     catch { case _: Throwable => () }
                   }
-                val terminal = FutureInterop
-                  .fromPromise(started._1.get())
-                  .map { value =>
-                    Right(
-                      ToolMiddlewareResult(
-                        value.toOption.map(v => SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(v))),
-                        None
-                      )
+                def terminal
+                  : Future[Either[ToolUnderlyingError[golem.schema.TypedSchemaValue], ToolMiddlewareResult]] = {
+                  if (disposed)
+                    return Future.successful(
+                      Left(ToolUnderlyingError.ProtocolError("underlying invocation observer was dropped"))
                     )
-                  }
-                  .recoverWith { case error @ js.JavaScriptException(value) =>
-                    decodeUnderlyingError(value) match {
-                      case Some(declared) => Future.successful(Left(declared))
-                      case None           => Future.failed(error)
+                  observing = true
+                  FutureInterop
+                    .fromPromise(started._1.get())
+                    .map { value =>
+                      Right(
+                        ToolMiddlewareResult(
+                          value.toOption.map(v => SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(v))),
+                          None
+                        )
+                      )
                     }
-                  }
-                  .transform { outcome =>
-                    settled = true
-                    disposeWhenSettled()
-                    outcome
-                  }
+                    .recoverWith { case error @ js.JavaScriptException(value) =>
+                      decodeUnderlyingError(value) match {
+                        case Some(declared) => Future.successful(Left(declared))
+                        case None           => Future.failed(error)
+                      }
+                    }
+                    .transform { outcome =>
+                      settled = true
+                      disposeWhenSettled()
+                      outcome
+                    }
+                }
                 Future.successful(
                   ToolUnderlyingAdmission(
                     started._2.toOption.map(new JsMiddlewareOutputStream(_)),
-                    terminal,
-                    () => if (!settled) started._1.cancel(),
+                    () => terminal,
+                    () => if (!settled && !disposed) started._1.cancel(),
                     () => {
                       dropRequested = true
                       disposeWhenSettled()

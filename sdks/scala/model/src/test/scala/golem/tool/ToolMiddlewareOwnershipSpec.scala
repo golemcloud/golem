@@ -83,6 +83,56 @@ object ToolMiddlewareOwnershipSpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("ToolMiddlewareOwnershipSpec")(
+      test("underlying observers start one get lazily and retain its terminal") {
+        var gets      = 0
+        val terminal  = Promise[Either[ToolUnderlyingError[Nothing], String]]()
+        val admission = ToolUnderlyingAdmission(None, () => { gets += 1; terminal.future }, () => (), () => ())
+        val before    = gets
+        val first     = admission.result
+        val second    = admission.result
+        terminal.success(Right("terminal"))
+        for {
+          a <- ZIO.fromFuture(_ => first)
+          b <- ZIO.fromFuture(_ => second)
+          c <- ZIO.fromFuture(_ => admission.result)
+        } yield assertTrue(before == 0, gets == 1, first eq second, a == Right("terminal"), b == a, c == a)
+      },
+      test("underlying cancellation and resource exhaustion remain distinct until wire encoding") {
+        ZIO
+          .foreach(
+            List(
+              (ToolUnderlyingError.Cancelled, ToolInvokeError.Cancelled),
+              (ToolUnderlyingError.ResourceExhausted("quota"), ToolInvokeError.ResourceExhausted("quota"))
+            )
+          ) { case (underlyingError, expected) =>
+            val admission = ToolUnderlyingAdmission[Nothing, ToolMiddlewareResult](
+              None,
+              () => Future.successful(Left(underlyingError)),
+              () => (),
+              () => ()
+            )
+            val raw = new RawToolUnderlying {
+              def invoke(path: List[String], input: TypedSchemaValue, stdin: Option[ToolMiddlewareInputHandle])
+                : Future[Outcome] =
+                ToolUnderlyingInvocation(Future.successful(admission)).toMiddlewareResult
+              override def start(
+                path: List[String],
+                input: TypedSchemaValue,
+                stdin: Option[ToolMiddlewareInputHandle]
+              ) =
+                ToolUnderlyingInvocation(Future.successful(admission))
+            }
+            for {
+              observed <- ZIO.fromFuture(_ => raw.invoke(Nil, unitInput, None))
+              tracked  <- ZIO.fromFuture(_ => withUnderlying(raw)(_.invoke(Nil, unitInput, None)))
+            } yield assertTrue(
+              observed == Left(expected),
+              tracked == observed,
+              ToolInvokeError.toWire(expected).isInstanceOf[golem.tool.wire.WitToolError.ConstraintViolation]
+            )
+          }
+          .map(results => results.reduce(_ && _))
+      },
       test("allows zero, one, and multiple sequential underlying calls") {
         ZIO
           .foreach(List(0, 1, 3)) { count =>

@@ -550,6 +550,8 @@ pub fn[E] RawToolInvocation::encode_handler_error(
     ProtocolError(message) => ProtocolError(message)
     Denied(message) => Denied(message)
     InternalError(message) => InternalError(message)
+    Cancelled => Cancelled
+    ResourceExhausted(message) => ResourceExhausted(message)
     Tool(error) => {
       let (name, typed) = match encode_custom_error(error) {
         Ok(named) => named
@@ -620,14 +622,9 @@ pub async fn UnderlyingTool::invoke_raw(
     Err(@underlying.UnderlyingError::Denied(message)) => Err(Denied(message))
     Err(@underlying.UnderlyingError::InternalError(message)) =>
       Err(InternalError(message))
-    Err(@underlying.UnderlyingError::Cancelled) =>
-      Err(ConstraintViolation("underlying invocation was cancelled"))
+    Err(@underlying.UnderlyingError::Cancelled) => Err(Cancelled)
     Err(@underlying.UnderlyingError::ResourceExhausted(message)) =>
-      Err(
-        ConstraintViolation(
-          "underlying invocation exhausted resources: \{message}",
-        ),
-      )
+      Err(ResourceExhausted(message))
   }
 }
 
@@ -693,10 +690,12 @@ pub async fn UnderlyingTool::start_raw(
     cancel_call: observer.cancel,
     drop_observer: close,
     state,
+    result_lock: @async-core.Mutex(),
+    cached_result: Ref(None),
     get_result: async fn() {
       if !state.val.open || state.val.get_in_flight {
         return Err(
-          InvalidInput("underlying invocation observer is no longer available"),
+          ProtocolError("underlying invocation observer is no longer available"),
         )
       }
       state.val.get_in_flight = true
@@ -715,14 +714,9 @@ pub async fn UnderlyingTool::start_raw(
           Err(Denied(message))
         Err(@underlying.UnderlyingError::InternalError(message)) =>
           Err(InternalError(message))
-        Err(@underlying.UnderlyingError::Cancelled) =>
-          Err(ConstraintViolation("underlying invocation was cancelled"))
+        Err(@underlying.UnderlyingError::Cancelled) => Err(Cancelled)
         Err(@underlying.UnderlyingError::ResourceExhausted(message)) =>
-          Err(
-            ConstraintViolation(
-              "underlying invocation exhausted resources: \{message}",
-            ),
-          )
+          Err(ResourceExhausted(message))
       }
     },
   })
@@ -761,6 +755,14 @@ pub fn encode_raw_tool_error(
     Denied(message) => @types.ToolError::ConstraintViolation(message)
     InternalError(message) =>
       @types.ToolError::InvalidResult("internal error: \{message}")
+    Cancelled =>
+      @types.ToolError::ConstraintViolation(
+        "underlying invocation was cancelled",
+      )
+    ResourceExhausted(message) =>
+      @types.ToolError::ConstraintViolation(
+        "underlying invocation exhausted resources: \{message}",
+      )
     Tool(value) =>
       match value.take_for_final(context) {
         Ok(value) =>

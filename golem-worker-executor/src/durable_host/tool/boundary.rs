@@ -545,13 +545,7 @@ mod tests {
         assert!(matches!(
             project_underlying_tool_response(
                 Err(wrong_direction),
-                &SelectedToolProjectionEdge {
-                    command: Some(CompiledCommandCompatibility {
-                        forward_unknown_errors: false,
-                        ..compatibility.commands[0].clone()
-                    }),
-                    expected_error_names: vec!["expected-error".into()]
-                },
+                &prepared.response_edge,
                 &mut NoStreams
             ),
             Err(SerializableToolRpcError::RemoteToolError(error))

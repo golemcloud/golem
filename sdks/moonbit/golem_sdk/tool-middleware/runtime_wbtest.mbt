@@ -1109,6 +1109,7 @@ test "per-call observers complete in reverse order and isolate disposal and canc
     assert_eq(cancels[1].val, 1)
     ignore(second_done_promise.complete(()))
     assert_true(second.get() is Ok(_))
+    assert_true(second.get() is Ok(_))
     assert_eq(drops[1].val, 1)
     first.drop()
     assert_eq(cancels[0].val, 0)
@@ -1165,6 +1166,155 @@ test "dropping an observer with an in-flight get defers raw disposal through com
     assert_true(underlying.ownership.state.val.active_calls == 0)
     invocation.drop()
     assert_eq(observer_drops.val, 1)
+  })
+}
+
+///|
+test "underlying terminals retain cancellation and resource exhaustion across concurrent and repeated get" {
+  run_component_async(async fn() {
+    for
+      error in [
+        @underlying.UnderlyingError::Cancelled,
+        @underlying.UnderlyingError::ResourceExhausted("quota"),
+      ] {
+      let gets = Ref(0)
+      let drops = Ref(0)
+      let cancellations = Ref(0)
+      let (entered, entered_promise) = @async-core.Future::new()
+      let (release, release_promise) = @async-core.Future::new()
+      let underlying : UnderlyingTool = {
+        ownership: OwnershipContext::new(no_raw_drop),
+        invoke: async fn(_, _, _) {
+          {
+            get: async fn() {
+              gets.val += 1
+              ignore(entered_promise.complete(()))
+              release.get()
+              Err(error)
+            },
+            stdout: None,
+            cancel: fn() { cancellations.val += 1 },
+            drop: fn() { drops.val += 1 },
+          }
+        },
+      }
+      let invocation = underlying
+        .start_with(
+          [],
+          @schema.try_into_typed_schema_value(()),
+          None,
+          fn(_, _) { None },
+          decode_result_empty,
+        )
+        .unwrap()
+      @async-core.with_task_group(async fn(group) {
+        let first = group.spawn(() => invocation.get())
+        entered.get()
+        let second = group.spawn(() => invocation.get())
+        ignore(release_promise.complete(()))
+        let expected : Result[Unit, ToolInvokeError[RawCustomToolError]] = match
+          error {
+          @underlying.UnderlyingError::Cancelled => Err(Cancelled)
+          _ => Err(ResourceExhausted("quota"))
+        }
+        assert_eq(first.wait(), expected)
+        assert_eq(second.wait(), expected)
+        assert_eq(invocation.get(), expected)
+      })
+      assert_eq(gets.val, 1)
+      assert_eq(drops.val, 1)
+      assert_eq(cancellations.val, 0)
+    }
+    assert_eq(
+      encode_tool_error(Cancelled),
+      @types.ToolError::ConstraintViolation(
+        "underlying invocation was cancelled",
+      ),
+    )
+    assert_eq(
+      encode_tool_error(ResourceExhausted("quota")),
+      @types.ToolError::ConstraintViolation(
+        "underlying invocation exhausted resources: quota",
+      ),
+    )
+  })
+}
+
+///|
+test "cancelling one waiter preserves shared typed and raw observation" {
+  run_component_async(async fn() {
+    for raw_lane in [false, true] {
+      for successful in [false, true] {
+        let gets = Ref(0)
+        let drops = Ref(0)
+        let cancellations = Ref(0)
+        let (entered, entered_promise) = @async-core.Future::new()
+        let (release, release_promise) = @async-core.Future::new()
+        let underlying : UnderlyingTool = {
+          ownership: OwnershipContext::new(no_raw_drop),
+          invoke: async fn(_, _, _) {
+            {
+              get: async fn() {
+                gets.val += 1
+                ignore(entered_promise.complete(()))
+                release.get()
+                if successful {
+                  Ok({ result: None, stdout: None, })
+                } else {
+                  Err(@underlying.UnderlyingError::ResourceExhausted("quota"))
+                }
+              },
+              stdout: None,
+              cancel: fn() { cancellations.val += 1 },
+              drop: fn() { drops.val += 1 },
+            }
+          },
+        }
+        let input = @schema.try_into_typed_schema_value(())
+        let get : async () -> Result[Unit, ToolInvokeError[Unit]] = if raw_lane {
+          let raw_input = underlying.ownership.own_raw_typed_schema_value(
+            @model.typed_schema_value_to_wit(input),
+          )
+          let invocation = underlying.start_raw([], raw_input, None).unwrap()
+          async fn() {
+            match invocation.get() {
+              Ok(_) => Ok(())
+              Err(error) => Err(error.map_tool(fn(_) { () }))
+            }
+          }
+        } else {
+          let invocation : UnderlyingInvocation[Unit, Unit] = underlying
+            .start_with([], input, None, fn(_, _) { None }, decode_result_empty)
+            .unwrap()
+          async fn() { invocation.get() }
+        }
+        @async-core.with_task_group(async fn(group) {
+          let first = group.spawn(async fn() {
+            try get() catch {
+              @async-core.Cancelled::Cancelled => ()
+              error => raise error
+            } noraise {
+              _ => fail("cancelled waiter unexpectedly returned")
+            }
+          })
+          entered.get()
+          let second = group.spawn(get)
+          first.cancel()
+          ignore(release_promise.complete(()))
+          let expected = if successful {
+            Ok(())
+          } else {
+            Err(ResourceExhausted("quota"))
+          }
+          assert_eq(second.wait(), expected)
+          assert_eq(get(), expected)
+          first.wait()
+        })
+        assert_eq(gets.val, 1)
+        assert_eq(drops.val, 1)
+        assert_eq(cancellations.val, 0)
+      }
+    }
   })
 }
 

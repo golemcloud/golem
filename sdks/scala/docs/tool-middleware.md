@@ -123,9 +123,14 @@ The supplied underlying is affine and valid only during its middleware invocatio
 
 - Convenience calls return `ToolUnderlyingInvocation`; call `.toMiddlewareResult` for the former await-the-whole-call behavior.
 - Calls may overlap. Each invocation has an independent admission, result, stdout, `cancel`, and `drop` handle, so middleware can fan out and observe completions in any order.
+- Sequential and concurrent `get()` calls share one lazy host observation and return the cached terminal result, including errors. This does not duplicate or rewind stdout.
 - Do not store, return, capture for later, or otherwise let the underlying escape. It is revoked when the middleware handler returns.
 - Revocation at handler return prevents new admissions but does not implicitly cancel admitted calls. Cleanup requests disposal of their observers; when observation is pending, disposal waits for it to settle.
 - Dropping an observer releases observation; it is not cancellation. Invoke its `cancel` callback only when cancellation is intended.
+
+Underlying `ToolInvokeError.Cancelled` and `ToolInvokeError.ResourceExhausted` remain distinguishable to middleware code. They become `ConstraintViolation` only when forwarded as the middleware's own wire result. Dropping an unobserved admission disposes it immediately without starting a host `get`.
+
+For structural-subtype and nominal compatibility, every inner tool error must be declared by the expected tool with a compatible payload. Expected-only errors are allowed; inner-only errors are rejected. Strict equality requires matching error vocabularies.
 
 Post-invocation admission fails with `ToolUnderlyingMisuseException`; this is SDK misuse, not a `ToolInvokeError` returned by the wrapped tool.
 

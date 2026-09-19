@@ -502,6 +502,28 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
           )
         )
       },
+      test("monomorphic empty parameters reject a non-record value with the correct schema") {
+        registered
+        var calls      = 0
+        val underlying = wrapped { (_, value, _) => calls += 1; resolved(JsInvocationResult(value, js.undefined)) }
+        val malformed  =
+          TypedSchemaValue(ToolMiddleware.noParametersSchema, SchemaValue.StringValue("not-an-empty-record"))
+        rejectionOf(
+          invokeWithParameters(
+            monomorphicName,
+            monomorphicTool.toolName,
+            toolToJs(monomorphicTool),
+            SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(malformed)),
+            js.Array[String](),
+            monomorphicInput,
+            noStdin,
+            underlying,
+            anonymous
+          )
+        ).map(error =>
+          assertTrue(error.asInstanceOf[js.Dynamic].tag.asInstanceOf[String] == "invalid-input", calls == 0)
+        )
+      },
       test("typed parameters reject wrong schema and wrong value type") {
         registered
         val codec                            = IntoSchema[NestedParameters]
@@ -605,7 +627,7 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
           )
         ).map(result => assertTrue(stdoutOf(result) eq stdout))
       },
-      test("dropping a pending observer defers disposal until get settles") {
+      test("dropping an unobserved pending invocation disposes immediately without starting get") {
         registered
         val middlewareName = "guest-middleware-drop-pending"
         ToolMiddlewareImplementationRuntime.registerUniversal(
@@ -621,21 +643,20 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
             () => new StartAndReturn
           )
         )
-        var pending              = true
+        var gets                 = 0
         var disposals            = 0
         var cancellations        = 0
         var complete: () => Unit = null
         val getPromise           =
           new js.Promise[js.UndefOr[JsTypedSchemaValue]]((resolve, _) => complete = () => resolve(js.undefined))
         val observer = js.Dynamic.literal(
-          "get"    -> js.Any.fromFunction0(() => getPromise),
+          "get"    -> js.Any.fromFunction0 { () => gets += 1; getPromise },
           "cancel" -> js.Any.fromFunction0(() => cancellations += 1)
         )
         js.Dynamic.global.Reflect.applyDynamic("set")(
           observer,
           js.Dynamic.global.Symbol.selectDynamic("dispose"),
           js.Any.fromFunction0 { () =>
-            if (pending) throw new RuntimeException("observer disposed while get was outstanding")
             disposals += 1
           }
         )
@@ -660,11 +681,10 @@ object ToolMiddlewareGuestSpec extends ZIOSpecDefault {
                )
           before = disposals
           _      = {
-            pending = false
             complete()
           }
           _ <- ZIO.fromFuture(_ => FutureInterop.fromPromise(js.Promise.resolve(())))
-        } yield assertTrue(before == 0, disposals == 1, cancellations == 0)
+        } yield assertTrue(before == 1, disposals == 1, cancellations == 0, gets == 0)
       },
       test("wrapped stdout is pumped through the host writer with backpressure") {
         registered

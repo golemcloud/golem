@@ -32,7 +32,6 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
-#[cfg(test)]
 use std::rc::Rc;
 
 /// Readable byte stream used for tool stdin and stdout.
@@ -196,7 +195,17 @@ pub struct UnderlyingTool {
     allow(dead_code)
 )]
 pub struct UnderlyingInvocation {
-    result: UnderlyingInvocationResult,
+    result: Rc<UnderlyingInvocationResult>,
+    #[cfg(any(
+        test,
+        feature = "export_golem_agentic",
+        feature = "export_golem_tool_middleware"
+    ))]
+    terminal: Rc<
+        super::invocation_result::InvocationResultDriver<
+            Result<Option<TypedSchemaValue>, ToolInvokeError<std::convert::Infallible>>,
+        >,
+    >,
     pub stdout: Option<InputStream>,
 }
 
@@ -307,8 +316,49 @@ struct FakeInvocationResult {
     feature = "export_golem_tool_middleware"
 ))]
 impl UnderlyingInvocation {
+    fn new(result: UnderlyingInvocationResult, stdout: Option<InputStream>) -> Self {
+        let result = Rc::new(result);
+        let source = Rc::clone(&result);
+        let terminal = Rc::new(super::invocation_result::InvocationResultDriver::new(
+            move || {
+                Box::pin(async move {
+                    let result = match source.as_ref() {
+                        #[cfg(any(
+                            feature = "export_golem_agentic",
+                            feature = "export_golem_tool_middleware"
+                        ))]
+                        UnderlyingInvocationResult::Raw(result) => result
+                            .get()
+                            .await
+                            .map_err(|error| decode_underlying_error(error, |_, _| Ok(None)))?,
+                        #[cfg(test)]
+                        UnderlyingInvocationResult::Fake(result) => {
+                            let future = result
+                                .result
+                                .borrow_mut()
+                                .take()
+                                .expect("observer starts once");
+                            future
+                                .await
+                                .map_err(|error| decode_wire_error(error, |_, _| Ok(None)))?
+                        }
+                    };
+                    result
+                        .map(decode_typed_schema_value_owned)
+                        .transpose()
+                        .map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))
+                })
+            },
+        ));
+        Self {
+            result,
+            terminal,
+            stdout,
+        }
+    }
+
     pub fn cancel(&self) {
-        match &self.result {
+        match self.result.as_ref() {
             #[cfg(any(
                 feature = "export_golem_agentic",
                 feature = "export_golem_tool_middleware"
@@ -331,31 +381,19 @@ impl UnderlyingInvocation {
         &self,
         decode_custom_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
     ) -> Result<Option<TypedSchemaValue>, ToolInvokeError<E>> {
-        let result = match &self.result {
-            #[cfg(any(
-                feature = "export_golem_agentic",
-                feature = "export_golem_tool_middleware"
-            ))]
-            UnderlyingInvocationResult::Raw(result) => result
-                .get()
-                .await
-                .map_err(|error| decode_underlying_error(error, decode_custom_error))?,
-            #[cfg(test)]
-            UnderlyingInvocationResult::Fake(result) => {
-                let future = result.result.borrow_mut().take().ok_or_else(|| {
-                    ToolInvokeError::InvalidResult(
-                        "underlying result was already observed".to_string(),
-                    )
-                })?;
-                future
-                    .await
-                    .map_err(|error| decode_wire_error(error, decode_custom_error))?
-            }
-        };
-        result
-            .map(decode_typed_schema_value_owned)
-            .transpose()
-            .map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))
+        Rc::clone(&self.terminal)
+            .wait()
+            .await
+            .map_err(|error| match error {
+                ToolInvokeError::UnknownCustomError(raw) => {
+                    match decode_custom_error(raw.name.clone(), raw.payload.clone()) {
+                        Ok(Some(value)) => ToolInvokeError::Tool(value),
+                        Ok(None) => ToolInvokeError::UnknownCustomError(raw),
+                        Err(error) => ToolInvokeError::InvalidResult(error),
+                    }
+                }
+                other => other.map_tool(|impossible| match impossible {}),
+            })
     }
 }
 
@@ -509,21 +547,21 @@ impl UnderlyingTool {
             ))]
             UnderlyingToolInner::Raw(raw) => {
                 let (result, stdout) = raw.invoke(command_path, input, stdin).await;
-                Ok(UnderlyingInvocation {
-                    result: UnderlyingInvocationResult::Raw(result),
+                Ok(UnderlyingInvocation::new(
+                    UnderlyingInvocationResult::Raw(result),
                     stdout,
-                })
+                ))
             }
             #[cfg(test)]
             UnderlyingToolInner::Fake(invoke) => {
                 let (result, stdout, cancelled) = invoke(command_path, input, stdin);
-                Ok(UnderlyingInvocation {
-                    result: UnderlyingInvocationResult::Fake(FakeInvocationResult {
+                Ok(UnderlyingInvocation::new(
+                    UnderlyingInvocationResult::Fake(FakeInvocationResult {
                         result: std::cell::RefCell::new(Some(result)),
                         cancelled,
                     }),
                     stdout,
-                })
+                ))
             }
         }
     }
@@ -1000,6 +1038,42 @@ mod tests {
     }
 
     #[test]
+    async fn underlying_observer_shares_concurrent_gets_and_caches_terminal() {
+        let polls = Rc::new(Cell::new(0));
+        let underlying = UnderlyingTool::from_fake_started(Box::new({
+            let polls = Rc::clone(&polls);
+            move |_, input, _| {
+                let polls = Rc::clone(&polls);
+                let mut value = Some(input);
+                let future = Box::pin(std::future::poll_fn(move |cx| {
+                    polls.set(polls.get() + 1);
+                    if polls.get() == 1 {
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    } else {
+                        std::task::Poll::Ready(Ok(value.take()))
+                    }
+                }));
+                (future as _, None, Rc::new(Cell::new(false)))
+            }
+        }));
+        let expected = "shared terminal"
+            .to_string()
+            .into_typed_schema_value()
+            .unwrap();
+        let invocation = underlying
+            .start(vec![], expected.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(polls.get(), 0);
+        let (first, second) = join_results(invocation.get(), invocation.get()).await;
+        assert_eq!(first.unwrap(), Some(expected.clone()));
+        assert_eq!(second.unwrap(), Some(expected.clone()));
+        assert_eq!(invocation.get().await.unwrap(), Some(expected));
+        assert_eq!(polls.get(), 2);
+    }
+
+    #[test]
     async fn result_wait_and_cancel_share_the_same_invocation_borrow() {
         let underlying = UnderlyingTool::from_fake_started(Box::new(|_, _, _| {
             let cancelled = Rc::new(Cell::new(false));
@@ -1034,6 +1108,10 @@ mod tests {
         invocation.cancel();
         assert!(matches!(
             get.await,
+            Err(ToolInvokeError::ConstraintViolation(message)) if message == "cancelled"
+        ));
+        assert!(matches!(
+            invocation.get().await,
             Err(ToolInvokeError::ConstraintViolation(message)) if message == "cancelled"
         ));
     }

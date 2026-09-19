@@ -280,7 +280,9 @@ order and skips hints. Key kinds:
 - `HostStreamFrame` (hint): a frame of a host-owned stream (e.g. a p3 HTTP request body) attached
   to its owning call by `parent_start_index`; consumers find frames by scanning, interrupted
   recordings need no closing entry.
-- `BeginAtomicRegion` / `EndAtomicRegion`, `Jump`, `Revert`, `NoOp`.
+- `BeginAtomicRegion` / `EndAtomicRegion` and `NoOp` are positional; `Jump` and `Revert` are hints.
+  Entity-local atomic rollback can append Jumps at the live tail during replay, outside the
+  discontiguous regions they delete, so the cursor must skip those markers without a guest claim.
 - `PendingUpdate`, `SuccessfulUpdate`, `FailedUpdate`, `Snapshot` (hint).
 - Lifecycle hints: `Suspend`, `Error`, `RecoverySucceeded`, `Interrupted`, `Resumed`, `Exited`,
   `Restart`.

@@ -345,6 +345,15 @@ wrappers enforce once-only transfer, cleanup, and revocation when the handler re
 itself does not provide affine type-system guarantees. Return only the final stdout stream;
 abandoned or unforwarded streams are cleaned up by the SDK.
 
+Sequential and concurrent `get()` calls on an underlying observer share one host observation and
+return the cached terminal result, including errors. This does not duplicate or rewind stdout.
+`Cancelled` and `ResourceExhausted` remain distinguishable to middleware code; they become
+`ConstraintViolation` only when forwarded as the middleware's own wire result.
+
+For structural-subtype and nominal compatibility, every inner tool error must be declared by the
+expected tool with a compatible payload. Expected-only errors are allowed; inner-only errors are
+rejected. Strict equality requires matching error vocabularies.
+
 Handler return revokes new underlying admissions but does not implicitly cancel admitted calls;
 observer disposal is likewise not cancellation. Commands declaring stdout receive a host writer at
 the guest boundary. Generated dispatch forwards the selected readable stdout into it concurrently

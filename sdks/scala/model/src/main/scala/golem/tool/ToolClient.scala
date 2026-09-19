@@ -212,6 +212,8 @@ object ToolClientRuntime {
       case ToolInvokeError.ProtocolError(message)       => s"protocol error: $message"
       case ToolInvokeError.Denied(message)              => s"denied: $message"
       case ToolInvokeError.InternalError(message)       => s"internal error: $message"
+      case ToolInvokeError.Cancelled                    => "cancelled"
+      case ToolInvokeError.ResourceExhausted(message)   => s"resource exhausted: $message"
       case ToolInvokeError.Tool(_)                      => "custom error"
       case ToolInvokeError.UnknownToolError(name, _)    => s"custom error `$name`"
     }

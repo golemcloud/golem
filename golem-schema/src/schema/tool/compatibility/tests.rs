@@ -350,7 +350,7 @@ fn strict_equality_preserves_doc_and_version_fields_in_literal_defaults() {
 }
 
 #[test]
-fn structural_requires_expected_error_vocabulary_but_allows_additions() {
+fn error_vocabulary_flows_from_inner_to_expected() {
     fn error(name: &str) -> ErrorCase {
         ErrorCase {
             name: name.into(),
@@ -363,15 +363,6 @@ fn structural_requires_expected_error_vocabulary_but_allows_additions() {
     let mut expected = tool(SchemaType::string());
     expected.commands.nodes[0].body.as_mut().unwrap().errors = vec![error("expected")];
     let missing = tool(SchemaType::string());
-    assert!(
-        compile_tool_compatibility(
-            &expected,
-            &missing,
-            ToolCompatibilityMode::StructuralSubtype
-        )
-        .is_err()
-    );
-
     let mut additional = expected.clone();
     additional.commands.nodes[0]
         .body
@@ -379,13 +370,23 @@ fn structural_requires_expected_error_vocabulary_but_allows_additions() {
         .unwrap()
         .errors
         .push(error("additional"));
+    for mode in [
+        ToolCompatibilityMode::StructuralSubtype,
+        ToolCompatibilityMode::Nominal,
+    ] {
+        let compiled = compile_tool_compatibility(&expected, &missing, mode).unwrap();
+        assert!(!compiled.commands[0].forward_unknown_errors);
+        assert!(compiled.commands[0].errors.is_empty());
+        let errors = compile_tool_compatibility(&expected, &additional, mode).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path.ends_with(".error.additional"))
+        );
+    }
     assert!(
-        compile_tool_compatibility(
-            &expected,
-            &additional,
-            ToolCompatibilityMode::StructuralSubtype
-        )
-        .is_ok()
+        compile_tool_compatibility(&expected, &missing, ToolCompatibilityMode::StrictEquality)
+            .is_err()
     );
 }
 

@@ -79,6 +79,12 @@ pub use tool_middleware_registry::{
 ))]
 pub(crate) use crate::schema::tool::wit::wire;
 
+#[cfg(any(
+    test,
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+pub(crate) mod invocation_result;
 mod tool_middleware;
 #[cfg(any(
     feature = "export_golem_tool_middleware",

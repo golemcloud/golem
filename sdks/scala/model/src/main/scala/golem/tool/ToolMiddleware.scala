@@ -97,18 +97,20 @@ trait RawToolUnderlying {
     commandPath: List[String],
     input: TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle]
-  ): ToolUnderlyingInvocation[TypedSchemaValue, ToolMiddlewareResult] =
+  ): ToolUnderlyingInvocation[TypedSchemaValue, ToolMiddlewareResult] = {
+    val terminal = invoke(commandPath, input, stdin)
+      .map(_.left.map(ToolUnderlyingError.Tool(_)))(ToolInvokerRuntime.executionContext)
     ToolUnderlyingInvocation(
       Future.successful(
         ToolUnderlyingAdmission(
           None,
-          invoke(commandPath, input, stdin)
-            .map(_.left.map(ToolUnderlyingError.Tool(_)))(ToolInvokerRuntime.executionContext),
+          () => terminal,
           () => (),
           () => ()
         )
       )
     )
+  }
 }
 
 sealed trait ToolUnderlyingError[+E] extends Product with Serializable
@@ -137,18 +139,20 @@ final case class ToolUnderlyingInvocation[+E, +A](
         case Left(ToolUnderlyingError.Denied(message))        => Left(ToolInvokeError.Denied(message))
         case Left(ToolUnderlyingError.InternalError(message)) => Left(ToolInvokeError.InternalError(message))
         case Left(ToolUnderlyingError.Cancelled)              =>
-          Left(ToolInvokeError.ConstraintViolation("underlying invocation was cancelled"))
+          Left(ToolInvokeError.Cancelled)
         case Left(ToolUnderlyingError.ResourceExhausted(message)) =>
-          Left(ToolInvokeError.ConstraintViolation(s"underlying invocation exhausted resources: $message"))
+          Left(ToolInvokeError.ResourceExhausted(message))
       }(ToolInvokerRuntime.executionContext)
 }
 
 final case class ToolUnderlyingAdmission[+E, +A](
   stdout: Option[ToolMiddlewareOutputHandle],
-  result: Future[Either[ToolUnderlyingError[E], A]],
+  startResult: () => Future[Either[ToolUnderlyingError[E], A]],
   cancel: () => Unit,
   drop: () => Unit
-)
+) {
+  lazy val result: Future[Either[ToolUnderlyingError[E], A]] = startResult()
+}
 
 final class ToolMiddlewareInvocationContext(
   val fields: List[CanonicalInputValue],
@@ -181,6 +185,9 @@ object ToolMiddlewareInvokerRuntime {
           failed(
             ToolInvokeError.InvalidInput("middleware installation parameter schema does not match its declaration")
           )
+        case Right(_)
+            if ValueValidation.validateValue(parameters.graph, parameters.graph.root, parameters.value).isLeft =>
+          failed(ToolInvokeError.InvalidInput("middleware installation parameter value does not match its schema"))
         case Right(_) if toolName != presented.toolName =>
           failed(ToolInvokeError.InvalidToolName(toolName))
         case Right(_) =>
@@ -302,6 +309,8 @@ object ToolMiddlewareInvokerRuntime {
       case Left(protocol: ToolInvokeError.ProtocolError)       => Left(protocol)
       case Left(protocol: ToolInvokeError.Denied)              => Left(protocol)
       case Left(protocol: ToolInvokeError.InternalError)       => Left(protocol)
+      case Left(ToolInvokeError.Cancelled)                     => Left(ToolInvokeError.Cancelled)
+      case Left(protocol: ToolInvokeError.ResourceExhausted)   => Left(protocol)
     }
 
   def validateRawInput(
@@ -335,6 +344,8 @@ object ToolMiddlewareInvokerRuntime {
       case Left(protocol: ToolInvokeError.ProtocolError)       => Left(protocol)
       case Left(protocol: ToolInvokeError.Denied)              => Left(protocol)
       case Left(protocol: ToolInvokeError.InternalError)       => Left(protocol)
+      case Left(ToolInvokeError.Cancelled)                     => Left(ToolInvokeError.Cancelled)
+      case Left(protocol: ToolInvokeError.ResourceExhausted)   => Left(protocol)
     }
 
   private def validateSuccess(
@@ -438,6 +449,8 @@ object ToolMiddlewareInvokerRuntime {
       case protocol: ToolInvokeError.ProtocolError       => protocol
       case protocol: ToolInvokeError.Denied              => protocol
       case protocol: ToolInvokeError.InternalError       => protocol
+      case ToolInvokeError.Cancelled                     => ToolInvokeError.Cancelled
+      case protocol: ToolInvokeError.ResourceExhausted   => protocol
     }
 
   def encodeInfallibleError(error: ToolInvokeError[Nothing]): ToolInvokeError[TypedSchemaValue] =
@@ -451,6 +464,8 @@ object ToolMiddlewareInvokerRuntime {
       case protocol: ToolInvokeError.ProtocolError       => protocol
       case protocol: ToolInvokeError.Denied              => protocol
       case protocol: ToolInvokeError.InternalError       => protocol
+      case ToolInvokeError.Cancelled                     => ToolInvokeError.Cancelled
+      case protocol: ToolInvokeError.ResourceExhausted   => protocol
     }
 
   def encodeUnit: Either[ToolInvokeError[Nothing], ToolMiddlewareResult] =
@@ -527,20 +542,23 @@ object ToolUnderlyingRuntime {
           return completed(Left(ToolInvokeError.InvalidCommandPath(commandPath)))
         val started = underlying.start(commandPath, value, stdin)
         ToolUnderlyingInvocation(started.admission.map { admission =>
-          admission.copy(result = admission.result.map {
-            case Left(ToolUnderlyingError.Tool(error)) =>
-              Left(ToolUnderlyingError.Tool(mapDeclared(error, decodeError)))
-            case Left(error: ToolUnderlyingError.ProtocolError)     => Left(error)
-            case Left(error: ToolUnderlyingError.Denied)            => Left(error)
-            case Left(error: ToolUnderlyingError.InternalError)     => Left(error)
-            case Left(ToolUnderlyingError.Cancelled)                => Left(ToolUnderlyingError.Cancelled)
-            case Left(error: ToolUnderlyingError.ResourceExhausted) => Left(error)
-            case Right(result)                                      =>
-              ToolMiddlewareInvokerRuntime.validateOutcome(tool, commandIndex.get, Right(result)) match {
-                case Right(valid) => Right(valid)
-                case Left(error)  => Left(ToolUnderlyingError.Tool(mapDeclared(error, decodeError)))
+          admission.copy(startResult =
+            () =>
+              admission.result.map {
+                case Left(ToolUnderlyingError.Tool(error)) =>
+                  Left(ToolUnderlyingError.Tool(mapDeclared(error, decodeError)))
+                case Left(error: ToolUnderlyingError.ProtocolError)     => Left(error)
+                case Left(error: ToolUnderlyingError.Denied)            => Left(error)
+                case Left(error: ToolUnderlyingError.InternalError)     => Left(error)
+                case Left(ToolUnderlyingError.Cancelled)                => Left(ToolUnderlyingError.Cancelled)
+                case Left(error: ToolUnderlyingError.ResourceExhausted) => Left(error)
+                case Right(result)                                      =>
+                  ToolMiddlewareInvokerRuntime.validateOutcome(tool, commandIndex.get, Right(result)) match {
+                    case Right(valid) => Right(valid)
+                    case Left(error)  => Left(ToolUnderlyingError.Tool(mapDeclared(error, decodeError)))
+                  }
               }
-          })
+          )
         })
     }
 
@@ -566,7 +584,7 @@ object ToolUnderlyingRuntime {
       Future.successful(
         ToolUnderlyingAdmission(
           None,
-          Future.successful(value.left.map(ToolUnderlyingError.Tool(_))),
+          () => Future.successful(value.left.map(ToolUnderlyingError.Tool(_))),
           () => (),
           () => ()
         )
@@ -594,10 +612,11 @@ object ToolUnderlyingRuntime {
   ): ToolUnderlyingInvocation[E, T] =
     ToolUnderlyingInvocation(
       call.admission.map(admission =>
-        admission.copy(result =
-          admission.result.map(
-            _.flatMap(result => decode(result).left.map(error => ToolUnderlyingError.Tool(resultError(error))))
-          )
+        admission.copy(startResult =
+          () =>
+            admission.result.map(
+              _.flatMap(result => decode(result).left.map(error => ToolUnderlyingError.Tool(resultError(error))))
+            )
         )
       )
     )
@@ -889,9 +908,9 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
           case Left(ToolUnderlyingError.Denied(message))        => Left(ToolInvokeError.Denied(message))
           case Left(ToolUnderlyingError.InternalError(message)) => Left(ToolInvokeError.InternalError(message))
           case Left(ToolUnderlyingError.Cancelled)              =>
-            Left(ToolInvokeError.ConstraintViolation("underlying invocation was cancelled"))
+            Left(ToolInvokeError.Cancelled)
           case Left(ToolUnderlyingError.ResourceExhausted(message)) =>
-            Left(ToolInvokeError.ConstraintViolation(s"underlying invocation exhausted resources: $message"))
+            Left(ToolInvokeError.ResourceExhausted(message))
         }
       }
 
@@ -916,7 +935,7 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
             Future.successful(
               ToolUnderlyingAdmission(
                 None,
-                Future.successful(Left(ToolUnderlyingError.Tool(error))),
+                () => Future.successful(Left(ToolUnderlyingError.Tool(error))),
                 () => (),
                 () => ()
               )
@@ -929,12 +948,13 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
                 val trackedStdout = admission.stdout.map(ownership.trackStdout)
                 admission.copy(
                   stdout = trackedStdout,
-                  result = admission.result.map {
-                    case Right(value) =>
-                      val merged = value.copy(stdout = trackedStdout.orElse(value.stdout))
-                      ownership.trackAndValidate(Right(merged)).left.map(ToolUnderlyingError.Tool(_))
-                    case Left(error) => Left(error)
-                  }
+                  startResult = () =>
+                    admission.result.map {
+                      case Right(value) =>
+                        val merged = value.copy(stdout = trackedStdout.orElse(value.stdout))
+                        ownership.trackAndValidate(Right(merged)).left.map(ToolUnderlyingError.Tool(_))
+                      case Left(error) => Left(error)
+                    }
                 )
               }
             } catch {

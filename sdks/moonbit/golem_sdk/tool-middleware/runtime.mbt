@@ -10,6 +10,8 @@ pub(all) enum ToolInvokeError[E] {
   ProtocolError(String)
   Denied(String)
   InternalError(String)
+  Cancelled
+  ResourceExhausted(String)
 } derive(Eq, Debug)
 
 ///|
@@ -34,6 +36,8 @@ pub fn[E, M] ToolInvokeError::map_tool(
     ProtocolError(message) => ProtocolError(message)
     Denied(message) => Denied(message)
     InternalError(message) => InternalError(message)
+    Cancelled => Cancelled
+    ResourceExhausted(message) => ResourceExhausted(message)
   }
 }
 
@@ -68,6 +72,8 @@ pub struct UnderlyingInvocation[T, E] {
   priv cancel_call : () -> Unit
   priv drop_observer : () -> Unit
   priv state : Ref[UnderlyingInvocationState]
+  priv result_lock : @async-core.Mutex
+  priv cached_result : Ref[Result[T, ToolInvokeError[E]]?]
 }
 
 ///|
@@ -81,7 +87,16 @@ priv struct UnderlyingInvocationState {
 pub async fn[T, E] UnderlyingInvocation::get(
   self : UnderlyingInvocation[T, E],
 ) -> Result[T, ToolInvokeError[E]] {
-  (self.get_result)()
+  self.result_lock.acquire()
+  defer self.result_lock.release()
+  if self.cached_result.val is Some(result) {
+    return result
+  }
+  @async-core.protect_from_cancel(async fn() {
+    let result = (self.get_result)()
+    self.cached_result.val = Some(result)
+    result
+  })
 }
 
 ///|
@@ -263,14 +278,9 @@ pub async fn[E] UnderlyingTool::invoke_with(
       return Err(Denied(message))
     Err(@underlying.UnderlyingError::InternalError(message)) =>
       return Err(InternalError(message))
-    Err(@underlying.UnderlyingError::Cancelled) =>
-      return Err(ConstraintViolation("underlying invocation was cancelled"))
+    Err(@underlying.UnderlyingError::Cancelled) => return Err(Cancelled)
     Err(@underlying.UnderlyingError::ResourceExhausted(message)) =>
-      return Err(
-        ConstraintViolation(
-          "underlying invocation exhausted resources: \{message}",
-        ),
-      )
+      return Err(ResourceExhausted(message))
   }
   match @toolCore.decode_invocation_result(wire_result) {
     Ok(result) => Ok(self.ownership.own_result(result))
@@ -345,10 +355,12 @@ pub async fn[T, E] UnderlyingTool::start_with(
     cancel_call: observer.cancel,
     drop_observer: close,
     state,
+    result_lock: @async-core.Mutex(),
+    cached_result: Ref(None),
     get_result: async fn() {
       if !state.val.open || state.val.get_in_flight {
         return Err(
-          InvalidInput("underlying invocation observer is no longer available"),
+          ProtocolError("underlying invocation observer is no longer available"),
         )
       }
       state.val.get_in_flight = true
@@ -377,14 +389,9 @@ pub async fn[T, E] UnderlyingTool::start_with(
           Err(Denied(message))
         Err(@underlying.UnderlyingError::InternalError(message)) =>
           Err(InternalError(message))
-        Err(@underlying.UnderlyingError::Cancelled) =>
-          Err(ConstraintViolation("underlying invocation was cancelled"))
+        Err(@underlying.UnderlyingError::Cancelled) => Err(Cancelled)
         Err(@underlying.UnderlyingError::ResourceExhausted(message)) =>
-          Err(
-            ConstraintViolation(
-              "underlying invocation exhausted resources: \{message}",
-            ),
-          )
+          Err(ResourceExhausted(message))
       }
     },
   })
@@ -454,6 +461,14 @@ pub fn encode_tool_error(
     Denied(message) => @types.ToolError::ConstraintViolation(message)
     InternalError(message) =>
       @types.ToolError::InvalidResult("internal error: \{message}")
+    Cancelled =>
+      @types.ToolError::ConstraintViolation(
+        "underlying invocation was cancelled",
+      )
+    ResourceExhausted(message) =>
+      @types.ToolError::ConstraintViolation(
+        "underlying invocation exhausted resources: \{message}",
+      )
     Tool(error) => {
       let encoded = @model.typed_schema_value_to_wit(error.payload) catch {
         encode_error => {

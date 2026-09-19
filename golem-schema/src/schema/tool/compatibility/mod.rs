@@ -966,7 +966,7 @@ pub fn compile_tool_compatibility(
                 input,
                 result,
                 errors: mapped_errors,
-                forward_unknown_errors: true,
+                forward_unknown_errors: false,
             });
         }
     }
@@ -1142,15 +1142,15 @@ fn compile_errors(
         mode,
         ToolCompatibilityMode::StructuralSubtype | ToolCompatibilityMode::Nominal
     ) {
-        for expected_error in &eb.errors {
-            if !nb
+        for inner_error in &nb.errors {
+            if !eb
                 .errors
                 .iter()
-                .any(|inner_error| inner_error.name == expected_error.name)
+                .any(|expected_error| expected_error.name == inner_error.name)
             {
                 errors.push(err(
-                    format!("{}.error.{}", format_path(path), expected_error.name),
-                    "inner tool lacks an expected error case",
+                    format!("{}.error.{}", format_path(path), inner_error.name),
+                    "inner tool declares an error case absent from the expected tool",
                 ));
             }
         }

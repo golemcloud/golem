@@ -12,15 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(test)]
 use std::cell::RefCell;
 use std::convert::Infallible;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::future::{Future, poll_fn};
+use std::future::Future;
+#[cfg(test)]
+use std::future::poll_fn;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Wake, Waker};
+#[cfg(test)]
+use std::sync::Arc;
+use std::task::{Context, Poll};
+#[cfg(test)]
+use std::task::{Wake, Waker};
 
 use crate::TypedSchemaValue;
 use crate::agentic::AmbientToolRpc;
@@ -476,99 +482,8 @@ pub fn pump_tool_stdin(source: InputStream) -> agentic_host_api::ToolStdin {
 }
 
 type CachedInvocationResult = Result<InvocationResult, ToolError<TypedSchemaValue>>;
-type InvocationResultFuture = Pin<Box<dyn Future<Output = CachedInvocationResult>>>;
-type InvocationResultFutureFactory = Box<dyn FnOnce() -> InvocationResultFuture>;
-
-enum InvocationResultDriverState {
-    Initial(Option<InvocationResultFutureFactory>),
-    Polling(InvocationResultFuture),
-    Ready(Box<CachedInvocationResult>),
-}
-
-#[derive(Default)]
-struct InvocationResultWake {
-    waiters: Mutex<Vec<Waker>>,
-}
-
-impl InvocationResultWake {
-    fn register(&self, waker: &Waker) {
-        let mut waiters = self.waiters.lock().expect("result waiters mutex poisoned");
-        if !waiters.iter().any(|waiter| waiter.will_wake(waker)) {
-            waiters.push(waker.clone());
-        }
-    }
-
-    fn wake_waiters(&self) {
-        let waiters =
-            std::mem::take(&mut *self.waiters.lock().expect("result waiters mutex poisoned"));
-        for waiter in waiters {
-            waiter.wake();
-        }
-    }
-}
-
-impl Wake for InvocationResultWake {
-    fn wake(self: Arc<Self>) {
-        self.wake_waiters();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        self.wake_waiters();
-    }
-}
-
-struct InvocationResultDriver {
-    state: RefCell<InvocationResultDriverState>,
-    wake: Arc<InvocationResultWake>,
-    source_waker: Waker,
-}
-
-impl InvocationResultDriver {
-    fn new(factory: impl FnOnce() -> InvocationResultFuture + 'static) -> Self {
-        let wake = Arc::new(InvocationResultWake::default());
-        Self {
-            state: RefCell::new(InvocationResultDriverState::Initial(Some(Box::new(
-                factory,
-            )))),
-            source_waker: Waker::from(Arc::clone(&wake)),
-            wake,
-        }
-    }
-
-    fn poll(&self, cx: &mut Context<'_>) -> Poll<CachedInvocationResult> {
-        loop {
-            let mut state = self.state.borrow_mut();
-            match &mut *state {
-                InvocationResultDriverState::Initial(factory) => {
-                    let future = factory
-                        .take()
-                        .expect("tool invocation result driver starts only once")(
-                    );
-                    *state = InvocationResultDriverState::Polling(future);
-                }
-                InvocationResultDriverState::Polling(future) => {
-                    self.wake.register(cx.waker());
-                    let mut source_context = Context::from_waker(&self.source_waker);
-                    let Poll::Ready(result) = future.as_mut().poll(&mut source_context) else {
-                        return Poll::Pending;
-                    };
-                    let result_for_caller = result.clone();
-                    *state = InvocationResultDriverState::Ready(Box::new(result));
-                    drop(state);
-                    self.wake.wake_waiters();
-                    return Poll::Ready(result_for_caller);
-                }
-                InvocationResultDriverState::Ready(result) => {
-                    return Poll::Ready((**result).clone());
-                }
-            }
-        }
-    }
-
-    async fn wait(self: Rc<Self>) -> CachedInvocationResult {
-        poll_fn(|cx| self.poll(cx)).await
-    }
-}
+type InvocationResultDriver =
+    crate::tool::invocation_result::InvocationResultDriver<CachedInvocationResult>;
 
 /// The readable stdout of a started tool invocation.
 ///
