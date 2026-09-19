@@ -1819,6 +1819,67 @@ async fn list_blobs_below_finds_nested_blobs_with_sizes(
     assert_eq!(listed_below_blob, Vec::new());
 }
 
+/// The namespace of the same kind in another environment.
+fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamespace {
+    let environment_id = EnvironmentId(Uuid::new_v4());
+    match namespace.clone() {
+        BlobStorageNamespace::CompilationCache { .. } => {
+            BlobStorageNamespace::CompilationCache { environment_id }
+        }
+        BlobStorageNamespace::InitialAgentFiles { .. } => {
+            BlobStorageNamespace::InitialAgentFiles { environment_id }
+        }
+        BlobStorageNamespace::CustomStorage { .. } => {
+            BlobStorageNamespace::CustomStorage { environment_id }
+        }
+        BlobStorageNamespace::OplogPayload {
+            agent_id,
+            agent_mode,
+            ..
+        } => BlobStorageNamespace::OplogPayload {
+            environment_id,
+            agent_id,
+            agent_mode,
+        },
+        BlobStorageNamespace::CompressedOplog {
+            component_id,
+            agent_mode,
+            level,
+            ..
+        } => BlobStorageNamespace::CompressedOplog {
+            environment_id,
+            component_id,
+            agent_mode,
+            level,
+        },
+        BlobStorageNamespace::Components { .. } => {
+            BlobStorageNamespace::Components { environment_id }
+        }
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_blobs_below_stays_in_its_namespace(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let other_namespace = in_another_environment(namespace);
+    let blobs = [("tree/a", 1)];
+    let other_blobs = [("tree/b", 2)];
+    put_blobs(&storage, namespace, &blobs).await;
+    put_blobs(&storage, &other_namespace, &other_blobs).await;
+
+    let listed_below_tree = sorted_listing(&storage, namespace, "tree").await;
+    let listed_below_root = sorted_listing(&storage, namespace, "").await;
+    let other_listed_below_tree = sorted_listing(&storage, &other_namespace, "tree").await;
+
+    assert_eq!(listed_below_tree, listed_blobs(&blobs));
+    assert_eq!(listed_below_root, listed_blobs(&blobs));
+    assert_eq!(other_listed_below_tree, listed_blobs(&other_blobs));
+}
+
 #[test]
 #[tracing::instrument]
 async fn get_raw_slice_uses_inclusive_ranges(
