@@ -79,7 +79,7 @@ impl SentRequest {
         self.method == "POST" && self.uri.contains("?delete")
     }
 
-    /// Gives the keys in the body of a `DeleteObjects` request, in their order.
+    /// Gives the keys in the body of a `DeleteObjects` request, in the order of the body.
     fn deleted_keys(&self) -> Vec<String> {
         self.body
             .split("<Key>")
@@ -119,8 +119,9 @@ impl Answer {
         }
     }
 
-    /// The whole object with the status 200 and its `Content-Length`, which the backend takes as
-    /// the answer of a server that ignores the range. A read of the body adds 1 to `body_reads`.
+    /// The whole object with the status 200 and its `Content-Length`. The backend assumes that
+    /// this is the answer of a server that ignores the range. A read of the body adds 1 to
+    /// `body_reads`.
     fn whole_object(body: &str, body_reads: &Arc<AtomicUsize>) -> Self {
         Self {
             content_length: Some(body.len()),
@@ -204,11 +205,12 @@ fn scripted_storage(
     scripted_storage_with(RetryConfig::disabled(), 3, object_prefix, script)
 }
 
-/// Makes an S3 blob storage that sends its requests to a script, with the given retries of the
-/// SDK and the given number of attempts of the blob storage.
+/// Makes an S3 blob storage that sends its requests to a script.
 ///
-/// The client reads no environment, no profile file and no instance metadata. The blob storage
-/// waits 1 ms between its attempts.
+/// `sdk_retries` is the retry setting of the AWS SDK, which retries inside one attempt of the
+/// blob storage. `attempts` is the number of attempts of the blob storage. The client reads no
+/// environment, no profile file and no instance metadata. The blob storage waits 1 ms between
+/// its attempts.
 fn scripted_storage_with(
     sdk_retries: RetryConfig,
     attempts: u32,
@@ -257,21 +259,20 @@ fn range_error(error: anyhow::Error) -> Option<BlobRangeError> {
 struct LogLines(Arc<Mutex<Vec<u8>>>);
 
 impl LogLines {
-    /// Gives the `op_label` and the message of each event of the retry loop of
-    /// `golem_common::retries`, in their order.
-    fn retry_events(&self) -> Vec<(String, String)> {
-        let field = |event: &serde_json::Value, name: &str| {
-            event["fields"][name]
-                .as_str()
-                .unwrap_or_default()
-                .to_string()
-        };
+    /// Gives the `op_label` of each event of the retry loop of `golem_common::retries`, in the
+    /// order of the events.
+    fn retry_ops(&self) -> Vec<String> {
         String::from_utf8(self.0.lock().unwrap().clone())
             .unwrap()
             .lines()
             .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
             .filter(|event| event["target"] == "golem_common::retries")
-            .map(|event| (field(&event, "op_label"), field(&event, "message")))
+            .map(|event| {
+                event["fields"]["op_label"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
             .collect()
     }
 }
@@ -295,11 +296,12 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogLines {
     }
 }
 
-/// Runs a future with a subscriber that records each event of the `error` level.
+/// Runs a future with a subscriber that records each event of the `error` level, and no event
+/// of a lower level.
 ///
-/// Gives the output of the future, and the `op_label` and the message of each recorded event
-/// of the retry loop, in their order.
-async fn with_error_log<T>(future: impl Future<Output = T>) -> (T, Vec<(String, String)>) {
+/// Gives the output of the future, and the `op_label` of each recorded event of the retry loop,
+/// in the order of the events.
+async fn with_error_log<T>(future: impl Future<Output = T>) -> (T, Vec<String>) {
     let lines = LogLines::default();
     let subscriber = tracing_subscriber::fmt()
         .json()
@@ -307,28 +309,27 @@ async fn with_error_log<T>(future: impl Future<Output = T>) -> (T, Vec<(String, 
         .with_writer(lines.clone())
         .finish();
     let output = future.with_subscriber(subscriber).await;
-    (output, lines.retry_events())
+    (output, lines.retry_ops())
 }
 
 /// Gives the number of failures that the metric `external_call_failure_total` counts for the
-/// target `test` and the given operation.
+/// given operation, on every target.
+///
+/// The counter is cumulative over the process, so a test reads it before and after the
+/// operation and uses the difference.
 fn external_call_failures(op_label: &str) -> f64 {
     prometheus::gather()
         .iter()
         .filter(|family| family.name() == "external_call_failure_total")
         .flat_map(|family| family.get_metric())
         .filter(|metric| {
-            let has = |name: &str, value: &str| {
-                metric
-                    .get_label()
-                    .iter()
-                    .any(|label| (label.name(), label.value()) == (name, value))
-            };
-            has("target", "test") && has("op", op_label)
+            metric
+                .get_label()
+                .iter()
+                .any(|label| (label.name(), label.value()) == ("op", op_label))
         })
         .map(|metric| metric.get_counter().value())
-        .next()
-        .unwrap_or(0.0)
+        .sum()
 }
 
 fn namespace() -> BlobStorageNamespace {
@@ -596,36 +597,43 @@ async fn get_raw_slice_turns_416_into_a_range_error_without_a_retry() {
 
 #[test]
 async fn get_raw_slice_keeps_a_416_and_a_missing_object_out_of_the_error_log() {
-    // Each read makes 1 attempt. The read of the failing object gets a server error, so it is
-    // the control that shows that the log and the metric record a failure.
-    let (storage, requests) =
-        scripted_storage_with(RetryConfig::disabled(), 1, "", |request, _| {
-            if request.uri.contains("outside") {
-                Answer::new(416, INVALID_RANGE)
-            } else if request.uri.contains("missing") {
-                Answer::new(404, NO_SUCH_KEY)
-            } else {
-                Answer::new(500, INTERNAL_ERROR)
-            }
-        });
+    // The 416 and the missing key are not retriable, so each of those reads makes 1 attempt.
+    // The read that gets a server error is the control. The blob storage makes 3 attempts for
+    // it: the first 2 log a warning, which is not in the error log, and the last logs an error
+    // and counts a failure.
+    let (storage, requests) = scripted_storage("", |request, _| {
+        if request.uri.contains("outside") {
+            Answer::new(416, INVALID_RANGE)
+        } else if request.uri.contains("missing") {
+            Answer::new(404, NO_SUCH_KEY)
+        } else {
+            Answer::new(500, INTERNAL_ERROR)
+        }
+    });
+    let ops = [
+        "get-raw-slice-416",
+        "get-raw-slice-404",
+        "get-raw-slice-500",
+    ];
     let read = |path: &'static str, op_label: &'static str| {
         storage.get_raw_slice("test", op_label, namespace(), Path::new(path), 6, 9)
     };
+    let failures_before = ops.map(external_call_failures);
 
     let ((outside, missing, failing), errors) = with_error_log(async {
         (
-            read("outside", "get-raw-slice-416")
-                .await
-                .map_err(range_error),
-            read("missing", "get-raw-slice-404")
-                .await
-                .map_err(range_error),
-            read("failing", "get-raw-slice-500")
-                .await
-                .map_err(range_error),
+            read("outside", ops[0]).await.map_err(range_error),
+            read("missing", ops[1]).await.map_err(range_error),
+            read("failing", ops[2]).await.map_err(range_error),
         )
     })
     .await;
+    let failures = ops
+        .map(external_call_failures)
+        .iter()
+        .zip(failures_before)
+        .map(|(after, before)| after - before)
+        .collect::<Vec<_>>();
 
     assert_eq!(
         (
@@ -633,33 +641,26 @@ async fn get_raw_slice_keeps_a_416_and_a_missing_object_out_of_the_error_log() {
             missing,
             failing,
             errors,
-            [
-                external_call_failures("get-raw-slice-416"),
-                external_call_failures("get-raw-slice-404"),
-                external_call_failures("get-raw-slice-500")
-            ],
+            failures,
             sent(&requests).len()
         ),
         (
             Err(Some(BlobRangeError { start: 6, end: 9 })),
             Ok(None),
             Err(None),
-            vec![(
-                "get-raw-slice-500".to_string(),
-                "op failure - no more retries".to_string()
-            )],
-            [0.0, 0.0, 1.0],
-            3
+            vec![ops[2].to_string()],
+            vec![0.0, 0.0, 1.0],
+            5
         )
     );
 }
 
 #[test]
 async fn get_raw_slice_takes_the_range_out_of_a_200_response() {
-    // The script answers 200 with the whole object, no content range and no content length,
-    // which the backend takes as the response of a server that ignores the range (RFC 9110,
-    // sections 14.2 and 15.5.17). The last range is the one that a guest reaches the host with
-    // after it gives a negative offset for the start and the end. The S3 case of
+    // The script answers 200 with the whole object, no content range and no content length.
+    // The backend assumes that this is the response of a server that ignores the range (RFC
+    // 9110, sections 14.2 and 15.5.17). The last range is the one that a guest reaches the host
+    // with after it gives a negative offset for the start and the end. The S3 case of
     // `get_raw_slice_uses_inclusive_ranges` in `tests/blob_storage.rs` sends the same range
     // to MinIO.
     let (storage, requests) = scripted_storage("", |request, _| {
@@ -838,8 +839,9 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
     let short_body = read_error(0, 2).await;
     let long_body = read_error(3, 4).await;
     let without_content_range = read_error(0, 5).await;
-    // The backend does not take a 206 response without a content range as the whole object,
-    // so its content length does not tell the backend whether the range is in the object.
+    // The backend does not assume that a 206 response without a content range holds the whole
+    // object, so its content length does not tell the backend whether the range is in the
+    // object.
     let partial_without_content_range = read_error(0, 9).await;
 
     assert_eq!(

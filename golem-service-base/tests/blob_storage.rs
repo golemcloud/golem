@@ -1157,8 +1157,9 @@ async fn fs_list_blobs_below_fails_for_a_directory_that_it_cannot_read(
 ) {
     let storage = test.get_blob_storage().await;
     // Writing a blob creates the directory of the namespace. Below it, the test lists a name of
-    // 300 bytes. That is longer than `NAME_MAX`, which is 255 on Linux and on macOS, so the
-    // directory read fails with an error that is not "not found" and not "not a directory".
+    // 300 bytes. The test assumes that the filesystem that holds the namespace refuses a name
+    // of that length, so the directory read fails with an error that is not "not found" and
+    // not "not a directory".
     put_blobs(&storage, namespace, &[("blob", 1)]).await;
     let too_long = "x".repeat(300);
 

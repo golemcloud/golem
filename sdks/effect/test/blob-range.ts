@@ -16,7 +16,7 @@
  *
  * The offsets are `u64` at the interface, so they stay `bigint` here.
  * `hostRange` wraps each offset to `u64`, because the host does the
- * same. The generated binding takes a `u64` parameter as
+ * same. The generated binding gives a `u64` parameter the type
  * `BigIntWrapper<u64>` (`get_wrapped_type_internal` in
  * `src/types.rs` of wasm-rquickjs). The `FromJs` implementation of
  * `BigIntWrapper<u64>` reads the value with `BigInt::to_i64`, then

@@ -48,7 +48,7 @@ export interface BlobFake {
   readonly layer: Layer.Layer<BlobstoreClient>
   /**
    * Every range the fake was asked to read. Lets a test pin the range
-   * the SDK derives, and the number of calls it takes to get it.
+   * the SDK derives, and the number of calls it makes to get it.
    */
   readonly getDataCalls: Effect.Effect<ReadonlyArray<GetDataCall>>
   /**
