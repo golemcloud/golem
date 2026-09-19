@@ -73,6 +73,36 @@ invocation. Producer and cleanup failures fail the active operation or invocatio
 than becoming clean EOF. P3 has no recoverable stream-local terminal error, so model one explicitly
 in the item type, for example `stream<result<T, E>>`, when needed.
 
+## Retrying user code
+
+`retry` interprets the same semantic policies used by Golem in ordinary user space. The callback may
+return synchronously or return a Promise. Use `properties` when a filtered policy needs values from
+the current failure, and use an `AbortSignal` to cancel an attempt or delay.
+
+```ts
+import { Duration, Policy, Predicate, retry } from '@golemcloud/golem-ts-sdk';
+
+const policy = Policy.exponential(Duration.milliseconds(100), 2)
+  .maxRetries(4)
+  .onlyWhen(Predicate.eq('transient', true));
+
+const response = await retry(policy, () => callUnreliableService(), {
+  properties: (error) => ({ transient: error instanceof TransientError }),
+  signal,
+});
+```
+
+Aborting stops waiting for an in-flight callback but cannot stop arbitrary user code. Pass the same
+signal into the underlying operation when it supports cancellation.
+
+Local `prop-matches` predicates translate `*` to JavaScript regex `.*` and `?` to `.`, without
+flags; all other characters are literal. Wildcards exclude line terminators, and `?` matches one
+UTF-16 code unit. This does not implement the host's full glob syntax. Use host-driven retries when
+authoritative platform matching is required.
+
+These are local function calls, not executor-managed retry attempts. They do not create executor
+retry-attempt oplog entries or survive suspension and recovery as one host-managed retry sequence.
+
 The SDK uses Standard Schema-compatible schemas to define agent identities,
 method inputs, and method results.
 
