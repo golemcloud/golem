@@ -465,9 +465,11 @@ async fn get_raw_slice_turns_416_into_a_range_error_without_a_retry() {
 
 #[test]
 async fn get_raw_slice_turns_an_ignored_range_into_a_range_error() {
-    // S3 sends the whole object and no content range when it does not apply the range of
-    // the request. MinIO answers an offset at the top of the `u64` range in this way, which
-    // is the offset that a guest reaches the host with after it gives a negative offset.
+    // The script answers 200 with the whole object and no content range, which is the
+    // response of a server that does not apply the range (RFC 9110, section 14.2). The
+    // range is the one that a guest reaches the host with after it gives a negative offset
+    // for the start and the end. The S3 case of `get_raw_slice_uses_inclusive_ranges` in
+    // `tests/blob_storage.rs` sends the same range to MinIO.
     let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, "abcdef"));
 
     let result = storage
@@ -532,6 +534,11 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
     let without_content_range = read(0, 5)
         .await
         .map_err(|error| error.downcast_ref::<BlobRangeError>().copied());
+    // A 206 response without a content range does not hold the whole object, so its length
+    // does not tell whether the range is in the object.
+    let partial_without_content_range = read(0, 9)
+        .await
+        .map_err(|error| error.downcast_ref::<BlobRangeError>().copied());
 
     assert_eq!(
         (
@@ -539,12 +546,14 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
             one_byte,
             after_the_end,
             from_another_byte,
-            without_content_range
+            without_content_range,
+            partial_without_content_range
         ),
         (
             Some(b"bcd".to_vec()),
             Some(b"f".to_vec()),
             Err(Some(BlobRangeError { start: 4, end: 9 })),
+            Err(None),
             Err(None),
             Err(None)
         )

@@ -22,8 +22,12 @@ use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::http::HttpResponse;
-use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region, RequestChecksumCalculation};
-use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::config::interceptors::BeforeDeserializationInterceptorContextRef;
+use aws_sdk_s3::config::{
+    BehaviorVersion, ConfigBag, Credentials, Intercept, Region, RequestChecksumCalculation,
+    RuntimeComponents,
+};
+use aws_sdk_s3::error::{BoxError, SdkError};
 use aws_sdk_s3::operation::copy_object::CopyObjectError;
 use aws_sdk_s3::operation::delete_objects::DeleteObjectsOutput;
 use aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey;
@@ -42,10 +46,14 @@ use http_body_util::combinators::BoxBody;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use tracing::info;
 
 /// The largest number of keys that S3 accepts in one `DeleteObjects` request.
 const MAX_KEYS_PER_DELETE_OBJECTS: usize = 1_000;
+
+/// The HTTP status of a response that holds the whole object.
+const OK: u16 = 200;
 
 /// The HTTP status that S3 gives for a range that has no byte in the object.
 const RANGE_NOT_SATISFIABLE: u16 = 416;
@@ -57,6 +65,38 @@ const DIR_MARKER: &str = "__dir_marker";
 pub struct S3BlobStorage {
     client: aws_sdk_s3::Client,
     config: S3BlobStorageConfig,
+}
+
+/// Records the HTTP status of the last response that a request got.
+///
+/// The output of a request does not hold the status of its response. This interceptor reads
+/// the status before the SDK deserializes the response. Each attempt of the request writes
+/// over the status of the attempt before it, so the status is that of the response that the
+/// SDK made the output from.
+#[derive(Debug, Clone, Default)]
+struct ResponseStatus(Arc<Mutex<Option<u16>>>);
+
+impl ResponseStatus {
+    /// Gives the status of the last response, or `None` before the first response.
+    fn get(&self) -> Option<u16> {
+        *self.0.lock().unwrap()
+    }
+}
+
+impl Intercept for ResponseStatus {
+    fn name(&self) -> &'static str {
+        "ResponseStatus"
+    }
+
+    fn read_before_deserialization(
+        &self,
+        context: &BeforeDeserializationInterceptorContextRef<'_>,
+        _runtime_components: &RuntimeComponents,
+        _cfg: &mut ConfigBag,
+    ) -> Result<(), BoxError> {
+        *self.0.lock().unwrap() = Some(context.response().status().as_u16());
+        Ok(())
+    }
 }
 
 impl S3BlobStorage {
@@ -295,25 +335,33 @@ impl S3BlobStorage {
 
     /// Checks that a ranged read got the bytes from `start` to `end`.
     ///
-    /// S3 sends a `Content-Range` when it applies the range of the request. If the range ends
-    /// after the object, S3 sends only the bytes that exist. That answer gives a
-    /// `BlobRangeError`. A range that starts at a different byte gives a different error.
+    /// `status`, `content_range` and `content_length` are the status, the `Content-Range` and
+    /// the `Content-Length` of the response. The content length is the size of the body
+    /// (aws-sdk-s3 1.143.0, `GetObjectOutput::content_length`).
     ///
-    /// S3 sends the whole object and no `Content-Range` when it does not apply the range. The
-    /// content length is then the size of the object, and an `end` at or after that size gives a
-    /// `BlobRangeError`. MinIO answers an offset at the top of the `u64` range in this way.
-    /// Any other answer without a `Content-Range` gives a different error.
+    /// A `Content-Range` that gives the range `start` to `end` passes. A `Content-Range` that
+    /// starts at `start` and ends before `end` gives a `BlobRangeError`. Any other
+    /// `Content-Range` gives a different error.
+    ///
+    /// A response with the status 200 and no `Content-Range` gives a `BlobRangeError` when
+    /// `end` is not before its content length. The body of a 200 response is the whole object
+    /// (RFC 9110, section 15.3.1), so its content length is the size of the object. Any other
+    /// response without a `Content-Range` gives a different error. A 206 response without a
+    /// `Content-Range` does not follow RFC 9110, section 15.3.7. Its body is a part of the
+    /// object, so its content length does not give the size of the object.
     fn check_content_range(
+        status: Option<u16>,
         content_range: Option<&str>,
         content_length: Option<i64>,
         start: u64,
         end: u64,
     ) -> Result<(), Error> {
         let Some(content_range) = content_range else {
-            return match content_length.and_then(|length| u64::try_from(length).ok()) {
-                Some(size) if end >= size => Err(BlobRangeError { start, end }.into()),
+            let size = content_length.and_then(|length| u64::try_from(length).ok());
+            return match (status, size) {
+                (Some(OK), Some(size)) if end >= size => Err(BlobRangeError { start, end }.into()),
                 _ => Err(anyhow!(
-                    "S3 returned the whole object of {content_length:?} bytes for the byte range {start}-{end}"
+                    "S3 returned the status {status:?} with {content_length:?} bytes and no content range for the byte range {start}-{end}"
                 )),
             };
         };
@@ -644,20 +692,23 @@ impl BlobStorage for S3BlobStorage {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
+        let status = ResponseStatus::default();
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
-            |(client, bucket, key)| {
+            &(self.client.clone(), bucket, key_str, status.clone()),
+            |(client, bucket, key, status)| {
                 Box::pin(async move {
                     client
                         .get_object()
                         .bucket(*bucket)
                         .key(key.clone())
                         .range(format!("bytes={start}-{end}"))
+                        .customize()
+                        .interceptor(status.clone())
                         .send()
                         .await
                 })
@@ -671,6 +722,7 @@ impl BlobStorage for S3BlobStorage {
         match result {
             Ok(response) => {
                 Self::check_content_range(
+                    status.get(),
                     response.content_range(),
                     response.content_length(),
                     start,
