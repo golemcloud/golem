@@ -3436,13 +3436,21 @@ async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     use golem_worker_executor::services::{HasOplog, HasOplogService};
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
 
     let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
     let local_resume: Arc<Mutex<Option<Arc<LocalWorkerResume>>>> = Arc::new(Mutex::new(None));
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
             wrap_worker_proxy: Some(Arc::new({
                 let local_resume = local_resume.clone();
                 move |inner| {
@@ -3520,28 +3528,14 @@ async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
     };
     let service = worker.oplog_service();
     let target_guard = service.lock_lifecycle(&target).await;
+    let copy = faults.pause_next("read_cached_status");
     let fork = tokio::spawn({
         let executor = executor.clone();
         let source = source.clone();
         let target = target.clone();
         async move { executor.fork_worker(&source, &target.agent_id, cut).await }
     });
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if tokio::time::timeout(Duration::from_millis(10), service.lock_lifecycle(&source))
-                .await
-                .is_err()
-            {
-                break;
-            }
-            assert!(
-                !fork.is_finished(),
-                "fork exited before holding its source guard"
-            );
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
+    tokio::time::timeout(Duration::from_secs(10), copy.entered()).await?;
     let hook = Arc::new(DeletionStageHook::new(
         owned.clone(),
         Some(WorkerDeletionStage::DurableStateRemoved),
@@ -3561,9 +3555,12 @@ async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
             .is_err()
     );
     assert_eq!(hook.calls(WorkerDeletionStage::CacheRemoved), 0);
+    copy.release();
+    // Once the hidden copy is complete, deletion must not wait for target publication.
+    tokio::time::timeout(Duration::from_secs(10), deleting).await???;
+    assert!(!fork.is_finished());
     drop(target_guard);
     fork.await??;
-    deleting.await??;
     assert!(executor.get_worker_metadata(&source).await.is_err());
     assert_eq!(
         executor
