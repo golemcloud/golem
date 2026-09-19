@@ -144,6 +144,10 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<(), Error>;
 
+    /// Lists the entries that are directly below the path.
+    ///
+    /// Returns an empty list if the path holds nothing. A path that has nothing at it holds
+    /// nothing, and so does the root of a namespace that has nothing in it.
     async fn list_dir(
         &self,
         target_label: &'static str,
@@ -181,6 +185,13 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<bool, Error>;
 
+    /// Tells what the path has.
+    ///
+    /// Returns `Directory` for a root path, whatever the namespace holds. A path is at the root
+    /// when it has no name in it, for example an empty path or `.`. Returns `Directory` for a
+    /// path that has blobs below it, at any depth, also when the storage keeps no entry for
+    /// that directory. Returns `File` for a path that has a blob. Returns `DoesNotExist` for
+    /// every other path.
     async fn exists(
         &self,
         target_label: &'static str,
