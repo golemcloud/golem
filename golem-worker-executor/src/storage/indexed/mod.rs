@@ -212,22 +212,22 @@ pub trait IndexedStorage: Debug + Sync {
         Ok(())
     }
 
-    /// Atomically moves a staged oplog to a previously absent primary oplog. Staging must
-    /// have one writer, stopped before this call, and contain exactly ids 1..=expected_last_id.
-    /// Returns false without mutation if the target exists. Invalid stages remain hidden.
+    /// Atomically moves a stopped source index to a previously absent target index. The source
+    /// must contain exactly ids 1..=expected_last_id. Returns false without mutation if the target
+    /// exists. An invalid source remains unchanged.
     /// An indeterminate result must be reconciled against the target, not blindly retried.
-    async fn publish_staged(
+    async fn move_if_absent(
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
-        _agent_id: &AgentId,
-        _agent_mode: AgentMode,
-        _stage_key: &str,
+        _source_namespace: IndexedStorageNamespace,
+        _source_key: &str,
+        _target_namespace: IndexedStorageNamespace,
         _target_key: &str,
         _expected_last_id: u64,
     ) -> Result<bool, IndexedStorageError> {
         Err(IndexedStorageError::Other(
-            "staged oplog publication is unsupported".to_string(),
+            "atomic index moves are unsupported".to_string(),
         ))
     }
 

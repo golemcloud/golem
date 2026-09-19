@@ -343,41 +343,29 @@ impl IndexedStorage for RedisIndexedStorage {
         Ok(())
     }
 
-    async fn publish_staged(
+    async fn move_if_absent(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        agent_id: &golem_common::model::AgentId,
-        agent_mode: golem_common::model::agent::AgentMode,
-        stage_key: &str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
         target_key: &str,
         expected_last_id: u64,
     ) -> Result<bool, IndexedStorageError> {
-        let stage = Self::composite_key(
-            IndexedStorageNamespace::StagedOpLog {
-                agent_id: agent_id.clone(),
-                agent_mode,
-            },
-            stage_key,
-        );
-        let target = Self::composite_key(
-            IndexedStorageNamespace::OpLog {
-                agent_id: agent_id.clone(),
-                agent_mode,
-            },
-            target_key,
-        );
+        let source = Self::composite_key(source_namespace, source_key);
+        let target = Self::composite_key(target_namespace, target_key);
         match self
             .redis
             .with(svc_name, api_name)
-            .publish_staged_stream(stage, target, expected_last_id)
+            .move_stream_if_absent(source, target, expected_last_id)
             .await
             .map_err(|error| Self::classify_append_error(error, true))?
         {
             1 => Ok(true),
             0 => Ok(false),
             _ => Err(IndexedStorageError::Other(
-                "staged oplog is missing, empty, gapped, or has an unexpected tip".to_string(),
+                "source index is missing, empty, gapped, or has an unexpected tip".to_string(),
             )),
         }
     }
