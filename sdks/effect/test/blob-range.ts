@@ -7,13 +7,18 @@
  * covers a `start` after the `end`, an `end` at or after the size, and
  * every range of an empty object.
  *
+ * The offsets are `u64` at the interface, so they stay `bigint` here. A
+ * double narrows them to `number` only after this predicate has shown
+ * that the range lies inside an object the double holds in memory.
+ *
  * The message is the one `BlobRangeError` gives in
  * `golem-service-base/src/storage/blob/mod.rs`, so a test that asserts
- * on it asserts on wording a real backend produces.
+ * on it asserts on wording a real backend produces. It says "blob"
+ * where this package says "object", because the wording is the host's.
  */
 
-export const rangeIsOutsideObject = (start: number, end: number, size: number): boolean =>
+export const rangeIsNotInObject = (start: bigint, end: bigint, size: bigint): boolean =>
   start > end || end >= size
 
-export const rangeErrorMessage = (start: number, end: number): string =>
+export const rangeErrorMessage = (start: bigint, end: bigint): string =>
   `the byte range ${start}-${end} is not in the blob`

@@ -289,8 +289,7 @@ describe("Container.forSchema", () => {
         expect(s(got)).toBe("alpha")
       }).pipe(Effect.provide(fake.layer))
       // The end offset is the last byte, not the size, and one call
-      // gets the whole object. The SDK once asked twice, to recover
-      // the last byte from a backend that read `end` as exclusive.
+      // gets the whole object.
       expect(yield* fake.getDataCalls).toEqual([
         { container: "whole-c", object: "k", start: 0n, end: 4n },
       ])
@@ -337,7 +336,6 @@ describe("Container.forSchema", () => {
         Effect.gen(function* () {
           const c = yield* Blobstore.createContainer("inverted-range-c")
           yield* c.writeData("k", u8("alpha"))
-          // The host refuses this before it reads the blob.
           return yield* c.getData("k", { start: 3n, end: 1n })
         }).pipe(Effect.provide(fake.layer)),
       )

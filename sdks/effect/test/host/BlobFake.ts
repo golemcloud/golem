@@ -23,7 +23,7 @@ import {
   type HostObjectMetadata,
 } from "../../src/host/BlobstoreClient.js"
 import { BlobstoreHostError } from "../../src/Blobstore.js"
-import { rangeErrorMessage, rangeIsOutsideObject } from "../blob-range.js"
+import { rangeErrorMessage, rangeIsNotInObject } from "../blob-range.js"
 
 interface ObjectEntry {
   bytes: Uint8Array
@@ -138,13 +138,16 @@ const makeFakeContainer = (
           )
         }
         // Mock follows the host: see `test/blob-range.ts`.
-        const start = Number(range.start)
-        const end = Number(range.end)
-        if (rangeIsOutsideObject(start, end, obj.bytes.length)) {
+        if (rangeIsNotInObject(range.start, range.end, BigInt(obj.bytes.length))) {
           return yield* Effect.fail(
-            new BlobstoreHostError(new Error(rangeErrorMessage(start, end)), "container.getData"),
+            new BlobstoreHostError(
+              new Error(rangeErrorMessage(range.start, range.end)),
+              "container.getData",
+            ),
           )
         }
+        const start = Number(range.start)
+        const end = Number(range.end)
         return new Uint8Array(obj.bytes.subarray(start, end + 1))
       }),
     )
