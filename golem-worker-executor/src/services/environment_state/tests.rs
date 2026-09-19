@@ -16,12 +16,17 @@ use golem_common::model::entity::{
 };
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::tool::{
-    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolDeploymentState,
-    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingOwner,
+    ToolDeploymentState, ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
-use golem_common::model::tool_middleware::CompiledToolMiddlewareChain;
-use golem_common::schema::SchemaGraph;
-use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+use golem_common::model::tool_middleware::{
+    CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
+    ToolMiddlewareName, ToolMiddlewareSource,
+};
+use golem_common::schema::tool::{
+    CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
+};
+use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,6 +60,7 @@ fn registered_tool(name: &str, deployment_revision: DeploymentRevision) -> Regis
         owner_account_email: AccountEmail::new("owner@example.com"),
         metadata_version: "0.1.0".to_string(),
         metadata_digest: Default::default(),
+        component_bindings: BTreeMap::new(),
     }
 }
 
@@ -66,7 +72,7 @@ fn binding(
     CompiledToolBinding {
         deployment_revision: registered_tool.deployment_revision,
         release_id: registered_tool.release_id,
-        agent_type_name: agent_type.clone(),
+        owner: agent_owner(agent_type),
         tool_name: tool_name.clone(),
         version: registered_tool.definition.version.clone(),
         metadata_version: registered_tool.metadata_version.clone(),
@@ -101,16 +107,16 @@ fn deployment_state() -> (ToolDeploymentState, AgentTypeName, AgentTypeName) {
                 (beta_name.clone(), beta.clone()),
                 (unbound_name, unbound),
             ]),
-            agent_tool_bindings: BTreeMap::from([
+            tool_bindings: BTreeMap::from([
                 (
-                    agent_a.clone(),
+                    agent_owner(&agent_a),
                     BTreeMap::from([
                         (alpha_name.clone(), binding(&agent_a, &alpha_name, &alpha)),
                         (beta_name.clone(), binding(&agent_a, &beta_name, &beta)),
                     ]),
                 ),
                 (
-                    agent_b.clone(),
+                    agent_owner(&agent_b),
                     BTreeMap::from([(beta_name.clone(), binding(&agent_b, &beta_name, &beta))]),
                 ),
             ]),
@@ -122,15 +128,98 @@ fn deployment_state() -> (ToolDeploymentState, AgentTypeName, AgentTypeName) {
     )
 }
 
+fn agent_owner(agent_type_name: &AgentTypeName) -> ToolBindingOwner {
+    ToolBindingOwner::AgentType {
+        agent_type_name: agent_type_name.clone(),
+    }
+}
+
 fn ready_activation(
     deployment: &ToolDeploymentState,
     agent_type: &AgentTypeName,
     tool_name: &ToolName,
 ) -> ToolActivationSnapshot {
-    match get_tool_activation_from_deployment(Some(deployment), agent_type, tool_name).unwrap() {
+    match get_tool_activation_from_deployment(Some(deployment), &agent_owner(agent_type), tool_name)
+        .unwrap()
+    {
         ToolActivationOutcome::Ready(activation) => *activation,
         outcome => panic!("expected ready activation, got {outcome:?}"),
     }
+}
+
+#[test]
+fn accepted_tool_activation_snapshot_round_trip_preserves_binding_identity() {
+    let (mut deployment, agent, _) = deployment_state();
+    let tool_name = ToolName::try_from("alpha").unwrap();
+    let middleware_name = ToolMiddlewareName::try_from("audit").unwrap();
+    let middleware = RegisteredToolMiddleware {
+        deployment_revision: deployment.deployment_revision,
+        release_id: None,
+        definition: ToolMiddleware {
+            name: middleware_name.to_string(),
+            version: "1.0.0".to_string(),
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            scope: ToolMiddlewareScope::Universal,
+            parameter_schema: SchemaGraph::empty(),
+        },
+        provision: ToolProvisionConfig::default(),
+        source: ToolMiddlewareSource::Component {
+            component_id: ComponentId::new(),
+            component_revision: ComponentRevision::try_from(1_u64).unwrap(),
+            component_name: ComponentName("middleware:audit".to_string()),
+        },
+        owner_account_id: AccountId::new(),
+        owner_account_email: AccountEmail::new("middleware@example.com"),
+        metadata_version: "0.1.0".to_string(),
+        metadata_digest: Default::default(),
+    };
+    let middleware_parameter_schema = middleware.definition.parameter_schema.clone();
+    let effective_definition = deployment.registered_tools[&tool_name].definition.clone();
+    let owner = agent_owner(&agent);
+    deployment
+        .registered_tool_middlewares
+        .insert(middleware_name, middleware.clone());
+    deployment.tool_middleware_chains.insert(
+        owner.clone(),
+        BTreeMap::from([(
+            tool_name.clone(),
+            CompiledToolMiddlewareChain {
+                deployment_revision: deployment.deployment_revision,
+                owner,
+                tool_name: tool_name.clone(),
+                effective_definition: effective_definition.clone(),
+                occurrences: vec![CompiledToolMiddlewareOccurrence {
+                    middleware,
+                    parameters: TypedSchemaValue::new(
+                        middleware_parameter_schema,
+                        SchemaValue::Record { fields: Vec::new() },
+                    ),
+                    provision: ToolProvisionConfig::default(),
+                    config_keys_readable: Default::default(),
+                    secret_keys_readable: SecretKeyScope::All,
+                    secret_keys_revealable: SecretKeyScope::All,
+                    filesystem_access: ToolFilesystemAccess::Unset,
+                    expected_definition: None,
+                    presented_definition: None,
+                    next_effective_definition: effective_definition,
+                    compatibility: None,
+                }],
+            },
+        )]),
+    );
+    let activation = ready_activation(&deployment, &agent, &tool_name);
+    let expected_revision = activation.binding().deployment_revision;
+    let expected_metadata_digest = activation.binding().metadata_digest;
+
+    let encoded = golem_common::serialization::serialize(&activation).unwrap();
+    let decoded: ToolActivationSnapshot =
+        golem_common::serialization::deserialize(&encoded).unwrap();
+
+    assert_eq!(decoded, activation);
+    assert_eq!(decoded.binding().deployment_revision, expected_revision);
+    assert_eq!(decoded.binding().metadata_digest, expected_metadata_digest);
+    assert_eq!(decoded.middleware_chain().unwrap().occurrences.len(), 1);
 }
 
 #[test]
@@ -144,8 +233,10 @@ fn accessible_tools_join_bindings_and_registrations_in_name_order() {
     };
     let snapshot = ToolDiscoverySnapshot::from(deployment);
 
-    let agent_a_tools = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap();
-    let agent_b_tools = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_b).unwrap();
+    let agent_a_tools =
+        get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_a)).unwrap();
+    let agent_b_tools =
+        get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_b)).unwrap();
 
     assert_eq!(
         agent_a_tools
@@ -165,14 +256,53 @@ fn accessible_tools_join_bindings_and_registrations_in_name_order() {
         vec!["beta"]
     );
     assert_eq!(agent_b_tools[0].lookup_name, "beta");
-    let beta_for_agent_a = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &beta)
-        .unwrap()
-        .unwrap();
-    let beta_for_agent_b = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_b, &beta)
-        .unwrap()
-        .unwrap();
+    let beta_for_agent_a =
+        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &beta)
+            .unwrap()
+            .unwrap();
+    let beta_for_agent_b =
+        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_b), &beta)
+            .unwrap()
+            .unwrap();
     assert!(Arc::ptr_eq(&agent_a_tools[1], &beta_for_agent_a));
     assert_eq!(beta_for_agent_a.as_ref(), beta_for_agent_b.as_ref());
+}
+
+#[test]
+fn component_baseline_binding_is_independent_from_agent_bindings() {
+    let (mut deployment, agent_a, _) = deployment_state();
+    let alpha = ToolName::try_from("alpha").unwrap();
+    let beta = ToolName::try_from("beta").unwrap();
+    let component_id = ComponentId::new();
+    let mut baseline_binding = deployment.tool_bindings[&agent_owner(&agent_a)][&alpha].clone();
+    baseline_binding.owner = ToolBindingOwner::ComponentBaseline { component_id };
+    deployment.tool_bindings.insert(
+        baseline_binding.owner.clone(),
+        BTreeMap::from([(alpha.clone(), baseline_binding)]),
+    );
+    let snapshot = ToolDiscoverySnapshot::from(deployment.clone());
+    let baseline_owner = ToolBindingOwner::ComponentBaseline { component_id };
+
+    assert!(
+        get_accessible_tool_from_snapshot(Some(&snapshot), &baseline_owner, &alpha)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        get_accessible_tool_from_snapshot(Some(&snapshot), &baseline_owner, &beta)
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        get_tool_activation_from_deployment(Some(&deployment), &baseline_owner, &beta).unwrap(),
+        ToolActivationOutcome::NotBound
+    ));
+    assert_eq!(
+        get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_a))
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[test]
@@ -185,12 +315,12 @@ fn discovery_projects_effective_definition_per_agent_binding() {
     presented_b.commands.nodes[0].name = "adapter-b".to_string();
     deployment.tool_middleware_chains = BTreeMap::from([
         (
-            agent_a.clone(),
+            agent_owner(&agent_a),
             BTreeMap::from([(
                 beta.clone(),
                 CompiledToolMiddlewareChain {
                     deployment_revision: deployment.deployment_revision,
-                    agent_type_name: agent_a.clone(),
+                    owner: agent_owner(&agent_a),
                     tool_name: beta.clone(),
                     effective_definition: presented_a,
                     occurrences: Vec::new(),
@@ -198,12 +328,12 @@ fn discovery_projects_effective_definition_per_agent_binding() {
             )]),
         ),
         (
-            agent_b.clone(),
+            agent_owner(&agent_b),
             BTreeMap::from([(
                 beta.clone(),
                 CompiledToolMiddlewareChain {
                     deployment_revision: deployment.deployment_revision,
-                    agent_type_name: agent_b.clone(),
+                    owner: agent_owner(&agent_b),
                     tool_name: beta.clone(),
                     effective_definition: presented_b,
                     occurrences: Vec::new(),
@@ -213,10 +343,10 @@ fn discovery_projects_effective_definition_per_agent_binding() {
     ]);
 
     let snapshot = ToolDiscoverySnapshot::from(deployment);
-    let for_a = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &beta)
+    let for_a = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &beta)
         .unwrap()
         .unwrap();
-    let for_b = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_b, &beta)
+    let for_b = get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_b), &beta)
         .unwrap()
         .unwrap();
     assert_eq!(for_a.lookup_name, "beta");
@@ -234,17 +364,17 @@ fn accessible_tool_requires_a_binding_for_the_agent() {
     let snapshot = ToolDiscoverySnapshot::from(deployment);
 
     assert!(
-        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &alpha)
+        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &alpha)
             .unwrap()
             .is_some()
     );
     assert!(
-        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_b, &alpha)
+        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_b), &alpha)
             .unwrap()
             .is_none()
     );
     assert!(
-        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &unbound)
+        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &unbound)
             .unwrap()
             .is_none()
     );
@@ -255,15 +385,16 @@ fn unknown_valid_tool_name_does_not_change_accessible_set() {
     let (deployment, agent_a, _) = deployment_state();
     let unknown = ToolName::try_from("unknown").unwrap();
     let snapshot = ToolDiscoverySnapshot::from(deployment);
-    let before = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap();
+    let before =
+        get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_a)).unwrap();
 
     assert!(
-        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &unknown)
+        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &unknown)
             .unwrap()
             .is_none()
     );
     assert_eq!(
-        get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap(),
+        get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_a)).unwrap(),
         before
     );
 }
@@ -271,7 +402,7 @@ fn unknown_valid_tool_name_does_not_change_accessible_set() {
 #[test]
 fn missing_deployment_or_agent_bindings_are_empty() {
     let (deployment, _, _) = deployment_state();
-    let missing_agent = AgentTypeName("MissingAgent".to_string());
+    let missing_agent = agent_owner(&AgentTypeName("MissingAgent".to_string()));
     let alpha = ToolName::try_from("alpha").unwrap();
     let snapshot = ToolDiscoverySnapshot::from(deployment);
 
@@ -299,13 +430,15 @@ fn dangling_binding_is_a_permanent_integrity_error() {
     deployment.registered_tools.remove(&beta);
     let snapshot = ToolDiscoverySnapshot::from(deployment);
 
-    let list_error = get_accessible_tools_from_snapshot(Some(&snapshot), &agent_a).unwrap_err();
+    let list_error =
+        get_accessible_tools_from_snapshot(Some(&snapshot), &agent_owner(&agent_a)).unwrap_err();
     let get_error =
-        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &beta).unwrap_err();
+        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &beta)
+            .unwrap_err();
 
-    let expected_message = concat!(
-        "Inconsistent tool deployment snapshot: binding for agent type ",
-        "'AgentA' references missing tool 'beta'"
+    let expected_message = format!(
+        "Inconsistent tool deployment snapshot: binding for {:?} references missing tool 'beta'",
+        agent_owner(&agent_a)
     );
     assert_eq!(list_error.to_string(), expected_message);
     assert_eq!(get_error.to_string(), expected_message);
@@ -336,7 +469,7 @@ fn component_dispatch_uses_one_pinned_consumer_snapshot() {
         ToolSource::Host { .. } => panic!("test fixture must be component-backed"),
     };
     deployment.registered_tools.clear();
-    deployment.agent_tool_bindings.clear();
+    deployment.tool_bindings.clear();
 
     let plan = activation.runtime_plan().unwrap();
     let EntityInvocationPlanLayer::Tool { activation: entity } = plan.layer(0).unwrap() else {
@@ -370,8 +503,8 @@ fn host_dispatch_preserves_exact_handler_and_consumer_policy() {
         "preserved".to_string(),
     );
     let binding = deployment
-        .agent_tool_bindings
-        .get_mut(&agent_a)
+        .tool_bindings
+        .get_mut(&agent_owner(&agent_a))
         .unwrap()
         .get_mut(&alpha)
         .unwrap();
@@ -421,8 +554,8 @@ fn activation_lookup_uses_explicit_filesystem_verdict() {
     let (mut deployment, agent_a, _) = deployment_state();
     let alpha = ToolName::try_from("alpha").unwrap();
     deployment
-        .agent_tool_bindings
-        .get_mut(&agent_a)
+        .tool_bindings
+        .get_mut(&agent_owner(&agent_a))
         .unwrap()
         .get_mut(&alpha)
         .unwrap()
@@ -440,15 +573,17 @@ fn activation_lookup_distinguishes_not_registered_from_not_bound() {
     let missing = ToolName::try_from("missing").unwrap();
 
     assert_eq!(
-        get_tool_activation_from_deployment(Some(&deployment), &agent_a, &unbound).unwrap(),
+        get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &unbound)
+            .unwrap(),
         ToolActivationOutcome::NotBound
     );
     assert_eq!(
-        get_tool_activation_from_deployment(Some(&deployment), &agent_a, &missing).unwrap(),
+        get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &missing)
+            .unwrap(),
         ToolActivationOutcome::NotRegistered
     );
     assert_eq!(
-        get_tool_activation_from_deployment(None, &agent_a, &unbound).unwrap(),
+        get_tool_activation_from_deployment(None, &agent_owner(&agent_a), &unbound).unwrap(),
         ToolActivationOutcome::NotRegistered
     );
 }
@@ -458,8 +593,8 @@ fn activation_lookup_rejects_files_with_explicit_filesystem_denial() {
     let (mut deployment, agent_a, _) = deployment_state();
     let alpha = ToolName::try_from("alpha").unwrap();
     deployment
-        .agent_tool_bindings
-        .get_mut(&agent_a)
+        .tool_bindings
+        .get_mut(&agent_owner(&agent_a))
         .unwrap()
         .get_mut(&alpha)
         .unwrap()
@@ -477,7 +612,8 @@ fn activation_lookup_rejects_files_with_explicit_filesystem_denial() {
             size: 0,
         });
 
-    let result = get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha);
+    let result =
+        get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha);
 
     assert!(matches!(
         result,
@@ -490,15 +626,16 @@ fn activation_lookup_rejects_cross_revision_pairs() {
     let (mut deployment, agent_a, _) = deployment_state();
     let alpha = ToolName::try_from("alpha").unwrap();
     deployment
-        .agent_tool_bindings
-        .get_mut(&agent_a)
+        .tool_bindings
+        .get_mut(&agent_owner(&agent_a))
         .unwrap()
         .get_mut(&alpha)
         .unwrap()
         .deployment_revision = DeploymentRevision::try_from(2_u64).unwrap();
 
     let error =
-        get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha).unwrap_err();
+        get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha)
+            .unwrap_err();
 
     assert!(matches!(
         error,
@@ -507,19 +644,37 @@ fn activation_lookup_rejects_cross_revision_pairs() {
 }
 
 #[test]
+fn activation_lookup_rejects_binding_owner_mismatch() {
+    let (mut deployment, agent_a, agent_b) = deployment_state();
+    let alpha = ToolName::try_from("alpha").unwrap();
+    deployment
+        .tool_bindings
+        .get_mut(&agent_owner(&agent_a))
+        .unwrap()
+        .get_mut(&alpha)
+        .unwrap()
+        .owner = agent_owner(&agent_b);
+
+    assert!(matches!(
+        get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha),
+        Err(ToolDiscoveryError::InconsistentSnapshot { .. })
+    ));
+}
+
+#[test]
 fn activation_lookup_rejects_mismatched_release_identity() {
     let (mut deployment, agent_a, _) = deployment_state();
     let alpha = ToolName::try_from("alpha").unwrap();
     deployment
-        .agent_tool_bindings
-        .get_mut(&agent_a)
+        .tool_bindings
+        .get_mut(&agent_owner(&agent_a))
         .unwrap()
         .get_mut(&alpha)
         .unwrap()
         .release_id = Some(golem_common::model::tool_release::ToolReleaseId::new());
 
     assert!(matches!(
-        get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha),
+        get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha),
         Err(ToolDiscoveryError::InconsistentSnapshot { .. })
     ));
 }
@@ -535,15 +690,15 @@ fn activation_lookup_rejects_mismatched_metadata_digest() {
     )
     .unwrap();
     deployment
-        .agent_tool_bindings
-        .get_mut(&agent_a)
+        .tool_bindings
+        .get_mut(&agent_owner(&agent_a))
         .unwrap()
         .get_mut(&alpha)
         .unwrap()
         .metadata_digest = mismatched_digest;
 
     assert!(matches!(
-        get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha),
+        get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha),
         Err(ToolDiscoveryError::InconsistentSnapshot { .. })
     ));
 }
@@ -562,7 +717,8 @@ fn activation_lookup_rejects_registration_under_the_wrong_name() {
         .name = "other".to_string();
 
     let error =
-        get_tool_activation_from_deployment(Some(&deployment), &agent_a, &alpha).unwrap_err();
+        get_tool_activation_from_deployment(Some(&deployment), &agent_owner(&agent_a), &alpha)
+            .unwrap_err();
 
     assert!(matches!(
         error,
@@ -579,7 +735,7 @@ fn single_lookup_does_not_scan_unrelated_dangling_bindings() {
     let snapshot = ToolDiscoverySnapshot::from(deployment);
 
     assert!(
-        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_a, &alpha)
+        get_accessible_tool_from_snapshot(Some(&snapshot), &agent_owner(&agent_a), &alpha)
             .unwrap()
             .is_some()
     );

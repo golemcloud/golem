@@ -2,7 +2,7 @@
 
 ///|
 pub(all) suberror UnderlyingError {
-  ToolError(@common.ToolError)
+  ToolError(@types.ToolError)
   ProtocolError(String)
   Denied(String)
   InternalError(String)
@@ -7433,7 +7433,7 @@ pub async fn UnderlyingInvokeResult::get(
                 mbt_ffi_load32(result_ptr + 16),
               )
 
-              @common.ToolError::InvalidToolName(result231)
+              @types.ToolError::InvalidToolName(result231)
             }
             1 => {
               let array233 : Array[String] = []
@@ -7451,7 +7451,7 @@ pub async fn UnderlyingInvokeResult::get(
               }
               mbt_ffi_free(mbt_ffi_load32(result_ptr + 12))
 
-              @common.ToolError::InvalidCommandPath(array233)
+              @types.ToolError::InvalidCommandPath(array233)
             }
             2 => {
               let result235 = mbt_ffi_ptr2str(
@@ -7459,7 +7459,7 @@ pub async fn UnderlyingInvokeResult::get(
                 mbt_ffi_load32(result_ptr + 16),
               )
 
-              @common.ToolError::InvalidInput(result235)
+              @types.ToolError::InvalidInput(result235)
             }
             3 => {
               let result236 = mbt_ffi_ptr2str(
@@ -7467,7 +7467,7 @@ pub async fn UnderlyingInvokeResult::get(
                 mbt_ffi_load32(result_ptr + 16),
               )
 
-              @common.ToolError::ConstraintViolation(result236)
+              @types.ToolError::ConstraintViolation(result236)
             }
             4 => {
               let result237 = mbt_ffi_ptr2str(
@@ -7475,7 +7475,7 @@ pub async fn UnderlyingInvokeResult::get(
                 mbt_ffi_load32(result_ptr + 16),
               )
 
-              @common.ToolError::InvalidResult(result237)
+              @types.ToolError::InvalidResult(result237)
             }
             5 => {
               let result238 = mbt_ffi_ptr2str(
@@ -9658,7 +9658,7 @@ pub async fn UnderlyingInvokeResult::get(
               }
               mbt_ffi_free(mbt_ffi_load32(result_ptr + 40))
 
-              @common.ToolError::CustomError(@common.CustomToolError::{
+              @types.ToolError::CustomError(@types.CustomToolError::{
                 name: result238,
                 payload: @types.TypedSchemaValue::{
                   graph: @types.SchemaGraph::{

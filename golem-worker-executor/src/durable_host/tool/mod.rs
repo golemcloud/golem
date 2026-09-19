@@ -34,18 +34,21 @@ pub use operation::{
 
 use crate::durable_host::authorization::targets::tool_target;
 use crate::durable_host::concurrent::{
-    AccessClaimOptions, CallReplayOutcome, CompletionDelivery, DeferredCallReplayOutcome,
-    DurableCallSession, LeaveIncompleteOnDrop, NotCancellable,
+    CallReplayOutcome, Cancellable, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access,
 };
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
-use crate::durable_host::durable_session::strip_typed_streams;
+use crate::durable_host::durable_session::{
+    DurableByteInputProducer, DurableInputEndpoint, DurableInputProducer, ForwardedDurableInput,
+    strip_typed_streams,
+};
 use crate::durable_host::entity::{
     EntityInvocationDurability, EntityInvocationKeyContext, IncompleteLiveRepairBeforeBody,
     RecordedEntityTerminal, ToolInvocationReplayOutcome, encode_tool_terminal,
     record_tool_rejection_access,
 };
 use crate::durable_host::secrets::secret_hold_targets_for_value;
+use crate::durable_host::stream_transport::{LiveStreamEndpoint, byte_output_stream_pair};
 use crate::durable_host::tool::attachment::{
     AttachmentConsumer, AttachmentController, AttachmentMemory, AttachmentObserver,
     AttachmentProducer, AttachmentStreamProducer, attachment_pair, discard_producer,
@@ -59,7 +62,7 @@ use crate::preview2::golem::tool::host::{
     HostFutureInvokeResultWithStore, HostToolRpc, HostToolRpcWithStore, HostToolStdin,
     HostToolStdinClosed, HostToolStdinClosedWithStore, HostToolStdinWriter,
     HostToolStdinWriterWithStore, HostToolStdout, HostWithStore, InvocationResult,
-    RegisteredTool as WitRegisteredTool, RpcError, StreamWriteError, TypedSchemaValue,
+    RegisteredTool as WitRegisteredTool, StreamWriteError, ToolRpcError, TypedSchemaValue,
 };
 use crate::preview2::golem::tool::streams::{
     Host as HostToolStreams, HostToolStdoutWriter, HostToolStdoutWriterWithStore,
@@ -83,13 +86,14 @@ use crate::workerctx::WorkerCtxExecutable;
 use anyhow::{Context, anyhow};
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
+use golem_common::model::agent::{AgentPrincipal, Principal, ResolvedOwnerContext};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::card::{
     ToolArgPattern, ToolIdentifier, ToolValueLiteral, ToolValuePattern,
 };
 use golem_common::model::component::ComponentName;
+use golem_common::model::durable_stream::SessionStreamRole;
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationDescriptorIdentity,
     EntityInvocationPlanReference, EntityInvocationRequestIdentity, InvocationExecutionMode,
@@ -99,7 +103,7 @@ use golem_common::model::entity::{
 };
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::oplog::host_functions::{
-    GolemToolGetAllTools, GolemToolGetTool, GolemToolObserveResults,
+    GolemToolGetAllTools, GolemToolGetTool, GolemToolResponseSecretHoldAdmission,
 };
 use golem_common::model::oplog::payload::types::{
     SerializableCustomToolError, SerializableEntityBodyExecution, SerializableToolError,
@@ -108,17 +112,18 @@ use golem_common::model::oplog::payload::types::{
 };
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestGolemToolGetTool, HostRequestGolemToolInvocationRejected,
-    HostRequestGolemToolObserveResults, HostRequestNoInput, HostResponseEntityInvocation,
-    HostResponseGolemToolObservedResults, HostResponseGolemToolTool, HostResponseGolemToolTools,
+    HostRequestGolemToolResponseSecretHoldAdmission, HostRequestNoInput,
+    HostResponseEntityInvocation, HostResponseGolemToolResponseSecretHoldAdmission,
+    HostResponseGolemToolTool, HostResponseGolemToolTools,
 };
-use golem_common::model::tool::ToolName;
+use golem_common::model::tool::{
+    ToolActivationSnapshot, ToolBindingOwner, ToolInvocationInput, ToolInvocationOutput, ToolName,
+};
 use golem_common::schema::render::cli_text::value_to_cli_text_unredacted;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
-use golem_common::schema::tool::wit::wire::{Host as HostToolCommon, Tool as WitTool};
-use golem_common::schema::tool::{
-    Constraint, FlagShape, OptionShape, OptionSpec, Quantifier, Ref, Repetition, Tool,
-};
+use golem_common::schema::tool::wit::wire::{Host as HostToolCommon, Tool as WitTool, ToolError};
+use golem_common::schema::tool::{FlagShape, OptionShape, OptionSpec, Repetition, Tool};
 use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_common::schema::wit::{
     decode_graph, decode_value_with, encode_graph, encode_value_with_streams,
@@ -126,6 +131,8 @@ use golem_common::schema::wit::{
 use golem_common::schema::{
     FromSchema, SchemaType, SchemaValue, TypedSchemaValue as ModelTypedSchemaValue,
 };
+use golem_common::schema::{IntoTypedSchemaValue, SchemaGraph};
+use golem_schema::schema::SchemaValueStream;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::future::Future;
 use std::pin::Pin;
@@ -168,7 +175,6 @@ pub struct ToolRpcEntry {
 #[derive(Clone)]
 struct ToolRpcOwnerContext {
     owner_id: OwnedAgentId,
-    agent_type: AgentTypeName,
 }
 
 /// Host-side resource table entry backing the
@@ -330,6 +336,87 @@ impl<D> StreamConsumer<D> for ToolStdinStreamConsumer {
     }
 }
 
+struct UnderlyingToolStdinStreamConsumer {
+    items: Option<mpsc::UnboundedSender<ToolStdinStreamItem>>,
+    pending_acknowledgement: Option<oneshot::Receiver<()>>,
+    attachment_closed: Pin<Box<dyn Future<Output = ByteStreamCloseCause> + Send>>,
+    max_chunk_bytes: usize,
+}
+
+impl UnderlyingToolStdinStreamConsumer {
+    fn new(
+        items: mpsc::UnboundedSender<ToolStdinStreamItem>,
+        observer: AttachmentObserver,
+        max_chunk_bytes: usize,
+    ) -> Self {
+        Self {
+            items: Some(items),
+            pending_acknowledgement: None,
+            attachment_closed: Box::pin(async move { observer.wait_terminal().await }),
+            max_chunk_bytes,
+        }
+    }
+}
+
+impl<D> StreamConsumer<D> for UnderlyingToolStdinStreamConsumer {
+    type Item = u8;
+
+    fn poll_consume(
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        mut store: StoreContextMut<'_, D>,
+        source: Source<'_, Self::Item>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        if self.attachment_closed.as_mut().poll(cx).is_ready() {
+            self.items.take();
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+
+        if let Some(acknowledged) = &mut self.pending_acknowledgement {
+            match Pin::new(acknowledged).poll(cx) {
+                Poll::Pending if finish => return Poll::Ready(Ok(StreamResult::Cancelled)),
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(())) => self.pending_acknowledgement = None,
+                Poll::Ready(Err(_)) => {
+                    self.items.take();
+                    return Poll::Ready(Ok(StreamResult::Dropped));
+                }
+            }
+        }
+
+        if finish {
+            return Poll::Ready(Ok(StreamResult::Cancelled));
+        }
+
+        let mut source = source.as_direct(store.as_context_mut());
+        let remaining = source.remaining();
+        if remaining.is_empty() {
+            return Poll::Ready(Ok(StreamResult::Completed));
+        }
+
+        let count = remaining.len().min(self.max_chunk_bytes.max(1));
+        let received = remaining[..count].to_vec();
+        source.mark_read(count);
+        let (acknowledged, acknowledgement) = oneshot::channel();
+        let Some(items) = &self.items else {
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        };
+        if items
+            .send(ToolStdinStreamItem {
+                item: Ok(received),
+                acknowledged,
+            })
+            .is_err()
+        {
+            self.items.take();
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        }
+        self.pending_acknowledgement = Some(acknowledgement);
+        Poll::Ready(Ok(StreamResult::Completed))
+    }
+}
+
 struct ToolStdinStreamPumpTask<Ctx> {
     producer: AttachmentProducer,
     items: mpsc::UnboundedReceiver<ToolStdinStreamItem>,
@@ -430,20 +517,21 @@ impl ToolStdoutWriterEntry {
     }
 }
 
-type ToolInvokeResponse = Result<SerializableToolInvocationResult, SerializableToolRpcError>;
+pub(crate) type ToolInvokeResponse =
+    Result<SerializableToolInvocationResult, SerializableToolRpcError>;
 
 async fn admit_tool_response_secret_holds<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     response: ToolInvokeResponse,
-) -> Result<ToolInvokeResponse, WorkerExecutorError>
+) -> anyhow::Result<ToolInvokeResponse>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
-    let targets = accessor.with(|mut access| {
+    let (value, targets) = accessor.with(|mut access| {
         let ctx = access.get();
         let value = match &response {
-            Ok(result) => result.result.as_ref(),
+            Ok(result) => result.result.as_deref(),
             Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
                 SerializableToolError::CustomError(value) => Some(&value.payload),
                 _ => None,
@@ -451,20 +539,46 @@ where
             _ => None,
         };
         match value {
-            Some(value) => secret_hold_targets_for_value(ctx, value.value()),
-            None => Ok(Vec::new()),
+            Some(value) => Ok::<_, WorkerExecutorError>((
+                Some(value.clone()),
+                secret_hold_targets_for_value(ctx, value.value())?,
+            )),
+            None => Ok((None, Vec::new())),
         }
     })?;
     if targets.is_empty() {
         return Ok(response);
     }
-    match authorize_live_permissions_at_serialized_access(accessor, accessor.getter(), &targets)
-        .await?
-    {
-        Ok(_) => Ok(response),
-        Err(_) => Ok(Err(SerializableToolRpcError::Denied(
+
+    let request = HostRequestGolemToolResponseSecretHoldAdmission {
+        value: value.expect("secret hold targets require a response value"),
+        targets: targets.clone(),
+    };
+    let admission =
+        DurableCallSession::<GolemToolResponseSecretHoldAdmission, Cancellable>::invoke_access(
+            accessor,
+            accessor.getter(),
+            request,
+            DurableFunctionType::ReadLocal,
+            async || {
+                Ok::<_, anyhow::Error>(HostResponseGolemToolResponseSecretHoldAdmission {
+                    admitted: authorize_live_permissions_at_serialized_access(
+                        accessor,
+                        accessor.getter(),
+                        &targets,
+                    )
+                    .await?
+                    .is_ok(),
+                })
+            },
+        )
+        .await?;
+    if admission.admitted {
+        Ok(response)
+    } else {
+        Ok(Err(SerializableToolRpcError::Denied(
             "permission denied".to_string(),
-        ))),
+        )))
     }
 }
 
@@ -572,22 +686,6 @@ impl ToolExecution {
 
     fn get_plan(self: &Arc<Self>) -> FutureToolInvokeGet {
         FutureToolInvokeGet::Active(self.clone())
-    }
-
-    fn records_result_readiness(&self) -> bool {
-        let EntityInvocationDescriptor::Tool(descriptor) = &self.operation.context().descriptor;
-        descriptor
-            .output_contract
-            .result
-            .iter()
-            .chain(
-                descriptor
-                    .output_contract
-                    .errors
-                    .iter()
-                    .map(|error| &error.payload),
-            )
-            .any(|graph| graph.contains_stream_type())
     }
 
     async fn result(&self) -> anyhow::Result<ToolInvokeResponse> {
@@ -846,207 +944,6 @@ fn validate_stream_attachments(
     Ok(())
 }
 
-fn ref_matches(
-    reference: &Ref,
-    tool: &Tool,
-    command_index: usize,
-    surfaces: &[CanonicalSurfaceRef],
-    values: &[golem_common::schema::tool::canonical::CanonicalInputValue],
-) -> bool {
-    let (name, expected) = match reference {
-        Ref::Present(name) => (name, None),
-        Ref::ValueIs(value) => (&value.name, Some(&value.value)),
-    };
-    let Some((index, value)) = values
-        .iter()
-        .enumerate()
-        .find(|(_, value)| value.name == *name || value.aliases.contains(name))
-    else {
-        return false;
-    };
-    if let Some(expected) = expected {
-        return schema_value_matches(&value.value, expected);
-    }
-    surface_is_present(tool, command_index, surfaces[index], &value.value)
-}
-
-fn schema_value_matches(value: &SchemaValue, expected: &SchemaValue) -> bool {
-    if value == expected {
-        return true;
-    }
-    match value {
-        SchemaValue::Option { inner } => inner
-            .as_deref()
-            .is_some_and(|value| schema_value_matches(value, expected)),
-        SchemaValue::List { elements } | SchemaValue::FixedList { elements } => elements
-            .iter()
-            .any(|value| schema_value_matches(value, expected)),
-        SchemaValue::Map { entries } => entries
-            .iter()
-            .any(|(_, value)| schema_value_matches(value, expected)),
-        _ => false,
-    }
-}
-
-fn value_is_present(value: &SchemaValue, default: Option<&SchemaValue>) -> bool {
-    if default.is_some_and(|default| value == default) {
-        return false;
-    }
-    match value {
-        SchemaValue::Option { inner } => inner.is_some(),
-        SchemaValue::List { elements } | SchemaValue::FixedList { elements } => {
-            !elements.is_empty()
-        }
-        SchemaValue::Map { entries } => !entries.is_empty(),
-        SchemaValue::Bool(value) => *value,
-        SchemaValue::U32(value) => *value != 0,
-        _ => true,
-    }
-}
-
-fn surface_is_present(
-    tool: &Tool,
-    command_index: usize,
-    surface: CanonicalSurfaceRef,
-    value: &SchemaValue,
-) -> bool {
-    let body = || {
-        tool.commands.nodes[command_index]
-            .body
-            .as_ref()
-            .expect("canonical input surfaces only resolve command bodies")
-    };
-    match surface {
-        CanonicalSurfaceRef::GlobalOption { node, index } => value_is_present(
-            value,
-            tool.commands.nodes[node].globals.options[index]
-                .default
-                .as_ref(),
-        ),
-        CanonicalSurfaceRef::BodyOption { index } => {
-            value_is_present(value, body().options[index].default.as_ref())
-        }
-        CanonicalSurfaceRef::GlobalFlag { node, index } => {
-            flag_is_present(&tool.commands.nodes[node].globals.flags[index].shape, value)
-        }
-        CanonicalSurfaceRef::BodyFlag { index } => {
-            flag_is_present(&body().flags[index].shape, value)
-        }
-        CanonicalSurfaceRef::BodyPositional { index } => {
-            value_is_present(value, body().positionals.fixed[index].default.as_ref())
-        }
-        CanonicalSurfaceRef::BodyTail => value_is_present(value, None),
-    }
-}
-
-fn flag_is_present(shape: &FlagShape, value: &SchemaValue) -> bool {
-    match (shape, value) {
-        (FlagShape::BoolFlag(shape), SchemaValue::Bool(value)) => *value != shape.default,
-        (FlagShape::CountFlag(_), SchemaValue::U32(value)) => *value != 0,
-        _ => false,
-    }
-}
-
-fn quantified_refs(
-    quantifier: Quantifier,
-    refs: &[Ref],
-    tool: &Tool,
-    command_index: usize,
-    surfaces: &[CanonicalSurfaceRef],
-    values: &[golem_common::schema::tool::canonical::CanonicalInputValue],
-) -> bool {
-    match quantifier {
-        Quantifier::All => refs
-            .iter()
-            .all(|reference| ref_matches(reference, tool, command_index, surfaces, values)),
-        Quantifier::Any => refs
-            .iter()
-            .any(|reference| ref_matches(reference, tool, command_index, surfaces, values)),
-    }
-}
-
-fn validate_tool_constraints(
-    tool: &Tool,
-    command_index: usize,
-    constraints: &[Constraint],
-    surfaces: &[CanonicalSurfaceRef],
-    values: &[golem_common::schema::tool::canonical::CanonicalInputValue],
-) -> Result<(), String> {
-    for (index, constraint) in constraints.iter().enumerate() {
-        let satisfied = match constraint {
-            Constraint::RequiresAll(refs) => {
-                quantified_refs(Quantifier::All, refs, tool, command_index, surfaces, values)
-            }
-            Constraint::AllOrNone(refs) => {
-                let present = refs
-                    .iter()
-                    .filter(|reference| {
-                        ref_matches(reference, tool, command_index, surfaces, values)
-                    })
-                    .count();
-                present == 0 || present == refs.len()
-            }
-            Constraint::RequiresAny(refs) => {
-                quantified_refs(Quantifier::Any, refs, tool, command_index, surfaces, values)
-            }
-            Constraint::MutexGroups(groups) => {
-                groups
-                    .iter()
-                    .filter(|group| {
-                        quantified_refs(
-                            Quantifier::All,
-                            &group.refs,
-                            tool,
-                            command_index,
-                            surfaces,
-                            values,
-                        )
-                    })
-                    .count()
-                    <= 1
-            }
-            Constraint::Implies(implies) => {
-                !quantified_refs(
-                    implies.lhs_quant,
-                    &implies.lhs,
-                    tool,
-                    command_index,
-                    surfaces,
-                    values,
-                ) || quantified_refs(
-                    implies.rhs_quant,
-                    &implies.rhs,
-                    tool,
-                    command_index,
-                    surfaces,
-                    values,
-                )
-            }
-            Constraint::Forbids(forbids) => {
-                !quantified_refs(
-                    forbids.lhs_quant,
-                    &forbids.lhs,
-                    tool,
-                    command_index,
-                    surfaces,
-                    values,
-                ) || !quantified_refs(
-                    Quantifier::Any,
-                    &forbids.rhs,
-                    tool,
-                    command_index,
-                    surfaces,
-                    values,
-                )
-            }
-        };
-        if !satisfied {
-            return Err(format!("tool command constraint {index} is not satisfied"));
-        }
-    }
-    Ok(())
-}
-
 fn resolve_tool_command(
     tool: &Tool,
     command_path: &[String],
@@ -1086,8 +983,14 @@ fn resolve_tool_command(
         .body
         .as_ref()
         .expect("command_index_by_path only resolves commands with bodies");
-    validate_tool_constraints(tool, command_index, &body.constraints, &surfaces, &values)
-        .map_err(SerializableToolError::ConstraintViolation)?;
+    golem_schema::schema::tool::constraints::validate_tool_constraints(
+        tool,
+        command_index,
+        &body.constraints,
+        &surfaces,
+        &values,
+    )
+    .map_err(SerializableToolError::ConstraintViolation)?;
     let mut args = Vec::new();
 
     for (surface, field) in surfaces.into_iter().zip(values) {
@@ -1184,59 +1087,51 @@ fn encode_typed_tool_value<Ctx: WorkerCtx>(
 fn project_tool_error<Ctx: WorkerCtx>(
     error: SerializableToolError,
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> RpcError {
+) -> ToolRpcError {
     let error = match error {
-        SerializableToolError::InvalidToolName(value) => {
-            crate::preview2::golem::tool::host::ToolError::InvalidToolName(value)
-        }
-        SerializableToolError::InvalidCommandPath(value) => {
-            crate::preview2::golem::tool::host::ToolError::InvalidCommandPath(value)
-        }
-        SerializableToolError::InvalidInput(value) => {
-            crate::preview2::golem::tool::host::ToolError::InvalidInput(value)
-        }
-        SerializableToolError::ConstraintViolation(value) => {
-            crate::preview2::golem::tool::host::ToolError::ConstraintViolation(value)
-        }
-        SerializableToolError::InvalidResult(value) => {
-            crate::preview2::golem::tool::host::ToolError::InvalidResult(value)
-        }
+        SerializableToolError::InvalidToolName(value) => ToolError::InvalidToolName(value),
+        SerializableToolError::InvalidCommandPath(value) => ToolError::InvalidCommandPath(value),
+        SerializableToolError::InvalidInput(value) => ToolError::InvalidInput(value),
+        SerializableToolError::ConstraintViolation(value) => ToolError::ConstraintViolation(value),
+        SerializableToolError::InvalidResult(value) => ToolError::InvalidResult(value),
         SerializableToolError::CustomError(value) => {
             match encode_typed_tool_value(&value.payload, ctx) {
-                Ok(payload) => crate::preview2::golem::tool::host::ToolError::CustomError(
-                    crate::preview2::golem::tool::common::CustomToolError {
+                Ok(payload) => {
+                    ToolError::CustomError(golem_common::schema::wit::wire::CustomToolError {
                         name: value.name,
                         payload,
-                    },
-                ),
-                Err(error) => return RpcError::ProtocolError(error),
+                    })
+                }
+                Err(error) => return ToolRpcError::ProtocolError(error),
             }
         }
     };
-    RpcError::RemoteToolError(error)
+    ToolRpcError::RemoteToolError(error)
 }
 
 fn project_tool_rpc_error<Ctx: WorkerCtx>(
     error: SerializableToolRpcError,
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> RpcError {
+) -> ToolRpcError {
     match error {
-        SerializableToolRpcError::ProtocolError(value) => RpcError::ProtocolError(value),
-        SerializableToolRpcError::Denied(value) => RpcError::Denied(value),
-        SerializableToolRpcError::NotFound(value) => RpcError::NotFound(value),
+        SerializableToolRpcError::ProtocolError(value) => ToolRpcError::ProtocolError(value),
+        SerializableToolRpcError::Denied(value) => ToolRpcError::Denied(value),
+        SerializableToolRpcError::NotFound(value) => ToolRpcError::NotFound(value),
         SerializableToolRpcError::RemoteInternalError(value) => {
-            RpcError::RemoteInternalError(value)
+            ToolRpcError::RemoteInternalError(value)
         }
         SerializableToolRpcError::RemoteToolError(error) => project_tool_error(*error, ctx),
-        SerializableToolRpcError::Cancelled => RpcError::Cancelled,
-        SerializableToolRpcError::ResourceExhausted(value) => RpcError::ResourceExhausted(value),
+        SerializableToolRpcError::Cancelled => ToolRpcError::Cancelled,
+        SerializableToolRpcError::ResourceExhausted(value) => {
+            ToolRpcError::ResourceExhausted(value)
+        }
     }
 }
 
 fn project_tool_response_value<Ctx: WorkerCtx>(
     response: ToolInvokeResponse,
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> Result<Option<TypedSchemaValue>, RpcError> {
+) -> Result<Option<TypedSchemaValue>, ToolRpcError> {
     response
         .map_err(|error| project_tool_rpc_error(error, ctx))
         .and_then(|response| {
@@ -1245,14 +1140,14 @@ fn project_tool_response_value<Ctx: WorkerCtx>(
                 .as_ref()
                 .map(|value| encode_typed_tool_value(value, ctx))
                 .transpose()
-                .map_err(RpcError::ProtocolError)
+                .map_err(ToolRpcError::ProtocolError)
         })
 }
 
 fn project_tool_response<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     response: ToolInvokeResponse,
-) -> Result<InvocationResult, RpcError>
+) -> Result<InvocationResult, ToolRpcError>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
@@ -1269,7 +1164,7 @@ where
 fn project_tool_unit<Ctx: WorkerCtx>(
     response: Result<(), SerializableToolRpcError>,
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> Result<(), RpcError> {
+) -> Result<(), ToolRpcError> {
     response.map_err(|error| project_tool_rpc_error(error, ctx))
 }
 
@@ -1304,12 +1199,19 @@ enum ToolCallPreparation {
     },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolAttachmentCounterparty {
+    Guest,
+    SessionJournal,
+}
+
 struct AcceptedToolCall {
     durability: EntityInvocationDurability,
     operation: operation::OwnerToolOperation,
     stdin: Option<Resource<ToolStdinEntry>>,
     deferred_admission_inserted: bool,
     incapable_lane_ticket: Option<crate::worker::owner_lane::OwnerInvocationTicket>,
+    attachment_counterparty: ToolAttachmentCounterparty,
 }
 
 enum ToolCallDispatch {
@@ -1443,15 +1345,10 @@ fn tool_rpc_for_current_owner<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     tool_name: ToolName,
 ) -> anyhow::Result<ToolRpcEntry> {
-    let agent_type = ctx
-        .parsed_agent_id()
-        .map(|agent_id| agent_id.agent_type)
-        .ok_or_else(|| anyhow!("tool RPC resources require an agent owner"))?;
     Ok(ToolRpcEntry {
         tool_name,
         owner: ToolRpcOwnerContext {
             owner_id: ctx.state.owned_agent_id.clone(),
-            agent_type,
         },
     })
 }
@@ -1608,6 +1505,8 @@ async fn prepare_tool_call<U, Ctx>(
     stdin: Option<Resource<ToolStdinEntry>>,
     stdout_requested: bool,
     call_mode: EntityCallMode,
+    pinned_activation: Option<Arc<ToolActivationSnapshot>>,
+    principal: Option<Principal>,
 ) -> anyhow::Result<ToolCallPreparation>
 where
     U: Send + 'static,
@@ -1670,63 +1569,81 @@ where
         ToolCallTarget::Ambient(rpc) => {
             let environment_state_service =
                 accessor.with(|mut access| access.get().state.environment_state_service.clone());
-            let (owner_component_id, owner_component_revision) = accessor.with(|mut access| {
-                let component = access.get().owner_component_metadata();
-                (component.id, component.revision)
-            });
-            let activation_snapshot = match environment_state_service
-                .get_tool_activation(
-                    rpc.owner.owner_id.environment_id,
-                    owner_component_id,
-                    owner_component_revision,
-                    &rpc.owner.agent_type,
-                    &rpc.tool_name,
-                )
-                .await
-            {
-                Ok(ToolActivationOutcome::Ready(activation)) => *activation,
-                Ok(ToolActivationOutcome::NotBound) => {
-                    return Ok(rejected_tool_call(
-                        &tool_name,
-                        attempt_ordinal,
-                        &command_path,
-                        Some(input),
-                        None,
-                        has_stdin,
-                        stdout_requested,
-                        call_mode,
-                        SerializableToolRpcError::Denied(format!(
-                            "tool '{}' is not bound to agent type '{}'",
-                            rpc.tool_name, rpc.owner.agent_type
-                        )),
-                        stdin,
-                    ));
-                }
-                Ok(ToolActivationOutcome::NotRegistered) => {
-                    return Ok(rejected_tool_call(
-                        &tool_name,
-                        attempt_ordinal,
-                        &command_path,
-                        Some(input),
-                        None,
-                        has_stdin,
-                        stdout_requested,
-                        call_mode,
-                        SerializableToolRpcError::NotFound(format!(
-                            "tool '{}' is not registered",
-                            rpc.tool_name
-                        )),
-                        stdin,
-                    ));
-                }
-                Err(error) => {
-                    return Err(anyhow::Error::new(ClassifiedHostError {
-                        kind: classify_tool_discovery_error(&error),
-                        message: error.to_string(),
-                    }));
+            let (owner_component_id, owner_component_revision, binding_owner) =
+                accessor.with(|mut access| {
+                    let state = access.get();
+                    let component = state.owner_component_metadata();
+                    let owner = match state.owner_context() {
+                        ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
+                            agent_type_name: agent.agent_type.clone(),
+                        },
+                        ResolvedOwnerContext::ComponentWorker
+                        | ResolvedOwnerContext::ComponentBaseline => {
+                            ToolBindingOwner::ComponentBaseline {
+                                component_id: component.id,
+                            }
+                        }
+                    };
+                    (component.id, component.revision, owner)
+                });
+            let activation_snapshot = if let Some(activation) = pinned_activation {
+                (*activation).clone()
+            } else {
+                match environment_state_service
+                    .get_tool_activation(
+                        rpc.owner.owner_id.environment_id,
+                        owner_component_id,
+                        owner_component_revision,
+                        &binding_owner,
+                        &rpc.tool_name,
+                    )
+                    .await
+                {
+                    Ok(ToolActivationOutcome::Ready(activation)) => *activation,
+                    Ok(ToolActivationOutcome::NotBound) => {
+                        return Ok(rejected_tool_call(
+                            &tool_name,
+                            attempt_ordinal,
+                            &command_path,
+                            Some(input),
+                            None,
+                            has_stdin,
+                            stdout_requested,
+                            call_mode,
+                            SerializableToolRpcError::Denied(format!(
+                                "tool '{}' is not bound to owner '{binding_owner:?}'",
+                                rpc.tool_name
+                            )),
+                            stdin,
+                        ));
+                    }
+                    Ok(ToolActivationOutcome::NotRegistered) => {
+                        return Ok(rejected_tool_call(
+                            &tool_name,
+                            attempt_ordinal,
+                            &command_path,
+                            Some(input),
+                            None,
+                            has_stdin,
+                            stdout_requested,
+                            call_mode,
+                            SerializableToolRpcError::NotFound(format!(
+                                "tool '{}' is not registered",
+                                rpc.tool_name
+                            )),
+                            stdin,
+                        ));
+                    }
+                    Err(error) => {
+                        return Err(anyhow::Error::new(ClassifiedHostError {
+                            kind: classify_tool_discovery_error(&error),
+                            message: error.to_string(),
+                        }));
+                    }
                 }
             };
             let plan = activation_snapshot.runtime_plan().map_err(|error| {
+                let error = ToolDiscoveryError::InconsistentSnapshot { details: error };
                 anyhow::Error::new(ClassifiedHostError {
                     kind: classify_tool_discovery_error(&error),
                     message: error.to_string(),
@@ -1851,7 +1768,7 @@ where
     let descriptor = EntityInvocationDescriptor::Tool(descriptor);
     let operation = accessor.with(|mut access| {
         let ctx = access.get();
-        let principal = ctx.invocation_principal();
+        let principal = principal.unwrap_or_else(|| ctx.invocation_principal());
         ctx.owner_execution
             .tool_operations()
             .create(operation::OwnerToolOperationContext {
@@ -1899,47 +1816,37 @@ fn decode_tool_terminal(
                         "invalid durable tool result payload: {error}"
                     ))
                 })?;
-            Ok(Ok(SerializableToolInvocationResult { result }))
+            Ok(Ok(SerializableToolInvocationResult {
+                result: result.map(Box::new),
+            }))
         }
         Err(error) => Ok(Err(error)),
     }
 }
 
 fn decode_guest_tool_error<Ctx: WorkerCtx>(
-    error: crate::preview2::golem::tool::host::ToolError,
+    error: ToolError,
     ctx: &mut DurableWorkerCtx<Ctx>,
 ) -> SerializableToolRpcError {
     let error = match error {
-        crate::preview2::golem::tool::host::ToolError::InvalidToolName(value) => {
-            SerializableToolError::InvalidToolName(value)
-        }
-        crate::preview2::golem::tool::host::ToolError::InvalidCommandPath(value) => {
-            SerializableToolError::InvalidCommandPath(value)
-        }
-        crate::preview2::golem::tool::host::ToolError::InvalidInput(value) => {
-            SerializableToolError::InvalidInput(value)
-        }
-        crate::preview2::golem::tool::host::ToolError::ConstraintViolation(value) => {
-            SerializableToolError::ConstraintViolation(value)
-        }
-        crate::preview2::golem::tool::host::ToolError::InvalidResult(value) => {
-            SerializableToolError::InvalidResult(value)
-        }
-        crate::preview2::golem::tool::host::ToolError::CustomError(value) => {
-            match decode_typed_tool_value(value.payload, ctx) {
-                Ok(payload) => {
-                    SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
-                        name: value.name,
-                        payload,
-                    }))
-                }
-                Err(_) => {
-                    return SerializableToolRpcError::ProtocolError(
-                        "tool guest returned an invalid custom-error payload".to_string(),
-                    );
-                }
+        ToolError::InvalidToolName(value) => SerializableToolError::InvalidToolName(value),
+        ToolError::InvalidCommandPath(value) => SerializableToolError::InvalidCommandPath(value),
+        ToolError::InvalidInput(value) => SerializableToolError::InvalidInput(value),
+        ToolError::ConstraintViolation(value) => SerializableToolError::ConstraintViolation(value),
+        ToolError::InvalidResult(value) => SerializableToolError::InvalidResult(value),
+        ToolError::CustomError(value) => match decode_typed_tool_value(value.payload, ctx) {
+            Ok(payload) => {
+                SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                    name: value.name,
+                    payload,
+                }))
             }
-        }
+            Err(_) => {
+                return SerializableToolRpcError::ProtocolError(
+                    "tool guest returned an invalid custom-error payload".to_string(),
+                );
+            }
+        },
     };
     SerializableToolRpcError::RemoteToolError(Box::new(error))
 }
@@ -2064,7 +1971,6 @@ struct ToolSidecarInvocation {
     principal: Principal,
     output_contract: ToolOutputContract,
     result_streams: crate::durable_host::durable_session::StreamSession,
-    result_ready: Option<oneshot::Sender<ToolInvokeResponse>>,
 }
 
 struct ToolSidecarBody {
@@ -2120,7 +2026,6 @@ async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
     >,
     output_contract: &ToolOutputContract,
     result_streams: &crate::durable_host::durable_session::StreamSession,
-    result_ready: Option<oneshot::Sender<ToolInvokeResponse>>,
 ) -> wasmtime::Result<HostResponseEntityInvocation> {
     let response = accessor
         .with(
@@ -2137,8 +2042,11 @@ async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
                                     "tool guest returned an invalid result payload",
                                 )
                             })?;
-                        validate_declared_tool_result(value, output_contract)
-                            .map(|result| SerializableToolInvocationResult { result })
+                        validate_declared_tool_result(value, output_contract).map(|result| {
+                            SerializableToolInvocationResult {
+                                result: result.map(Box::new),
+                            }
+                        })
                     }
                     Err(error) => Err(validate_declared_tool_error(
                         decode_guest_tool_error(error, ctx),
@@ -2156,7 +2064,6 @@ async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
         access.spawn(streams::MaterializeResponse {
             streams: result_streams.clone(),
             revision,
-            ready: result_ready,
             response,
             completed,
             activity,
@@ -2185,7 +2092,6 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
         principal,
         output_contract,
         result_streams,
-        result_ready,
     } = invocation;
     let mut store = store.as_context_mut();
     store
@@ -2273,14 +2179,8 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         principal,
                     )
                     .await?;
-                materialize_guest_tool_response(
-                    accessor,
-                    result,
-                    &output_contract,
-                    &result_streams,
-                    result_ready,
-                )
-                .await
+                materialize_guest_tool_response(accessor, result, &output_contract, &result_streams)
+                    .await
             })
             .await
         }
@@ -2342,7 +2242,6 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                     result?,
                     &output_contract,
                     &result_streams,
-                    result_ready,
                 )
                 .await
             })
@@ -3225,6 +3124,7 @@ where
         stdin,
         deferred_admission_inserted,
         mut incapable_lane_ticket,
+        attachment_counterparty,
     } = accepted;
     let parent = durability.parent().clone();
     let start = durability.scope().invocation_id().start_index();
@@ -3321,6 +3221,11 @@ where
     let stdout_completion_only = stdout
         .as_ref()
         .is_some_and(ToolStdoutWriterEntry::completion_only);
+    // Guest counterparties need the same owner lane as a capable body. Session journals
+    // progress independently, so their streams stay live while the body owns the lane.
+    let stage_attachments = filesystem
+        == golem_common::model::entity::FilesystemCapability::Capable
+        && attachment_counterparty == ToolAttachmentCounterparty::Guest;
     if !operation.attach(stdin_controller.clone(), stdout_controller.clone()) {
         return Err(anyhow!("owner generation fenced tool invocation"));
     }
@@ -3442,18 +3347,22 @@ where
         }
     }
 
+    if let Some(stdin) = &stdin_controller {
+        if stage_attachments {
+            stdin.configure_completion();
+        } else {
+            stdin.configure_live();
+        }
+    }
+    if let Some(stdout) = &stdout_controller {
+        if stage_attachments || stdout_completion_only {
+            stdout.configure_completion();
+        } else {
+            stdout.configure_live();
+        }
+    }
     match filesystem {
         golem_common::model::entity::FilesystemCapability::Incapable => {
-            if let Some(stdin) = &stdin_controller {
-                stdin.configure_live();
-            }
-            if let Some(stdout) = &stdout_controller {
-                if stdout_completion_only {
-                    stdout.configure_completion();
-                } else {
-                    stdout.configure_live();
-                }
-            }
             if !operation.transition_admission(
                 operation::BodyAdmissionState::Staging,
                 operation::BodyAdmissionState::Running,
@@ -3462,12 +3371,6 @@ where
             }
         }
         golem_common::model::entity::FilesystemCapability::Capable => {
-            if let Some(stdin) = &stdin_controller {
-                stdin.configure_completion();
-            }
-            if let Some(stdout) = &stdout_controller {
-                stdout.configure_completion();
-            }
             if execution.is_some_and(ToolExecution::is_cancelled) {
                 return cancel_tool_before_body(
                     accessor,
@@ -3483,7 +3386,7 @@ where
                 )
                 .await;
             }
-            if let Some(stdin) = &stdin_controller {
+            if stage_attachments && let Some(stdin) = &stdin_controller {
                 let stdin_observer = stdin.observer();
                 let terminal = match execution {
                     Some(execution) => {
@@ -3667,12 +3570,6 @@ where
     let context = operation.context();
     let position = durability.resolved_position().clone();
     let leaf_position = (position.plan().len() - 1) as u32;
-    let early_result = (position.position()..=leaf_position).all(|index| {
-        position.plan().layer(index).is_ok_and(|layer| {
-            layer.activation().filesystem()
-                == golem_common::model::entity::FilesystemCapability::Incapable
-        })
-    });
     let AgentEntity::Tool(tool_name) = position
         .plan()
         .layer(leaf_position)
@@ -3691,7 +3588,6 @@ where
         crate::durable_host::schema_value_stream::contains_stream(context.input.value());
     let input =
         streams::materialize_input(&result_streams, caller_revision, &context.input).await?;
-    let (result_ready, mut result_available) = oneshot::channel();
     let sidecar = ToolSidecarInvocation {
         tool_name: tool_name.to_string(),
         position,
@@ -3702,7 +3598,6 @@ where
         principal: context.principal.clone(),
         output_contract: descriptor.output_contract.clone(),
         result_streams: result_streams.clone(),
-        result_ready: early_result.then_some(result_ready),
     };
     let replaying_completed =
         scope.mode() == golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted;
@@ -3859,8 +3754,8 @@ where
             return Err(error.into());
         }
     };
-    let mut drive = Box::pin(
-        durability.drive_access(
+    let outcome = durability
+        .drive_access(
             accessor,
             accessor.getter(),
             body,
@@ -3883,19 +3778,8 @@ where
                     .select_infrastructure(error)
                     .await;
             },
-        ),
-    );
-    let outcome = tokio::select! {
-        outcome = &mut drive => outcome,
-        ready = &mut result_available => {
-            if let Ok(response) = ready
-                && let Some(execution) = execution
-            {
-                execution.complete(Ok(response));
-            }
-            drive.await
-        }
-    };
+        )
+        .await;
     match outcome {
         Ok(crate::durable_host::entity::EntityInvocationDurabilityOutcome::Completed(
             response,
@@ -3939,8 +3823,7 @@ where
                     .await
                     .map_err(anyhow::Error::msg)?;
             }
-            if (filesystem == golem_common::model::entity::FilesystemCapability::Capable
-                || stdout_completion_only)
+            if (stage_attachments || stdout_completion_only)
                 && let Some(stdout) = &stdout_controller
             {
                 stdout.publish_completion();
@@ -4000,8 +3883,7 @@ where
             operation.settle().await;
             if no_body {
                 publish_no_body_terminals(stdin_controller.as_ref(), stdout_controller.as_ref());
-            } else if (filesystem == golem_common::model::entity::FilesystemCapability::Capable
-                || stdout_completion_only)
+            } else if (stage_attachments || stdout_completion_only)
                 && let Some(stdout) = &stdout_controller
             {
                 stdout.publish_completion();
@@ -4024,31 +3906,6 @@ where
     }
 }
 
-async fn dispatch_tool_call<U, Ctx>(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    target: ToolCallTarget,
-    command_path: Vec<String>,
-    input: TypedSchemaValue,
-    stdin: Option<Resource<ToolStdinEntry>>,
-    has_stdout: bool,
-    call_mode: EntityCallMode,
-) -> anyhow::Result<ToolCallDispatch>
-where
-    U: Send + 'static,
-    Ctx: WorkerCtx,
-{
-    let attempt = read_tool_attempt(accessor, target, input)?;
-    dispatch_tool_attempt(
-        accessor,
-        attempt,
-        command_path,
-        stdin,
-        has_stdout,
-        call_mode,
-    )
-    .await
-}
-
 async fn dispatch_tool_attempt<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     attempt: ToolInvocationAttempt,
@@ -4056,6 +3913,9 @@ async fn dispatch_tool_attempt<U, Ctx>(
     stdin: Option<Resource<ToolStdinEntry>>,
     has_stdout: bool,
     call_mode: EntityCallMode,
+    pinned_activation: Option<Arc<ToolActivationSnapshot>>,
+    principal: Option<Principal>,
+    attachment_counterparty: ToolAttachmentCounterparty,
 ) -> anyhow::Result<ToolCallDispatch>
 where
     U: Send + 'static,
@@ -4107,6 +3967,7 @@ where
                     stdin,
                     deferred_admission_inserted: false,
                     incapable_lane_ticket: None,
+                    attachment_counterparty,
                 })));
             }
             ToolInvocationReplayOutcome::ReplayEnded => {}
@@ -4122,6 +3983,8 @@ where
         stdin,
         has_stdout,
         call_mode,
+        pinned_activation,
+        principal,
     )
     .await?
     {
@@ -4160,9 +4023,38 @@ where
                 stdin: prepared.stdin,
                 deferred_admission_inserted: false,
                 incapable_lane_ticket: None,
+                attachment_counterparty,
             })))
         }
     }
+}
+
+async fn dispatch_tool_call<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    target: ToolCallTarget,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<Resource<ToolStdinEntry>>,
+    has_stdout: bool,
+    call_mode: EntityCallMode,
+) -> anyhow::Result<ToolCallDispatch>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    let attempt = read_tool_attempt(accessor, target, input)?;
+    dispatch_tool_attempt(
+        accessor,
+        attempt,
+        command_path,
+        stdin,
+        has_stdout,
+        call_mode,
+        None,
+        None,
+        ToolAttachmentCounterparty::Guest,
+    )
+    .await
 }
 
 async fn release_capable_tool_cohort<U, D, Ctx>(
@@ -4248,7 +4140,7 @@ pub(crate) async fn settle_tool_children_owned(
 async fn get_tool_invoke_results<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     futures: &[Resource<FutureInvokeResultEntry>],
-) -> anyhow::Result<Vec<Result<InvocationResult, RpcError>>>
+) -> anyhow::Result<Vec<Result<InvocationResult, ToolRpcError>>>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
@@ -4274,108 +4166,18 @@ where
 async fn get_tool_invoke_plans<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     plans: Vec<FutureToolInvokeGet>,
-) -> anyhow::Result<Vec<Result<InvocationResult, RpcError>>>
+) -> anyhow::Result<Vec<Result<InvocationResult, ToolRpcError>>>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
 {
-    let (responses, delivery) = observe_tool_invoke_plans(accessor, plans).await?;
+    let responses = await_tool_invoke_plans(accessor, plans).await?;
     let mut projected = Vec::with_capacity(responses.len());
     for response in responses {
         let response = admit_tool_response_secret_holds(accessor, response).await?;
         projected.push(project_tool_response(accessor, response));
     }
-    if let Some(delivery) = delivery {
-        delivery.deliver_at_accessor_terminal(accessor).await?;
-    }
     Ok(projected)
-}
-
-async fn observe_tool_invoke_plans<U, Ctx>(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    plans: Vec<FutureToolInvokeGet>,
-) -> anyhow::Result<(Vec<ToolInvokeResponse>, Option<CompletionDelivery>)>
-where
-    U: Send + 'static,
-    Ctx: WorkerCtx,
-{
-    // Only stream-declared outputs can become visible before entity settlement. The
-    // recorded schema, not readiness timing or the returned value, selects this boundary.
-    if !plans.iter().any(|plan| {
-        matches!(plan, FutureToolInvokeGet::Active(execution) if execution.records_result_readiness())
-    }) {
-        return Ok((await_tool_invoke_plans(accessor, plans).await?, None));
-    }
-    let entity_starts = plans
-        .iter()
-        .filter_map(|plan| match plan {
-            FutureToolInvokeGet::Active(execution) => Some(execution.start),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if entity_starts.is_empty() {
-        return Ok((await_tool_invoke_plans(accessor, plans).await?, None));
-    }
-    let request = HostRequestGolemToolObserveResults { entity_starts };
-    let mut handle =
-        DurableCallSession::<GolemToolObserveResults, LeaveIncompleteOnDrop>::start_access_with_options(
-            accessor,
-            accessor.getter(),
-            DurableFunctionType::ReadLocal,
-            AccessClaimOptions {
-                request_identity: Some(request.clone().into()),
-                ..AccessClaimOptions::default()
-            },
-            async move |_| Ok(request),
-        )
-        .await?;
-
-    let results = if !handle.is_live() {
-        let (replayed, reconstructed) = tokio::try_join!(
-            async {
-                handle
-                    .replay_access_deferred(accessor, accessor.getter())
-                    .await
-                    .map_err(anyhow::Error::from)
-            },
-            await_tool_invoke_plans(accessor, plans),
-        )?;
-        match replayed {
-            DeferredCallReplayOutcome::Replayed(response, delivery) => {
-                if response.results
-                    != reconstructed
-                        .iter()
-                        .cloned()
-                        .map(streams::strip_response)
-                        .collect::<Vec<_>>()
-                {
-                    return Err(anyhow!(
-                        "reconstructed tool results differ from their recorded observation"
-                    ));
-                }
-                return Ok((reconstructed, Some(delivery)));
-            }
-            DeferredCallReplayOutcome::Incomplete(live) => handle = live,
-        }
-        reconstructed
-    } else {
-        await_tool_invoke_plans(accessor, plans).await?
-    };
-    let (_, delivery) = handle
-        .complete_access_deferred(
-            accessor,
-            accessor.getter(),
-            HostResponseGolemToolObservedResults {
-                results: results
-                    .iter()
-                    .cloned()
-                    .map(streams::strip_response)
-                    .collect(),
-            },
-            None,
-        )
-        .await?;
-    Ok((results, Some(delivery)))
 }
 
 async fn await_tool_invoke_plans<U, Ctx>(
@@ -4481,6 +4283,259 @@ where
         .collect()
 }
 
+/// Invokes a component-backed tool directly from the owner invocation driver.
+///
+/// The activation and optional byte stream mappings are pinned at queue admission. Stream
+/// readers are reconstructed from the owner's session journal, not from the client connection.
+pub(crate) async fn invoke_external_tool<Ctx: WorkerCtx>(
+    store: &mut StoreContextMut<'_, Ctx>,
+    activation: Arc<ToolActivationSnapshot>,
+    tool_name: ToolName,
+    command_path: Vec<String>,
+    input: ModelTypedSchemaValue,
+    stdin: bool,
+    stdout: bool,
+    principal: Principal,
+) -> Result<anyhow::Result<ToolInvokeResponse>, GuestCallSettlementError> {
+    run_guest_call_settled(
+        store,
+        async move |accessor| -> anyhow::Result<ToolInvokeResponse> {
+            let accessor =
+                accessor.with_getter::<HasSelf<DurableWorkerCtx<Ctx>>>(|ctx| ctx.durable_ctx_mut());
+            let (result, receiver) = oneshot::channel();
+            accessor.spawn(NativeToolTask {
+                activation,
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                principal,
+                result,
+            });
+            receiver
+                .await
+                .map_err(|_| anyhow!("native tool task ended without a result"))
+        },
+    )
+    .await
+}
+
+struct NativeToolTask {
+    activation: Arc<ToolActivationSnapshot>,
+    tool_name: ToolName,
+    command_path: Vec<String>,
+    input: ModelTypedSchemaValue,
+    stdin: bool,
+    stdout: bool,
+    principal: Principal,
+    result: oneshot::Sender<ToolInvokeResponse>,
+}
+
+impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for NativeToolTask {
+    async fn run(
+        self,
+        accessor: &Accessor<Ctx, HasSelf<DurableWorkerCtx<Ctx>>>,
+    ) -> wasmtime::Result<()> {
+        let Self {
+            activation,
+            tool_name,
+            command_path,
+            input,
+            stdin: has_stdin,
+            stdout: has_stdout,
+            principal,
+            result,
+        } = self;
+        let (worker, key) = accessor.with(|mut access| {
+            let ctx = access.get();
+            (
+                ctx.public_state.worker(),
+                ctx.state.get_current_idempotency_key(),
+            )
+        });
+        let key = key.ok_or_else(|| wasmtime::Error::msg("native tool has no invocation key"))?;
+        let session = worker
+            .native_tool_session(&key)
+            .await
+            .map_err(|error| wasmtime::Error::from_anyhow(error.into()))?;
+        let input = if session.is_some() {
+            ToolInvocationInput::from_value(input.value())
+                .map_err(|error| wasmtime::Error::msg(error.to_string()))?
+        } else {
+            ToolInvocationInput {
+                arguments: input,
+                stdin: None,
+            }
+        };
+        let output_handle = session.as_ref().and_then(|(prepared, _)| {
+            prepared
+                .stream_mappings
+                .iter()
+                .find(|mapping| mapping.role == SessionStreamRole::Output)
+                .map(|mapping| mapping.handle.clone())
+        });
+        if input.stdin.is_some() != has_stdin || output_handle.is_some() != has_stdout {
+            return Err(wasmtime::Error::msg(
+                "native tool byte streams disagree with its accepted session",
+            ));
+        }
+        let stdin = if let Some(stdin) = input.stdin {
+            let endpoint = stdin
+                .take_host_endpoint::<DurableInputEndpoint>()
+                .map_err(wasmtime::Error::msg)?;
+            let reader = accessor.with(|mut access| {
+                let ctx = access.get();
+                let producer = DurableByteInputProducer(
+                    DurableInputProducer::new(endpoint).with_drop_cleanup(
+                        ctx.state
+                            .dropped_call_event_sender()
+                            .expect("dropped-call event sender is always available"),
+                        ctx.stream_runtime_teardown_probe(),
+                    ),
+                );
+                StreamReader::new(&mut access, producer)
+            })?;
+            Some(
+                create_native_underlying_stdin(accessor, reader)
+                    .map_err(wasmtime::Error::from_anyhow)?,
+            )
+        } else {
+            None
+        };
+        let (stdout, drain) = if let Some((_, streams)) = &session
+            && let Some(handle) = &output_handle
+        {
+            let (stdout, consumer) =
+                create_stdout_attachment(accessor, false).map_err(wasmtime::Error::from_anyhow)?;
+            let endpoint = accessor.with(|mut access| -> wasmtime::Result<_> {
+                let capacity = access.get().live_stream_event_capacity();
+                let runtime_teardown = access.get().stream_runtime_teardown_probe();
+                let (sink, stream) = byte_output_stream_pair(capacity, runtime_teardown)
+                    .map_err(wasmtime::Error::msg)?;
+                let reader = StreamReader::new(&mut access, consumer.into_raw_stream_producer())?;
+                reader.pipe(&mut access, sink)?;
+                stream
+                    .take_host_endpoint::<LiveStreamEndpoint>()
+                    .map_err(wasmtime::Error::msg)
+            })?;
+            (
+                Some(stdout),
+                Some((streams.clone(), handle.clone(), endpoint)),
+            )
+        } else {
+            (None, None)
+        };
+        let (target, parent, attempt_ordinal, key_context, calling_principal) = accessor
+            .with(|mut access| {
+                let ctx = access.get();
+                let rpc = tool_rpc_for_current_owner(ctx, tool_name)?;
+                let parent = ctx.owner_invocation_id()?;
+                let next_ordinal = ctx
+                    .state
+                    .tool_invocation_attempt_ordinals
+                    .entry(parent.clone())
+                    .or_default();
+                let attempt_ordinal = *next_ordinal;
+                *next_ordinal = next_ordinal
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow!("tool invocation attempt ordinal overflow"))?;
+                let target = ToolCallTarget::Ambient(rpc);
+                let calling_principal = target.calling_principal(ctx);
+                let key_context = EntityInvocationKeyContext::capture(ctx, attempt_ordinal)?;
+                Ok::<_, anyhow::Error>((
+                    target,
+                    parent,
+                    attempt_ordinal,
+                    key_context,
+                    calling_principal,
+                ))
+            })
+            .map_err(wasmtime::Error::from_anyhow)?;
+        let stdin_rep = stdin.as_ref().map(Resource::rep);
+        let stdout_rep = stdout.as_ref().map(Resource::rep);
+        let execute = async {
+            let dispatch = dispatch_tool_attempt(
+                accessor,
+                ToolInvocationAttempt {
+                    target,
+                    input: Ok(input.arguments),
+                    rejection: None,
+                    key_context,
+                    parent,
+                    attempt_ordinal,
+                    calling_principal,
+                },
+                command_path,
+                stdin,
+                has_stdout,
+                EntityCallMode::Synchronous,
+                Some(activation),
+                Some(principal),
+                ToolAttachmentCounterparty::SessionJournal,
+            )
+            .await
+            .map_err(|error| {
+                cleanup_failed_tool_dispatch(accessor, stdin_rep, stdout_rep, error)
+            })?;
+            let response = match dispatch {
+                ToolCallDispatch::Rejected { response, stdin } => {
+                    close_stdin(accessor, stdin)?;
+                    reject_stdout(accessor, stdout)?;
+                    *response
+                }
+                ToolCallDispatch::Accepted(mut accepted) => {
+                    register_tool_admission(accessor, &mut accepted)?;
+                    execute_accepted_tool_call(accessor, *accepted, stdout, None, None).await?
+                }
+            };
+            Ok::<_, anyhow::Error>(response)
+        };
+        let drain = async {
+            if let Some((streams, handle, endpoint)) = drain {
+                streams
+                    .drain_registered_output(
+                        handle,
+                        endpoint,
+                        Arc::new(SchemaGraph::empty()),
+                        SchemaType::u8(),
+                    )
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        let (response, ()) =
+            tokio::try_join!(execute, drain).map_err(wasmtime::Error::from_anyhow)?;
+        let response = admit_tool_response_secret_holds(accessor, response)
+            .await
+            .map_err(wasmtime::Error::from_anyhow)?;
+        if let Some((prepared, streams)) = &session {
+            let value = ToolInvocationOutput {
+                outcome: response.clone(),
+                stdout: output_handle.map(|handle| {
+                    SchemaValueStream::from_host_endpoint(ForwardedDurableInput { handle })
+                }),
+            }
+            .into_typed_schema_value()
+            .map_err(|error| wasmtime::Error::msg(error.to_string()))?;
+            streams
+                .materialize_result(
+                    value.value().clone(),
+                    value.graph(),
+                    value.root_type(),
+                    prepared.attempt.invocation.target_component_revision,
+                )
+                .await
+                .map_err(wasmtime::Error::msg)?;
+        }
+        result
+            .send(response)
+            .map_err(|_| wasmtime::Error::msg("native tool result receiver dropped"))?;
+        Ok(())
+    }
+}
+
 pub(crate) async fn prepare_tool_parent_end<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
     parent: crate::worker::owner_lane::OwnerInvocationId,
@@ -4516,11 +4571,10 @@ pub(crate) async fn settle_tool_children<Ctx: WorkerCtx>(
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
 }
 
-async fn spawn_tool_execution<U, Ctx>(
+fn register_tool_admission<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-    mut accepted: AcceptedToolCall,
-    stdout: Option<Resource<ToolStdoutEntry>>,
-) -> anyhow::Result<Arc<ToolExecution>>
+    accepted: &mut AcceptedToolCall,
+) -> anyhow::Result<()>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
@@ -4549,6 +4603,19 @@ where
             golem_common::model::entity::FilesystemCapability::Incapable,
         )?);
     }
+    Ok(())
+}
+
+async fn spawn_tool_execution<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    mut accepted: AcceptedToolCall,
+    stdout: Option<Resource<ToolStdoutEntry>>,
+) -> anyhow::Result<Arc<ToolExecution>>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    register_tool_admission(accessor, &mut accepted)?;
     let inherited_cancellation = accessor.with(|mut access| access.get().entity_cancellation());
     let execution = ToolExecution::new(&accepted, inherited_cancellation);
     let completed_supervisor = (accepted.durability.scope().mode()
@@ -4685,8 +4752,49 @@ where
     })
 }
 
-fn create_underlying_stdout<U, Ctx>(
+fn create_native_underlying_stdin<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    source: StreamReader<u8>,
+) -> anyhow::Result<Resource<ToolStdinEntry>>
+where
+    U: Send + 'static,
+    Ctx: WorkerCtx,
+{
+    accessor.with(|mut access| {
+        let ctx = access.get();
+        let memory = AttachmentMemory::for_store(
+            ctx.public_state.worker().active_agents(),
+            ctx.state.is_live(),
+        );
+        let max_attachment_bytes = ctx.state.config.limits.max_tool_attachment_bytes;
+        let (producer, consumer, observer) = attachment_pair(max_attachment_bytes, memory);
+        let stdin = ctx.table().push(ToolStdinEntry { consumer })?;
+        let (items, received) = mpsc::unbounded_channel();
+        if let Err(error) = source.pipe(
+            &mut access,
+            UnderlyingToolStdinStreamConsumer::new(items, observer, max_attachment_bytes),
+        ) {
+            return Err(cleanup_tool_endpoints(
+                error.into(),
+                || {
+                    access.get().table().delete(stdin)?;
+                    Ok(())
+                },
+                || Ok(()),
+            ));
+        }
+        access.spawn(ToolStdinStreamPumpTask::<Ctx> {
+            producer,
+            items: received,
+            _ctx: std::marker::PhantomData,
+        });
+        Ok(stdin)
+    })
+}
+
+fn create_stdout_attachment<U, Ctx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    completion_only: bool,
 ) -> anyhow::Result<(Resource<ToolStdoutEntry>, AttachmentConsumer)>
 where
     U: Send + 'static,
@@ -4702,7 +4810,7 @@ where
             attachment_pair(ctx.state.config.limits.max_tool_attachment_bytes, memory);
         let target = ctx.table().push(ToolStdoutEntry {
             producer: Some(producer),
-            completion_only: false,
+            completion_only,
         })?;
         Ok((target, consumer))
     })
@@ -4715,7 +4823,7 @@ async fn invoke_tool_terminal<U, Ctx>(
     input: TypedSchemaValue,
     stdin: Option<Resource<ToolStdinEntry>>,
     stdout: Option<Resource<ToolStdoutEntry>>,
-) -> anyhow::Result<(ToolInvokeResponse, Option<CompletionDelivery>)>
+) -> anyhow::Result<ToolInvokeResponse>
 where
     U: Send + 'static,
     Ctx: WorkerCtx,
@@ -4733,7 +4841,7 @@ where
         EntityCallMode::Synchronous,
     )
     .await;
-    let (response, delivery) = match dispatch {
+    let response = match dispatch {
         Err(error) => {
             return Err(cleanup_failed_tool_dispatch(
                 accessor, stdin_rep, stdout_rep, error,
@@ -4743,23 +4851,17 @@ where
             ToolCallDispatch::Rejected { response, stdin } => {
                 close_stdin(accessor, stdin)?;
                 reject_stdout(accessor, stdout)?;
-                (*response, None)
+                *response
             }
             ToolCallDispatch::Accepted(accepted) => {
                 let execution = spawn_tool_execution(accessor, *accepted, stdout).await?;
-                let (mut results, delivery) =
-                    observe_tool_invoke_plans(accessor, vec![execution.get_plan()]).await?;
-                (
-                    results.pop().expect("one tool invocation has one result"),
-                    delivery,
-                )
+                let mut results =
+                    await_tool_invoke_plans(accessor, vec![execution.get_plan()]).await?;
+                results.pop().expect("one tool invocation has one result")
             }
         },
     };
-    Ok((
-        admit_tool_response_secret_holds(accessor, response).await?,
-        delivery,
-    ))
+    admit_tool_response_secret_holds(accessor, response).await
 }
 
 impl TryFrom<&DiscoveredTool> for WitRegisteredTool {
@@ -4799,10 +4901,18 @@ fn terminal_tool_discovery_error(message: String) -> anyhow::Error {
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub(crate) async fn get_all_tools_model(&mut self) -> anyhow::Result<Vec<Arc<DiscoveredTool>>> {
-        let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
         let environment_id = self.state.owned_agent_id.environment_id;
-        let component_id = self.state.owned_agent_id.agent_id.component_id;
-        let component_revision = self.owner_component_metadata().revision;
+        let owner_component_metadata = self.owner_component_metadata();
+        let component_id = owner_component_metadata.id;
+        let component_revision = owner_component_metadata.revision;
+        let binding_owner = match self.owner_context() {
+            ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
+                agent_type_name: agent.agent_type.clone(),
+            },
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                ToolBindingOwner::ComponentBaseline { component_id }
+            }
+        };
 
         let mut handle = DurableCallSession::<GolemToolGetAllTools, NotCancellable>::start(
             self,
@@ -4819,28 +4929,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let result = if let Some(agent_type) = &agent_type {
-                loop {
-                    let result = self
-                        .state
-                        .environment_state_service
-                        .get_accessible_tools(
-                            environment_id,
-                            component_id,
-                            component_revision,
-                            agent_type,
-                        )
-                        .await;
-                    match handle
-                        .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
-                        .await?
-                    {
-                        InternalRetryResult::Persist => break result,
-                        InternalRetryResult::RetryInternally => continue,
-                    }
+            let result = loop {
+                let result = self
+                    .state
+                    .environment_state_service
+                    .get_accessible_tools(
+                        environment_id,
+                        component_id,
+                        component_revision,
+                        &binding_owner,
+                    )
+                    .await;
+                match handle
+                    .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
+                    .await?
+                {
+                    InternalRetryResult::Persist => break result,
+                    InternalRetryResult::RetryInternally => continue,
                 }
-            } else {
-                Err(ToolDiscoveryError::AgentContextRequired)
             };
 
             handle
@@ -4854,12 +4960,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         response.result.map_err(|error| {
-            let agent_type = agent_type
-                .as_ref()
-                .map_or("<missing>", |agent_type| agent_type.0.as_str());
             terminal_tool_discovery_error(format!(
-                "failed to discover tools for agent type '{}' in environment '{environment_id}': {error}",
-                agent_type
+                "failed to discover tools for owner '{binding_owner:?}' in environment '{environment_id}': {error}"
             ))
         })
     }
@@ -4868,11 +4970,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         tool_name: String,
     ) -> anyhow::Result<Option<Arc<DiscoveredTool>>> {
-        let agent_type = self.parsed_agent_id().map(|agent_id| agent_id.agent_type);
         let valid_tool_name = ToolName::try_from(tool_name.as_str()).ok();
         let environment_id = self.state.owned_agent_id.environment_id;
-        let component_id = self.state.owned_agent_id.agent_id.component_id;
-        let component_revision = self.owner_component_metadata().revision;
+        let owner_component_metadata = self.owner_component_metadata();
+        let component_id = owner_component_metadata.id;
+        let component_revision = owner_component_metadata.revision;
+        let binding_owner = match self.owner_context() {
+            ResolvedOwnerContext::Agent(agent) => ToolBindingOwner::AgentType {
+                agent_type_name: agent.agent_type.clone(),
+            },
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                ToolBindingOwner::ComponentBaseline { component_id }
+            }
+        };
 
         let mut handle = DurableCallSession::<GolemToolGetTool, NotCancellable>::start(
             self,
@@ -4891,33 +5001,29 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let result = if let Some(agent_type) = &agent_type {
-                if let Some(valid_tool_name) = &valid_tool_name {
-                    loop {
-                        let result = self
-                            .state
-                            .environment_state_service
-                            .get_accessible_tool(
-                                environment_id,
-                                component_id,
-                                component_revision,
-                                agent_type,
-                                valid_tool_name,
-                            )
-                            .await;
-                        match handle
-                            .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
-                            .await?
-                        {
-                            InternalRetryResult::Persist => break result,
-                            InternalRetryResult::RetryInternally => continue,
-                        }
+            let result = if let Some(valid_tool_name) = &valid_tool_name {
+                loop {
+                    let result = self
+                        .state
+                        .environment_state_service
+                        .get_accessible_tool(
+                            environment_id,
+                            component_id,
+                            component_revision,
+                            &binding_owner,
+                            valid_tool_name,
+                        )
+                        .await;
+                    match handle
+                        .try_trigger_retry_or_loop(self, &result, classify_tool_discovery_error)
+                        .await?
+                    {
+                        InternalRetryResult::Persist => break result,
+                        InternalRetryResult::RetryInternally => continue,
                     }
-                } else {
-                    Ok(None)
                 }
             } else {
-                Err(ToolDiscoveryError::AgentContextRequired)
+                Ok(None)
             };
 
             handle
@@ -4931,12 +5037,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         response.result.map_err(|error| {
-            let agent_type = agent_type
-                .as_ref()
-                .map_or("<missing>", |agent_type| agent_type.0.as_str());
             terminal_tool_discovery_error(format!(
-                "failed to discover tool '{}' for agent type '{}' in environment '{environment_id}': {error}",
-                tool_name, agent_type
+                "failed to discover tool '{}' for owner '{binding_owner:?}' in environment '{environment_id}': {error}",
+                tool_name
             ))
         })
     }
@@ -5179,7 +5282,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
     async fn get_invoke_results(
         accessor: &Accessor<U, Self>,
         futures: Vec<Resource<FutureInvokeResultEntry>>,
-    ) -> anyhow::Result<Vec<Result<InvocationResult, RpcError>>> {
+    ) -> anyhow::Result<Vec<Result<InvocationResult, ToolRpcError>>> {
         accessor.with(|mut access| {
             access
                 .get()
@@ -5256,7 +5359,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             .transpose()?;
         let stdin_rep = stdin.as_ref().map(Resource::rep);
         let (stdout, stdout_consumer) = if stdout_requested {
-            let (stdout, consumer) = create_underlying_stdout(accessor)
+            let (stdout, consumer) = create_stdout_attachment(accessor, false)
                 .map_err(|error| cleanup_failed_tool_dispatch(accessor, stdin_rep, None, error))?;
             (Some(stdout), Some(consumer))
         } else {
@@ -5270,6 +5373,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingToolWithStore<U> for ToolC
             stdin,
             stdout_requested,
             EntityCallMode::Asynchronous,
+            None,
+            None,
+            ToolAttachmentCounterparty::Guest,
         )
         .await;
         let state = match dispatch {
@@ -5336,7 +5442,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
             };
             Ok::<_, anyhow::Error>((plan, entry.response_edge.clone()))
         })?;
-        let (mut responses, delivery) = observe_tool_invoke_plans(&accessor, vec![plan]).await?;
+        let mut responses = await_tool_invoke_plans(&accessor, vec![plan]).await?;
         let response = responses
             .pop()
             .expect("a scalar underlying result await must return one response");
@@ -5352,24 +5458,23 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
         };
         let response = admit_tool_response_secret_holds(&accessor, response).await?;
         let response = project_tool_response(&accessor, response);
-        if let Some(delivery) = delivery {
-            delivery.deliver_at_accessor_terminal(&accessor).await?;
-        }
         match response {
             Ok(result) => Ok(Ok(result.result)),
-            Err(RpcError::RemoteToolError(error)) => Ok(Err(UnderlyingError::ToolError(error))),
-            Err(RpcError::Cancelled) => Ok(Err(UnderlyingError::Cancelled)),
-            Err(RpcError::ResourceExhausted(message)) => {
+            Err(ToolRpcError::RemoteToolError(error)) => Ok(Err(UnderlyingError::ToolError(error))),
+            Err(ToolRpcError::Cancelled) => Ok(Err(UnderlyingError::Cancelled)),
+            Err(ToolRpcError::ResourceExhausted(message)) => {
                 Ok(Err(UnderlyingError::ResourceExhausted(message)))
             }
-            Err(RpcError::ProtocolError(message)) => {
+            Err(ToolRpcError::ProtocolError(message)) => {
                 Ok(Err(UnderlyingError::ProtocolError(message)))
             }
-            Err(RpcError::Denied(message)) => Ok(Err(UnderlyingError::Denied(message))),
-            Err(RpcError::RemoteInternalError(message)) => {
+            Err(ToolRpcError::Denied(message)) => Ok(Err(UnderlyingError::Denied(message))),
+            Err(ToolRpcError::RemoteInternalError(message)) => {
                 Ok(Err(UnderlyingError::InternalError(message)))
             }
-            Err(RpcError::NotFound(message)) => Ok(Err(UnderlyingError::InternalError(message))),
+            Err(ToolRpcError::NotFound(message)) => {
+                Ok(Err(UnderlyingError::InternalError(message)))
+            }
         }
     }
 }
@@ -5396,7 +5501,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         command_path: Vec<String>,
         input: TypedSchemaValue,
         stdin: Option<Resource<ToolStdinEntry>>,
-    ) -> anyhow::Result<Result<(), RpcError>> {
+    ) -> anyhow::Result<Result<(), ToolRpcError>> {
         accessor.with(|mut access| {
             access
                 .get()
@@ -5440,20 +5545,16 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostToolRpcWithStore<U> for HasSelf<Dura
         input: TypedSchemaValue,
         stdin: Option<Resource<ToolStdinEntry>>,
         stdout: Option<Resource<ToolStdoutEntry>>,
-    ) -> anyhow::Result<Result<InvocationResult, RpcError>> {
+    ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
         accessor.with(|mut access| {
             access
                 .get()
                 .observe_function_call("golem::tool::host::tool-rpc", "invoke-and-await");
         });
         let rpc = tool_rpc_resource(accessor, &self_)?;
-        let (response, delivery) =
+        let response =
             invoke_tool_terminal(accessor, rpc, command_path, input, stdin, stdout).await?;
-        let response = project_tool_response(accessor, response);
-        if let Some(delivery) = delivery {
-            delivery.deliver_at_accessor_terminal(accessor).await?;
-        }
-        Ok(response)
+        Ok(project_tool_response(accessor, response))
     }
 
     async fn async_invoke_and_await(
@@ -5517,7 +5618,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
     async fn get(
         accessor: &Accessor<U, Self>,
         self_: Resource<FutureInvokeResultEntry>,
-    ) -> anyhow::Result<Result<InvocationResult, RpcError>> {
+    ) -> anyhow::Result<Result<InvocationResult, ToolRpcError>> {
         accessor.with(|mut access| {
             access
                 .get()
@@ -6042,6 +6143,7 @@ mod tests {
                 release_id: None,
                 definition,
                 provision: ToolProvisionConfig::default(),
+                component_bindings: Default::default(),
                 source: ToolSource::Component {
                     component_id,
                     component_revision: ComponentRevision::try_from(7_u64).unwrap(),

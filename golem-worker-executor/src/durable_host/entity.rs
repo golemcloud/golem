@@ -1721,8 +1721,8 @@ mod tests {
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::tool::{
-        CompiledToolBinding, ConfigKeyScope, SecretKeyScope, ToolFilesystemAccess, ToolName,
-        ToolProvisionConfig, ToolSource,
+        CompiledToolBinding, ConfigKeyScope, SecretKeyScope, ToolBindingOwner,
+        ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
     };
     use golem_common::schema::tool::{CommandTree, Tool};
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
@@ -1771,6 +1771,7 @@ mod tests {
             EntityActivationPolicy::ToolMiddleware {
                 middleware_name: ToolMiddlewareName::try_from(name).unwrap(),
                 provision: ToolProvisionConfig::default(),
+                config_keys_readable: ConfigKeyScope::All,
                 secret_keys_readable: SecretKeyScope::All,
                 secret_keys_revealable: SecretKeyScope::All,
                 filesystem_access: ToolFilesystemAccess::Unset,
@@ -1793,7 +1794,9 @@ mod tests {
         let binding = CompiledToolBinding {
             deployment_revision,
             release_id: None,
-            agent_type_name: AgentTypeName("Owner".to_string()),
+            owner: ToolBindingOwner::AgentType {
+                agent_type_name: AgentTypeName("Owner".to_string()),
+            },
             tool_name: ToolName::try_from("entity").unwrap(),
             version: "1.0.0".to_string(),
             metadata_version: "0.1.0".to_string(),

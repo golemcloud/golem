@@ -610,6 +610,7 @@ mod tests {
     ) -> AgentMetadata {
         AgentMetadata {
             agent_id,
+            owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             env: vec![],
             environment_id,
             created_by,

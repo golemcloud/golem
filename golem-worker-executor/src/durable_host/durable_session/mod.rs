@@ -3118,6 +3118,26 @@ impl StreamSession {
         .await
     }
 
+    /// Drains an output whose normal result-leaf mapping was committed during preparation.
+    pub(crate) async fn drain_registered_output(
+        &self,
+        handle: DurableStreamHandle,
+        endpoint: LiveStreamEndpoint,
+        graph: Arc<SchemaGraph>,
+        element_type: SchemaType,
+    ) -> Result<(), String> {
+        self.drain_materialized_result(
+            vec![PendingOwnedStreamDrain {
+                handle,
+                endpoint,
+                element_type,
+                role: SessionStreamRole::Output,
+            }],
+            graph,
+        )
+        .await
+    }
+
     /// Reconstructs a previously persisted remote result without reissuing the RPC.
     pub async fn replay_remote_result(&self) -> Result<Option<SchemaValue>, String> {
         self.recover_session_mappings().await?;
@@ -3148,6 +3168,206 @@ impl StreamSession {
         }
     }
 
+    /// Validates committed bytes and terminals without republishing the historical prefix.
+    async fn drain_byte_output(
+        &self,
+        handle: DurableStreamHandle,
+        endpoint: LiveStreamEndpoint,
+    ) -> Result<(), String> {
+        let lifecycle = endpoint.lifecycle();
+        let mut source = endpoint.activate();
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        let registration_id = self
+            .producer
+            .register_source_cancellation(handle.stream_id, cancelled.clone());
+        let _registration = OutputDrainRegistration {
+            producer: self.producer.clone(),
+            stream_id: handle.stream_id,
+            registration_id,
+            lifecycle: lifecycle.clone(),
+        };
+        let high_water = self
+            .producer
+            .input_high_water(handle.stream_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut history = if high_water.is_some() {
+            Some(
+                self.producer
+                    .catch_up(handle.clone(), None)
+                    .await
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        };
+        let result: Result<(), String> = async {
+        let mut pending = None;
+        let mut sequence = 0;
+        loop {
+            let recorded = if let Some(reader) = history.as_mut() {
+                let recorded = reader
+                    .next()
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| "byte output history ended before its high water".to_string())?;
+                if recorded.producer_sequence != sequence {
+                    return Err("byte output history has a non-contiguous sequence".into());
+                }
+                if matches!(
+                    recorded.payload,
+                    CommittedProducerStreamEventPayload::Cancel {
+                        role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
+                        ..
+                    }
+                ) {
+                    return Ok(());
+                }
+                Some(recorded)
+            } else {
+                None
+            };
+            let event = match pending.take() {
+                Some(event) => event,
+                None => tokio::select! {
+                    biased;
+                    _ = cancelled.cancelled() => return Ok(()),
+                    _ = lifecycle.cancelled() => return Ok(()),
+                    received = source.recv() => match received {
+                        Ok(event) => event,
+                        Err(LiveStreamReceiveError::Closed) if lifecycle.is_aborted() => return Ok(()),
+                        Err(error) => return Err(format!("byte output closed without a terminal: {error:?}")),
+                    },
+                },
+            };
+            if event.offset != sequence {
+                return Err("byte output producer sequence diverged".into());
+            }
+            let payload = match event.payload {
+                LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => {
+                    CommittedProducerStreamEventPayload::PackedU8(byte)
+                }
+                LiveStreamEventPayload::Item(_) => {
+                    return Err("byte output contains a non-byte value".into());
+                }
+                LiveStreamEventPayload::End => {
+                    CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+                }
+                LiveStreamEventPayload::Error(error) => CommittedProducerStreamEventPayload::End(
+                    StreamEndResult::ErrorContext(error.into_bytes()),
+                ),
+                LiveStreamEventPayload::ClassifiedError { kind, message } => match kind {
+                    HostFailureKind::Permanent => CommittedProducerStreamEventPayload::Cancel {
+                        role: StreamCancelRole::System,
+                        reason: StreamCancelReason::SourceUnavailable,
+                        details: Some(message),
+                    },
+                    HostFailureKind::Transient => CommittedProducerStreamEventPayload::End(
+                        StreamEndResult::ErrorContext(message.into_bytes()),
+                    ),
+                },
+            };
+            if let Some(recorded) = recorded {
+                if recorded.payload != payload {
+                    return Err("byte output differs from its recorded bytes or terminal".into());
+                }
+                if recorded.is_terminal() {
+                    return Ok(());
+                }
+                if high_water
+                    .as_ref()
+                    .is_some_and(|water| recorded.offset == water.resulting_offset)
+                {
+                    history = None;
+                }
+                sequence += 1;
+                continue;
+            }
+            let terminal = matches!(
+                payload,
+                CommittedProducerStreamEventPayload::End(_)
+                    | CommittedProducerStreamEventPayload::Cancel { .. }
+            );
+            let written = match payload {
+                CommittedProducerStreamEventPayload::PackedU8(byte) => {
+                    let first_sequence = sequence;
+                    let mut bytes = vec![byte];
+                    sequence += 1;
+                    let deadline = tokio::time::Instant::now() + PACKED_U8_OUTPUT_FLUSH_DELAY;
+                    while bytes.len() < MAX_PACKED_U8_STREAM_ITEM_SIZE {
+                        let next = match tokio::time::timeout_at(deadline, source.recv()).await {
+                            Ok(Ok(event)) => event,
+                            Ok(Err(LiveStreamReceiveError::Closed)) | Err(_) => break,
+                            Ok(Err(error)) => return Err(format!("{error:?}")),
+                        };
+                        if next.offset != sequence {
+                            return Err("byte output producer sequence diverged".into());
+                        }
+                        match next.payload {
+                            LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => {
+                                bytes.push(byte);
+                                sequence += 1;
+                            }
+                            payload => {
+                                pending = Some(crate::durable_host::stream_bus::LiveStreamEvent {
+                                    offset: next.offset,
+                                    payload,
+                                });
+                                break;
+                            }
+                        }
+                    }
+                    self.producer
+                        .write_items_with_nested_sources(
+                            None,
+                            handle.stream_id,
+                            first_sequence,
+                            StreamItemsPayload::PackedU8(bytes),
+                            Vec::new(),
+                        )
+                        .await
+                        .map(|_| ())
+                }
+                CommittedProducerStreamEventPayload::End(result) => self
+                    .producer
+                    .end(None, handle.stream_id, sequence, result)
+                    .await
+                    .map(|_| ()),
+                CommittedProducerStreamEventPayload::Cancel { role, reason, details } => self
+                    .producer
+                    .cancel(handle.stream_id, sequence, role, reason, details)
+                    .await
+                    .map(|_| ()),
+                _ => unreachable!("byte output produces only bytes and terminals"),
+            };
+            match written {
+                Err(StreamStoreError::FencedByTerminal(
+                    CommittedProducerStreamEventPayload::Cancel {
+                        role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
+                        ..
+                    },
+                )) => return Ok(()),
+                Err(error) => return Err(error.to_string()),
+                Ok(()) if terminal => return Ok(()),
+                Ok(()) => {}
+            }
+        }
+        }.await;
+        if let Err(error) = &result
+            && history.is_none()
+        {
+            let _ = self
+                .producer
+                .end_open(
+                    None,
+                    handle.stream_id,
+                    StreamEndResult::ErrorContext(error.clone().into_bytes()),
+                )
+                .await;
+        }
+        result
+    }
+
     async fn drain_output(
         &self,
         drain: PendingOwnedStreamDrain,
@@ -3160,6 +3380,9 @@ impl StreamSession {
             element_type,
             role,
         } = drain;
+        if matches!(graph.resolve_ref(&element_type), Ok(SchemaType::U8 { .. })) {
+            return self.drain_byte_output(handle, endpoint).await;
+        }
         // Root drains require admission; children are admitted by their committed parent item.
         // A child returned unread to its producer is consumed locally, without an attachment.
         let lifecycle = endpoint.lifecycle();
@@ -3175,11 +3398,8 @@ impl StreamSession {
             lifecycle: lifecycle.clone(),
         };
         let mut next_sequence = 0;
-        let mut pending_event = None;
         loop {
-            let received = match pending_event.take() {
-                Some(event) => Ok(event),
-                None => tokio::select! {
+            let received = tokio::select! {
                     biased;
                     _ = source_cancelled.cancelled() => {
                         break;
@@ -3188,7 +3408,6 @@ impl StreamSession {
                         break;
                     },
                     received = source.recv() => received,
-                },
             };
             let event = match received {
                 Ok(event) => event,
@@ -3242,48 +3461,6 @@ impl StreamSession {
                             )
                             .await;
                         break;
-                    }
-                    let mut packed_u8 =
-                        if matches!(graph.resolve_ref(&element_type), Ok(SchemaType::U8 { .. })) {
-                            match &value {
-                                SchemaValue::U8(byte) => Some(vec![*byte]),
-                                _ => None,
-                            }
-                        } else {
-                            None
-                        };
-                    if let Some(bytes) = packed_u8.as_mut() {
-                        let flush_deadline =
-                            tokio::time::Instant::now() + PACKED_U8_OUTPUT_FLUSH_DELAY;
-                        while bytes.len() < MAX_PACKED_U8_STREAM_ITEM_SIZE {
-                            let next = match tokio::time::timeout_at(flush_deadline, source.recv())
-                                .await
-                            {
-                                Ok(Ok(next)) => next,
-                                Ok(Err(LiveStreamReceiveError::Closed)) | Err(_) => break,
-                                Ok(Err(error)) => return Err(format!("{error:?}")),
-                            };
-                            let expected_sequence = event
-                                .offset
-                                .checked_add(bytes.len() as u64)
-                                .ok_or_else(|| "packed-u8 output sequence overflow".to_string())?;
-                            match next.payload {
-                                LiveStreamEventPayload::Item(SchemaValue::U8(byte))
-                                    if next.offset == expected_sequence =>
-                                {
-                                    bytes.push(byte);
-                                    next_sequence = next.offset.saturating_add(1);
-                                }
-                                payload => {
-                                    pending_event =
-                                        Some(crate::durable_host::stream_bus::LiveStreamEvent {
-                                            offset: next.offset,
-                                            payload,
-                                        });
-                                    break;
-                                }
-                            }
-                        }
                     }
                     let mut nested_outputs = Vec::new();
                     let value = match encode_recursive_stream_value_with_schema(
@@ -3359,10 +3536,7 @@ impl StreamSession {
                                 })
                         })
                         .collect();
-                    let payload = match packed_u8 {
-                        Some(bytes) => StreamItemsPayload::PackedU8(bytes),
-                        None => StreamItemsPayload::Values(vec![value.encode_to_vec()]),
-                    };
+                    let payload = StreamItemsPayload::Values(vec![value.encode_to_vec()]);
                     match self
                         .producer
                         .write_items_with_nested_sources(
@@ -3713,10 +3887,11 @@ impl StreamSession {
     ) -> Result<(), String> {
         self.recover_session_mappings().await?;
         let root_output_mapping_ids = self.session_root_output_mapping_ids().await?;
-        self.pump_output_streams_from_recovered(
+        self.pump_output_streams_once(
             &HashMap::new(),
             &root_output_mapping_ids,
             &[],
+            &Default::default(),
             responses,
         )
         .await
@@ -3739,17 +3914,18 @@ impl StreamSession {
         known_output_mapping_ids: &[u64],
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
-        self.recover_session_mappings().await?;
-        self.pump_output_streams_from_recovered(
+        self.pump_output_streams_once(
             cursors,
             root_output_mapping_ids,
             known_output_mapping_ids,
+            &Default::default(),
             responses,
         )
         .await
     }
 
-    async fn pump_output_streams_from_recovered(
+    /// Early and result-time pumps for one attachment share `seen`, including nested mappings.
+    pub(crate) async fn pump_output_streams_once(
         &self,
         cursors: &HashMap<
             golem_common::model::durable_stream::StreamId,
@@ -3757,17 +3933,13 @@ impl StreamSession {
         >,
         root_output_mapping_ids: &[u64],
         known_output_mapping_ids: &[u64],
+        seen: &std::sync::Mutex<HashSet<u64>>,
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
-        let mut seen = HashSet::new();
-        self.pump_output_stream_trees(cursors, root_output_mapping_ids, &mut seen, responses)
+        self.recover_session_mappings().await?;
+        self.pump_output_stream_trees(cursors, root_output_mapping_ids, seen, responses)
             .await?;
-        let detached = known_output_mapping_ids
-            .iter()
-            .copied()
-            .filter(|transport_stream_id| !seen.contains(transport_stream_id))
-            .collect::<Vec<_>>();
-        self.pump_output_stream_trees(cursors, &detached, &mut seen, responses)
+        self.pump_output_stream_trees(cursors, known_output_mapping_ids, seen, responses)
             .await
     }
 
@@ -3778,13 +3950,13 @@ impl StreamSession {
             Option<golem_common::model::durable_stream::StreamOffset>,
         >,
         output_mapping_ids: &[u64],
-        seen: &mut HashSet<u64>,
+        seen: &std::sync::Mutex<HashSet<u64>>,
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
         let mut pending = output_mapping_ids
             .iter()
             .copied()
-            .filter(|transport_stream_id| seen.insert(*transport_stream_id))
+            .filter(|transport_stream_id| seen.lock().unwrap().insert(*transport_stream_id))
             .map(|transport_stream_id| {
                 let mapping = self.mapping(transport_stream_id).ok_or_else(|| {
                     format!("unknown durable output stream {transport_stream_id}")
@@ -3806,7 +3978,7 @@ impl StreamSession {
             pending = nested
                 .into_iter()
                 .flatten()
-                .filter(|mapping| seen.insert(mapping.transport_stream_id))
+                .filter(|mapping| seen.lock().unwrap().insert(mapping.transport_stream_id))
                 .collect();
         }
         Ok(())
@@ -5312,19 +5484,20 @@ impl Drop for DurableInputProducer {
     }
 }
 
-impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
-    type Item = wire::SchemaValueTree;
-    type Buffer = Option<wire::SchemaValueTree>;
+enum DurableInputItem {
+    Value(SchemaValue),
+    Terminal(StreamResult),
+}
 
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
+impl DurableInputProducer {
+    fn poll_value<Ctx: WorkerCtx>(
+        &mut self,
         cx: &mut Context<'_>,
-        mut store: StoreContextMut<'a, Ctx>,
-        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        store: &mut StoreContextMut<'_, Ctx>,
         finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
+    ) -> Poll<wasmtime::Result<DurableInputItem>> {
         if self.finished {
-            return Poll::Ready(Ok(StreamResult::Dropped));
+            return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
         }
         if finish {
             if !self.dropping {
@@ -5363,7 +5536,7 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                     self.finished = true;
                     self.pending_drop = None;
                     self.input.reader = None;
-                    return Poll::Ready(Ok(StreamResult::Cancelled));
+                    return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Cancelled)));
                 }
             }
         }
@@ -5393,12 +5566,35 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
         };
         let value = match self.finish_receive(receive_result) {
             Ok(DurableInputEvent::Item(value)) => value,
-            Ok(DurableInputEvent::End) => return Poll::Ready(Ok(StreamResult::Dropped)),
-            Ok(DurableInputEvent::Cancelled) => return Poll::Ready(Ok(StreamResult::Cancelled)),
+            Ok(DurableInputEvent::End) => {
+                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
+            }
+            Ok(DurableInputEvent::Cancelled) => {
+                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Cancelled)));
+            }
             Err(error) => {
                 self.finished = true;
                 return Poll::Ready(Err(wasmtime::Error::from_anyhow(error)));
             }
+        };
+        Poll::Ready(Ok(DurableInputItem::Value(value)))
+    }
+}
+
+impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
+    type Item = wire::SchemaValueTree;
+    type Buffer = Option<wire::SchemaValueTree>;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: StoreContextMut<'a, Ctx>,
+        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        let value = match std::task::ready!(self.poll_value(cx, &mut store, finish))? {
+            DurableInputItem::Value(value) => value,
+            DurableInputItem::Terminal(result) => return Poll::Ready(Ok(result)),
         };
         let encoded = {
             let mut resolver = StoreValueResolver::new(&mut store);
@@ -5427,6 +5623,36 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             Ok(Box::new(ForwardedDurableInput { handle }))
         } else {
             Err(me)
+        }
+    }
+}
+
+/// Adapts the same durable input journal to native tools' byte-stream ABI.
+pub struct DurableByteInputProducer(pub DurableInputProducer);
+
+impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableByteInputProducer {
+    type Item = u8;
+    type Buffer = bytes::Bytes;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: StoreContextMut<'a, Ctx>,
+        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        match std::task::ready!(self.0.poll_value(cx, &mut store, finish))? {
+            DurableInputItem::Value(SchemaValue::U8(byte)) => {
+                destination.set_buffer(bytes::Bytes::copy_from_slice(&[byte]));
+                Poll::Ready(Ok(StreamResult::Completed))
+            }
+            DurableInputItem::Value(_) => {
+                self.0.finished = true;
+                Poll::Ready(Err(wasmtime::Error::msg(
+                    "tool stdin contains a non-byte value",
+                )))
+            }
+            DurableInputItem::Terminal(result) => Poll::Ready(Ok(result)),
         }
     }
 }

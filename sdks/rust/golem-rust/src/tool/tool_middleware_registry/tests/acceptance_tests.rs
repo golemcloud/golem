@@ -516,7 +516,7 @@ fn adapter_underlying(calls: AdapterCalls, result: Result<u64, String>) -> Under
         Box::pin(async move {
             match result {
                 Ok(value) => Ok(typed_result(value)),
-                Err(message) => Err(wire::ToolError::CustomError(wire::CustomToolError {
+                Err(message) => Err(wire::ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
                     name: "failed".to_string(),
                     payload: encode_typed_schema_value_owned(
                         message.into_typed_schema_value().unwrap(),

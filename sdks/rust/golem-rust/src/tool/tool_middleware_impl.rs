@@ -114,19 +114,23 @@ async fn encode_invocation_error(error: ToolInvokeError<RawCustomToolError>) -> 
         ToolInvokeError::InvalidResult(message) => wire::ToolError::InvalidResult(message),
         ToolInvokeError::Tool(error) => {
             match crate::encode_typed_schema_value_async(&error.payload).await {
-                Ok(payload) => wire::ToolError::CustomError(wire::CustomToolError {
-                    name: error.name,
-                    payload,
-                }),
+                Ok(payload) => {
+                    wire::ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
+                        name: error.name,
+                        payload,
+                    })
+                }
                 Err(error) => wire::ToolError::InvalidResult(error.to_string()),
             }
         }
         ToolInvokeError::UnknownCustomError(error) => {
             match crate::encode_typed_schema_value_async(&error.payload).await {
-                Ok(payload) => wire::ToolError::CustomError(wire::CustomToolError {
-                    name: error.name,
-                    payload,
-                }),
+                Ok(payload) => {
+                    wire::ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
+                        name: error.name,
+                        payload,
+                    })
+                }
                 Err(error) => wire::ToolError::InvalidResult(error.to_string()),
             }
         }

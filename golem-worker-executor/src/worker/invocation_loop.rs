@@ -44,7 +44,7 @@ use futures::FutureExt;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
 use futures::future::{BoxFuture, Shared};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, OwnerKind, ParsedAgentId};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
@@ -329,6 +329,19 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let kind = pending_interrupt
                         .map(|interrupt| interrupt.kind)
                         .unwrap_or(kind);
+                    if self.parent.initial_worker_metadata.owner_kind
+                        == OwnerKind::EphemeralExternalTool
+                    {
+                        // Core initialization has already entered the executable Store. Losing it
+                        // is terminal for an external owner, just as losing its invocation body is.
+                        self.parent
+                            .add_and_commit_oplog(OplogEntry::interrupted())
+                            .await;
+                        self.stop_unloaded(Some(super::inactive_ephemeral_agent_error()))
+                            .await;
+                        self.archive_ephemeral_oplog();
+                        break;
+                    }
                     // Interrupted while instantiating: record the same lifecycle oplog entry the
                     // invocation failure path would (`Suspend`/`Interrupted`), then park or
                     // restart. There is no store to run `on_invocation_failure` on, but no
@@ -568,6 +581,25 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
                     break 'resident;
                 }
+            }
+
+            if self.parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+                // An external owner cannot reconstruct accepted execution after losing its Store.
+                // Record terminal interruption instead of leaving the accepted key pending behind
+                // a retry marker or starting a replacement component instance.
+                if matches!(
+                    final_decision,
+                    Some(
+                        RetryDecision::Immediate
+                            | RetryDecision::Delayed(_)
+                            | RetryDecision::ReacquirePermits
+                            | RetryDecision::TryStop(_)
+                    )
+                ) {
+                    final_interrupt = Some(InterruptKind::Interrupt(Timestamp::now_utc()));
+                }
+                final_decision = Some(RetryDecision::None);
+                cleanup_ephemeral_worker = true;
             }
 
             retry_was_live = {
@@ -2359,7 +2391,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     drop(interrupt_state);
                     if self.uses_streams
                         && let AgentInvocationResult::AgentMethod { output } =
-                            &mut invocation_result
+                            &mut *invocation_result
                     {
                         let component = self.store.data().component_metadata();
                         let Some(agent_type) =
@@ -2469,7 +2501,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     self.agent_invocation_finished(
                         display_name,
                         &invocation_idempotency_key,
-                        invocation_result,
+                        *invocation_result,
                         consumed_fuel,
                         kind,
                     )
@@ -2835,10 +2867,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
 
         match result {
-            Ok(InvokeResult::Succeeded {
-                result: AgentInvocationResult::SaveSnapshot { snapshot },
-                ..
-            }) => {
+            Ok(InvokeResult::Succeeded { result, .. }) => {
+                let AgentInvocationResult::SaveSnapshot { snapshot } = *result else {
+                    return self
+                        .fail_update(
+                            target_revision,
+                            "failed to get a snapshot for manual update: invalid snapshot result"
+                                .to_string(),
+                        )
+                        .await;
+                };
                 match self
                     .store
                     .data()
@@ -2867,14 +2905,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         .await
                     }
                 }
-            }
-            Ok(InvokeResult::Succeeded { .. }) => {
-                self.fail_update(
-                    target_revision,
-                    "failed to get a snapshot for manual update: invalid snapshot result"
-                        .to_string(),
-                )
-                .await
             }
             Ok(InvokeResult::Failed { error, .. }) => {
                 let stderr = self
@@ -3119,10 +3149,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
 
         match result {
-            Ok(InvokeResult::Succeeded {
-                result: AgentInvocationResult::SaveSnapshot { snapshot },
-                ..
-            }) => {
+            Ok(InvokeResult::Succeeded { result, .. }) => {
+                let AgentInvocationResult::SaveSnapshot { snapshot } = *result else {
+                    warn!("Periodic snapshot returned unexpected result format");
+                    return CommandOutcome::Continue;
+                };
                 let serialized = golem_common::serialization::serialize(&snapshot.data);
                 match serialized {
                     Ok(serialized_bytes) => {
@@ -3168,10 +3199,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         warn!("Failed to serialize snapshot data: {err}");
                     }
                 }
-                CommandOutcome::Continue
-            }
-            Ok(InvokeResult::Succeeded { .. }) => {
-                warn!("Periodic snapshot returned unexpected result format");
                 CommandOutcome::Continue
             }
             Ok(InvokeResult::Exited { .. }) => {

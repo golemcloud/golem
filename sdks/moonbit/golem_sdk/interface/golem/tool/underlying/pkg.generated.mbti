@@ -4,7 +4,6 @@ package "golemcloud/golem_sdk/interface/golem/tool/underlying"
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
-  "golemcloud/golem_sdk/interface/golem/tool/common",
   "golemcloud/golem_sdk/interface/golem/tool/streams",
   "moonbitlang/core/debug",
 }
@@ -13,7 +12,7 @@ import {
 
 // Errors
 pub(all) suberror UnderlyingError {
-  ToolError(@common.ToolError)
+  ToolError(@types.ToolError)
   ProtocolError(String)
   Denied(String)
   InternalError(String)

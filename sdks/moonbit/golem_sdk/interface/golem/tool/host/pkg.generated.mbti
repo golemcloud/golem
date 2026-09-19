@@ -18,26 +18,17 @@ pub fn create_stdout() -> (ToolStdout, @async-core.Stream[Result[FixedArray[Byte
 
 pub fn get_all_tools() -> Array[RegisteredTool]
 
-pub async fn get_invoke_results(Array[FutureInvokeResult]) -> Array[Result[@common.InvocationResult, RpcError]]
+pub async fn get_invoke_results(Array[FutureInvokeResult]) -> Array[Result[@common.InvocationResult, @types.ToolRpcError]]
 
 pub fn get_tool(String) -> RegisteredTool?
 
 // Errors
-pub(all) suberror RpcError {
-  ProtocolError(String)
-  Denied(String)
-  NotFound(String)
-  RemoteInternalError(String)
-  RemoteToolError(@common.ToolError)
-  Cancelled
-  ResourceExhausted(String)
-} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) struct FutureInvokeResult(Int) derive(Eq, @debug.Debug)
 pub fn FutureInvokeResult::cancel(Self) -> Unit
 pub fn FutureInvokeResult::drop(Self) -> Unit
-pub async fn FutureInvokeResult::get(Self) -> Result[@common.InvocationResult, RpcError]
+pub async fn FutureInvokeResult::get(Self) -> Result[@common.InvocationResult, @types.ToolRpcError]
 
 pub(all) struct RegisteredTool {
   lookup_name : String
@@ -48,8 +39,8 @@ pub(all) struct RegisteredTool {
 pub(all) struct ToolRpc(Int) derive(Eq, @debug.Debug)
 pub fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> FutureInvokeResult
 pub fn ToolRpc::drop(Self) -> Unit
-pub fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, ToolStdin?) -> Result[Unit, RpcError]
-pub async fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> Result[@common.InvocationResult, RpcError]
+pub fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, ToolStdin?) -> Result[Unit, @types.ToolRpcError]
+pub async fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> Result[@common.InvocationResult, @types.ToolRpcError]
 pub fn ToolRpc::tool_rpc(String) -> Self
 
 pub(all) struct ToolStdin(Int) derive(Eq, @debug.Debug)

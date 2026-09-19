@@ -123,6 +123,7 @@ fn make_agent_metadata(
 ) -> AgentMetadata {
     AgentMetadata {
         agent_id,
+        owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         env: vec![],
         environment_id,
         created_by,
@@ -169,7 +170,9 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
             binding: Box::new(CompiledToolBinding {
                 deployment_revision,
                 release_id: None,
-                agent_type_name: AgentTypeName("Agent".to_string()),
+                owner: golem_common::model::tool::ToolBindingOwner::AgentType {
+                    agent_type_name: AgentTypeName("Agent".to_string()),
+                },
                 tool_name: tool_name.clone(),
                 version: "1".to_string(),
                 metadata_version: "1".to_string(),
@@ -191,6 +194,7 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
         AgentEntity::ToolMiddleware(middleware_name) => EntityActivationPolicy::ToolMiddleware {
             middleware_name: middleware_name.clone(),
             provision: ToolProvisionConfig::default(),
+            config_keys_readable: Default::default(),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: ToolFilesystemAccess::Unset,

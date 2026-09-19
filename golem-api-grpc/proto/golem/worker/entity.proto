@@ -58,6 +58,7 @@ message ToolMiddlewareEntityActivationPolicy {
   golem.component.SecretKeyScope secret_keys_readable = 3;
   golem.component.SecretKeyScope secret_keys_revealable = 4;
   golem.registry.ToolFilesystemAccess filesystem_access = 5;
+  golem.component.ConfigKeyScope config_keys_readable = 6;
 }
 
 message EntityActivationPolicy {

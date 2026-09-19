@@ -130,7 +130,7 @@ run loop (`worker/invocation_loop.rs::run`) is:
 │ outer loop (one iteration = one resident instance)                  │
 │  create Store + instance ──▶ prepare_instance                       │
 │    durable agent:  handle PendingUpdate ▸ try snapshot ▸ resume_replay│
-│    ephemeral:      replay first invocation only, append Restart     │
+│    ephemeral:      replay typed initialization only, append Restart │
 │  ──▶ inner loop: pop durable queue, run invocation, persist Finished │
 │  ──▶ instance ends (idle / interrupt / trap / suspend)               │
 │  ──▶ RetryDecision: Immediate | Delayed | ReacquirePermits | None | TryStop │
@@ -139,7 +139,10 @@ run loop (`worker/invocation_loop.rs::run`) is:
 
 `resume_replay` (`durable_host/mod.rs`) loops `get_oplog_entry_agent_invocation_started`, replays
 each recorded invocation in `InvocationMode::Replay`, and when there is no further
-`AgentInvocationStarted` it switches to live. Replay starts from the chosen snapshot baseline
+`AgentInvocationStarted` it switches to live. Ephemeral owners replay at most one recorded
+`AgentInitialization`, and only when their resolved owner is a typed agent. Component-baseline
+tool owners instantiate the deployed component but never queue or replay an agent constructor.
+Replay starts from the chosen snapshot baseline
 (see Snapshots and updates), not necessarily from `OplogIndex::INITIAL`. Interruption kinds
 (`Worker::set_interrupting`): `Interrupt` stays interrupted, `Restart` is a simulated crash with
 automatic recovery, `Suspend` unloads and resumes on demand; all three end in the same
@@ -580,11 +583,10 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   `get`/`cancel`; dropping the observer does not cancel execution. Handler return revokes new
   admissions, while already admitted children remain owned until full operation settlement.
   A parent body terminal may precede child settlement so nested filesystem lanes can progress.
-- Typed stream results use early RPC-style visibility after their mappings are durable, but their
-  producer/session remains alive through materialization. Underlying stdout is an ordinary writer.
-  Early visibility requires all remaining recorded plan layers to be filesystem-incapable;
-  otherwise the enclosing layers preserve capable result staging. Actual result awaits scope
-  their causal lane edges, so later capable work cannot overlap a resumed caller.
+- Typed stream mappings are materialized durably while the producer/session remains alive, but a
+  result is exposed only through the entity completion. Underlying stdout is an ordinary writer.
+  Actual result awaits scope their causal lane edges, so later capable work cannot overlap a
+  resumed caller.
   Store or executor loss stops resident drains without recording EOF; reconstruction resumes
   from durable input offsets. Normal settlement finalizes the session and cancels unread inputs.
 - Incomplete entity recovery installs rollback for that entity's abandoned atomic regions before

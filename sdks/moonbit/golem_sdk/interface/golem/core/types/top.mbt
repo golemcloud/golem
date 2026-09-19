@@ -607,6 +607,34 @@ pub(all) struct TypedSchemaValue {
 } derive(Debug, Eq)
 
 ///|
+/// A declared tool failure shared by invocation and oplog interfaces.
+pub(all) struct CustomToolError {
+  name : String
+  payload : TypedSchemaValue
+} derive(Debug, Eq)
+
+///|
+pub(all) suberror ToolError {
+  InvalidToolName(String)
+  InvalidCommandPath(Array[String])
+  InvalidInput(String)
+  ConstraintViolation(String)
+  InvalidResult(String)
+  CustomError(CustomToolError)
+} derive(Debug, Eq)
+
+///|
+pub(all) suberror ToolRpcError {
+  ProtocolError(String)
+  Denied(String)
+  NotFound(String)
+  RemoteInternalError(String)
+  RemoteToolError(ToolError)
+  Cancelled
+  ResourceExhausted(String)
+} derive(Debug, Eq)
+
+///|
 /// Parses a UUID from a string
 pub fn parse_uuid(uuid : String) -> Result[Uuid, String] {
   let ptr = mbt_ffi_str2ptr(uuid)

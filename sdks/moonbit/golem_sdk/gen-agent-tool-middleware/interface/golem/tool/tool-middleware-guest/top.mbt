@@ -5,7 +5,7 @@
 #warnings("-declaration_unimplemented")
 declare pub fn discover_tool_middlewares() -> Result[
   Array[@common.ToolMiddleware],
-  @common.ToolError,
+  @types.ToolError,
 ]
 
 ///|
@@ -13,7 +13,7 @@ declare pub fn discover_tool_middlewares() -> Result[
 #warnings("-declaration_unimplemented")
 declare pub fn get_tool_middleware(
   name : String,
-) -> Result[@common.ToolMiddleware, @common.ToolError]
+) -> Result[@common.ToolMiddleware, @types.ToolError]
 
 ///|
 /// Invoke one middleware layer around its runtime-bound next inner layer.
@@ -32,4 +32,4 @@ declare pub async fn invoke_tool_middleware(
   principal : @common0.Principal,
   wrapped : @underlying.UnderlyingTool,
   background_group : @async-core.TaskGroup[Unit],
-) -> Result[@common.InvocationResult, @common.ToolError]
+) -> Result[@common.InvocationResult, @types.ToolError]

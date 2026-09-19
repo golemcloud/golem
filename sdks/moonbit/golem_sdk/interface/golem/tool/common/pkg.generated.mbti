@@ -17,15 +17,6 @@ pub(all) suberror ErrorKind {
 pub fn ErrorKind::from(Int) -> Self
 pub fn ErrorKind::ordinal(Self) -> Int
 
-pub(all) suberror ToolError {
-  InvalidToolName(String)
-  InvalidCommandPath(Array[String])
-  InvalidInput(String)
-  ConstraintViolation(String)
-  InvalidResult(String)
-  CustomError(CustomToolError)
-} derive(Eq, @debug.Debug)
-
 // Types and methods
 pub(all) struct BoolFlagShape {
   default : Bool
@@ -71,11 +62,6 @@ pub(all) enum Constraint {
   MutexGroups(Array[RefGroup])
   Implies(ImpliesC)
   Forbids(ForbidsC)
-} derive(Eq, @debug.Debug)
-
-pub(all) struct CustomToolError {
-  name : String
-  payload : @types.TypedSchemaValue
 } derive(Eq, @debug.Debug)
 
 pub(all) struct Doc {

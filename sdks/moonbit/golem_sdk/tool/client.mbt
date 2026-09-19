@@ -567,33 +567,33 @@ fn[E : @schema.FromSchema] decode_custom_tool_error(
 
 ///|
 fn[E] map_rpc_error(
-  error : @toolHost.RpcError,
+  error : @types.ToolRpcError,
   decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> ToolError[E] {
   match error {
-    @toolHost.RpcError::ProtocolError(message) =>
+    @types.ToolRpcError::ProtocolError(message) =>
       ToolError::Rpc(RpcError::Protocol(message))
-    @toolHost.RpcError::Denied(message) =>
+    @types.ToolRpcError::Denied(message) =>
       ToolError::Rpc(RpcError::Denied(message))
-    @toolHost.RpcError::NotFound(message) =>
+    @types.ToolRpcError::NotFound(message) =>
       ToolError::Rpc(RpcError::NotFound(message))
-    @toolHost.RpcError::RemoteInternalError(message) =>
+    @types.ToolRpcError::RemoteInternalError(message) =>
       ToolError::Rpc(RpcError::RemoteInternal(message))
-    @toolHost.RpcError::Cancelled => ToolError::Rpc(RpcError::Cancelled)
-    @toolHost.RpcError::ResourceExhausted(message) =>
+    @types.ToolRpcError::Cancelled => ToolError::Rpc(RpcError::Cancelled)
+    @types.ToolRpcError::ResourceExhausted(message) =>
       ToolError::Rpc(RpcError::ResourceExhausted(message))
-    @toolHost.RpcError::RemoteToolError(error) =>
+    @types.ToolRpcError::RemoteToolError(error) =>
       map_remote_tool_error(error, decode_error)
   }
 }
 
 ///|
 fn[E] map_remote_tool_error(
-  error : @toolCommon.ToolError,
+  error : @types.ToolError,
   decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> ToolError[E] {
   match error {
-    @toolCommon.ToolError::CustomError(error) => {
+    @types.ToolError::CustomError(error) => {
       let decoded = @model_host.typed_schema_value_from_wit(error.payload) catch {
         e =>
           return tool_protocol_error(
@@ -619,18 +619,16 @@ fn[E] map_remote_tool_error(
 }
 
 ///|
-fn remote_tool_error_label(error : @toolCommon.ToolError) -> String {
+fn remote_tool_error_label(error : @types.ToolError) -> String {
   match error {
-    @toolCommon.ToolError::InvalidToolName(name) =>
+    @types.ToolError::InvalidToolName(name) =>
       "invalid tool name `" + name + "`"
-    @toolCommon.ToolError::InvalidCommandPath(path) =>
+    @types.ToolError::InvalidCommandPath(path) =>
       "invalid command path `" + path.join(" ") + "`"
-    @toolCommon.ToolError::InvalidInput(message) => "invalid input: " + message
-    @toolCommon.ToolError::ConstraintViolation(message) =>
+    @types.ToolError::InvalidInput(message) => "invalid input: " + message
+    @types.ToolError::ConstraintViolation(message) =>
       "constraint violation: " + message
-    @toolCommon.ToolError::InvalidResult(message) =>
-      "invalid result: " + message
-    @toolCommon.ToolError::CustomError(error) =>
-      "custom error `" + error.name + "`"
+    @types.ToolError::InvalidResult(message) => "invalid result: " + message
+    @types.ToolError::CustomError(error) => "custom error `" + error.name + "`"
   }
 }

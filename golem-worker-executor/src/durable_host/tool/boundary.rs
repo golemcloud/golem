@@ -157,7 +157,7 @@ fn project_result(
                 .map_err(|error| invalid_result(format_projection_error("result", error)))?;
             let typed = ModelTypedSchemaValue::new(plan.target_schema.clone(), value);
             Ok(SerializableToolInvocationResult {
-                result: Some(typed),
+                result: Some(Box::new(typed)),
             })
         }
         _ => Err(invalid_result(
@@ -423,7 +423,7 @@ mod tests {
         let inner_result = typed_record(&["right", "left", "discarded"], &["R", "L", "ignored"]);
         let projected = project_underlying_tool_response(
             Ok(SerializableToolInvocationResult {
-                result: Some(inner_result),
+                result: Some(Box::new(inner_result)),
             }),
             &prepared.response_edge,
             &mut NoStreams,
@@ -445,7 +445,7 @@ mod tests {
         assert!(matches!(
             project_underlying_tool_response(
                 Ok(SerializableToolInvocationResult {
-                    result: Some(reversed)
+                    result: Some(Box::new(reversed))
                 }),
                 &prepared.response_edge,
                 &mut NoStreams

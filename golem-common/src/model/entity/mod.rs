@@ -258,6 +258,7 @@ pub enum EntityActivationPolicy {
     ToolMiddleware {
         middleware_name: ToolMiddlewareName,
         provision: ToolProvisionConfig,
+        config_keys_readable: crate::model::tool::ConfigKeyScope,
         secret_keys_readable: SecretKeyScope,
         secret_keys_revealable: SecretKeyScope,
         filesystem_access: ToolFilesystemAccess,
@@ -293,11 +294,10 @@ impl EntityActivationPolicy {
     pub fn config_keys_readable(&self) -> &crate::model::tool::ConfigKeyScope {
         match self {
             Self::Tool { binding, .. } => &binding.config_keys_readable,
-            Self::ToolMiddleware { .. } => {
-                static ALL: crate::model::tool::ConfigKeyScope =
-                    crate::model::tool::ConfigKeyScope::All;
-                &ALL
-            }
+            Self::ToolMiddleware {
+                config_keys_readable,
+                ..
+            } => config_keys_readable,
         }
     }
 
@@ -1218,6 +1218,7 @@ impl From<EntityActivationPolicy> for golem_api_grpc::proto::golem::worker::Enti
             EntityActivationPolicy::ToolMiddleware {
                 middleware_name,
                 provision,
+                config_keys_readable,
                 secret_keys_readable,
                 secret_keys_revealable,
                 filesystem_access,
@@ -1225,6 +1226,7 @@ impl From<EntityActivationPolicy> for golem_api_grpc::proto::golem::worker::Enti
                 golem_api_grpc::proto::golem::worker::ToolMiddlewareEntityActivationPolicy {
                     middleware_name: middleware_name.into_inner(),
                     provision: Some(provision.into()),
+                    config_keys_readable: Some(config_keys_readable.into()),
                     secret_keys_readable: Some(secret_keys_readable.into()),
                     secret_keys_revealable: Some(secret_keys_revealable.into()),
                     filesystem_access:
@@ -1265,6 +1267,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityActivationPolicy>
                 provision: middleware
                     .provision
                     .ok_or("Missing ToolMiddlewareEntityActivationPolicy.provision")?
+                    .try_into()?,
+                config_keys_readable: middleware
+                    .config_keys_readable
+                    .ok_or("Missing ToolMiddlewareEntityActivationPolicy.config_keys_readable")?
                     .try_into()?,
                 secret_keys_readable: middleware
                     .secret_keys_readable

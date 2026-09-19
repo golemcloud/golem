@@ -537,7 +537,9 @@ async fn filesystem_capable_incapable_capable_chain_serializes_fanout_lanes(
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
     let chain = deployment
         .tool_middleware_chains
-        .get_mut(&agent_type)
+        .get_mut(&ToolBindingOwner::AgentType {
+            agent_type_name: agent_type.clone(),
+        })
         .unwrap()
         .get_mut(&tool_name)
         .unwrap();
@@ -798,17 +800,20 @@ async fn partial_fanout_restart_replays_completed_child_repairs_pending_and_keep
         .unwrap();
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
     let mut changed = original_deployment;
-    let (middleware_component_id, middleware_component_revision) =
-        match &changed.tool_middleware_chains[&agent_type][&tool_name].occurrences[0]
-            .middleware
-            .source
-        {
-            ToolMiddlewareSource::Component {
-                component_id,
-                component_revision,
-                ..
-            } => (*component_id, *component_revision),
-        };
+    let (middleware_component_id, middleware_component_revision) = match &changed
+        .tool_middleware_chains[&ToolBindingOwner::AgentType {
+        agent_type_name: agent_type.clone(),
+    }][&tool_name]
+        .occurrences[0]
+        .middleware
+        .source
+    {
+        ToolMiddlewareSource::Component {
+            component_id,
+            component_revision,
+            ..
+        } => (*component_id, *component_revision),
+    };
     install_middleware_chain(
         &mut changed,
         &agent_type,

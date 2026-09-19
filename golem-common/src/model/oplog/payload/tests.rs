@@ -45,7 +45,8 @@ use crate::model::oplog::{
     HostRequestEntityInvocation, HostRequestFileSystemPath,
     HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemApiOplogEnrich,
     HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
-    HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke, HostRequestKVCacheKey,
+    HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke,
+    HostRequestGolemToolResponseSecretHoldAdmission, HostRequestKVCacheKey,
     HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
     HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
@@ -54,15 +55,15 @@ use crate::model::oplog::{
     HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
     HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcScheduledInvocationCompat,
-    HostResponseGolemToolInvokeResult, HostResponseGolemToolTool, HostResponseGolemToolTools,
-    HostResponseGolemToolUnitOrFailure, HostResponseKVDelete, HostResponseKVGet,
-    HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
-    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
-    HostResponseP3FileSystemWriteAdmission, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
-    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
-    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsConnect,
-    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseGolemToolInvokeResult, HostResponseGolemToolResponseSecretHoldAdmission,
+    HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
+    HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
+    HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
+    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
+    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
+    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
+    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
+    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
     HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
@@ -1065,6 +1066,23 @@ fn durable_rpc_activation_payload_pair_roundtrips() {
 }
 
 #[test]
+fn tool_response_secret_hold_admission_payload_pair_roundtrips() {
+    let value = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),
+        SchemaValue::Tuple {
+            elements: Vec::new(),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolResponseSecretHoldAdmission>(
+        HostRequestGolemToolResponseSecretHoldAdmission {
+            value,
+            targets: Vec::new(),
+        },
+        HostResponseGolemToolResponseSecretHoldAdmission { admitted: false },
+    );
+}
+
+#[test]
 fn prepared_revert_payload_pair_roundtrips() {
     let agent_id = AgentId {
         component_id: ComponentId::new(),
@@ -1223,7 +1241,9 @@ fn tool_invocation_host_payload_pairs_roundtrip() {
     };
     let response = HostResponseGolemToolInvokeResult {
         result: Ok(SerializableToolInvocationResult {
-            result: Some("match".to_string().into_typed_schema_value().unwrap()),
+            result: Some(Box::new(
+                "match".to_string().into_typed_schema_value().unwrap(),
+            )),
         }),
     };
 

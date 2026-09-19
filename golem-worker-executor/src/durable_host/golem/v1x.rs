@@ -31,7 +31,7 @@ use crate::model::public_oplog::{
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
     AgentAnyFilter, ForkDetails, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
-    HostGetPromiseResultWithStore,
+    HostGetPromiseResultWithStore, HostWithStore,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, OplogReadError, SearchOplog,
@@ -452,40 +452,69 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    async fn create_promise(&mut self) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
-        let mut handle = DurableCallSession::<GolemApiCreatePromise, NotCancellable>::start(
-            self,
-            HostRequestNoInput {},
+impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
+    async fn create_promise(
+        accessor: &Accessor<U, Self>,
+    ) -> anyhow::Result<golem_api_1_x::host::PromiseId> {
+        // A synchronous guest import must still let concurrent host admissions release their
+        // authority boundary; holding an exclusive Store borrow here would deadlock them.
+        let mut handle = DurableCallSession::<GolemApiCreatePromise, NotCancellable>::start_access_with(
+            accessor,
+            accessor.getter(),
             DurableFunctionType::WriteLocal,
+            async |context| {
+                if context.is_live {
+                    crate::durable_host::call_coordinator::synchronize_live_agent_authority_access(
+                        accessor,
+                        accessor.getter(),
+                    )
+                    .await?;
+                }
+                Ok(HostRequestNoInput {})
+            },
         )
         .await?;
 
-        let result = 'result: {
-            if !handle.is_live() {
-                match handle.replay(self).await? {
-                    CallReplayOutcome::Replayed(replayed) => break 'result replayed,
-                    CallReplayOutcome::Incomplete(live) => handle = live,
+        if !handle.is_live() {
+            match handle.replay_access(accessor, accessor.getter()).await? {
+                CallReplayOutcome::Replayed(response) => return Ok(response.promise_id.into()),
+                CallReplayOutcome::Incomplete(live) => {
+                    handle = live;
+                    crate::durable_host::call_coordinator::synchronize_live_agent_authority_access(
+                        accessor,
+                        accessor.getter(),
+                    )
+                    .await?;
                 }
             }
-
-            // The promise oplog index is the host-call `Start` index: with the legacy atomic pair
-            // this equalled `current_oplog_index().next()` captured before the pair was written.
-            // It is stable across an incomplete-replay re-execution because the `Start` is reused.
-            let oplog_idx = handle.start_index();
-            let promise_id = self
-                .public_state
-                .promise_service
-                .create(&self.owned_agent_id.agent_id, oplog_idx)
-                .await?;
-            handle
-                .complete(self, HostResponseGolemApiPromiseId { promise_id })
-                .await?
+        }
+        let (promise_service, agent_id) = accessor.with(|mut access| {
+            let ctx = access.get();
+            (
+                ctx.public_state.promise_service.clone(),
+                ctx.agent_id().clone(),
+            )
+        });
+        // The Start index remains the promise identity across incomplete replay.
+        let promise_id = match promise_service
+            .create(&agent_id, handle.start_index())
+            .await
+        {
+            Ok(promise_id) => promise_id,
+            Err(error) => return Err(handle.trap(error)),
         };
-
+        let result = handle
+            .complete_access(
+                accessor,
+                accessor.getter(),
+                HostResponseGolemApiPromiseId { promise_id },
+            )
+            .await?;
         Ok(result.promise_id.into())
     }
+}
 
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_promise(
         &mut self,
         promise_id: golem_api_1_x::host::PromiseId,

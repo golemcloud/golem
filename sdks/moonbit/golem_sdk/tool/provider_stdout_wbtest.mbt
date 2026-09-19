@@ -286,7 +286,7 @@ test "invocation stdout terminals preserve structured results and original error
       let result = try
         invoke_with_stdout(stdout, () => {
           match mode {
-            "tool-error" => Err(@toolCommon.ToolError::InvalidInput("original"))
+            "tool-error" => Err(@types.ToolError::InvalidInput("original"))
             "exception" => raise ToolStreamError::Failed("original")
             "cancelled" => raise @async-core.Cancelled::Cancelled
             _ => {
@@ -307,7 +307,7 @@ test "invocation stdout terminals preserve structured results and original error
       match mode {
         "tool-error" => {
           assert_true(
-            result is Ok(Err(@toolCommon.ToolError::InvalidInput("original"))),
+            result is Ok(Err(@types.ToolError::InvalidInput("original"))),
           )
           assert_eq(terminals, ["failed"])
         }

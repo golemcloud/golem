@@ -36,7 +36,6 @@ use wasmtime::component::{Accessor, AccessorTask};
 pub(super) struct MaterializeResponse {
     pub streams: StreamSession,
     pub revision: ComponentRevision,
-    pub ready: Option<oneshot::Sender<ToolInvokeResponse>>,
     pub response: ToolInvokeResponse,
     pub completed: oneshot::Sender<Result<HostResponseEntityInvocation, WorkerExecutorError>>,
     pub activity: TailActivity,
@@ -47,17 +46,16 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx> for MaterializeResponse {
         let Self {
             streams,
             revision,
-            ready,
             response,
             completed,
             activity: _activity,
         } = self;
         let result = async {
-            let response = materialize_response(&streams, revision, ready, response).await?;
+            let response = materialize_response(&streams, revision, response).await?;
             let response = response.map(|result| SerializableToolStructuredResult {
                 result: result
                     .result
-                    .as_ref()
+                    .as_deref()
                     .map(SerializableToolResultValue::from_typed)
                     .transpose()
                     .expect("a materialized tool result is serializable"),
@@ -121,7 +119,7 @@ pub(super) async fn materialize_input(
 
 fn payload(response: &mut ToolInvokeResponse) -> Option<&mut TypedSchemaValue> {
     match response {
-        Ok(result) => result.result.as_mut(),
+        Ok(result) => result.result.as_deref_mut(),
         Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_mut() {
             SerializableToolError::CustomError(error) => Some(&mut error.payload),
             _ => None,
@@ -130,7 +128,7 @@ fn payload(response: &mut ToolInvokeResponse) -> Option<&mut TypedSchemaValue> {
     }
 }
 
-pub(super) fn strip_response(mut response: ToolInvokeResponse) -> ToolInvokeResponse {
+fn strip_response(mut response: ToolInvokeResponse) -> ToolInvokeResponse {
     if let Some(value) = payload(&mut response) {
         *value = strip_typed_streams(value);
     }
@@ -155,7 +153,6 @@ pub(super) async fn restore_response(
 pub(super) async fn materialize_response(
     streams: &StreamSession,
     revision: ComponentRevision,
-    ready: Option<oneshot::Sender<ToolInvokeResponse>>,
     mut response: ToolInvokeResponse,
 ) -> Result<ToolInvokeResponse, WorkerExecutorError> {
     let Some(value) = payload(&mut response) else {
@@ -167,24 +164,9 @@ pub(super) async fn materialize_response(
     let graph = value.graph().clone();
     let value = value.value().clone();
     let stripped = strip_response(response);
-    let published = stripped.clone();
-    let drain = async {
-        streams
-            .materialize_result(value, &graph, &graph.root, revision)
-            .await
-            .map_err(WorkerExecutorError::runtime)
-    };
-    let publish = async {
-        if let Some(ready) = ready {
-            streams
-                .wait_persisted_result()
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
-            let response = restore_response(streams, published).await?;
-            let _ = ready.send(response);
-        }
-        Ok::<_, WorkerExecutorError>(())
-    };
-    tokio::try_join!(drain, publish)?;
+    streams
+        .materialize_result(value, &graph, &graph.root, revision)
+        .await
+        .map_err(WorkerExecutorError::runtime)?;
     Ok(stripped)
 }

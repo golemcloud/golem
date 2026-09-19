@@ -506,6 +506,28 @@ pub struct AgentConfigDeclarationSchema {
     pub value_type: SchemaType,
 }
 
+/// Component-owned configuration declarations. Unlike an agent schema this contract can be
+/// declared and provisioned even when the component exports no agent types.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", derive(golem_schema_derive::PoemSchema))]
+pub struct ComponentConfigSchema {
+    #[serde(default = "SchemaGraph::empty")]
+    pub schema: SchemaGraph,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub declarations: Vec<AgentConfigDeclarationSchema>,
+}
+
+impl Default for ComponentConfigSchema {
+    fn default() -> Self {
+        Self {
+            schema: SchemaGraph::empty(),
+            declarations: Vec::new(),
+        }
+    }
+}
+
 /// Schema-model form of a registered agent type. Mirrors the legacy
 /// `RegisteredAgentType`, with `agent_type` replaced by [`AgentTypeSchema`].
 /// Used by the MCP export path (`CompiledMcp`).

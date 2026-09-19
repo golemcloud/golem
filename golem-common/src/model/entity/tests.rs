@@ -53,7 +53,9 @@ fn activation() -> EntityActivation {
     let binding = CompiledToolBinding {
         deployment_revision,
         release_id: None,
-        agent_type_name: AgentTypeName("Example".to_string()),
+        owner: crate::model::tool::ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName("Example".to_string()),
+        },
         tool_name: ToolName::try_from("search").unwrap(),
         version: "1.0.0".to_string(),
         metadata_version: "0.1.0".to_string(),
@@ -90,6 +92,7 @@ fn middleware_activation() -> EntityActivation {
         EntityActivationPolicy::ToolMiddleware {
             middleware_name: ToolMiddlewareName::try_from("audit").unwrap(),
             provision: ToolProvisionConfig::default(),
+            config_keys_readable: crate::model::tool::ConfigKeyScope::All,
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: ToolFilesystemAccess::Unset,

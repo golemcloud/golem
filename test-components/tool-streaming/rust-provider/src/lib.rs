@@ -2,6 +2,7 @@ use golem_rust::agentic::{
     AgentStream, InputStream, OutputStream, Principal, pump_tool_stdin, spawn_local,
 };
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
+use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, ToolError, tool_definition, tool_implementation,
 };
@@ -194,6 +195,12 @@ pub enum StreamingError {
     Declared { bytes_read: u64 },
 }
 
+#[derive(Debug, Clone, ToolError)]
+pub enum SecretEchoError {
+    #[tool_error(kind = "runtime-error", exit_code = 8)]
+    Returned { value: GuestSecretHandle },
+}
+
 #[derive(IntoSchema)]
 struct RawRunInput {
     mode: String,
@@ -215,6 +222,12 @@ pub trait Streaming {
     ) -> Result<StreamSummary, StreamingError>;
 
     async fn no_stream(&self, value: String) -> Result<String, StreamingError>;
+
+    async fn echo_secret(
+        &self,
+        value: GuestSecretHandle,
+        fail: bool,
+    ) -> Result<GuestSecretHandle, SecretEchoError>;
 
     async fn optional_streams(
         &self,
@@ -340,6 +353,52 @@ async fn stream_through_http(
         bytes_read,
         output_closed,
     })
+}
+
+async fn record_native_order_external_effect() {
+    use futures_concurrency::prelude::*;
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::wit_future;
+
+    let port =
+        std::env::var("NATIVE_ORDER_HTTP_PORT").expect("NATIVE_ORDER_HTTP_PORT is configured");
+    let headers = types::Fields::from_list(&[]).expect("valid native-order HTTP fields");
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, None, trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .expect("set native-order HTTP method");
+    request
+        .set_scheme(Some(&types::Scheme::Http))
+        .expect("set native-order HTTP scheme");
+    request
+        .set_authority(Some(&format!("127.0.0.1:{port}")))
+        .expect("set native-order HTTP authority");
+    request
+        .set_path_with_query(Some("/"))
+        .expect("set native-order HTTP path");
+    let receive_response = async move {
+        client::send(request)
+            .await
+            .expect("send native-order HTTP request")
+    };
+    let finish_request = async move {
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .expect("finish native-order HTTP request");
+        transmit.await.expect("transmit native-order HTTP request");
+    };
+    let (response, ()) = (receive_response, finish_request).join().await;
+    assert_eq!(response.get_status_code(), 204);
+    let (response_done_tx, response_done_rx) = wit_future::new(|| Ok(()));
+    let (body, trailers) = types::Response::consume_body(response, response_done_rx);
+    response_done_tx
+        .write(Ok(()))
+        .await
+        .expect("finish native-order HTTP response");
+    drop(body);
+    drop(trailers);
 }
 
 fn raw_run_input(mode: &str) -> golem_rust::schema::wit::wire::TypedSchemaValue {
@@ -966,7 +1025,29 @@ impl Streaming for StreamingImpl {
         if value == "hold-attempt-identity" {
             wait_at_crash_checkpoint(&value, "attempt-identity-accepted").await;
         }
+        if value == "native-error" {
+            append_owner_file("/native-tool-order.log", b"E")
+                .expect("append native declared-error invocation order");
+            return Err(StreamingError::Declared { bytes_read: 0 });
+        }
+        if value == "native-order" {
+            record_native_order_external_effect().await;
+            append_owner_file("/native-tool-order.log", b"T")
+                .expect("append native external tool invocation order");
+        }
         Ok(format!("no-stream:{value}"))
+    }
+
+    async fn echo_secret(
+        &self,
+        value: GuestSecretHandle,
+        fail: bool,
+    ) -> Result<GuestSecretHandle, SecretEchoError> {
+        if fail {
+            Err(SecretEchoError::Returned { value })
+        } else {
+            Ok(value)
+        }
     }
 
     async fn optional_streams(

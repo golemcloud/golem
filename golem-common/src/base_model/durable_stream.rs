@@ -546,15 +546,28 @@ pub struct PersistedStreamInvocationDescriptor {
     pub format_version: u8,
     pub session_key: StreamSessionKey,
     pub target_component_revision: ComponentRevision,
-    pub method_name: String,
+    pub target: PersistedInvocationTarget,
     /// Canonical serialization of the complete recursive invocation value after replacing each
-    /// stream leaf with its corresponding durable handle in `stream_handles`.
+    /// stream leaf with its corresponding durable handle in `stream_handles`. The typed-value
+    /// bytes contain both the schema graph and value.
     pub invocation_value: Vec<u8>,
     pub stream_handles: Vec<DurableStreamHandle>,
     /// Canonical execution-mode and configuration bytes that affect the call.
     pub execution_config: Vec<u8>,
     /// Canonical effective principal and grant identity. Credential bytes and expiry are excluded.
     pub effective_identity: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum PersistedInvocationTarget {
+    AgentMethod {
+        method_name: String,
+    },
+    ExternalTool {
+        tool_name: String,
+        command_path: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1212,13 +1225,14 @@ impl StreamSessionRecord {
                     && record.stream_mappings.len() <= MAX_NEW_STREAM_HANDLES_PER_VALUE
                     && record.stream_mappings.len() == unique_transport_ids.len()
                     && record.stream_mappings.len() == unique_mappings.len()
-                    && record.stream_mappings.iter().all(|mapping| {
-                        mapping.role == SessionStreamRole::Input
-                            && supported_handle(&mapping.handle)
-                    })
                     && record
                         .stream_mappings
                         .iter()
+                        .all(|mapping| supported_handle(&mapping.handle))
+                    && record
+                        .stream_mappings
+                        .iter()
+                        .filter(|mapping| mapping.role == SessionStreamRole::Input)
                         .map(|mapping| &mapping.handle)
                         .eq(record.attempt.invocation.stream_handles.iter())
             }
@@ -1407,9 +1421,10 @@ fn topology_mapping_matches(
 #[cfg(test)]
 mod tests {
     use super::{
-        AttachmentId, AttemptId, DurableStreamHandle, PersistedStreamInvocationDescriptor,
-        StartAttemptDescriptor, StreamAttachmentKey, StreamConsumerItemValueRecord, StreamId,
-        StreamInvocationId, StreamOffset, StreamOffsetError, StreamSessionPreparedRecord,
+        AttachmentId, AttemptId, DurableStreamHandle, PersistedInvocationTarget,
+        PersistedStreamInvocationDescriptor, SessionStreamRole, StartAttemptDescriptor,
+        StreamAttachmentKey, StreamConsumerItemValueRecord, StreamId, StreamInvocationId,
+        StreamOffset, StreamOffsetError, StreamSessionMappingRecord, StreamSessionPreparedRecord,
         StreamSessionRecord,
     };
     use crate::base_model::component::{ComponentId, ComponentRevision};
@@ -1694,7 +1709,9 @@ mod tests {
                     format_version: 1,
                     session_key,
                     target_component_revision: ComponentRevision::new(1).unwrap(),
-                    method_name: "method".to_string(),
+                    target: PersistedInvocationTarget::AgentMethod {
+                        method_name: "method".to_string(),
+                    },
                     invocation_value: Vec::new(),
                     stream_handles: vec![unsupported_handle],
                     execution_config: Vec::new(),
@@ -1710,5 +1727,94 @@ mod tests {
             !record.has_supported_format(),
             "a prepared v1 record must reject a non-v1 handle in its persisted invocation descriptor"
         );
+    }
+
+    #[test]
+    fn prepared_record_validates_input_handles_and_allows_early_outputs_for_any_target() {
+        let environment_id = EnvironmentId(Uuid::from_u128(1));
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::from_u128(2)),
+            agent_id: "tool-host".to_string(),
+        };
+        let fingerprint = AgentFingerprint(Uuid::from_u128(3));
+        let session_key = StreamInvocationId {
+            callee_environment_id: environment_id,
+            callee: agent_id.clone(),
+            callee_fingerprint: fingerprint,
+            idempotency_key: IdempotencyKey::new("tool-invocation".to_string()),
+        };
+        let attachment_id =
+            AttachmentId::primary(environment_id, &agent_id, &session_key.idempotency_key).unwrap();
+        let handle = |id| DurableStreamHandle {
+            format_version: 1,
+            stream_id: StreamId(Uuid::from_u128(id)),
+            producer_environment_id: environment_id,
+            producer: agent_id.clone(),
+            expected_producer_fingerprint: fingerprint,
+            source_invocation: session_key.clone(),
+            component_revision: ComponentRevision::INITIAL,
+            element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
+        };
+        let stdin = handle(4);
+        let stdout = handle(5);
+        let argument = handle(6);
+        let mut prepared = StreamSessionPreparedRecord {
+            format_version: 1,
+            attempt: StartAttemptDescriptor {
+                format_version: 1,
+                session_key: session_key.clone(),
+                attachment_id,
+                expected_callee_fingerprint: fingerprint,
+                attempt_id: AttemptId::fresh(),
+                invocation: PersistedStreamInvocationDescriptor {
+                    format_version: 1,
+                    session_key,
+                    target_component_revision: ComponentRevision::INITIAL,
+                    target: PersistedInvocationTarget::ExternalTool {
+                        tool_name: "cat".to_string(),
+                        command_path: vec!["/bin/cat".to_string()],
+                    },
+                    invocation_value: vec![],
+                    stream_handles: vec![stdin.clone(), argument.clone()],
+                    execution_config: vec![],
+                    effective_identity: vec![],
+                },
+                effective_identity: vec![],
+                live_join_buffer_events: 1,
+            },
+            stream_mappings: vec![
+                StreamSessionMappingRecord {
+                    transport_stream_id: 10,
+                    handle: stdin,
+                    role: SessionStreamRole::Input,
+                },
+                StreamSessionMappingRecord {
+                    transport_stream_id: 11,
+                    handle: stdout,
+                    role: SessionStreamRole::Output,
+                },
+                StreamSessionMappingRecord {
+                    transport_stream_id: 12,
+                    handle: argument,
+                    role: SessionStreamRole::Input,
+                },
+            ],
+        };
+
+        assert!(StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
+
+        prepared.stream_mappings[0].role = SessionStreamRole::Output;
+        assert!(!StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
+        prepared.stream_mappings[0].role = SessionStreamRole::Input;
+        prepared.stream_mappings[1].transport_stream_id = 10;
+        assert!(!StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
+        prepared.stream_mappings[1].transport_stream_id = 11;
+        prepared.stream_mappings[2].role = SessionStreamRole::Output;
+        assert!(!StreamSessionRecord::Prepared(prepared.clone()).has_supported_format());
+        prepared.stream_mappings[2].role = SessionStreamRole::Input;
+        prepared.attempt.invocation.target = PersistedInvocationTarget::AgentMethod {
+            method_name: "run".to_string(),
+        };
+        assert!(StreamSessionRecord::Prepared(prepared).has_supported_format());
     }
 }

@@ -19,8 +19,8 @@ use crate::durable_host::durable_stream::{
 };
 use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_common::model::durable_stream::{
-    DurableStreamHandle, DurableStreamReadRequest, ExternalProducerId, StreamHandleReadRequest,
-    StreamItemsPayload, StreamOffset, StreamSessionKey,
+    DurableStreamHandle, DurableStreamReadRequest, ExternalProducerId, PersistedInvocationTarget,
+    StreamHandleReadRequest, StreamItemsPayload, StreamOffset, StreamSessionKey,
 };
 use golem_common::model::invocation_session_public::validate_durable_stream_session_id;
 use golem_common::schema::{
@@ -362,7 +362,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
         let descriptor = &prepared.attempt.invocation;
-        if expected_method.is_some_and(|expected| expected != descriptor.method_name) {
+        let PersistedInvocationTarget::AgentMethod { method_name } = &descriptor.target else {
+            return Ok(None);
+        };
+        if expected_method.is_some_and(|expected| expected != method_name) {
             return Ok(None);
         }
         let component = self
@@ -381,7 +384,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let method = agent
             .methods
             .iter()
-            .find(|method| method.name == descriptor.method_name)
+            .find(|method| method.name == *method_name)
             .ok_or_else(|| WorkerExecutorError::runtime("persisted agent method is missing"))?;
         let mut candidates = method
             .input_schema
@@ -420,8 +423,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let source = if status.tombstoned_slots.contains(name) {
             SlotSource::Tombstoned
         } else if schema.writable {
+            let input = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(
+                descriptor.invocation_value.as_slice(),
+            )
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            .value
+            .ok_or_else(|| WorkerExecutorError::runtime("persisted invocation input is missing"))?;
             SlotSource::Stream(
-                schema.extract_handle(&descriptor.invocation_value, &descriptor.stream_handles)?,
+                schema.extract_handle(&input.encode_to_vec(), &descriptor.stream_handles)?,
             )
         } else if let Some(result_index) = status.invocation_result {
             let StreamSessionRecord::InvocationResult(result) =
@@ -641,7 +650,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         else {
             return Ok(ExportStreamControlResult::NotFound);
         };
-        if prepared.attempt.invocation.method_name != request.expected_method {
+        if !matches!(&prepared.attempt.invocation.target,
+            PersistedInvocationTarget::AgentMethod { method_name } if *method_name == request.expected_method)
+        {
             return Ok(ExportStreamControlResult::NotFound);
         }
         let producer = self.durable_stream_producer().await?;

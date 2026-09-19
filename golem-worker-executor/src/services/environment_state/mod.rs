@@ -19,17 +19,13 @@ use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::entity::{
-    EntityActivation, EntityActivationPolicy, EntityInvocationPlan, EntityInvocationPlanLayer,
-    ExecutableTarget, FilesystemCapability, ToolMiddlewareName,
-};
+use golem_common::model::entity::FilesystemCapability;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
+pub use golem_common::model::tool::{ToolActivationSnapshot, ToolDispatchTarget};
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, ToolDeploymentState, ToolFilesystemAccess, ToolName,
-    ToolProvisionConfig, ToolSource,
+    ToolBindingOwner, ToolDeploymentState, ToolFilesystemAccess, ToolName,
 };
-use golem_common::model::tool_middleware::CompiledToolMiddlewareChain;
 use golem_common::schema::tool::DiscoveredTool;
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -135,12 +131,9 @@ pub enum ToolDiscoveryError {
 }
 
 impl ToolDiscoveryError {
-    fn dangling_binding(agent_type: &AgentTypeName, tool_name: &ToolName) -> Self {
+    fn dangling_binding(owner: &ToolBindingOwner, tool_name: &ToolName) -> Self {
         Self::InconsistentSnapshot {
-            details: format!(
-                "binding for agent type '{}' references missing tool '{}'",
-                agent_type.0, tool_name
-            ),
+            details: format!("binding for {owner:?} references missing tool '{tool_name}'"),
         }
     }
 }
@@ -173,16 +166,8 @@ impl From<WorkerExecutorError> for ToolDiscoveryError {
 }
 
 pub struct ToolDiscoverySnapshot {
-    agent_tools: BTreeMap<AgentTypeName, BTreeMap<ToolName, Arc<DiscoveredTool>>>,
-    dangling_bindings: BTreeMap<AgentTypeName, BTreeSet<ToolName>>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ToolActivationSnapshot {
-    registered_tool: RegisteredTool,
-    binding: CompiledToolBinding,
-    middleware_chain: Option<CompiledToolMiddlewareChain>,
-    filesystem: FilesystemCapability,
+    owner_tools: BTreeMap<ToolBindingOwner, BTreeMap<ToolName, Arc<DiscoveredTool>>>,
+    dangling_bindings: BTreeMap<ToolBindingOwner, BTreeSet<ToolName>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -192,137 +177,23 @@ pub enum ToolActivationOutcome {
     NotRegistered,
 }
 
-impl ToolActivationSnapshot {
-    pub fn registered_tool(&self) -> &RegisteredTool {
-        &self.registered_tool
-    }
-
-    pub fn binding(&self) -> &CompiledToolBinding {
-        &self.binding
-    }
-
-    pub fn filesystem(&self) -> FilesystemCapability {
-        self.filesystem
-    }
-
-    pub fn middleware_chain(&self) -> Option<&CompiledToolMiddlewareChain> {
-        self.middleware_chain.as_ref()
-    }
-
-    pub fn effective_definition(&self) -> &golem_common::schema::tool::Tool {
-        self.middleware_chain
-            .as_ref()
-            .map(|chain| &chain.effective_definition)
-            .unwrap_or(&self.registered_tool.definition)
-    }
-
-    /// Materializes the deployment-selected chain into a self-contained durable runtime plan.
-    pub fn runtime_plan(&self) -> Result<EntityInvocationPlan, ToolDiscoveryError> {
-        let mut layers = Vec::new();
-        if let Some(chain) = &self.middleware_chain {
-            for occurrence in &chain.occurrences {
-                let golem_common::model::tool_middleware::ToolMiddlewareSource::Component {
-                    component_id,
-                    component_revision,
-                    ..
-                } = &occurrence.middleware.source;
-                let filesystem =
-                    filesystem_capability(occurrence.filesystem_access, &occurrence.provision)?;
-                let activation = EntityActivation::new(
-                    ExecutableTarget::new(*component_id, *component_revision),
-                    occurrence.middleware.deployment_revision,
-                    EntityActivationPolicy::ToolMiddleware {
-                        middleware_name: ToolMiddlewareName::try_from(
-                            occurrence.middleware.definition.name.as_str(),
-                        )
-                        .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details })?,
-                        provision: occurrence.provision.clone(),
-                        secret_keys_readable: occurrence.secret_keys_readable.clone(),
-                        secret_keys_revealable: occurrence.secret_keys_revealable.clone(),
-                        filesystem_access: occurrence.filesystem_access,
-                    },
-                    filesystem,
-                )
-                .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details })?;
-                layers.push(EntityInvocationPlanLayer::Middleware {
-                    activation,
-                    parameters: occurrence.parameters.clone(),
-                    expected_definition: occurrence.expected_definition.clone(),
-                    presented_definition: occurrence.presented_definition.clone(),
-                    next_effective_definition: occurrence.next_effective_definition.clone(),
-                    compatibility: occurrence.compatibility.clone(),
-                });
-            }
-        }
-        let leaf = match &self.registered_tool.source {
-            ToolSource::Component {
-                component_id,
-                component_revision,
-                ..
-            } => EntityActivation::new(
-                ExecutableTarget::new(*component_id, *component_revision),
-                self.registered_tool.deployment_revision,
-                EntityActivationPolicy::Tool {
-                    provision: self.registered_tool.provision.clone(),
-                    binding: Box::new(self.binding.clone()),
-                },
-                self.filesystem,
-            ),
-            ToolSource::Host {
-                host_tool_id,
-                implementation_version,
-            } => EntityActivation::new_host(
-                host_tool_id.clone(),
-                implementation_version.clone(),
-                self.registered_tool.deployment_revision,
-                EntityActivationPolicy::Tool {
-                    provision: self.registered_tool.provision.clone(),
-                    binding: Box::new(self.binding.clone()),
-                },
-                self.filesystem,
-            ),
-        }
-        .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details })?;
-        layers.push(EntityInvocationPlanLayer::Tool { activation: leaf });
-        EntityInvocationPlan::new(layers)
-            .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details })
-    }
-}
-
-fn filesystem_capability(
-    access: ToolFilesystemAccess,
-    provision: &ToolProvisionConfig,
-) -> Result<FilesystemCapability, ToolDiscoveryError> {
-    match (access, provision.files.is_empty()) {
-        (ToolFilesystemAccess::Allowed, _) | (ToolFilesystemAccess::Unset, false) => {
-            Ok(FilesystemCapability::Capable)
-        }
-        (ToolFilesystemAccess::Denied, false) => Err(ToolDiscoveryError::InconsistentSnapshot {
-            details: "filesystem-denied middleware cannot provision files".to_string(),
-        }),
-        (ToolFilesystemAccess::Denied | ToolFilesystemAccess::Unset, true) => {
-            Ok(FilesystemCapability::Incapable)
-        }
-    }
-}
-
 pub fn get_tool_activation_from_deployment(
     deployment: Option<&ToolDeploymentState>,
-    agent_type: &AgentTypeName,
+    owner: &ToolBindingOwner,
     tool_name: &ToolName,
 ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
     let Some(deployment) = deployment else {
         return Ok(ToolActivationOutcome::NotRegistered);
     };
     let binding = deployment
-        .agent_tool_bindings
-        .get(agent_type)
+        .tool_bindings
+        .get(owner)
         .and_then(|bindings| bindings.get(tool_name));
     let registered_tool = deployment.registered_tools.get(tool_name);
 
     let Some(registered_tool) = registered_tool else {
         return match binding {
-            Some(_) => Err(ToolDiscoveryError::dangling_binding(agent_type, tool_name)),
+            Some(_) => Err(ToolDiscoveryError::dangling_binding(owner, tool_name)),
             None => Ok(ToolActivationOutcome::NotRegistered),
         };
     };
@@ -331,7 +202,7 @@ pub fn get_tool_activation_from_deployment(
     };
     let middleware_chain = deployment
         .tool_middleware_chains
-        .get(agent_type)
+        .get(owner)
         .and_then(|chains| chains.get(tool_name));
 
     let consistent = registered_tool.deployment_revision == deployment.deployment_revision
@@ -340,7 +211,7 @@ pub fn get_tool_activation_from_deployment(
             .name()
             .is_some_and(|name| name == tool_name.as_str())
         && binding.deployment_revision == deployment.deployment_revision
-        && binding.agent_type_name == *agent_type
+        && binding.owner == *owner
         && binding.tool_name == *tool_name
         && binding.version == registered_tool.definition.version
         && binding.metadata_version == registered_tool.metadata_version
@@ -356,15 +227,15 @@ pub fn get_tool_activation_from_deployment(
     if !consistent {
         return Err(ToolDiscoveryError::InconsistentSnapshot {
             details: format!(
-                "registration and binding for agent type '{}' and tool '{}' do not describe one deployment activation",
-                agent_type.0, tool_name
+                "registration and binding for agent type '{owner:?}' and tool '{}' do not describe one deployment activation",
+                tool_name
             ),
         });
     }
 
     if let Some(chain) = middleware_chain {
         let chain_consistent = chain.deployment_revision == deployment.deployment_revision
-            && chain.agent_type_name == *agent_type
+            && chain.owner == *owner
             && chain.tool_name == *tool_name
             && chain.occurrences.iter().all(|occurrence| {
                 occurrence.middleware.deployment_revision == deployment.deployment_revision
@@ -378,8 +249,8 @@ pub fn get_tool_activation_from_deployment(
         if !chain_consistent {
             return Err(ToolDiscoveryError::InconsistentSnapshot {
                 details: format!(
-                    "middleware chain for agent type '{}' and tool '{}' does not describe one deployment activation",
-                    agent_type.0, tool_name
+                    "middleware chain for agent type '{owner:?}' and tool '{}' does not describe one deployment activation",
+                    tool_name
                 ),
             });
         }
@@ -419,25 +290,25 @@ impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
     fn from(value: ToolDeploymentState) -> Self {
         let ToolDeploymentState {
             registered_tools,
-            agent_tool_bindings,
+            tool_bindings,
             tool_middleware_chains,
             ..
         } = value;
 
-        let dangling_bindings = agent_tool_bindings
+        let dangling_bindings = tool_bindings
             .iter()
-            .filter_map(|(agent_type, bindings)| {
+            .filter_map(|(owner, bindings)| {
                 let missing = bindings
                     .keys()
                     .filter(|name| !registered_tools.contains_key(*name))
                     .cloned()
                     .collect::<BTreeSet<_>>();
-                (!missing.is_empty()).then(|| (agent_type.clone(), missing))
+                (!missing.is_empty()).then(|| (owner.clone(), missing))
             })
             .collect();
-        let agent_tools = agent_tool_bindings
+        let owner_tools = tool_bindings
             .into_iter()
-            .map(|(agent_type, bindings)| {
+            .map(|(owner, bindings)| {
                 let tools = bindings
                     .into_keys()
                     .filter_map(|name| {
@@ -445,7 +316,7 @@ impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
                             let mut discovered: DiscoveredTool = registered.clone().into();
                             discovered.lookup_name = name.to_string();
                             if let Some(chain) = tool_middleware_chains
-                                .get(&agent_type)
+                                .get(&owner)
                                 .and_then(|chains| chains.get(&name))
                             {
                                 discovered.definition = chain.effective_definition.clone();
@@ -454,11 +325,11 @@ impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
                         })
                     })
                     .collect();
-                (agent_type, tools)
+                (owner, tools)
             })
             .collect();
         Self {
-            agent_tools,
+            owner_tools,
             dangling_bindings,
         }
     }
@@ -466,17 +337,17 @@ impl From<ToolDeploymentState> for ToolDiscoverySnapshot {
 
 pub fn get_accessible_tools_from_snapshot(
     snapshot: Option<&ToolDiscoverySnapshot>,
-    agent_type: &AgentTypeName,
+    owner: &ToolBindingOwner,
 ) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
     let Some(snapshot) = snapshot else {
         return Ok(Vec::new());
     };
-    if let Some(missing) = snapshot.dangling_bindings.get(agent_type)
+    if let Some(missing) = snapshot.dangling_bindings.get(owner)
         && let Some(tool_name) = missing.first()
     {
-        return Err(ToolDiscoveryError::dangling_binding(agent_type, tool_name));
+        return Err(ToolDiscoveryError::dangling_binding(owner, tool_name));
     }
-    let Some(tools) = snapshot.agent_tools.get(agent_type) else {
+    let Some(tools) = snapshot.owner_tools.get(owner) else {
         return Ok(Vec::new());
     };
     Ok(tools.values().cloned().collect())
@@ -484,7 +355,7 @@ pub fn get_accessible_tools_from_snapshot(
 
 pub fn get_accessible_tool_from_snapshot(
     snapshot: Option<&ToolDiscoverySnapshot>,
-    agent_type: &AgentTypeName,
+    owner: &ToolBindingOwner,
     tool_name: &ToolName,
 ) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
     let Some(snapshot) = snapshot else {
@@ -492,14 +363,14 @@ pub fn get_accessible_tool_from_snapshot(
     };
     if snapshot
         .dangling_bindings
-        .get(agent_type)
+        .get(owner)
         .is_some_and(|missing| missing.contains(tool_name))
     {
-        return Err(ToolDiscoveryError::dangling_binding(agent_type, tool_name));
+        return Err(ToolDiscoveryError::dangling_binding(owner, tool_name));
     }
     Ok(snapshot
-        .agent_tools
-        .get(agent_type)
+        .owner_tools
+        .get(owner)
         .and_then(|tools| tools.get(tool_name))
         .cloned())
 }
@@ -537,7 +408,7 @@ pub trait EnvironmentStateService: Send + Sync {
         _environment_id: EnvironmentId,
         _component_id: ComponentId,
         _component_revision: ComponentRevision,
-        _agent_type: &AgentTypeName,
+        _owner: &ToolBindingOwner,
         _tool_name: &ToolName,
     ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
         Ok(ToolActivationOutcome::NotRegistered)
@@ -548,7 +419,7 @@ pub trait EnvironmentStateService: Send + Sync {
         _environment_id: EnvironmentId,
         _component_id: ComponentId,
         _component_revision: ComponentRevision,
-        _agent_type: &AgentTypeName,
+        _owner: &ToolBindingOwner,
     ) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         Ok(Vec::new())
     }
@@ -558,7 +429,7 @@ pub trait EnvironmentStateService: Send + Sync {
         _environment_id: EnvironmentId,
         _component_id: ComponentId,
         _component_revision: ComponentRevision,
-        _agent_type: &AgentTypeName,
+        _owner: &ToolBindingOwner,
         _tool_name: &ToolName,
     ) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         Ok(None)
@@ -697,7 +568,7 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        agent_type: &AgentTypeName,
+        owner: &ToolBindingOwner,
         tool_name: &ToolName,
     ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
         let snapshot = self
@@ -705,7 +576,7 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
             .await?;
         get_tool_activation_from_deployment(
             snapshot.as_deref().map(|snapshot| &snapshot.state),
-            agent_type,
+            owner,
             tool_name,
         )
     }
@@ -715,14 +586,14 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        agent_type: &AgentTypeName,
+        owner: &ToolBindingOwner,
     ) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         let snapshot = self
             .get_tool_deployment_snapshot(environment_id, component_id, component_revision)
             .await?;
         get_accessible_tools_from_snapshot(
             snapshot.as_deref().map(|snapshot| &snapshot.discovery),
-            agent_type,
+            owner,
         )
     }
 
@@ -731,7 +602,7 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        agent_type: &AgentTypeName,
+        owner: &ToolBindingOwner,
         tool_name: &ToolName,
     ) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         let snapshot = self
@@ -739,7 +610,7 @@ impl EnvironmentStateService for GrpcEnvironmentStateService {
             .await?;
         get_accessible_tool_from_snapshot(
             snapshot.as_deref().map(|snapshot| &snapshot.discovery),
-            agent_type,
+            owner,
             tool_name,
         )
     }

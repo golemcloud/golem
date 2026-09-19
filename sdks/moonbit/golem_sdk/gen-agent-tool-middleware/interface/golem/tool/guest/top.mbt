@@ -4,17 +4,12 @@
 /// Enumerate the tools this component exposes. The returned metadata
 /// is complete (full command tree and schema graph).
 #warnings("-declaration_unimplemented")
-declare pub fn discover_tools() -> Result[
-  Array[@common.Tool],
-  @common.ToolError,
-]
+declare pub fn discover_tools() -> Result[Array[@common.Tool], @types.ToolError]
 
 ///|
 /// Look up a single tool by name.
 #warnings("-declaration_unimplemented")
-declare pub fn get_tool(
-  name : String,
-) -> Result[@common.Tool, @common.ToolError]
+declare pub fn get_tool(name : String) -> Result[@common.Tool, @types.ToolError]
 
 ///|
 /// Invoke a command of a tool.
@@ -55,4 +50,4 @@ declare pub async fn invoke(
   stdout : @streams.ToolStdoutWriter?,
   principal : @common0.Principal,
   background_group : @async-core.TaskGroup[Unit],
-) -> Result[@common.InvocationResult, @common.ToolError]
+) -> Result[@common.InvocationResult, @types.ToolError]

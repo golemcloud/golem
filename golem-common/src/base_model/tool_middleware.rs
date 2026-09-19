@@ -17,7 +17,6 @@ use crate::base_model::diff::Hash;
 use crate::base_model::tool::ToolProvisionConfig;
 use crate::base_model::tool::{SecretKeyScope, ToolFilesystemAccess, ToolName};
 use crate::base_model::validate_lower_kebab_case_identifier;
-use crate::model::agent::AgentTypeName;
 use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::json::NormalizedJsonValue;
@@ -196,6 +195,7 @@ pub struct CompiledToolMiddlewareOccurrence {
     pub middleware: RegisteredToolMiddleware,
     pub parameters: TypedSchemaValue,
     pub provision: ToolProvisionConfig,
+    pub config_keys_readable: crate::model::tool::ConfigKeyScope,
     pub secret_keys_readable: SecretKeyScope,
     pub secret_keys_revealable: SecretKeyScope,
     pub filesystem_access: ToolFilesystemAccess,
@@ -213,7 +213,7 @@ pub struct CompiledToolMiddlewareOccurrence {
 #[allow(clippy::derive_partial_eq_without_eq)]
 pub struct CompiledToolMiddlewareChain {
     pub deployment_revision: DeploymentRevision,
-    pub agent_type_name: AgentTypeName,
+    pub owner: crate::model::tool::ToolBindingOwner,
     pub tool_name: ToolName,
     pub effective_definition: Tool,
     pub occurrences: Vec<CompiledToolMiddlewareOccurrence>,

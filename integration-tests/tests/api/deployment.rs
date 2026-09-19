@@ -101,6 +101,7 @@ fn publisher_tool_config() -> ToolDeploymentConfigCreation {
             files: BTreeMap::new(),
         },
         environment_binding: None,
+        component_bindings: BTreeMap::new(),
         agent_bindings: BTreeMap::new(),
     }
 }
@@ -144,6 +145,7 @@ fn remote_tool_request(
             files: Vec::new(),
         },
         environment_binding: None,
+        component_bindings: BTreeMap::new(),
         agent_bindings,
     }
 }
@@ -182,6 +184,7 @@ fn remote_tool_hash_input(
             plugins: Vec::new(),
             files: Vec::new(),
         },
+        component_bindings: BTreeMap::new(),
         bindings,
     }
 }
@@ -486,6 +489,8 @@ async fn get_component_version_from_previous_deployment(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("Counter".to_string()),
@@ -761,6 +766,8 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("Counter".to_string()),
@@ -1151,6 +1158,8 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
             &ComponentCreation {
                 component_name: ComponentName::try_from("publisher-tools:search")
                     .map_err(anyhow::Error::msg)?,
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 agent_types: Vec::new(),
                 agent_type_provision_configs: BTreeMap::new(),
                 tools: vec![cross_account_tool("1.2.0")],
@@ -1341,6 +1350,8 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
             &publisher_component.id.0,
             &ComponentUpdate {
                 current_revision: publisher_component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
                 tools: Some(vec![cross_account_tool("1.3.0")]),
@@ -1351,6 +1362,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
                     ToolDeploymentConfigUpdate {
                         provision: None,
                         environment_binding: OptionalFieldUpdate::NoChange,
+                        component_bindings: None,
                         agent_bindings: None,
                     },
                 )])),

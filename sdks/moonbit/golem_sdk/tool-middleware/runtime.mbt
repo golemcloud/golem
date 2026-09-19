@@ -6,7 +6,7 @@ pub(all) enum ToolInvokeError[E] {
   ConstraintViolation(String)
   InvalidResult(String)
   Tool(E)
-  UnknownToolError(@toolCommon.CustomToolError)
+  UnknownToolError(@types.CustomToolError)
   ProtocolError(String)
   Denied(String)
   InternalError(String)
@@ -113,7 +113,7 @@ fn new_underlying_tool(
     Array[String],
     @types.TypedSchemaValue,
     @async-core.Stream[Byte]?,
-  ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError],
+  ) -> Result[@toolCommon.InvocationResult, @types.ToolError],
   drop_raw : () -> Unit,
 ) -> UnderlyingTool {
   let ownership = OwnershipContext::new(drop_raw)
@@ -143,7 +143,7 @@ fn new_scoped_underlying_tool(
     Array[String],
     @types.TypedSchemaValue,
     @async-core.Stream[Byte]?,
-  ) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError],
+  ) -> Result[@toolCommon.InvocationResult, @types.ToolError],
   drop_raw : () -> Unit,
   background_group : @async-core.TaskGroup[Unit],
 ) -> UnderlyingTool {
@@ -392,7 +392,7 @@ pub async fn[T, E] UnderlyingTool::start_with(
 
 ///|
 pub fn[E] decode_tool_error(
-  error : @toolCommon.ToolError,
+  error : @types.ToolError,
   decode_custom_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> ToolInvokeError[E] {
   decode_tool_error_with_ownership(error, decode_custom_error, None)
@@ -400,18 +400,18 @@ pub fn[E] decode_tool_error(
 
 ///|
 fn[E] decode_tool_error_with_ownership(
-  error : @toolCommon.ToolError,
+  error : @types.ToolError,
   decode_custom_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
   ownership : OwnershipContext?,
 ) -> ToolInvokeError[E] {
   match error {
-    @toolCommon.ToolError::InvalidToolName(name) => InvalidToolName(name)
-    @toolCommon.ToolError::InvalidCommandPath(path) => InvalidCommandPath(path)
-    @toolCommon.ToolError::InvalidInput(message) => InvalidInput(message)
-    @toolCommon.ToolError::ConstraintViolation(message) =>
+    @types.ToolError::InvalidToolName(name) => InvalidToolName(name)
+    @types.ToolError::InvalidCommandPath(path) => InvalidCommandPath(path)
+    @types.ToolError::InvalidInput(message) => InvalidInput(message)
+    @types.ToolError::ConstraintViolation(message) =>
       ConstraintViolation(message)
-    @toolCommon.ToolError::InvalidResult(message) => InvalidResult(message)
-    @toolCommon.ToolError::CustomError(error) => {
+    @types.ToolError::InvalidResult(message) => InvalidResult(message)
+    @types.ToolError::CustomError(error) => {
       let decoded = match
         @toolCore.decode_typed_value(error.payload, "tool error") {
         Ok(decoded) => decoded
@@ -441,31 +441,31 @@ fn[E] decode_tool_error_with_ownership(
 ///|
 pub fn encode_tool_error(
   error : ToolInvokeError[RawCustomToolError],
-) -> @toolCommon.ToolError {
+) -> @types.ToolError {
   match error {
-    InvalidToolName(name) => @toolCommon.ToolError::InvalidToolName(name)
-    InvalidCommandPath(path) => @toolCommon.ToolError::InvalidCommandPath(path)
-    InvalidInput(message) => @toolCommon.ToolError::InvalidInput(message)
+    InvalidToolName(name) => @types.ToolError::InvalidToolName(name)
+    InvalidCommandPath(path) => @types.ToolError::InvalidCommandPath(path)
+    InvalidInput(message) => @types.ToolError::InvalidInput(message)
     ConstraintViolation(message) =>
-      @toolCommon.ToolError::ConstraintViolation(message)
-    InvalidResult(message) => @toolCommon.ToolError::InvalidResult(message)
+      @types.ToolError::ConstraintViolation(message)
+    InvalidResult(message) => @types.ToolError::InvalidResult(message)
     ProtocolError(message) =>
-      @toolCommon.ToolError::InvalidResult("protocol error: \{message}")
-    Denied(message) => @toolCommon.ToolError::ConstraintViolation(message)
+      @types.ToolError::InvalidResult("protocol error: \{message}")
+    Denied(message) => @types.ToolError::ConstraintViolation(message)
     InternalError(message) =>
-      @toolCommon.ToolError::InvalidResult("internal error: \{message}")
+      @types.ToolError::InvalidResult("internal error: \{message}")
     Tool(error) => {
       let encoded = @model.typed_schema_value_to_wit(error.payload) catch {
         encode_error => {
           @model.drop_owned_capabilities(error.payload.value)
-          return @toolCommon.ToolError::InvalidResult(
+          return @types.ToolError::InvalidResult(
             "failed to encode tool error: \{Repr(encode_error)}",
           )
         }
       }
-      @toolCommon.ToolError::CustomError({ name: error.name, payload: encoded, })
+      @types.ToolError::CustomError({ name: error.name, payload: encoded, })
     }
-    UnknownToolError(error) => @toolCommon.ToolError::CustomError(error)
+    UnknownToolError(error) => @types.ToolError::CustomError(error)
   }
 }
 

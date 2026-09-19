@@ -17,7 +17,6 @@ use crate::preview2::golem::tool::host::{
 };
 use crate::services::active_agents::{ActiveAgents, MemoryGrant};
 use crate::workerctx::WorkerCtx;
-#[cfg(test)]
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::future::Future;
@@ -1157,7 +1156,6 @@ impl AttachmentConsumer {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn into_raw_stream_producer(self) -> RawAttachmentStreamProducer {
         RawAttachmentStreamProducer {
             consumer: Some(self),
@@ -1430,14 +1428,12 @@ impl<D> StreamProducer<D> for AttachmentStreamProducer {
     }
 }
 
-#[cfg(test)]
 pub(crate) struct RawAttachmentStreamProducer {
     consumer: Option<AttachmentConsumer>,
     in_flight_charge: Option<AttachmentCharge>,
     finished: bool,
 }
 
-#[cfg(test)]
 impl<D> StreamProducer<D> for RawAttachmentStreamProducer {
     type Item = u8;
     type Buffer = Bytes;

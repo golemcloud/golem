@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(feature = "export_golem_agentic")]
 use crate::agentic::InputStream;
 #[cfg(feature = "export_golem_agentic")]
 use crate::agentic::agent_impl::Component;

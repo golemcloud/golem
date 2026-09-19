@@ -114,7 +114,7 @@ fn invoke_agent_session_once<'a>(
 
 #[derive(Debug)]
 enum OneShotInvocationSessionResult {
-    Success(AgentInvocationOutput),
+    Success(Box<AgentInvocationOutput>),
     Rejected(InvocationRejected),
     Failure(InvocationFailure),
     ProtocolFailure(String),
@@ -182,6 +182,19 @@ fn decode_invocation_result(
         }
         invocation_session_result::Result::NoResult(_) => {
             AgentInvocationResult::AgentInitialization
+        }
+        invocation_session_result::Result::ToolResult(result) => {
+            let result: golem_common::model::oplog::PublicExternalToolResult = result.try_into()?;
+            AgentInvocationResult::ExternalTool {
+                result: match result {
+                    golem_common::model::oplog::PublicExternalToolResult::Success(result) => {
+                        Ok(result)
+                    }
+                    golem_common::model::oplog::PublicExternalToolResult::Failure(error) => {
+                        Err(error)
+                    }
+                },
+            }
         }
     };
     let invocation_status = wire.status.and_then(|status| {
@@ -259,6 +272,7 @@ where
                 terminal_outcome = Some(match finished.outcome {
                     Some(invocation_session_completion::Outcome::Success(_)) => result
                         .take()
+                        .map(Box::new)
                         .map(OneShotInvocationSessionResult::Success)
                         .ok_or_else(|| Status::internal("invocation completed without a result")),
                     Some(invocation_session_completion::Outcome::Failure(failure)) => {
@@ -515,6 +529,16 @@ pub trait WorkerClient: Send + Sync {
     ) -> WorkerResult<InvocationResponseStream> {
         Err(WorkerServiceError::Internal(
             "invocation sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn invoke_agent_session_one_shot(
+        &self,
+        _agent_id: &AgentId,
+        _start: InvocationStart,
+    ) -> WorkerResult<AgentInvocationOutput> {
+        Err(WorkerServiceError::Internal(
+            "one-shot invocation sessions are not supported by this worker client".to_string(),
         ))
     }
 
@@ -1961,6 +1985,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         expected_callee_fingerprint: None,
                         durable_input_mappings: Vec::new(),
                         scope_card: scope_card.clone(),
+                        external_tool: None,
                     };
                     Box::pin(run_one_shot_invocation_session(
                         worker_executor_client,
@@ -1968,7 +1993,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     ))
                 },
                 |outcome| match outcome {
-                    OneShotInvocationSessionResult::Success(output) => Ok(output),
+                    OneShotInvocationSessionResult::Success(output) => Ok(*output),
                     OneShotInvocationSessionResult::Rejected(rejected) => {
                         Err(decode_invocation_rejection(rejected).into())
                     }
@@ -2026,6 +2051,55 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 )
             })?;
         Ok(Box::pin(response.into_inner()))
+    }
+
+    async fn invoke_agent_session_one_shot(
+        &self,
+        agent_id: &AgentId,
+        start: InvocationStart,
+    ) -> WorkerResult<AgentInvocationOutput> {
+        let agent_id = agent_id.clone();
+        let first_dispatch = Arc::new(AtomicBool::new(true));
+        self.call_worker_executor(
+            agent_id,
+            "invoke_agent_session",
+            move |worker_executor_client| {
+                let mut start = start.clone();
+                let requested = if start.freshness_disposition
+                    == golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
+                        as i32
+                {
+                    InvocationFreshnessDisposition::KnownFresh
+                } else {
+                    InvocationFreshnessDisposition::MayExist
+                };
+                start.freshness_disposition = match freshness_disposition_for_dispatch(
+                    requested,
+                    &first_dispatch,
+                ) {
+                    InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
+                    InvocationFreshnessDisposition::MayExist => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+                };
+                Box::pin(run_one_shot_invocation_session(
+                    worker_executor_client,
+                    start,
+                ))
+            },
+            |outcome| match outcome {
+                OneShotInvocationSessionResult::Success(output) => Ok(*output),
+                OneShotInvocationSessionResult::Rejected(rejected) => {
+                    Err(decode_invocation_rejection(rejected).into())
+                }
+                OneShotInvocationSessionResult::Failure(failure) => {
+                    Err(decode_invocation_failure(failure).into())
+                }
+                OneShotInvocationSessionResult::ProtocolFailure(details) => {
+                    Err(WorkerExecutorError::invalid_request(details).into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
     }
 
     async fn control_export_stream(
@@ -2095,7 +2169,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             )),
         }
     }
-
     async fn control_durable_stream_attachment(
         &self,
         producer_agent_id: &AgentId,
@@ -2525,6 +2598,7 @@ mod one_shot_session_tests {
         state
             .validate_trusted_request(&InvocationRequest {
                 request: Some(invocation_request::Request::Start(InvocationStart {
+                    method_name: Some("run".to_string()),
                     input: Some(SchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),

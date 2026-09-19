@@ -18,6 +18,7 @@ pub mod types;
 mod tests;
 
 use crate::model::agent::AgentTypeName;
+use crate::model::card::PermissionTarget;
 use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
 use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
@@ -322,9 +323,6 @@ oplog_payload! {
             input: TypedSchemaValue,
             has_stdin: bool,
         },
-        GolemToolObserveResults {
-            entity_starts: Vec<OplogIndex>,
-        },
         GolemApiGetAgents {
             component_id: ComponentId,
         },
@@ -335,6 +333,11 @@ oplog_payload! {
             remote_agent_id: AgentId,
             method_name: String,
             decision: Result<(), SerializableRpcError>,
+        },
+        GolemToolResponseSecretHoldAdmission {
+            value: TypedSchemaValue,
+            #[schema(skip)]
+            targets: Vec<PermissionTarget>,
         },
         EntityInvocation {
             metadata: Vec<u8>,
@@ -663,9 +666,6 @@ oplog_payload! {
         GolemToolInvokeResult {
             result: Result<SerializableToolInvocationResult, SerializableToolRpcError>
         },
-        GolemToolObservedResults {
-            results: Vec<Result<SerializableToolInvocationResult, SerializableToolRpcError>>,
-        },
         GolemToolUnitOrFailure {
             result: Result<(), SerializableToolRpcError>
         },
@@ -677,6 +677,9 @@ oplog_payload! {
         },
         GolemRpcActivate {
             result: Result<AgentFingerprint, SerializableRpcError>
+        },
+        GolemToolResponseSecretHoldAdmission {
+            admitted: bool,
         },
         EntityInvocation {
             result: Result<TypedSchemaValue, String>
@@ -917,10 +920,10 @@ pub mod host_functions {
         (GolemToolRpcInvokeAndAwait => "golem::tool::host::tool-rpc", "invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
         (GolemToolRpcInvoke => "golem::tool::host::tool-rpc", "invoke", GolemToolInvoke, GolemToolUnitOrFailure),
         (GolemToolRpcAsyncInvokeAndAwait => "golem::tool::host::tool-rpc", "async-invoke-and-await", GolemToolInvoke, GolemToolInvokeResult),
-        (GolemToolObserveResults => "golem::tool::internal", "observe-results", GolemToolObserveResults, GolemToolObservedResults),
         (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents),
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
         (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
+        (GolemToolResponseSecretHoldAdmission => "golem::tool::internal", "response-secret-hold-admission", GolemToolResponseSecretHoldAdmission, GolemToolResponseSecretHoldAdmission),
         (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),
         (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation),
         (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType)

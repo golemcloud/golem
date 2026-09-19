@@ -756,6 +756,11 @@ impl<T: Clone> LiveStreamPublisher<T> {
             receiver: self.sender.new_receiver(),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn close_without_terminal(&self) {
+        self.sender.close();
+    }
 }
 
 struct PrimaryDropGuard<T> {

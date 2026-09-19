@@ -269,11 +269,8 @@ async fn ProviderStdout::complete(
 #doc(hidden)
 pub async fn invoke_with_stdout(
   stdout : ProviderStdout,
-  invoke : async () -> Result[
-    @toolCommon.InvocationResult,
-    @toolCommon.ToolError,
-  ],
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  invoke : async () -> Result[@toolCommon.InvocationResult, @types.ToolError],
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   defer stdout.drop()
   let result = invoke() catch {
     error => {
@@ -302,7 +299,7 @@ pub async fn invoke_with_stdout(
           }
           raise error
         }
-        Err(@toolCommon.ToolError::CustomError(payload)) if error
+        Err(@types.ToolError::CustomError(payload)) if error
           is @async-core.Cancelled::Cancelled => {
           match @toolCore.decode_typed_value(payload.payload, "tool error") {
             Ok(decoded) => @model.drop_owned_capabilities(decoded.value)

@@ -15,6 +15,7 @@
 use crate::config::BuiltinPluginsConfig;
 use crate::repo::plugin::PluginRepo;
 use crate::services::application::{ApplicationError, ApplicationService};
+use crate::services::auth::AuthService;
 use crate::services::component::{ComponentError, ComponentService, ComponentWriteService};
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
@@ -64,7 +65,7 @@ impl BuiltinPluginDescriptor {
 static BUILTIN_PLUGINS: &[BuiltinPluginDescriptor] = &[BuiltinPluginDescriptor {
     component_name: "otlp:exporter",
     plugin_name: "golem-otlp-exporter",
-    version: "1.5.1",
+    version: "1.5.2",
     description: "Built-in OTLP exporter oplog processor plugin",
     wasm_bytes: include_bytes!("../../../plugins/otlp-exporter.wasm"),
 }];
@@ -73,6 +74,7 @@ pub async fn provision_builtin_plugins(
     config: &BuiltinPluginsConfig,
     builtin_plugin_owner_account_id: AccountId,
     plugin_repo: &Arc<dyn PluginRepo>,
+    auth_service: &Arc<AuthService>,
     application_service: &Arc<ApplicationService>,
     environment_service: &Arc<EnvironmentService>,
     component_service: &Arc<ComponentService>,
@@ -85,7 +87,9 @@ pub async fn provision_builtin_plugins(
         return Ok(());
     }
 
-    let auth = AuthCtx::system();
+    let auth = auth_service
+        .builtin_owner_auth(builtin_plugin_owner_account_id)
+        .await?;
 
     let app = get_or_create_application(
         application_service,
@@ -234,6 +238,8 @@ async fn upload_or_update_component(
             env_id,
             ComponentCreation {
                 component_name: component_name.clone(),
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 agent_types: Vec::new(),
                 agent_type_provision_configs: BTreeMap::new(),
                 tools: Vec::new(),
@@ -268,6 +274,8 @@ async fn upload_or_update_component(
                         existing.id,
                         ComponentUpdate {
                             current_revision: existing.revision,
+                            config_schema: None,
+                            component_provision_config: None,
                             agent_types: None,
                             agent_type_provision_config_updates: None,
                             tools: None,

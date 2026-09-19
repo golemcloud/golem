@@ -336,22 +336,6 @@ pub(all) struct ToolMiddleware {
 
 ///|
 /// Invocation contract — shared between guest and host.
-pub(all) struct CustomToolError {
-  name : String
-  payload : @types.TypedSchemaValue
-} derive(Debug, Eq)
-
-///|
-pub(all) suberror ToolError {
-  InvalidToolName(String)
-  InvalidCommandPath(Array[String])
-  InvalidInput(String)
-  ConstraintViolation(String)
-  InvalidResult(String)
-  CustomError(CustomToolError)
-} derive(Debug, Eq)
-
-///|
 pub(all) struct InvocationResult {
   result : @types.TypedSchemaValue?
   stdout : @async-core.Stream[Byte]?

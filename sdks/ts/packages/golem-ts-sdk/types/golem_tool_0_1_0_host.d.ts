@@ -59,7 +59,7 @@ declare module 'golem:tool/host@0.1.0' {
    * input order controls the result order; filesystem-capable bodies become
    * eligible together and execute in durable Start order.
    */
-  export function getInvokeResults(futures: FutureInvokeResult[]): Promise<Result<InvocationResult, RpcError>[]>;
+  export function getInvokeResults(futures: FutureInvokeResult[]): Promise<Result<InvocationResult, ToolRpcError>[]>;
   export class ToolStdinWriter {
     /**
      * @throws StreamWriteError
@@ -88,13 +88,13 @@ declare module 'golem:tool/host@0.1.0' {
      * drive this wait and the already-created reader concurrently. Callers
      * that manually created an open stdin must likewise drive its writer
      * concurrently; see `create-stdin`.
-     * @throws RpcError
+     * @throws ToolRpcError
      */
     invokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: ToolStdin | undefined, stdout: ToolStdout | undefined): Promise<InvocationResult>;
     /**
      * Durably admits fire-and-forget work. Declared output is discarded by
      * the host so an absent caller reader cannot apply backpressure.
-     * @throws RpcError
+     * @throws ToolRpcError
      */
     invoke(commandPath: string[], input: TypedSchemaValue, stdin: ToolStdin | undefined): void;
     /**
@@ -108,7 +108,7 @@ declare module 'golem:tool/host@0.1.0' {
     /**
      * Sequential calls return the same immutable terminal. Only one call may
      * be outstanding at a time.
-     * @throws RpcError
+     * @throws ToolRpcError
      */
     get(): Promise<InvocationResult>;
     /**
@@ -118,7 +118,6 @@ declare module 'golem:tool/host@0.1.0' {
     cancel(): void;
   }
   export type Tool = golemTool010Common.Tool;
-  export type ToolError = golemTool010Common.ToolError;
   export type InvocationResult = golemTool010Common.InvocationResult;
   export type ByteStreamFailure = golemTool010Streams.ByteStreamFailure;
   export type ByteStreamItem = golemTool010Streams.ByteStreamItem;
@@ -126,6 +125,7 @@ declare module 'golem:tool/host@0.1.0' {
   export type StreamWriteError = golemTool010Streams.StreamWriteError;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type ComponentId = golemCore200Types.ComponentId;
+  export type ToolRpcError = golemCore200Types.ToolRpcError;
   /**
    * A tool registered in the environment, addressable by name from
    * any agent or other tool. `definition` carries the full metadata;
@@ -141,39 +141,6 @@ declare module 'golem:tool/host@0.1.0' {
     lookupName: string;
     definition: Tool;
     implementedBy: ComponentId;
-  };
-  export type RpcError =
-  {
-    tag: 'protocol-error'
-    val: string
-  } |
-  {
-    tag: 'denied'
-    val: string
-  } |
-  {
-    tag: 'not-found'
-    val: string
-  } |
-  {
-    tag: 'remote-internal-error'
-    val: string
-  } |
-  {
-    tag: 'remote-tool-error'
-    val: ToolError
-  } |
-  /** The operation's explicit cancellation won terminal arbitration. */
-  {
-    tag: 'cancelled'
-  } |
-  /**
-   * A filesystem-capable input or output attachment exceeded the
-   * configured per-direction retained-byte limit.
-   */
-  {
-    tag: 'resource-exhausted'
-    val: string
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

@@ -28,22 +28,22 @@ test "wire protocol errors retain their exact middleware variants" {
     decode_tool_error(error, fn(_, _ : @model.TypedSchemaValue) { Some(Ok(0)) })
   }
   assert_true(
-    decode(@toolCommon.ToolError::InvalidToolName("missing"))
+    decode(@types.ToolError::InvalidToolName("missing"))
     is InvalidToolName("missing"),
   )
   assert_true(
-    decode(@toolCommon.ToolError::InvalidCommandPath(["a", "b"]))
+    decode(@types.ToolError::InvalidCommandPath(["a", "b"]))
     is InvalidCommandPath(["a", "b"]),
   )
   assert_true(
-    decode(@toolCommon.ToolError::InvalidInput("bad")) is InvalidInput("bad"),
+    decode(@types.ToolError::InvalidInput("bad")) is InvalidInput("bad"),
   )
   assert_true(
-    decode(@toolCommon.ToolError::ConstraintViolation("denied"))
+    decode(@types.ToolError::ConstraintViolation("denied"))
     is ConstraintViolation("denied"),
   )
   assert_true(
-    decode(@toolCommon.ToolError::InvalidResult("bad result"))
+    decode(@types.ToolError::InvalidResult("bad result"))
     is InvalidResult("bad result"),
   )
 }
@@ -52,7 +52,7 @@ test "wire protocol errors retain their exact middleware variants" {
 test "underlying copies share overlap revocation and exactly-once drop state" {
   let drops : Ref[Int] = Ref(0)
   let underlying = new_underlying_tool(
-    (_, _, _) => Err(@toolCommon.ToolError::InvalidInput("unused")),
+    (_, _, _) => Err(@types.ToolError::InvalidInput("unused")),
     fn() { drops.val = drops.val + 1 },
   )
   let copy = underlying
@@ -208,10 +208,7 @@ test "malformed wire custom error drops each distinct capability exactly once" {
     },
   }
   let decoded : ToolInvokeError[Unit] = decode_tool_error(
-    @toolCommon.ToolError::CustomError({
-      name: "test-error",
-      payload: malformed,
-    }),
+    @types.ToolError::CustomError({ name: "test-error", payload: malformed, }),
     fn(_, _) { Some(Ok(())) },
   )
   assert_true(decoded is InvalidResult(_))
@@ -229,7 +226,7 @@ test "rejected custom error decoder drops lifted capabilities" {
     ),
   })
   let decoded : ToolInvokeError[Unit] = decode_tool_error(
-    @toolCommon.ToolError::CustomError({ name: "test-error", payload: encoded, }),
+    @types.ToolError::CustomError({ name: "test-error", payload: encoded, }),
     fn(_, _) { Some(Err("custom error payload rejected")) },
   )
   assert_true(decoded is InvalidResult("custom error payload rejected"))
@@ -243,7 +240,7 @@ test "successful custom error decode remains owned until invocation teardown" {
     let underlying = new_underlying_tool(
       (_, _, _) => {
         Err(
-          @toolCommon.ToolError::CustomError({
+          @types.ToolError::CustomError({
             name: "test-error",
             payload: raw_secret_value(351),
           }),
@@ -272,7 +269,7 @@ test "underlying invocation preserves the custom error name" {
     let underlying = new_underlying_tool(
       (_, _, _) => {
         Err(
-          @toolCommon.ToolError::CustomError({
+          @types.ToolError::CustomError({
             name: "named-error",
             payload: @toolCore.encode_typed_input(
               @schema.try_into_typed_schema_value("details"),
@@ -314,7 +311,7 @@ test "failed custom error encoding drops untransferred capabilities" {
   let encoded = encode_tool_error(
     Tool({ name: "malformed", payload: malformed, }),
   )
-  assert_true(encoded is @toolCommon.ToolError::InvalidResult(_))
+  assert_true(encoded is @types.ToolError::InvalidResult(_))
   assert_resource_drop_counts(0, 0, 1)
 }
 
@@ -461,7 +458,7 @@ test "raw custom errors lower once and preserve resource ownership" {
   let payload = context.own_raw_typed_schema_value(raw_secret_value(603))
   let lowered = encode_raw_tool_error(Tool(payload), context)
   match lowered {
-    @toolCommon.ToolError::CustomError(value) =>
+    @types.ToolError::CustomError(value) =>
       drop_raw_value_resources(value.payload)
     _ => fail("raw custom error was not preserved")
   }
@@ -505,7 +502,7 @@ test "raw final lowering rejects foreign results and errors without consuming th
   )
   assert_true(
     encode_raw_tool_error(Tool(payload), expected_context)
-    is @toolCommon.ToolError::InvalidResult(_),
+    is @types.ToolError::InvalidResult(_),
   )
   assert_resource_drop_counts(1, 0, 0)
   match payload.take_for_final(foreign_context) {
@@ -628,7 +625,7 @@ test "raw invoke supports sequential calls and raw backend errors" {
         calls.val = calls.val + 1
         if calls.val == 3 {
           Err(
-            @toolCommon.ToolError::CustomError({
+            @types.ToolError::CustomError({
               name: "test-error",
               payload: raw_secret_value(606),
             }),
@@ -656,7 +653,7 @@ test "raw invoke supports sequential calls and raw backend errors" {
       Err(UnknownToolError(error)) =>
         match
           encode_raw_tool_error(UnknownToolError(error), underlying.ownership) {
-          @toolCommon.ToolError::CustomError(value) =>
+          @types.ToolError::CustomError(value) =>
             drop_raw_value_resources(value.payload)
           _ => fail("raw backend custom error changed protocol variant")
         }
@@ -1259,9 +1256,7 @@ test "backend protocol and raised errors both clear active state" {
   run_component_async(async fn() {
     let input = @schema.try_into_typed_schema_value(())
     let protocol_error = new_underlying_tool(
-      (_, _, _) => {
-        Err(@toolCommon.ToolError::InvalidInput("backend rejected input"))
-      },
+      (_, _, _) => Err(@types.ToolError::InvalidInput("backend rejected input")),
       no_raw_drop,
     )
     let result = protocol_error.invoke([], input, None)

@@ -132,7 +132,9 @@ pub use durability::*;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, AgentPrincipal, ParsedAgentId, Principal};
+use golem_common::model::agent::{
+    AgentMode, AgentPrincipal, ParsedAgentId, Principal, ResolvedOwnerContext,
+};
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
@@ -327,6 +329,32 @@ pub(crate) fn agent_effective_surface_from_component_metadata(
     Ok(golem_common::model::card::agent_effective_surface_from_wallet(&context, [&card]))
 }
 
+pub(crate) fn owner_effective_surface_from_component_metadata(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    owner_context: &ResolvedOwnerContext,
+) -> Result<golem_common::model::card::EffectiveSurface, WorkerExecutorError> {
+    match owner_context {
+        ResolvedOwnerContext::Agent(agent_id) => {
+            agent_effective_surface_from_component_metadata(component, owned_agent_id, agent_id)
+        }
+        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            let card = StoredCard::Polymorphic(
+                component
+                    .metadata
+                    .component_provision_config()
+                    .initial_permissions
+                    .clone(),
+            );
+            Ok(component_baseline_effective_surface_from_wallet(
+                component,
+                owned_agent_id,
+                [&card],
+            ))
+        }
+    }
+}
+
 pub(crate) fn agent_monomorphization_context(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
@@ -338,8 +366,49 @@ pub(crate) fn agent_monomorphization_context(
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
         agent_name: owned_agent_id.agent_id.agent_id.clone(),
-        agent_type: agent_id.agent_type.clone(),
+        owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
+            agent_id.agent_type.clone(),
+        ),
     }
+}
+
+fn component_baseline_monomorphization_context(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
+    golem_common::model::card::AgentPermissionMonomorphizationContext {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+        component: component.component_name.clone(),
+        agent_name: owned_agent_id.agent_id.agent_id.clone(),
+        owner:
+            golem_common::model::card::recipient::RecipientOwnerContext::ComponentExternalToolOwner,
+    }
+}
+
+pub(crate) fn owner_monomorphization_context(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    owner_context: &ResolvedOwnerContext,
+) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
+    match owner_context {
+        ResolvedOwnerContext::Agent(agent_id) => {
+            agent_monomorphization_context(component, owned_agent_id, agent_id)
+        }
+        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            component_baseline_monomorphization_context(component, owned_agent_id)
+        }
+    }
+}
+
+fn component_baseline_effective_surface_from_wallet<'a>(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    cards: impl IntoIterator<Item = &'a StoredCard>,
+) -> golem_common::model::card::EffectiveSurface {
+    let context = component_baseline_monomorphization_context(component, owned_agent_id);
+    golem_common::model::card::agent_effective_surface_from_wallet(&context, cards)
 }
 
 fn agent_initial_card_from_component_metadata(
@@ -792,7 +861,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -979,7 +1048,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let agent_type_provision_configs = match &runtime {
-            OwnerRuntime::Agent => agent_id.as_ref().and_then(|agent_id| {
+            OwnerRuntime::Agent => owner_context.agent().and_then(|agent_id| {
                 component_metadata
                     .metadata
                     .agent_type_provision_configs()
@@ -988,16 +1057,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }),
             OwnerRuntime::Entity(_) => None,
         };
-        let agent_config = if agent_id.is_some() {
-            effective_agent_config(
-                worker_config.initial_agent_config.clone(),
-                agent_type_provision_configs
+        let agent_config = if matches!(runtime, OwnerRuntime::Agent) {
+            let provisioned_config = match &owner_context {
+                ResolvedOwnerContext::Agent(_) => agent_type_provision_configs
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                    component_metadata
+                        .metadata
+                        .component_provision_config()
+                        .config
+                        .clone()
+                }
+            };
+            effective_agent_config(
+                worker_config.initial_agent_config.clone(),
+                provisioned_config,
             )?
         } else {
-            HashMap::new()
+            worker_config
+                .initial_agent_config
+                .iter()
+                .map(|entry| (entry.path.clone(), entry.value.clone()))
+                .collect()
         };
 
         let stdin = ManagedStdIn::disabled();
@@ -1047,7 +1130,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             OwnerRuntime::Entity(_) => tail_work::TailWorkTracker::new(),
         };
         let state = PrivateDurableWorkerState::new(
-            agent_id,
+            owner_context,
             oplog_service,
             oplog.clone(),
             promise_service.clone(),
@@ -1444,19 +1527,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn agent_auth_ctx(&self) -> AuthCtx {
-        let delegation_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
-            let context = agent_monomorphization_context(
+        let context = match &self.state.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => agent_monomorphization_context(
                 self.owner_component_metadata(),
                 &self.owned_agent_id,
                 agent_id,
-            );
-            golem_common::model::card::agent_delegation_surface_from_wallet(
-                &context,
-                self.state.agent_wallet_cards.values(),
-            )
-        } else {
-            golem_common::model::card::DelegationSurface::default()
+            ),
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                component_baseline_monomorphization_context(
+                    self.owner_component_metadata(),
+                    &self.owned_agent_id,
+                )
+            }
         };
+        let delegation_surface = golem_common::model::card::agent_delegation_surface_from_wallet(
+            &context,
+            self.state.agent_wallet_cards.values(),
+        );
 
         AuthCtx::agent_with_permission_surfaces(
             self.created_by(),
@@ -1840,20 +1927,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if matches!(self.runtime, OwnerRuntime::Entity(_)) {
             return;
         }
-        self.state.agent_effective_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
-            let context = agent_monomorphization_context(
+        let context = match &self.state.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => agent_monomorphization_context(
                 self.owner_component_metadata(),
                 &self.owned_agent_id,
                 agent_id,
-            );
+            ),
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                component_baseline_monomorphization_context(
+                    self.owner_component_metadata(),
+                    &self.owned_agent_id,
+                )
+            }
+        };
+        self.state.agent_effective_surface =
             golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
                 &context,
                 self.state.agent_wallet_cards.values(),
                 self.state.invocation_scope_card.as_ref(),
-            )
-        } else {
-            golem_common::model::card::EffectiveSurface::default()
-        };
+            );
     }
 
     fn interested_card_ids(&self) -> Vec<CardId> {
@@ -2307,7 +2399,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
-        self.state.agent_id.clone()
+        self.state.owner_context.agent().cloned()
+    }
+
+    pub fn owner_context(&self) -> &ResolvedOwnerContext {
+        &self.state.owner_context
     }
 
     pub fn agent_mode(&self) -> AgentMode {
@@ -2345,7 +2441,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {
-        self.state.agent_id.as_ref().and_then(|agent_id| {
+        self.state.owner_context.agent().and_then(|agent_id| {
             self.owner_component_metadata()
                 .metadata
                 .agent_type_provision_config(&agent_id.agent_type)
@@ -3849,16 +3945,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 let error = error.to_string(&stderr);
                                 Some(format!("Manual update failed to load snapshot: {error}"))
                             }
-                            Ok(InvokeResult::Succeeded {
-                                result: AgentInvocationResult::LoadSnapshot { error },
-                                ..
-                            }) => {
-                                error.map(|e| format!("Manual update failed to load snapshot: {e}"))
-                            }
-                            Ok(InvokeResult::Succeeded { .. }) => Some(
-                                "Unexpected result value from the snapshot load function"
-                                    .to_string(),
-                            ),
+                            Ok(InvokeResult::Succeeded { result, .. }) => match *result {
+                                AgentInvocationResult::LoadSnapshot { error } => error
+                                    .map(|e| format!("Manual update failed to load snapshot: {e}")),
+                                _ => Some(
+                                    "Unexpected result value from the snapshot load function"
+                                        .to_string(),
+                                ),
+                            },
                             _ => None,
                         };
 
@@ -4129,13 +4223,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     "Snapshot recovery failed to load snapshot: {error}"
                 ))
             }
-            Ok(InvokeResult::Succeeded {
-                result: AgentInvocationResult::LoadSnapshot { error },
-                ..
-            }) => error.map(|e| format!("Snapshot recovery load-snapshot returned error: {e}")),
-            Ok(InvokeResult::Succeeded { .. }) => {
-                Some("Unexpected result value from load-snapshot function".to_string())
-            }
+            Ok(InvokeResult::Succeeded { result, .. }) => match *result {
+                AgentInvocationResult::LoadSnapshot { error } => {
+                    error.map(|e| format!("Snapshot recovery load-snapshot returned error: {e}"))
+                }
+                _ => Some("Unexpected result value from load-snapshot function".to_string()),
+            },
             Ok(_) => Some("Snapshot recovery interrupted".to_string()),
         };
 
@@ -4954,7 +5047,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let stack = self.get_current_invocation_context().await;
 
             let scope_card = match &invocation {
-                AgentInvocation::AgentMethod { scope_card, .. } => scope_card.clone(),
+                AgentInvocation::AgentMethod { scope_card, .. }
+                | AgentInvocation::ExternalTool { scope_card, .. } => scope_card.clone(),
                 _ => None,
             };
             let scope_root_cards = if let Some(scope_card) = &scope_card {
@@ -4972,6 +5066,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let input = match &invocation {
                 AgentInvocation::AgentInitialization { input, .. }
                 | AgentInvocation::AgentMethod { input, .. } => Some(input),
+                AgentInvocation::ExternalTool { input, .. } => Some(input.value()),
                 _ => None,
             };
             if let Some(input) = input
@@ -4988,6 +5083,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     *invocation_context = stack;
                 }
                 AgentInvocation::AgentMethod {
+                    invocation_context, ..
+                }
+                | AgentInvocation::ExternalTool {
                     invocation_context, ..
                 } => {
                     *invocation_context = stack;
@@ -5299,7 +5397,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 | AgentInvocationResult::ManualUpdate
                 | AgentInvocationResult::LoadSnapshot { .. }
                 | AgentInvocationResult::SaveSnapshot { .. }
-                | AgentInvocationResult::ProcessOplogEntries { .. } => true,
+                | AgentInvocationResult::ProcessOplogEntries { .. }
+                | AgentInvocationResult::ExternalTool { .. } => true,
             };
 
             // Only `AgentMethod` results need the method name persisted so the
@@ -5739,18 +5838,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 .await?;
         }
 
-        let (agent_mode, is_agent) = {
-            let component = store.as_context().data().component_metadata();
-            (
-                store.as_context().data().agent_mode(),
-                component.metadata.is_agent(),
-            )
-        };
+        let agent_mode = store.as_context().data().agent_mode();
 
         let resume_result = loop {
-            let cont = store.as_context().data().durable_ctx().state.is_replay() && // replay while not live
-                (agent_mode == AgentMode::Durable || // durable components are fully replayed
-                    (number_of_replayed_functions == 0 && is_agent)); // ephemeral agents replay the first (initialize), other ephemerals nothing (deprecated)
+            let context = store.as_context();
+            let durable_ctx = context.data().durable_ctx();
+            let cont = durable_ctx.state.is_replay() && should_replay_invocation(
+                agent_mode,
+                durable_ctx.owner_context(),
+                number_of_replayed_functions,
+            );
 
             if cont {
                 let oplog_entry = store
@@ -5782,10 +5879,15 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             invocation_payload,
                             invocation_context.clone(),
                         );
-                        let scope_card = match &agent_invocation {
-                            AgentInvocation::AgentMethod { scope_card, .. } => scope_card.clone(),
-                            _ => None,
-                        };
+                        if agent_mode == AgentMode::Ephemeral
+                            && !matches!(agent_invocation, AgentInvocation::AgentInitialization { .. })
+                        {
+                            break Err(WorkerExecutorError::unexpected_oplog_entry(
+                                "AgentInitialization for ephemeral initialization replay",
+                                format!("{:?}", agent_invocation.kind()),
+                            ));
+                        }
+                        let scope_card = agent_invocation.scope_card().cloned();
                         let recorded_scope_card_id = wallet_pin.and_then(|pin| pin.scope_card_id);
                         let payload_scope_card_id =
                             scope_card.as_ref().map(|card| card.scope_card_id);
@@ -5890,7 +5992,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             }) => {
                                 if uses_streams
                                     && let AgentInvocationResult::AgentMethod { output } =
-                                        &mut invocation_result
+                                        &mut *invocation_result
                                 {
                                     let (graph, root, component_revision) = {
                                         let component = store.data().component_metadata();
@@ -5956,7 +6058,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
                                 let mut output = AgentInvocationOutput {
-                                    result: invocation_result,
+                                    result: *invocation_result,
                                     consumed_fuel: Some(consumed_fuel),
                                     invocation_status: None,
                                     component_revision: Some(component_revision),
@@ -6170,7 +6272,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         let prepare_result = if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
             // Ephemeral workers cannot be recovered
 
-            // We have to replay the initialize call for agents:
+            // Only typed agent owners have an initialize call to replay.
             let replay_decision = Self::resume_replay(store, instance, false).await;
             record_resume_worker(start.elapsed());
 
@@ -6838,6 +6940,15 @@ fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> b
         ) || status.has_pending_work())
 }
 
+fn should_replay_invocation(
+    mode: AgentMode,
+    owner: &ResolvedOwnerContext,
+    replayed_invocations: usize,
+) -> bool {
+    mode == AgentMode::Durable
+        || (matches!(owner, ResolvedOwnerContext::Agent(_)) && replayed_invocations == 0)
+}
+
 fn store_is_live(
     entity_execution_mode: Option<InvocationExecutionMode>,
     local_live_tail: bool,
@@ -7089,6 +7200,43 @@ mod tests {
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
     use test_r::test;
+
+    #[test]
+    fn ephemeral_replay_is_only_for_typed_owner_initialization() {
+        use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+
+        let agent = ResolvedOwnerContext::Agent(Box::new(ParsedAgentId::new(
+            AgentTypeName("counter".to_string()),
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::string()),
+                SchemaValue::String("meaningful-constructor-input".to_string()),
+            ),
+            None,
+        )));
+        assert!(should_replay_invocation(AgentMode::Ephemeral, &agent, 0));
+        assert!(!should_replay_invocation(AgentMode::Ephemeral, &agent, 1));
+        for owner in [
+            ResolvedOwnerContext::ComponentWorker,
+            ResolvedOwnerContext::ComponentBaseline,
+        ] {
+            for replayed in [0, 1, 3] {
+                assert!(!should_replay_invocation(
+                    AgentMode::Ephemeral,
+                    &owner,
+                    replayed
+                ));
+            }
+        }
+        for owner in [agent, ResolvedOwnerContext::ComponentWorker] {
+            for replayed in [0, 1, 3] {
+                assert!(should_replay_invocation(
+                    AgentMode::Durable,
+                    &owner,
+                    replayed
+                ));
+            }
+        }
+    }
 
     #[test]
     fn entity_store_liveness_is_scoped_to_its_invocation_mode() {
@@ -7957,7 +8105,9 @@ mod tests {
             environment: EnvironmentName::try_from("prod").unwrap(),
             component: ComponentName("cart-svc".to_string()),
             agent_name: "Cart(alice)".to_string(),
-            agent_type: AgentTypeName("Cart".to_string()),
+            owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
+                AgentTypeName("Cart".to_string()),
+            ),
         }
     }
 
@@ -10079,7 +10229,7 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
-    agent_id: Option<ParsedAgentId>,
+    owner_context: ResolvedOwnerContext,
     created_by_email: AccountEmail,
     current_idempotency_key: Option<IdempotencyKey>,
     /// Child positions under an entity seed admitted in a caller's atomic region.
@@ -10402,7 +10552,7 @@ impl WakeupScheduler {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -10456,15 +10606,25 @@ impl PrivateDurableWorkerState {
             OwnerRuntime::Agent => {
                 let initial_agent_wallet_cards =
                     || -> Result<BTreeMap<CardId, StoredCard>, WorkerExecutorError> {
-                        match agent_id.as_ref() {
-                            Some(agent_id) => {
+                        match &owner_context {
+                            ResolvedOwnerContext::Agent(agent_id) => {
                                 let card = agent_initial_card_from_component_metadata(
                                     &component_metadata,
                                     agent_id,
                                 )?;
                                 Ok(BTreeMap::from([(card.card_id(), card)]))
                             }
-                            None => Ok(BTreeMap::new()),
+                            ResolvedOwnerContext::ComponentWorker
+                            | ResolvedOwnerContext::ComponentBaseline => {
+                                let card = StoredCard::Polymorphic(
+                                    component_metadata
+                                        .metadata
+                                        .component_provision_config()
+                                        .initial_permissions
+                                        .clone(),
+                                );
+                                Ok(BTreeMap::from([(card.card_id(), card)]))
+                            }
                         }
                     };
                 if let Some(snapshot_idx) = last_snapshot_index {
@@ -10492,8 +10652,8 @@ impl PrivateDurableWorkerState {
             agent_id: owned_agent_id.agent_id.clone(),
         })
         .wallet_id_hash();
-        let agent_effective_surface = match (&runtime, agent_id.as_ref()) {
-            (OwnerRuntime::Agent, Some(agent_id)) => {
+        let agent_effective_surface = match (&runtime, &owner_context) {
+            (OwnerRuntime::Agent, ResolvedOwnerContext::Agent(agent_id)) => {
                 let context =
                     agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
                 golem_common::model::card::agent_effective_surface_from_wallet(
@@ -10501,14 +10661,21 @@ impl PrivateDurableWorkerState {
                     agent_wallet_cards.values(),
                 )
             }
-            (OwnerRuntime::Agent, None) => golem_common::model::card::EffectiveSurface::default(),
+            (
+                OwnerRuntime::Agent,
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline,
+            ) => component_baseline_effective_surface_from_wallet(
+                &component_metadata,
+                &owned_agent_id,
+                agent_wallet_cards.values(),
+            ),
             (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
         };
         let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
         Ok(Self {
             oplog_service,
             oplog,
-            agent_id,
+            owner_context,
             http_call_count: 0,
             per_invocation_http_call_limit,
             rpc_call_count: 0,
@@ -10920,7 +11087,7 @@ impl PrivateDurableWorkerState {
     /// Enriches retry properties with worker-local context: `agent-type` and `is-idempotent`.
     /// Should be called on all executor-constructed retry property bags before policy resolution.
     pub fn enrich_retry_properties(&self, props: &mut RetryProperties) {
-        if let Some(agent_id) = &self.agent_id {
+        if let Some(agent_id) = self.owner_context.agent() {
             props.set(
                 "agent-type",
                 PredicateValue::Text(agent_id.agent_type.to_string()),
