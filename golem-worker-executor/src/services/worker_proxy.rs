@@ -1254,6 +1254,7 @@ mod tests {
                                 environment_id: start.environment_id,
                                 callee_fingerprint: start.expected_callee_fingerprint,
                                 method_name: start.method_name.clone(),
+                                joined_origin_observer: false,
                             },
                         )),
                     };
@@ -1308,6 +1309,7 @@ mod tests {
                                 environment_id: resume.environment_id,
                                 callee_fingerprint: resume.expected_callee_fingerprint,
                                 method_name: Some("streaming-method".to_string()),
+                                joined_origin_observer: false,
                             },
                         )),
                     };

@@ -39,6 +39,15 @@ input bindings. Transport slot IDs, schemas, execution configuration and authori
 match. Unread received inputs can be forwarded directly as their existing foreign handles; the
 forwarding path performs no eager read or ownership conversion.
 
+Over remote RPC, a joined-origin caller receives `InvocationAccepted.joined_origin_observer`
+without an attachment ID, attempt ID, or epoch authority. It observes the persisted `Result`
+and `Finished`; result handles are read through the ordinary offset-based stream reader, not
+through output frames on this invocation transport. A persisted result precedes a later failed
+terminal, while a failure before any result is delivered without waiting for guest completion.
+Observer disconnects and invalid controls cannot detach or finalize the original attachment.
+A lost observer response retries the retained `Start`, never `ResumeAttach` as the original
+caller. This transport distinction does not change out-of-band consumer-drop cancellation.
+
 Staged oplogs use a hidden indexed-storage namespace and a standalone primary actor, without
 visible oplog caches, archives or session indexes. Publication atomically moves a complete
 committed stage into an absent primary key. The primary key survives archival even when empty;

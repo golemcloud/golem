@@ -208,6 +208,7 @@ pub struct DurableStreamingInvocationAcceptance {
     pub prepared: StreamSessionPreparedRecord,
     pub streams: StreamSession,
     pub replayed: bool,
+    pub joined_origin_observer: bool,
 }
 
 /// Durable state returned after resuming or taking over a streaming invocation.
@@ -5577,6 +5578,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             prepared,
             streams,
             replayed: retained_acceptance,
+            joined_origin_observer: joined_origin,
         })
     }
 

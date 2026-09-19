@@ -208,6 +208,10 @@ message InvocationAccepted {
   golem.common.EnvironmentId environment_id = 8;
   golem.common.UUID callee_fingerprint = 9;
   optional string method_name = 10;
+  // A validated same-origin caller observes the existing invocation without owning
+  // its attachment. Mappings are read out of band; no stream control frames are allowed.
+  // Result and Finished retain their ordinary durable publication boundaries.
+  bool joined_origin_observer = 11;
 }
 
 message InvocationSessionResult {

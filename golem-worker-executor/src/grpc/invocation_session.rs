@@ -152,6 +152,7 @@ fn publish_acceptance(
             durable_streams: None,
             prepared: None,
             durable_replayed: false,
+            joined_origin_observer: false,
         })
         .map_err(|_| WorkerExecutorError::runtime("invocation session ended before acceptance"))
 }
@@ -200,6 +201,7 @@ struct AcceptedInvocation {
     durable_streams: Option<StreamSession>,
     prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecord>,
     durable_replayed: bool,
+    joined_origin_observer: bool,
 }
 
 struct TransportStreamId(u64);
@@ -604,16 +606,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             durable_streams: Some(streams.clone()),
                             prepared: Some(acceptance.prepared),
                             durable_replayed: acceptance.replayed,
+                            joined_origin_observer: acceptance.joined_origin_observer,
                         })
                         .map_err(|_| {
                             WorkerExecutorError::runtime(
                                 "invocation session ended before durable acceptance",
                             )
                         })?;
-                    streams
-                        .recover_nested_input_mappings()
-                        .await
-                        .map_err(WorkerExecutorError::runtime)?;
+                    if !acceptance.joined_origin_observer {
+                        streams
+                            .recover_nested_input_mappings()
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
+                    }
                     worker.await_enqueued_invocation(ik.clone()).await?
                 } else {
                     let (admission_tx, admission_rx) = tokio::sync::oneshot::channel();
@@ -976,8 +981,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         };
 
-        let durable_attachment = accepted.durable_streams.clone();
-        *response_lease.lock().unwrap() = durable_attachment
+        // Observation must never run attachment cleanup, even while the original is current.
+        let durable_attachment = accepted
+            .durable_streams
+            .clone()
+            .filter(|_| !accepted.joined_origin_observer);
+        *response_lease.lock().unwrap() = accepted
+            .durable_streams
             .as_ref()
             .and_then(StreamSession::response_lease);
         until_response_closed(&outward, &forwarder_stopped, async {
@@ -1014,12 +1024,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         attachment_id: accepted
                             .prepared
                             .as_ref()
+                            .filter(|_| !accepted.joined_origin_observer)
                             .map(|prepared| prepared.attempt.attachment_id.0.into()),
                         attempt_id: accepted
                             .prepared
                             .as_ref()
+                            .filter(|_| !accepted.joined_origin_observer)
                             .map(|prepared| prepared.attempt.attempt_id.0.into()),
-                        epoch: accepted.durable_streams.as_ref().map(StreamSession::attachment_epoch).unwrap_or_default(),
+                        epoch: accepted.durable_streams.as_ref()
+                            .filter(|_| !accepted.joined_origin_observer)
+                            .map(StreamSession::attachment_epoch).unwrap_or_default(),
                         stream_mappings: accepted
                             .durable_streams
                             .as_ref()
@@ -1044,6 +1058,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .as_ref()
                             .map(|prepared| prepared.attempt.expected_callee_fingerprint.0.into()),
                         method_name: start.method_name.clone(),
+                        joined_origin_observer: accepted.joined_origin_observer,
                     },
                 )),
             })
@@ -1053,6 +1068,86 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return;
         }
         acceptance_forwarded.await;
+        if accepted.joined_origin_observer {
+            let streams = accepted.durable_streams.as_ref().expect("durable observer");
+            // No controls, pumps, finalization, or detach are permitted on this path.
+            let observe = async {
+                let mut completed = early_output;
+                let result = loop {
+                    if let Some(result) = streams.persisted_result().await.map_err(WorkerExecutorError::runtime)? {
+                        break result;
+                    }
+                    if let Some(outcome) = streams.persisted_finished().await.map_err(WorkerExecutorError::runtime)? {
+                        // A result can be committed between the two reads. Its handles must
+                        // precede the terminal even when the invocation subsequently failed.
+                        if let Some(result) = streams.persisted_result().await.map_err(WorkerExecutorError::runtime)? {
+                            break result;
+                        }
+                        outcome.map_err(|details| WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned()))?;
+                        return Err(WorkerExecutorError::runtime("session finished successfully without a persisted result"));
+                    }
+                    if let Some(output) = completed.take() {
+                        if let Some(result) = streams.persisted_result().await.map_err(WorkerExecutorError::runtime)? {
+                            break result;
+                        }
+                        output?;
+                        return Err(WorkerExecutorError::runtime("invocation finished without a persisted result"));
+                    }
+                    tokio::select! {
+                        result = streams.wait_persisted_result() => { result.map_err(WorkerExecutorError::runtime)?; },
+                        outcome = streams.wait_persisted_finished() => { outcome.map_err(WorkerExecutorError::runtime)?.ok(); },
+                        output = &mut invocation => completed = Some(output),
+                    }
+                };
+                let new_stream_mappings = result.proto_mappings();
+                if responses.send(InvocationResponse {
+                    response: Some(invocation_response::Response::Result(InvocationSessionResult {
+                        result: Some(invocation_session_result::Result::MethodResult(result.value)),
+                        component_revision: accepted.component_revision.map(|revision| revision.get()),
+                        agent_id: start.agent_id.clone(),
+                        idempotency_key: start.idempotency_key.clone(),
+                        agent_fingerprint: start.expected_callee_fingerprint,
+                        new_stream_mappings,
+                        ..Default::default()
+                    })),
+                }).await.is_err() {
+                    return Ok::<_, WorkerExecutorError>(());
+                }
+                let outcome = streams.wait_persisted_finished().await
+                    .map_err(WorkerExecutorError::runtime)?;
+                match outcome {
+                    Ok(()) => {
+                        let _ = responses.send(InvocationResponse {
+                            response: Some(invocation_response::Response::Finished(InvocationSessionCompletion {
+                                outcome: Some(invocation_session_completion::Outcome::Success(golem::common::Empty {})),
+                            })),
+                        }).await;
+                    }
+                    Err(details) => send_worker_failure(&responses,
+                        WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned())).await,
+                }
+                Ok(())
+            };
+            let reject_controls = async {
+                let next = match early_inbound.take() {
+                    Some(request) => request,
+                    None => inbound.message().await,
+                };
+                match next {
+                    Ok(None) => std::future::pending::<()>().await,
+                    Ok(Some(_)) | Err(_) => {
+                        send_protocol_failure(&responses, "an invocation observer cannot send stream controls".into()).await;
+                    }
+                }
+            };
+            tokio::select! {
+                result = observe => if let Err(error) = result {
+                    send_worker_failure(&responses, error).await;
+                },
+                () = reject_controls => {},
+            }
+            return;
+        }
         if accepted.durable_replayed
             && let Some(streams) = &accepted.durable_streams
             && streams.ensure_current_attachment().await.is_err()
@@ -1740,6 +1835,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 .method_name
                                 .clone(),
                         ),
+                        joined_origin_observer: false,
                     },
                 )),
             })
