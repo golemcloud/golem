@@ -33,6 +33,8 @@ pub mod memory;
 pub mod s3;
 pub mod sqlite;
 
+pub use s3::BlobNameError;
+
 #[async_trait]
 pub trait BlobStorage: Debug + Send + Sync {
     async fn get_raw(

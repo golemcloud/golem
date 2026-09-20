@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::types::ObjectMetadata;
 use golem_service_base::storage::blob::{
-    BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult,
+    BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -164,6 +164,24 @@ pub struct DefaultBlobStoreService {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
 }
 
+/// Gives the `BlobStoreError` of an error of the blob storage.
+///
+/// A [`BlobRangeError`] and a [`BlobNameError`] are errors of the input of the guest, so they
+/// become [`BlobStoreError::InvalidInput`], which `classify_blob_store_error` in
+/// `crate::durable_host::blobstore` makes permanent. Each other error becomes
+/// [`BlobStoreError::TransientBackend`], which is transient, so the executor retries the
+/// operation. Each method of [`DefaultBlobStoreService`] maps its errors with this function,
+/// so an error of the input is permanent at each of them.
+fn blob_store_error(err: anyhow::Error) -> BlobStoreError {
+    if let Some(range) = err.downcast_ref::<BlobRangeError>() {
+        BlobStoreError::InvalidInput(range.to_string())
+    } else if let Some(name) = err.downcast_ref::<BlobNameError>() {
+        BlobStoreError::InvalidInput(name.to_string())
+    } else {
+        BlobStoreError::TransientBackend(err.to_string())
+    }
+}
+
 impl DefaultBlobStoreService {
     pub fn new(blob_storage: Arc<dyn BlobStorage + Send + Sync>) -> Self {
         Self { blob_storage }
@@ -182,13 +200,13 @@ impl BlobStoreService for DefaultBlobStoreService {
         self.blob_storage
             .delete_dir("blob_store", "clear", namespace.clone(), path)
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+            .map_err(blob_store_error)?;
         // Re-create the empty container directory so the container continues to exist.
         // clear() semantics: remove all objects, keep the container itself.
         self.blob_storage
             .create_dir("blob_store", "clear", namespace, path)
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+            .map_err(blob_store_error)?;
         Ok(())
     }
 
@@ -205,7 +223,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
             .map(|result| match result {
                 ExistsResult::Directory => true,
                 ExistsResult::File => false,
@@ -230,7 +248,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &Path::new(&destination_container_name).join(&destination_object_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
     }
 
     async fn create_container(
@@ -246,7 +264,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+            .map_err(blob_store_error)?;
         Ok(())
     }
 
@@ -263,7 +281,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+            .map_err(blob_store_error)?;
         Ok(())
     }
 
@@ -281,7 +299,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &Path::new(&container_name).join(&object_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+            .map_err(blob_store_error)?;
         Ok(())
     }
 
@@ -303,7 +321,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &paths,
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
     }
 
     async fn get_container(
@@ -319,7 +337,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
             .map(|result| result.map(|metadata| metadata.last_modified_at.to_millis()))
     }
 
@@ -342,10 +360,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 end,
             )
             .await
-            .map_err(|err| match err.downcast_ref::<BlobRangeError>() {
-                Some(range) => BlobStoreError::InvalidInput(range.to_string()),
-                None => BlobStoreError::TransientBackend(err.to_string()),
-            })?;
+            .map_err(blob_store_error)?;
 
         match data {
             Some(data) => Ok(data.to_vec()),
@@ -369,7 +384,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &Path::new(&container_name).join(&object_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
             .map(|result| match result {
                 ExistsResult::Directory => false,
                 ExistsResult::File => true,
@@ -390,7 +405,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
             .map(|paths| {
                 paths
                     .iter()
@@ -416,7 +431,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &Path::new(&destination_container_name).join(&destination_object_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
     }
 
     async fn object_info(
@@ -434,7 +449,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &Path::new(&container_name).join(&object_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?
+            .map_err(blob_store_error)?
         {
             Some(metadata) => Ok(ObjectMetadata {
                 name: object_name,
@@ -464,7 +479,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 data,
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
     }
 }
 
@@ -472,14 +487,255 @@ impl BlobStoreService for DefaultBlobStoreService {
 mod tests {
     use crate::durable_host::blobstore::classify_blob_store_error;
     use crate::durable_host::durability::HostFailureKind;
-    use crate::services::blob_store::{BlobStoreError, BlobStoreService, DefaultBlobStoreService};
+    use crate::services::blob_store::{
+        BlobStoreError, BlobStoreService, DefaultBlobStoreService, blob_store_error,
+    };
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use futures::stream::BoxStream;
     use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::replayable_stream::ErasedReplayableStream;
     use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use std::path::Path;
+    use golem_service_base::storage::blob::{
+        BlobMetadata, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
+        ExistsResult, ListedBlob,
+    };
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tempfile::TempDir;
     use test_r::test;
+
+    /// A blob storage that gives a `BlobNameError` for each operation.
+    #[derive(Debug)]
+    struct NameErrorBlobStorage;
+
+    impl NameErrorBlobStorage {
+        fn error<T>() -> Result<T, anyhow::Error> {
+            Err(BlobNameError::NulByte.into())
+        }
+    }
+
+    #[async_trait]
+    impl BlobStorage for NameErrorBlobStorage {
+        async fn get_raw(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+            Self::error()
+        }
+
+        async fn get_stream(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Option<BoxStream<'static, Result<Bytes, anyhow::Error>>>, anyhow::Error>
+        {
+            Self::error()
+        }
+
+        async fn get_metadata(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Option<BlobMetadata>, anyhow::Error> {
+            Self::error()
+        }
+
+        async fn put_raw(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+            _data: &[u8],
+        ) -> Result<(), anyhow::Error> {
+            Self::error()
+        }
+
+        async fn put_stream(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+            _stream: &dyn ErasedReplayableStream<
+                Item = Result<Vec<u8>, anyhow::Error>,
+                Error = anyhow::Error,
+            >,
+        ) -> Result<(), anyhow::Error> {
+            Self::error()
+        }
+
+        async fn delete(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<(), anyhow::Error> {
+            Self::error()
+        }
+
+        async fn create_dir(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<(), anyhow::Error> {
+            Self::error()
+        }
+
+        async fn list_dir(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Vec<PathBuf>, anyhow::Error> {
+            Self::error()
+        }
+
+        async fn list_blobs_below(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Box<[ListedBlob]>, anyhow::Error> {
+            Self::error()
+        }
+
+        async fn delete_dir(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<bool, anyhow::Error> {
+            Self::error()
+        }
+
+        async fn exists(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<ExistsResult, anyhow::Error> {
+            Self::error()
+        }
+    }
+
+    #[test]
+    fn blob_store_error_makes_an_error_of_the_input_permanent_and_another_error_transient() {
+        let errors = [
+            BlobNameError::NulByte.into(),
+            BlobRangeError { start: 3, end: 2 }.into(),
+            anyhow::anyhow!("Blob path cannot contain parent traversal"),
+        ]
+        .map(blob_store_error);
+
+        assert_eq!(
+            errors
+                .iter()
+                .map(|error| (error.to_string(), classify_blob_store_error(error)))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    format!("Invalid input: {}", BlobNameError::NulByte),
+                    HostFailureKind::Permanent
+                ),
+                (
+                    format!("Invalid input: {}", BlobRangeError { start: 3, end: 2 }),
+                    HostFailureKind::Permanent
+                ),
+                (
+                    "Backend error: Blob path cannot contain parent traversal".to_string(),
+                    HostFailureKind::Transient
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    async fn every_operation_gives_invalid_input_for_a_name_error() {
+        let blob_store = DefaultBlobStoreService::new(Arc::new(NameErrorBlobStorage));
+        let environment_id = EnvironmentId::new();
+        let container = || "container".to_string();
+        let object = || "object".to_string();
+
+        let errors: Vec<Result<(), BlobStoreError>> = vec![
+            blob_store.clear(environment_id, container()).await,
+            blob_store
+                .container_exists(environment_id, container())
+                .await
+                .map(drop),
+            blob_store
+                .copy_object(environment_id, container(), object(), container(), object())
+                .await,
+            blob_store
+                .create_container(environment_id, container())
+                .await,
+            blob_store
+                .delete_container(environment_id, container())
+                .await,
+            blob_store
+                .delete_object(environment_id, container(), object())
+                .await,
+            blob_store
+                .delete_objects(environment_id, "container", &[object()])
+                .await,
+            blob_store
+                .get_container(environment_id, container())
+                .await
+                .map(drop),
+            blob_store
+                .get_data(environment_id, container(), object(), 0, 1)
+                .await
+                .map(drop),
+            blob_store
+                .has_object(environment_id, container(), object())
+                .await
+                .map(drop),
+            blob_store
+                .list_objects(environment_id, container())
+                .await
+                .map(drop),
+            blob_store
+                .move_object(environment_id, container(), object(), container(), object())
+                .await,
+            blob_store
+                .object_info(environment_id, container(), object())
+                .await
+                .map(drop),
+            blob_store
+                .write_data(environment_id, "container", "object", &[1])
+                .await,
+        ];
+
+        assert_eq!(
+            errors
+                .iter()
+                .map(|result| match result {
+                    Err(error @ BlobStoreError::InvalidInput(_)) => {
+                        classify_blob_store_error(error) == HostFailureKind::Permanent
+                    }
+                    _ => false,
+                })
+                .collect::<Vec<_>>(),
+            vec![true; 14],
+            "{errors:?}"
+        );
+    }
 
     async fn test_container_exists(blob_store: &impl BlobStoreService) {
         let environment_id = EnvironmentId::new();

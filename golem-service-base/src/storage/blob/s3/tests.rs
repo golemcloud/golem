@@ -14,7 +14,9 @@
 
 use super::S3BlobStorage;
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
-use crate::storage::blob::{BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob};
+use crate::storage::blob::{
+    BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob,
+};
 use aws_sdk_s3::config::http::{HttpRequest, HttpResponse};
 use aws_sdk_s3::config::retry::RetryConfig;
 use aws_sdk_s3::config::{
@@ -278,6 +280,11 @@ fn sent(requests: &SentRequests) -> Vec<SentRequest> {
 /// Gives the `BlobRangeError` of an error of the blob storage, or `None` for another error.
 fn range_error(error: anyhow::Error) -> Option<BlobRangeError> {
     error.downcast_ref::<BlobRangeError>().copied()
+}
+
+/// Gives the `BlobNameError` of an error of the blob storage, or `None` for another error.
+fn name_error(error: anyhow::Error) -> Option<BlobNameError> {
+    error.downcast_ref::<BlobNameError>().cloned()
 }
 
 /// The lines that a subscriber wrote, one JSON object for each event.
@@ -1041,6 +1048,290 @@ async fn list_blobs_below_fails_when_a_key_has_no_size() {
     assert_eq!(
         error.to_string(),
         format!("S3 gave no size for the key {key}")
+    );
+}
+
+#[test]
+async fn put_raw_rejects_a_name_that_breaks_a_rule_without_a_request() {
+    // The key of `namespace()` in a storage without an object prefix is the 36 bytes of the
+    // nil UUID, `/`, and the name. The last name has 988 bytes, so its key has 1025.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+    let names = [
+        "a\0b".to_string(),
+        " . ".to_string(),
+        "a/ .. /b".to_string(),
+        "a\\..\\b".to_string(),
+        "dir/__dir_marker".to_string(),
+        "a".repeat(988),
+    ];
+
+    let errors = futures::stream::iter(&names)
+        .then(|name| async {
+            storage
+                .put_raw("test", "put-raw", namespace(), Path::new(name), b"x")
+                .await
+                .map_err(name_error)
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    assert_eq!(
+        (errors, sent(&requests).len()),
+        (
+            vec![
+                Err(Some(BlobNameError::NulByte)),
+                Err(Some(BlobNameError::DotSegment {
+                    segment: " . ".to_string()
+                })),
+                Err(Some(BlobNameError::DotSegment {
+                    segment: " .. ".to_string()
+                })),
+                Err(Some(BlobNameError::DotSegment {
+                    segment: "..".to_string()
+                })),
+                Err(Some(BlobNameError::Reserved)),
+                Err(Some(BlobNameError::TooLong { length: 1025 })),
+            ],
+            0
+        )
+    );
+}
+
+#[test]
+async fn the_key_limit_counts_bytes_of_utf8_and_not_characters() {
+    // Each name has 600 characters, which is under the limit. The first has 1200 bytes,
+    // because `é` has 2 bytes of UTF-8, so its key has 1237. The second has 600 bytes.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+    let storage = &storage;
+    let write = |name: String| async move {
+        storage
+            .put_raw("test", "put-raw", namespace(), Path::new(&name), b"x")
+            .await
+            .map_err(name_error)
+    };
+
+    let multi_byte = write("é".repeat(600)).await;
+    let single_byte = write("a".repeat(600)).await;
+
+    assert_eq!(
+        (multi_byte, single_byte, sent(&requests).len()),
+        (
+            Err(Some(BlobNameError::TooLong { length: 1237 })),
+            Ok(()),
+            1
+        )
+    );
+}
+
+#[test]
+async fn the_key_limit_counts_the_namespace_prefix() {
+    // The prefix of `namespace()` is `objects/`, the 36 bytes of the nil UUID, and `/`: 45
+    // bytes. A name of 979 bytes gives a key of 1024 bytes, and a name of 980 bytes a key of
+    // 1025, although both names have fewer than 1024 bytes on their own.
+    let (storage, requests) = scripted_storage("objects", |_, _| Answer::new(200, ""));
+    let storage = &storage;
+    let write = |name: String| async move {
+        storage
+            .put_raw("test", "put-raw", namespace(), Path::new(&name), b"x")
+            .await
+            .map_err(name_error)
+    };
+
+    let at_the_limit = write("a".repeat(979)).await;
+    let over_the_limit = write("a".repeat(980)).await;
+
+    assert_eq!(
+        (
+            at_the_limit,
+            over_the_limit,
+            sent(&requests)
+                .iter()
+                .map(|request| {
+                    request.uri.contains(&format!(
+                        "/objects/{}/{}?",
+                        namespace_prefix(),
+                        "a".repeat(979)
+                    ))
+                })
+                .collect::<Vec<_>>()
+        ),
+        (
+            Ok(()),
+            Err(Some(BlobNameError::TooLong { length: 1025 })),
+            vec![true]
+        )
+    );
+}
+
+#[test]
+async fn a_name_that_ends_with_the_marker_is_rejected_and_the_error_names_it() {
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+
+    let written = storage
+        .put_raw(
+            "test",
+            "put-raw",
+            namespace(),
+            Path::new("dir/__dir_marker"),
+            b"x",
+        )
+        .await
+        .unwrap_err();
+    let created = storage
+        .create_dir("test", "create-dir", namespace(), Path::new("__dir_marker"))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        (
+            written.to_string().contains("__dir_marker"),
+            created.to_string().contains("__dir_marker"),
+            name_error(written),
+            name_error(created),
+            sent(&requests).len()
+        ),
+        (
+            true,
+            true,
+            Some(BlobNameError::Reserved),
+            Some(BlobNameError::Reserved),
+            0
+        )
+    );
+}
+
+#[test]
+async fn a_name_with_the_marker_in_the_middle_is_written_read_and_listed() {
+    // The marker is reserved as the last segment only. This test shows what a name with the
+    // marker as a middle segment does: the backend sends it to S3 as the guest wrote it, gives
+    // the object back under it, and keeps it in the blob listing, because the filter of the
+    // listing reads the last segment only.
+    let prefix = namespace_prefix();
+    let listing = list_page(
+        &[
+            (format!("{prefix}/tree/__dir_marker/b"), 1),
+            (format!("{prefix}/tree/x/__dir_marker"), 0),
+        ],
+        None,
+    );
+    let (storage, requests) = scripted_storage("", move |request, _| {
+        if request.is_list_objects() {
+            Answer::new(200, listing.clone())
+        } else if request.method == "GET" {
+            Answer::new(200, "b")
+        } else {
+            Answer::new(200, "")
+        }
+    });
+    let path = Path::new("tree/__dir_marker/b");
+
+    storage
+        .put_raw("test", "put-raw", namespace(), path, b"b")
+        .await
+        .unwrap();
+    let read = storage
+        .get_raw("test", "get-raw", namespace(), path)
+        .await
+        .unwrap();
+    let listed = storage
+        .list_blobs_below("test", "list", namespace(), Path::new("tree"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            read,
+            listed.into_vec(),
+            sent(&requests)
+                .iter()
+                .map(|request| (
+                    request.method.clone(),
+                    request.uri.contains("/tree/__dir_marker/b")
+                ))
+                .collect::<Vec<_>>()
+        ),
+        (
+            Some(b"b".to_vec()),
+            vec![listed_blob("tree/__dir_marker/b", 1)],
+            vec![
+                ("PUT".to_string(), true),
+                ("GET".to_string(), true),
+                ("GET".to_string(), false)
+            ]
+        )
+    );
+}
+
+#[test]
+async fn create_dir_writes_the_marker_and_the_listing_leaves_it_out() {
+    let prefix = namespace_prefix();
+    let listing = list_page(
+        &[
+            (format!("{prefix}/tree/__dir_marker"), 0),
+            (format!("{prefix}/tree/a"), 1),
+        ],
+        None,
+    );
+    let (storage, requests) = scripted_storage("", move |request, _| {
+        if request.is_list_objects() {
+            Answer::new(200, listing.clone())
+        } else {
+            Answer::new(200, "")
+        }
+    });
+
+    storage
+        .create_dir("test", "create-dir", namespace(), Path::new("tree"))
+        .await
+        .unwrap();
+    let listed = storage
+        .list_blobs_below("test", "list", namespace(), Path::new("tree"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            listed.into_vec(),
+            sent(&requests)
+                .iter()
+                .map(|request| (
+                    request.method.clone(),
+                    request
+                        .uri
+                        .contains(&format!("/{prefix}/tree/__dir_marker"))
+                ))
+                .collect::<Vec<_>>()
+        ),
+        (
+            vec![listed_blob("tree/a", 1)],
+            vec![("PUT".to_string(), true), ("GET".to_string(), false)]
+        )
+    );
+}
+
+#[test]
+async fn create_dir_rejects_a_directory_whose_marker_does_not_fit_the_key_limit() {
+    // The name has 987 bytes, so its key has 1024 bytes and a blob can have it. The key of
+    // the marker of a directory with the name has 13 bytes more.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+    let name = "a".repeat(987);
+
+    let written = storage
+        .put_raw("test", "put-raw", namespace(), Path::new(&name), b"x")
+        .await
+        .map_err(name_error);
+    let created = storage
+        .create_dir("test", "create-dir", namespace(), Path::new(&name))
+        .await
+        .map_err(name_error);
+
+    assert_eq!(
+        (written, created, sent(&requests).len()),
+        (
+            Ok(()),
+            Err(Some(BlobNameError::TooLong { length: 1037 })),
+            1
+        )
     );
 }
 
