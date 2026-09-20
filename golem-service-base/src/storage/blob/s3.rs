@@ -16,8 +16,8 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
-    BlobStorageNamespace, ExistsResult, ListedBlob, blob_path_is_root, blob_path_to_string,
-    blob_range, normalized_blob_path,
+    BlobStorageNamespace, ExistsResult, ListedBlob, blob_copy_changes_nothing, blob_path_is_root,
+    blob_path_to_string, blob_range, normalized_blob_path, reject_root_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -1022,6 +1022,8 @@ impl BlobStorage for S3BlobStorage {
                 ),
             })),
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
+                // A directory that create_dir made keeps a marker object below its path, and the
+                // time of the marker is the time of the directory.
                 HeadObjectError::NotFound(_) => {
                     // The marker key is longer than the key of the directory, so it can go
                     // past the limit for a key that fits it (`dir_marker_key_of`). The
@@ -1087,6 +1089,8 @@ impl BlobStorage for S3BlobStorage {
         data: &[u8],
     ) -> Result<(), Error> {
         let path = &*normalized_blob_path(path)?;
+        reject_root_blob_path(path)?;
+
         let bucket = self.bucket_of(&namespace);
         let key = self.key_of(&namespace, path)?;
         let bytes = Bytes::copy_from_slice(data);
@@ -1126,6 +1130,8 @@ impl BlobStorage for S3BlobStorage {
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
         let path = &*normalized_blob_path(path)?;
+        reject_root_blob_path(path)?;
+
         let bucket = self.bucket_of(&namespace);
         let key = self.key_of(&namespace, path)?;
 
@@ -1404,6 +1410,13 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<ExistsResult, Error> {
         let path = &*normalized_blob_path(path)?;
+
+        // The root of a namespace is a directory, also when the bucket holds no object under
+        // its prefix.
+        if blob_path_is_root(path) {
+            return Ok(ExistsResult::Directory);
+        }
+
         let bucket = self.bucket_of(&namespace);
         let key = self.key_of(&namespace, path)?;
         let op_id = format!("{bucket} - {key:?}");
@@ -1504,6 +1517,10 @@ impl BlobStorage for S3BlobStorage {
     /// stops the retry loop at it. `move` is the default one, which is this copy and then a
     /// delete of the source, so a source that is not there gives the error from the copy and
     /// deletes nothing.
+    ///
+    /// A copy onto the same path sends no `CopyObject` request: it reads the source and gives
+    /// the same [`BlobMissingError`] when the bucket holds no object at it. A root path at
+    /// either end gives [`BlobNameError::NoName`] (`blob_copy_changes_nothing`).
     async fn copy(
         &self,
         target_label: &'static str,
@@ -1514,6 +1531,18 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), Error> {
         let from = &*normalized_blob_path(from)?;
         let to = &*normalized_blob_path(to)?;
+
+        // A copy onto the same path writes nothing, and it still needs the blob that it reads.
+        if blob_copy_changes_nothing(from, to)? {
+            return match self.exists(target_label, op_label, namespace, from).await? {
+                ExistsResult::File => Ok(()),
+                _ => Err(BlobMissingError {
+                    path: from.to_path_buf(),
+                }
+                .into()),
+            };
+        }
+
         let bucket = self.bucket_of(&namespace);
         let from_key = self.key_of(&namespace, from)?;
         let to_key = self.key_of(&namespace, to)?;

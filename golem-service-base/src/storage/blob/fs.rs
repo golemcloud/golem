@@ -14,8 +14,8 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_path_is_root,
-    normalized_blob_path,
+    BlobMetadata, BlobMissingError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
+    blob_copy_changes_nothing, blob_path_is_root, normalized_blob_path,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -333,7 +333,13 @@ impl BlobStorage for FileSystemBlobStorage {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        let mut entries = async_fs::read_dir(&full_path).await?;
+        // The directory of a namespace comes into being with the first write below it, so a
+        // path that is not there holds nothing, and so does an untouched namespace.
+        let mut entries = match async_fs::read_dir(&full_path).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(err.into()),
+        };
 
         let mut result = Vec::new();
         while let Some(entry) = TryStreamExt::try_next(&mut entries).await? {
@@ -399,6 +405,12 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
     ) -> Result<ExistsResult, Error> {
         let path = &*normalized_blob_path(path)?;
+
+        // The root of a namespace is a directory, also before the first write makes it.
+        if blob_path_is_root(path) {
+            return Ok(ExistsResult::Directory);
+        }
+
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
@@ -423,6 +435,23 @@ impl BlobStorage for FileSystemBlobStorage {
     ) -> Result<(), Error> {
         let from = &*normalized_blob_path(from)?;
         let to = &*normalized_blob_path(to)?;
+
+        // A copy onto the same path writes nothing, and it still needs the blob that it reads.
+        // `async_fs::copy` opens the target for writing before it reads the source, so with one
+        // path it empties the blob.
+        if blob_copy_changes_nothing(from, to)? {
+            return match self
+                .exists(_target_label, _op_label, namespace, from)
+                .await?
+            {
+                ExistsResult::File => Ok(()),
+                _ => Err(BlobMissingError {
+                    path: from.to_path_buf(),
+                }
+                .into()),
+            };
+        }
+
         let from_full_path = self.path_of(&namespace, from);
         let to_full_path = self.path_of(&namespace, to);
         self.ensure_path_is_inside_root(&from_full_path)?;

@@ -1502,19 +1502,16 @@ async fn the_marker_key_of_a_root_path_has_one_separator() {
     // The key of a root path is the prefix of the namespace and a `/` after it, so a marker
     // key that always puts a separator of its own before the marker would have `//` in it.
     // MinIO rejects such a key with `XMinioInvalidObjectName`, and no rule of `BlobNameError`
-    // reads the marker key, so nothing else would catch it.
+    // reads the marker key, so nothing else would catch it. `get_metadata` is the one method
+    // that reads the marker of a root path: `exists` gives `Directory` for such a path and
+    // sends no request, and `create_dir` leaves no directory at the root.
     let prefix = namespace_prefix();
-    let (storage, requests) = scripted_storage("", |request, _| {
-        if request.uri.ends_with("__dir_marker") {
-            Answer::new(200, "")
-        } else {
-            Answer::new(404, "")
-        }
-    });
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, ""));
 
     let root = storage
-        .exists("test", "exists", namespace(), Path::new(""))
+        .get_metadata("test", "get-metadata", namespace(), Path::new(""))
         .await
+        .map(|metadata| metadata.is_some())
         .map_err(name_error);
 
     assert_eq!(
@@ -1526,12 +1523,29 @@ async fn the_marker_key_of_a_root_path_has_one_separator() {
                 .collect::<Vec<_>>()
         ),
         (
-            Ok(ExistsResult::Directory),
+            Ok(false),
             vec![
                 format!("http://s3.test/custom-data/{prefix}/"),
                 format!("http://s3.test/custom-data/{prefix}/__dir_marker"),
             ]
         )
+    );
+}
+
+#[test]
+async fn exists_gives_a_directory_for_a_root_path_and_sends_no_request() {
+    // The root of a namespace is a directory, also when the bucket holds no object under its
+    // prefix, so the answer needs no request of its own.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, ""));
+
+    let root = storage
+        .exists("test", "exists", namespace(), Path::new("."))
+        .await
+        .map_err(name_error);
+
+    assert_eq!(
+        (root, sent(&requests).len()),
+        (Ok(ExistsResult::Directory), 0)
     );
 }
 

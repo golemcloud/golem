@@ -1045,16 +1045,20 @@ mod tests {
 
     /// A guest picks the name of a container and the name of an object, and two empty names
     /// make a path with no name in it, which is the root of the namespace. A name of `.` makes
-    /// the same path, because a `.` is not a name. The in-memory and the SQLite backends read
-    /// the last name of the path, so the name breaks a rule of the backend and the guest gets
-    /// a permanent error: the executor does not retry a name that can never work.
+    /// the same path, because a `.` is not a name.
     ///
-    /// The filesystem backend and the S3 backend are not here. The two of them read no last
-    /// name of the path, so the two of them give no such error: for these same names each of
-    /// them gives `Ok(None)`, the metadata of the root of the namespace, or an error of its
-    /// own. #3911 holds the decision of what a backend gives for a root path, and this test
-    /// holds only what the executor does with the error of a backend that gives one.
-    async fn test_a_root_name_is_invalid_input(blob_store: &impl BlobStoreService) {
+    /// The root of a namespace is a directory, and a directory has no blob at its path, so an
+    /// operation that reads a blob there gives the answer of a path that holds no blob:
+    /// `get_container` gives no metadata and `get_data` finds no object, and `delete_object`
+    /// removes nothing. A blob cannot be where a directory is, so `write_data` gives
+    /// `BlobNameError::NoName` (`reject_root_blob_path`), which is
+    /// `BlobStoreError::InvalidInput`. Both errors are permanent: the executor retries neither
+    /// a name that can never work nor a read of a blob that the storage does not hold.
+    ///
+    /// Only the in-memory backend is here. It is the backend whose answers #3915 holds, and
+    /// the S3 backend gives each of these answers too, which `tests/blob_storage.rs` holds
+    /// against MinIO.
+    async fn test_a_root_name_reads_nothing_and_writes_nothing(blob_store: &impl BlobStoreService) {
         let environment_id = EnvironmentId::new();
         blob_store
             .create_container(environment_id, "container1".to_string())
@@ -1063,26 +1067,41 @@ mod tests {
 
         let container = blob_store
             .get_container(environment_id, "".to_string())
-            .await
-            .map(drop);
-        let written = blob_store.write_data(environment_id, "", "", &[1]).await;
+            .await;
+        let deleted = blob_store
+            .delete_object(environment_id, "".to_string(), "".to_string())
+            .await;
         let read = blob_store
             .get_data(environment_id, "".to_string(), "".to_string(), 0, 0)
             .await
             .map(drop);
-        let deleted = blob_store
-            .delete_object(environment_id, "".to_string(), "".to_string())
-            .await;
+        let written = blob_store.write_data(environment_id, "", "", &[1]).await;
         let dot = blob_store.write_data(environment_id, ".", ".", &[1]).await;
 
-        let results = [container, written, read, deleted, dot];
+        assert_eq!(
+            (
+                container.map_err(|error| error.to_string()),
+                deleted.map_err(|error| error.to_string())
+            ),
+            (Ok(None), Ok(())),
+            "a root path holds no blob to read or to remove"
+        );
         assert!(
-            results.iter().all(|result| matches!(
+            matches!(
+                &read,
+                Err(error @ BlobStoreError::NotFound(_))
+                    if classify_blob_store_error(error) == HostFailureKind::Permanent
+            ),
+            "{read:?}"
+        );
+        let written = [written, dot];
+        assert!(
+            written.iter().all(|result| matches!(
                 result,
                 Err(error @ BlobStoreError::InvalidInput(_))
                     if classify_blob_store_error(error) == HostFailureKind::Permanent
             )),
-            "{results:?}"
+            "{written:?}"
         );
     }
 
@@ -1229,9 +1248,9 @@ mod tests {
     }
 
     #[test]
-    async fn test_a_root_name_is_invalid_input_in_memory() {
+    async fn test_a_root_name_reads_nothing_and_writes_nothing_in_memory() {
         let blob_store = in_memory_blob_store();
-        test_a_root_name_is_invalid_input(&blob_store).await;
+        test_a_root_name_reads_nothing_and_writes_nothing(&blob_store).await;
     }
 
     #[test]
