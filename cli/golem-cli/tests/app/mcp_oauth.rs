@@ -284,7 +284,7 @@ async fn rust_mcp_oauth_consent_invokes_over_tls_and_replays_offline() {
         impl OAuthConsumer for Consumer {
             fn new(_name: String) -> Self { Self { result: String::new() } }
             async fn run(&mut self) -> String {
-                let outcome = match OauthLookupClient::new().oauth_lookup("asymmetric".into()).unwrap().collect().await {
+                let outcome = match OauthLookupClient::new().oauth_lookup("asymmetric".into()).await.unwrap().collect().await {
                     Ok((result, stdout)) => format!("{}:{}:{}", result.structured.answer, result.structured.score, String::from_utf8(stdout).unwrap()),
                     Err(error) => format!("error:{error:?}"),
                 };

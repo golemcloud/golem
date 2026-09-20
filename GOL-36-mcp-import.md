@@ -1,11 +1,11 @@
 # GOL-36: MCP import — work-in-progress specification and plan
 
 Status: implementation in progress. Steps 1–7 and 9 completed after tests, Oracle
-review and bounded bug-finder loops. Steps 8 and 10 remain open: the middleware
-dependency is not integration-ready, and final combined acceptance must include it.
+review and bounded bug-finder loops. Steps 8 and 10 remain open: GOL-439 is now
+merged from main, but dynamic MCP chain compilation and combined acceptance remain.
 The resource-budget boundary has provisional user approval and must be revisited
 in the final review.
-Middleware remains an implementation dependency. The finalized planning snapshot
+Middleware integration remains required. The finalized planning snapshot
 is attached to GOL-36 in Linear.
 The user approved a fixed one-day limit for resolver operation timeouts and
 refresh intervals. The correction passed 28 targeted tests and Oracle review;
@@ -14,7 +14,7 @@ findings or active checkpoint. Public metadata inspection, refresh, generated
 clients, deployment warnings and operator documentation are now implemented and
 verified. Combined OAuth/agent acceptance, quota enforcement, public-oplog
 rendering, protocol validation and generated config checks pass; middleware
-integration is still blocked on its dependency transfer.
+integration can now proceed on the merged dependency.
 
 This is the living record of the requirements, decisions, implementation plan, and
 open details discussed in the planning thread. Update this file in place as the
@@ -1373,7 +1373,25 @@ public-oplog and config acceptance closes this step; middleware remains step 8.
   ordinary-tool attachment interleaving. Updated walkthrough rendering is pending.
   Step 7 remains open for combined quotas, transport/auth acceptance and review.
 
-### Step 8 — dependency integration pending
+### Step 8 — dynamic MCP middleware integration pending
+
+The dependency is now merged from main. The reports below are historical; the
+remaining local implementation is:
+
+1. Preserve per-name MCP middleware bindings through CLI validation, deployment
+   requests, hashing, persistence and deployment snapshots. Unknown imported names
+   warn without dropping their bindings; invalid static middleware still fails.
+2. Share the existing pure middleware compiler between deployment validation and
+   dynamic activation. Snapshot universal installations, per-name bindings and
+   compatibility mode from the existing persisted middleware identity; do not
+   infer installations from a different tool's compiled chain.
+3. Compile each dynamic projection against that exact snapshot for discovery and
+   admission. Feed the resulting chain and MCP leaf into the existing recorded
+   root plan and generic Host dispatcher. Incompatible drift rejects new calls;
+   replay retains recorded metadata and plans without upstream access.
+4. Exercise real universal/per-tool guest middleware over MCP with multiple
+   underlying calls, stdout, cancellation, replay/restart, changed deployment and
+   changed upstream schemas. Count effects and verify idempotency keys separately.
 
 - The dependency status changed during implementation: GOL-39 is merged in
   [PR 3842](https://github.com/golemcloud/golem/pull/3842) and is included in the
@@ -1758,6 +1776,24 @@ public-oplog and config acceptance closes this step; middleware remains step 8.
   freshly built tests and returns clean; Oracle's follow-up finds no blockers in
   the three corrected paths. Fresh integration fixtures and combined acceptance
   remain in progress. No green CI or completed step 8/10 is claimed yet.
+- Main advanced again with external Durable Streams support while validation ran,
+  preventing pull-request CI from starting. The additional merge preserves both
+  service dependencies, configuration tests, payload mappings and CLI test shards.
+  Oracle reports no blockers and the bounded merge bug-finder returns clean.
+  The draft remains open, and CI is running on the combined merge. A build spanning
+  the source update used stale dependencies and must be rerun; it is not passing
+  validation evidence. Executor build caches were cleaned to recover disk space.
+- Fresh local validation passes all 8 executor config tests and all 13 discovery
+  integrations, including renamed middleware lookup and offline MCP replay.
+  The first combined CI run passes 51 jobs and fails three test jobs: structured
+  binding-owner keys invalidate the snapshot test's JSON encoding, and MCP Rust
+  consumer fixtures omit the newly required await before tool admission. The
+  snapshot assertion now scans the entire binary snapshot for plaintext secrets;
+  all four guest call sites await admission separately from result collection.
+  SQLite snapshot/rollback and Rust generated-consumer tests pass locally, as does
+  an adversarial collect/stdout compile probe. Oracle approves both corrections
+  and the bounded bug-finder finds no bugs. Full guest and PostgreSQL acceptance
+  still require the next CI run.
 
 ## Review and decision history
 

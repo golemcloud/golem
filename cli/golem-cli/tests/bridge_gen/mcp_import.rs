@@ -91,7 +91,7 @@ fn mcp_projections_compile_with_rust_generator() {
             &format!(
                 r#"
 async fn consume(client: &{client}) {{
-    let invocation = client.{method}("query".into()).unwrap();
+    let invocation = client.{method}("query".into()).await.unwrap();
     let result = invocation.result().await.unwrap();
     {fields}
     let _ = result.content;

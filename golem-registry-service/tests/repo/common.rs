@@ -6571,9 +6571,14 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             })
             .collect::<Vec<_>>();
         assert_eq!(snapshot.mcp_imports, expected);
-        let serialized = serde_json::to_string(snapshot).unwrap();
-        assert!(!serialized.contains("private-token"));
-        assert!(!serialized.contains("private-password"));
+        let serialized = desert_rust::serialize_to_byte_vec(snapshot).unwrap();
+        for secret in [b"private-token".as_slice(), b"private-password".as_slice()] {
+            assert!(
+                !serialized
+                    .windows(secret.len())
+                    .any(|bytes| bytes == secret)
+            );
+        }
         assert_eq!(
             deps.full_deployment_repo
                 .get_deployment_mcp_import_credential(environment_id, revision, 0)

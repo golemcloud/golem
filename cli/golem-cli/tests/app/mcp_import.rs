@@ -162,7 +162,7 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
             fn new(_name: String) -> Self { Self { results: Vec::new() } }
             async fn run(&mut self) -> Vec<String> {
                 for query in ["simple", "mixed"] {
-                    let (result, stdout) = BearerLookupClient::new().bearer_lookup(query.into()).unwrap().collect().await.unwrap();
+                    let (result, stdout) = BearerLookupClient::new().bearer_lookup(query.into()).await.unwrap().collect().await.unwrap();
                     let content = match result.content {
                         BearerContent::Blocks(blocks) => blocks.into_iter().map(|block| match block {
                             BearerBlocks::Text(text) => text.text,
@@ -173,7 +173,7 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
                     };
                     if query == "mixed" { assert_eq!(content, "left,right"); }
                     self.results.push(format!("bearer:{}:{}:{}:{content}", result.structured.answer, result.structured.score, String::from_utf8(stdout).unwrap()));
-                    let (result, stdout) = BasicLookupClient::new().basic_lookup(query.into()).unwrap().collect().await.unwrap();
+                    let (result, stdout) = BasicLookupClient::new().basic_lookup(query.into()).await.unwrap().collect().await.unwrap();
                     let content = match result.content {
                         BasicContent::Blocks(blocks) => blocks.into_iter().map(|block| match block {
                             BasicBlocks::Text(text) => text.text,
