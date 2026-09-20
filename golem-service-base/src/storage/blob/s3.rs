@@ -34,7 +34,7 @@ use aws_sdk_s3::operation::copy_object::CopyObjectError;
 use aws_sdk_s3::operation::delete_objects::DeleteObjectsOutput;
 use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey;
-use aws_sdk_s3::operation::head_object::HeadObjectError;
+use aws_sdk_s3::operation::head_object::{HeadObjectError, HeadObjectOutput};
 use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
@@ -365,6 +365,66 @@ impl S3BlobStorage {
             });
         }
         Ok(key)
+    }
+
+    /// Tells what the bucket holds at one object key: the head of the object, or `None` when
+    /// the bucket holds no object there.
+    ///
+    /// The key is a key of this backend (`key_of` or `dir_marker_key_of`), so S3 accepts it.
+    /// The request goes again while the error of an attempt is one that one more attempt can
+    /// pass (`is_head_object_error_retriable`), and every other error of the service comes to
+    /// the caller. A key that the bucket does not hold is not such an error: it is the answer.
+    async fn head_object(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        bucket: &str,
+        key: String,
+        op_id: String,
+    ) -> Result<Option<HeadObjectOutput>, Error> {
+        let result = with_retries_customized(
+            target_label,
+            op_label,
+            Some(op_id),
+            &self.config.retries,
+            &(self.client.clone(), bucket, key),
+            |(client, bucket, key)| {
+                Box::pin(async move {
+                    client
+                        .head_object()
+                        .bucket(*bucket)
+                        .key(key.clone())
+                        .send()
+                        .await
+                })
+            },
+            Self::is_head_object_error_retriable,
+            Self::head_object_error_as_loggable,
+            false,
+        )
+        .await;
+
+        match result {
+            Ok(head) => Ok(Some(head)),
+            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
+                HeadObjectError::NotFound(_) => Ok(None),
+                err => Err(err.into()),
+            },
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Gives the time of the last change of the object.
+    ///
+    /// S3 sends that time in each response to a `HeadObject`, so a response without it is not
+    /// one that S3 sends.
+    fn last_modified_of(head: &HeadObjectOutput) -> Timestamp {
+        Timestamp::from(
+            head.last_modified()
+                .expect("S3 gave no time of the last change of the object")
+                .to_millis()
+                .expect("failed to convert date-time value to millis") as u64,
+        )
     }
 
     fn encode_copy_source_key(key: &str) -> String {
@@ -1067,96 +1127,34 @@ impl BlobStorage for S3BlobStorage {
         let key = self.key_of(&namespace, path)?;
         let op_id = format!("{bucket} - {key:?}");
 
-        let file_head_result = with_retries_customized(
-            target_label,
-            op_label,
-            Some(op_id.clone()),
-            &self.config.retries,
-            &(self.client.clone(), bucket, key.clone()),
-            |(client, bucket, key)| {
-                Box::pin(async move {
-                    client
-                        .head_object()
-                        .bucket(*bucket)
-                        .key(key.clone())
-                        .send()
-                        .await
-                })
-            },
-            Self::is_head_object_error_retriable,
-            Self::head_object_error_as_loggable,
-            false,
-        )
-        .await;
-        match file_head_result {
-            Ok(result) => Ok(Some(BlobMetadata {
-                size: result.content_length().unwrap_or_default() as u64,
-                last_modified_at: Timestamp::from(
-                    result
-                        .last_modified
-                        .unwrap()
-                        .to_millis()
-                        .expect("failed to convert date-time value to millis")
-                        as u64,
-                ),
-            })),
-            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                // A directory that create_dir made keeps a marker object below its path, and the
-                // time of the marker is the time of the directory.
-                HeadObjectError::NotFound(_) => {
-                    // The marker key is longer than the key of the directory, so it can go
-                    // past the limit for a key that fits it (`dir_marker_key_of`). The
-                    // backend sends no key that S3 rejects, so a directory with such a key
-                    // has no marker object, and nothing is at the path.
-                    let Ok(marker) = Self::dir_marker_key_of(&key) else {
-                        return Ok(None);
-                    };
-                    let dir_marker_head_result = with_retries_customized(
-                        target_label,
-                        op_label,
-                        Some(op_id),
-                        &self.config.retries,
-                        &(self.client.clone(), bucket, marker),
-                        |(client, bucket, marker)| {
-                            Box::pin(async move {
-                                client
-                                    .head_object()
-                                    .bucket(*bucket)
-                                    .key(marker.clone())
-                                    .send()
-                                    .await
-                            })
-                        },
-                        Self::is_head_object_error_retriable,
-                        Self::head_object_error_as_loggable,
-                        false,
-                    )
-                    .await;
-                    match dir_marker_head_result {
-                        Ok(result) => Ok(Some(BlobMetadata {
-                            size: 0,
-                            last_modified_at: Timestamp::from(
-                                result
-                                    .last_modified
-                                    .unwrap()
-                                    .to_millis()
-                                    .expect("failed to convert date-time value to millis")
-                                    as u64,
-                            ),
-                        })),
-                        Err(SdkError::ServiceError(service_error)) => {
-                            match service_error.into_err() {
-                                HeadObjectError::NotFound(_) => Ok(None),
-                                err => Err(err.into()),
-                            }
-                        }
-                        Err(err) => Err(err.into()),
-                    }
-                }
-                err => Err(err.into()),
-            },
-            Err(err) => Err(err.into()),
+        if let Some(head) = self
+            .head_object(target_label, op_label, bucket, key.clone(), op_id.clone())
+            .await?
+        {
+            return Ok(Some(BlobMetadata {
+                size: head.content_length().unwrap_or_default() as u64,
+                last_modified_at: Self::last_modified_of(&head),
+            }));
         }
+
+        // A directory that create_dir made keeps a marker object below its path, and the time
+        // of the marker is the time of the directory.
+        //
+        // The marker key is longer than the key of the directory, so it can go past the limit
+        // for a key that fits it (`dir_marker_key_of`). The backend sends no key that S3
+        // rejects, so a directory with such a key has no marker object, and nothing is at the
+        // path.
+        let Ok(marker) = Self::dir_marker_key_of(&key) else {
+            return Ok(None);
+        };
+
+        Ok(self
+            .head_object(target_label, op_label, bucket, marker, op_id)
+            .await?
+            .map(|head| BlobMetadata {
+                size: 0,
+                last_modified_at: Self::last_modified_of(&head),
+            }))
     }
 
     async fn put_raw(
@@ -1500,90 +1498,38 @@ impl BlobStorage for S3BlobStorage {
         let key = self.key_of(&namespace, path)?;
         let op_id = format!("{bucket} - {key:?}");
 
-        let file_head_result = with_retries_customized(
-            target_label,
-            op_label,
-            Some(op_id.clone()),
-            &self.config.retries,
-            &(self.client.clone(), bucket, key.clone()),
-            |(client, bucket, key)| {
-                Box::pin(async move {
-                    client
-                        .head_object()
-                        .bucket(*bucket)
-                        .key(key.clone())
-                        .send()
-                        .await
-                })
-            },
-            Self::is_head_object_error_retriable,
-            Self::head_object_error_as_loggable,
-            false,
-        )
-        .await;
-        match file_head_result {
-            Ok(_) => Ok(ExistsResult::File),
-            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                HeadObjectError::NotFound(_) => {
-                    let marker_exists = match Self::dir_marker_key_of(&key) {
-                        Ok(marker) => {
-                            let dir_marker_head_result = with_retries_customized(
-                                target_label,
-                                op_label,
-                                Some(op_id),
-                                &self.config.retries,
-                                &(self.client.clone(), bucket, marker),
-                                |(client, bucket, marker)| {
-                                    Box::pin(async move {
-                                        client
-                                            .head_object()
-                                            .bucket(*bucket)
-                                            .key(marker.clone())
-                                            .send()
-                                            .await
-                                    })
-                                },
-                                Self::is_head_object_error_retriable,
-                                Self::head_object_error_as_loggable,
-                                false,
-                            )
-                            .await;
-                            match dir_marker_head_result {
-                                Ok(_) => true,
-                                Err(SdkError::ServiceError(service_error)) => {
-                                    match service_error.into_err() {
-                                        HeadObjectError::NotFound(_) => false,
-                                        err => return Err(err.into()),
-                                    }
-                                }
-                                Err(err) => return Err(err.into()),
-                            }
-                        }
-                        // The marker key is longer than the key of the directory, so it can
-                        // go past the limit for a key that fits it (`dir_marker_key_of`). The
-                        // backend sends no key that S3 rejects, so a directory with such a
-                        // key has no marker object. A child of it can still fit the limit, so
-                        // the prefix below decides.
-                        Err(_) => false,
-                    };
+        if self
+            .head_object(target_label, op_label, bucket, key.clone(), op_id.clone())
+            .await?
+            .is_some()
+        {
+            return Ok(ExistsResult::File);
+        }
 
-                    // S3 has no real directories: an implicit directory can exist (because of
-                    // nested objects or markers) without an explicit `__dir_marker` of its
-                    // own. Match the filesystem and in-memory backends and give a directory
-                    // whenever any object is under the prefix of this path.
-                    if marker_exists
-                        || self
-                            .prefix_has_objects(target_label, op_label, bucket, &key)
-                            .await?
-                    {
-                        Ok(ExistsResult::Directory)
-                    } else {
-                        Ok(ExistsResult::DoesNotExist)
-                    }
-                }
-                err => Err(err.into()),
-            },
-            Err(err) => Err(err.into()),
+        let marker_exists = match Self::dir_marker_key_of(&key) {
+            Ok(marker) => self
+                .head_object(target_label, op_label, bucket, marker, op_id)
+                .await?
+                .is_some(),
+            // The marker key is longer than the key of the directory, so it can go past the
+            // limit for a key that fits it (`dir_marker_key_of`). The backend sends no key
+            // that S3 rejects, so a directory with such a key has no marker object. A child
+            // of it can still fit the limit, so the prefix below decides.
+            Err(_) => false,
+        };
+
+        // S3 has no real directories: an implicit directory can exist (because of nested
+        // objects or markers) without an explicit `__dir_marker` of its own. Match the
+        // filesystem and in-memory backends and give a directory whenever any object is under
+        // the prefix of this path.
+        if marker_exists
+            || self
+                .prefix_has_objects(target_label, op_label, bucket, &key)
+                .await?
+        {
+            Ok(ExistsResult::Directory)
+        } else {
+            Ok(ExistsResult::DoesNotExist)
         }
     }
 
