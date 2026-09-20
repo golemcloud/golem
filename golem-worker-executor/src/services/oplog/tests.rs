@@ -203,7 +203,7 @@ impl OplogArchive for RecordingArchive {
     }
 }
 
-fn make_agent_metadata(
+pub(super) fn make_agent_metadata(
     agent_id: AgentId,
     created_by: AccountId,
     environment_id: EnvironmentId,
@@ -236,13 +236,14 @@ fn invocation_wallet_pin() -> InvocationWalletPin {
     }
 }
 
-fn default_last_known_status() -> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
+pub(super) fn default_last_known_status()
+-> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
     read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(arc_swap::ArcSwap::from_pointee(
         AgentStatusRecord::default(),
     )))
 }
 
-fn default_execution_status(
+pub(super) fn default_execution_status(
     agent_mode: AgentMode,
 ) -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
     read_only_lock::std::ReadOnlyLock::new(Arc::new(RwLock::new(ExecutionStatus::Suspended {
