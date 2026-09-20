@@ -398,6 +398,16 @@ impl S3BlobStorage {
     /// Returns whether any object exists under the given prefix (treated as a
     /// directory, i.e. with a trailing `/`). Used to detect implicit directories
     /// that have children but no explicit `__dir_marker`.
+    ///
+    /// The prefix is a key with a `/` after it, so it has one byte more than the key and can
+    /// have more bytes than [`MAX_KEY_BYTES`]. MinIO accepts such a prefix: it reads the
+    /// prefix of a listing with `IsValidObjectPrefix`, which counts no bytes
+    /// (`validateListObjectsArgs` in `cmd/bucket-listobjects-handlers.go` and
+    /// `checkListObjsArgs` in `cmd/object-api-input-checks.go`), and it counts the 1024 bytes
+    /// of a name only for an object (`checkObjectNameForLengthAndSlash`). The API reference of
+    /// S3 gives no limit for the `prefix` parameter of ListObjectsV2 and does not say what S3
+    /// does with a prefix that has more bytes than a key, so this doc does not say it
+    /// either.
     async fn prefix_has_objects(
         &self,
         target_label: &'static str,

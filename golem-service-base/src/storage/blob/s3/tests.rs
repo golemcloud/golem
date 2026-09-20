@@ -1399,7 +1399,7 @@ async fn exists_tells_the_truth_for_a_name_whose_marker_does_not_fit_the_key_lim
     // of a child with a name of one byte has 1014 bytes. No marker object of such a directory
     // can be there, so `exists` sends no request for one, and the objects below the prefix
     // decide. A name that is too long for a marker is a name that a blob can still have, so
-    // an error here would tell a guest that its question is invalid when the answer is
+    // an error here would tell a guest that its question is invalid when `exists` can give
     // `Directory` or `DoesNotExist`.
     let name = "a".repeat(975);
     let prefix = namespace_prefix();
@@ -1457,8 +1457,8 @@ async fn exists_tells_the_truth_for_a_name_whose_marker_does_not_fit_the_key_lim
 async fn get_metadata_gives_none_for_a_missing_name_whose_marker_does_not_fit_the_key_limit() {
     // The key of a name of 987 bytes has 1024 bytes, the most that S3 accepts, so the key of
     // the marker of a directory with that name has 1037 and does not fit. `put_raw` writes a
-    // blob at that name, so a question about it is a valid question, and the answer is that
-    // nothing is there: one `HEAD` of the name, no request for a marker, and `None`.
+    // blob at that name, so a question about it is a valid question, and nothing is there:
+    // one `HEAD` of the name, no request for a marker, and `None`.
     let name = "a".repeat(987);
     let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, ""));
 
