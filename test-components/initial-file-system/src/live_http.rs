@@ -113,7 +113,12 @@ impl LiveFiles for LiveFilesImpl {
             .unwrap();
         root.symlink_at("../private", "public/parent-link").unwrap();
         if name.starts_with("large-") {
-            let contents: Vec<u8> = (0..32 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+            // gRPC gzip must not shrink this below the transport receive window.
+            let mut contents = vec![0; 32 * 1024 * 1024];
+            blake3::Hasher::new()
+                .update(b"live-file-backpressure")
+                .finalize_xof()
+                .fill(&mut contents);
             std::fs::write("/public/large.bin", contents).unwrap();
         }
         Self

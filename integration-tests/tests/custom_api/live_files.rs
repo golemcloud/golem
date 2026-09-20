@@ -17,6 +17,44 @@ use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(EnvBasedTestDependencies);
 
+fn large_file_contents() -> Vec<u8> {
+    let mut contents = vec![0; 32 * 1024 * 1024];
+    blake3::Hasher::new()
+        .update(b"live-file-backpressure")
+        .finalize_xof()
+        .fill(&mut contents);
+    contents
+}
+
+#[test]
+fn large_file_exceeds_compressed_grpc_window() {
+    use flate2::{Compression, write::GzEncoder};
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        GetFileContentsResponse, get_file_contents_response,
+    };
+    use prost::Message;
+    use std::io::Write;
+
+    let wire_size = |contents: &[u8]| -> usize {
+        contents
+            .chunks(golem_common::model::filesystem::FILE_READ_CHUNK_SIZE)
+            .map(|chunk| {
+                let message = GetFileContentsResponse {
+                    result: Some(get_file_contents_response::Result::Success(chunk.to_vec())),
+                };
+                let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+                gzip.write_all(&message.encode_to_vec()).unwrap();
+                5 + gzip.finish().unwrap().len()
+            })
+            .sum()
+    };
+    // The old periodic payload fits inside the inner 2 MiB HTTP/2 receive window,
+    // allowing the executor to reach EOF despite a backpressured HTTP response.
+    let periodic: Vec<u8> = (0..32 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+    assert!(wire_size(&periodic) < 2 * 1024 * 1024);
+    assert!(wire_size(&large_file_contents()) > 30 * 1024 * 1024);
+}
+
 async fn context(deps: &EnvBasedTestDependencies) -> anyhow::Result<HttpTestContext> {
     make_test_context_with_files(
         deps,
@@ -297,13 +335,13 @@ async fn mounted_live_stream_completion_and_disconnect_release_mutation(
         .user
         .get_latest_component_revision(&context.component_id)
         .await?;
+    let expected = large_file_contents();
     for disconnect in [false, true] {
         let name = format!("large-{disconnect}");
         let domain = context.host_header.to_str()?;
         let address = ([127, 0, 0, 1], context.base_url.port().unwrap()).into();
-        // HTTP/1.1 can buffer the entire response in the transport before the mutation is
-        // admitted, so an unread client body does not prove that the server read is active.
-        // The small HTTP/2 stream window provides deterministic transport backpressure.
+        // Bound outer transport read-ahead as well as the gzip-compressed inner gRPC
+        // stream. The fixture must remain larger than both windows after compression.
         let client = reqwest::Client::builder()
             .no_proxy()
             .resolve(domain, address)
@@ -319,9 +357,7 @@ async fn mounted_live_stream_completion_and_disconnect_release_mutation(
             (32 * 1024 * 1024).to_string()
         );
         let first = response.chunk().await?.unwrap();
-        for (i, byte) in first.iter().enumerate() {
-            assert_eq!(*byte, (i % 251) as u8);
-        }
+        assert_eq!(first.as_ref(), &expected[..first.len()]);
         let parsed = agent_id!("LiveFiles", name.as_str());
         let mut mutation = Box::pin(context.user.invoke_and_await_agent(
             &component,
@@ -343,19 +379,17 @@ async fn mounted_live_stream_completion_and_disconnect_release_mutation(
                 }
             }) => admitted??,
         }
+        let early_mutation = tokio::time::timeout(Duration::from_millis(200), &mut mutation).await;
         assert!(
-            tokio::time::timeout(Duration::from_millis(200), &mut mutation)
-                .await
-                .is_err()
+            early_mutation.is_err(),
+            "mutation completed while the response was held (disconnect={disconnect}): {early_mutation:?}"
         );
         if disconnect {
             drop(response);
         } else {
             let mut offset = first.len();
             while let Some(chunk) = response.chunk().await? {
-                for (i, byte) in chunk.iter().enumerate() {
-                    assert_eq!(*byte, ((offset + i) % 251) as u8);
-                }
+                assert_eq!(chunk.as_ref(), &expected[offset..offset + chunk.len()]);
                 offset += chunk.len();
             }
             assert_eq!(offset, 32 * 1024 * 1024);

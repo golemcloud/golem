@@ -49,6 +49,7 @@ serde_yaml = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
+flate2 = { workspace = true }
 goldenfile = { workspace = true }
 h2 = { workspace = true }
 http = { workspace = true }

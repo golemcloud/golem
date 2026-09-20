@@ -687,6 +687,7 @@ name = "it_initial_file_system"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "blake3",
  "ctor",
  "golem-rust",
  "serde",

@@ -5412,6 +5412,7 @@ dependencies = [
  "chrono",
  "clap",
  "convert_case 0.11.0",
+ "flate2",
  "futures",
  "futures-concurrency",
  "goldenfile",
