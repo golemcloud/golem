@@ -1240,7 +1240,7 @@ pub struct LocalServer {
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
-        with = "crate::model::byte_size::optional"
+        with = "golem_common::config::byte_size::optional"
     )]
     pub system_memory_override: Option<std::num::NonZeroU64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]

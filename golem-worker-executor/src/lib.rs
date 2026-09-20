@@ -390,6 +390,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>> {
         let native_tool_catalog = self.create_native_tool_catalog()?;
+        let external_durable_streams = Arc::new(
+            services::external_durable_stream::DefaultExternalDurableStreamService::new()?,
+        );
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -424,6 +427,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            external_durable_streams.clone(),
             shutdown_token.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
@@ -467,6 +471,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            external_durable_streams.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
             additional_deps.clone(),
@@ -478,6 +483,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             active_agents,
             agent_types_service,
             agent_webhooks_service,
+            external_durable_streams,
             card_service,
             engine,
             linker,
@@ -542,6 +548,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
+        crate::preview2::golem::agent::durable_streams::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
         crate::preview2::golem::tool::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
