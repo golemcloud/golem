@@ -45,11 +45,12 @@ use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 use test_r::{test, timeout};
-use tracing::Level;
 use tracing::instrument::WithSubscriber;
+use tracing::subscriber::Interest;
+use tracing::{Event, Level, Metadata, span};
 use uuid::Uuid;
 
 /// A request that the scripted transport received.
@@ -361,12 +362,65 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogLines {
     }
 }
 
+/// A subscriber that records no event, and that is interested in each callsite.
+///
+/// `open_each_callsite` makes it the default subscriber of the process.
+struct OpenCallsites;
+
+impl tracing::Subscriber for OpenCallsites {
+    fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
+        Interest::sometimes()
+    }
+
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        false
+    }
+
+    fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
+        span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+    fn event(&self, _event: &Event<'_>) {}
+
+    fn enter(&self, _span: &span::Id) {}
+
+    fn exit(&self, _span: &span::Id) {}
+}
+
+/// Makes `OpenCallsites` the default subscriber of the process, one time.
+///
+/// `tracing` keeps one `Interest` for each callsite, for the full process, and the first event
+/// of a callsite makes that `Interest` from the subscriber of the thread that gives the event.
+/// A thread with no subscriber makes `Interest::never`, and then `tracing` keeps each later
+/// event of that callsite away from every subscriber, also from the subscriber that
+/// `with_error_log` attaches to its own future. The tests share one process and more than one
+/// thread, so the thread that first gives an event of the retry loop is not always the thread
+/// of the test that reads the error log. A service sets its default subscriber before its
+/// first request, and gets the `Interest` of each callsite from that subscriber.
+///
+/// `OpenCallsites` is interested in each callsite, so each callsite gets `Interest::sometimes`,
+/// `tracing` asks the subscriber of the thread about each event, and the subscriber of
+/// `with_error_log` gets each error that its future gives. `OpenCallsites` records no event, so
+/// a test that attaches no subscriber gets no output.
+fn open_each_callsite() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        tracing::subscriber::set_global_default(OpenCallsites)
+            .expect("the tests set no other default subscriber of the process");
+    });
+}
+
 /// Runs a future with a subscriber that records each event of the `error` level, and no event
 /// of a lower level.
 ///
 /// Gives the output of the future, and the `op_label` of each recorded event of the retry loop,
 /// in the order of the events.
 async fn with_error_log<T>(future: impl Future<Output = T>) -> (T, Vec<String>) {
+    open_each_callsite();
     let lines = LogLines::default();
     let subscriber = tracing_subscriber::fmt()
         .json()
