@@ -14,9 +14,8 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_child_path,
-    blob_file_name_to_string, blob_parent_to_string, blob_path_is_root, blob_path_to_string,
-    normalized_blob_path, reject_root_blob_path,
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath,
+    blob_child_path, normalized_blob_path,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -72,12 +71,12 @@ impl InMemoryBlobStorage {
 
     /// Gives the key of the blob at the path.
     ///
-    /// The path is in its one form and is not at the root of the namespace.
-    fn blob_key(namespace: BlobStorageNamespace, path: &Path) -> Result<Key, Error> {
+    /// The path is not at the root of the namespace.
+    fn blob_key(namespace: BlobStorageNamespace, path: &NormalizedBlobPath) -> Result<Key, Error> {
         Ok(Key {
             namespace,
-            dir: blob_parent_to_string(path)?,
-            file: Some(blob_file_name_to_string(path)?),
+            dir: path.parent_text()?,
+            file: Some(path.file_name_text()?),
         })
     }
 
@@ -104,14 +103,14 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
         // A root path is a directory, and a directory has no blob at its path.
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(None);
         }
 
-        let key = Self::blob_key(namespace, path)?;
+        let key = Self::blob_key(namespace, &path)?;
 
         Ok(self
             .data
@@ -130,14 +129,14 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
         // A root path is a directory, and a directory has no blob at its path.
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(None);
         }
 
-        let key = Self::blob_key(namespace, path)?;
+        let key = Self::blob_key(namespace, &path)?;
 
         Ok(self
             .data
@@ -161,14 +160,14 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
         // A root path is a directory, and create_dir leaves no directory at the root.
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(None);
         }
 
-        let blob_key = Self::blob_key(namespace.clone(), path)?;
+        let blob_key = Self::blob_key(namespace.clone(), &path)?;
         let blob_metadata = self
             .data
             .read_async(&blob_key, |_, entry| match entry {
@@ -186,7 +185,7 @@ impl BlobStorage for InMemoryBlobStorage {
         // directory that only holds blobs has no key, so it has no time of its own.
         let dir_key = Key {
             namespace,
-            dir: blob_path_to_string(path)?,
+            dir: path.text()?,
             file: None,
         };
 
@@ -211,10 +210,10 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
-        reject_root_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
+        path.reject_root()?;
 
-        let key = Self::blob_key(namespace, path)?;
+        let key = Self::blob_key(namespace, &path)?;
         let entry = Entry::File {
             data: data.to_vec(),
             metadata: BlobMetadata {
@@ -236,10 +235,10 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
-        reject_root_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
+        path.reject_root()?;
 
-        let key = Self::blob_key(namespace, path)?;
+        let key = Self::blob_key(namespace, &path)?;
 
         let stream = stream.make_stream_erased().await?;
         let data = stream.try_collect::<Vec<_>>().await?.concat();
@@ -263,14 +262,14 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
         // A root path is a directory, and a directory has no blob at its path to remove.
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(());
         }
 
-        let key = Self::blob_key(namespace, path)?;
+        let key = Self::blob_key(namespace, &path)?;
         self.data.remove_async(&key).await;
 
         Ok(())
@@ -283,15 +282,15 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(());
         }
 
         let key = Key {
             namespace,
-            dir: blob_path_to_string(path)?,
+            dir: path.text()?,
             file: None,
         };
 
@@ -314,8 +313,8 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
-        let path = &*normalized_blob_path(path)?;
-        let dir = blob_path_to_string(path)?;
+        let path = normalized_blob_path(path)?;
+        let dir = path.text()?;
 
         // The directory holds the blobs that have it as their directory. It also holds the
         // directories that `create_dir` made below it, at the depth of their own key.
@@ -351,8 +350,8 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        let path = &*normalized_blob_path(path)?;
-        let directory = blob_path_to_string(path)?;
+        let path = normalized_blob_path(path)?;
+        let directory = path.text()?;
         let nested = format!("{directory}/");
 
         let mut listed = Vec::new();
@@ -382,13 +381,13 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(false);
         }
 
-        let dir = blob_path_to_string(path)?;
+        let dir = path.text()?;
 
         // A directory that only holds blobs has no key of its own, so the keys below it tell
         // that it is there. They go with it, at any depth.
@@ -414,23 +413,23 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
         // The root of a namespace is a directory, also when the namespace holds nothing.
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(ExistsResult::Directory);
         }
 
         // A blob at the path wins over a directory at the same path, because the other backends
         // answer that way: a key that holds bytes is a file, whatever sits below it.
-        let blob_key = Self::blob_key(namespace.clone(), path)?;
+        let blob_key = Self::blob_key(namespace.clone(), &path)?;
         if self.data.contains_async(&blob_key).await {
             return Ok(ExistsResult::File);
         }
 
         // A directory that only holds blobs has no key of its own, so the keys below it tell
         // that it is there. This is the range that delete_dir removes.
-        let dir = blob_path_to_string(path)?;
+        let dir = path.text()?;
         let has_keys_below = self
             .data
             .any_async(|key, _| Self::is_in_dir(key, &namespace, &dir))

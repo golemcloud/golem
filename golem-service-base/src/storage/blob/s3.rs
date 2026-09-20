@@ -16,9 +16,9 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
-    BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob, blob_copy_changes_nothing,
-    blob_path_is_root, blob_path_to_string, blob_range, check_blob_name, normalized_blob_path,
-    reject_root_blob_path,
+    BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob, NormalizedBlobPath,
+    blob_copy_changes_nothing, blob_path_to_string, blob_range, check_blob_name,
+    normalized_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -298,10 +298,9 @@ impl S3BlobStorage {
 
     /// Gives the object key of the blob at `path` in `namespace`, or a [`BlobNameError`].
     ///
-    /// `path` is the one form of a relative blob path (`normalized_blob_path`). The key is the
-    /// prefix of the namespace, then `/`, then `path`. The key of the root of a namespace is
-    /// the prefix and a `/` after it, which is what `Path::join` gives for an empty path. The
-    /// prefix holds the environment id, so the key is never empty.
+    /// The key is the prefix of the namespace, then `/`, then `path`. The key of the root of a
+    /// namespace is the prefix and a `/` after it, which is what `Path::join` gives for an
+    /// empty path. The prefix holds the environment id, so the key is never empty.
     ///
     /// Each key that the backend makes of a blob path comes from this function or from
     /// `dir_marker_key_of`, so each such key satisfies the rules of [`BlobNameError`]. Two
@@ -312,7 +311,7 @@ impl S3BlobStorage {
     fn key_of(
         &self,
         namespace: &BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath,
     ) -> Result<String, BlobNameError> {
         let key = blob_path_to_string(&self.prefix_of(namespace).join(path))?;
         Self::checked_key(key)
@@ -933,9 +932,9 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
 
         let result = with_retries_customized(
             target_label,
@@ -982,9 +981,9 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
 
         let result = with_retries_customized(
             target_label,
@@ -1037,9 +1036,9 @@ impl BlobStorage for S3BlobStorage {
         if start > end {
             return Err(BlobRangeError { start, end }.into());
         }
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
 
         let result = with_retries_customized(
             target_label,
@@ -1122,9 +1121,9 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
         let op_id = format!("{bucket} - {key:?}");
 
         if let Some(head) = self
@@ -1165,11 +1164,11 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
-        reject_root_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
+        path.reject_root()?;
 
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
         let bytes = Bytes::copy_from_slice(data);
 
         with_retries_customized(
@@ -1206,11 +1205,11 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
-        reject_root_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
+        path.reject_root()?;
 
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
 
         fn go<'a>(
             args: &'a (
@@ -1276,9 +1275,9 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
 
         with_retries_customized(
             target_label,
@@ -1317,8 +1316,8 @@ impl BlobStorage for S3BlobStorage {
         let to_delete = paths
             .iter()
             .map(|path| {
-                let path = &*normalized_blob_path(path)?;
-                let key = self.key_of(&namespace, path)?;
+                let path = normalized_blob_path(path)?;
+                let key = self.key_of(&namespace, &path)?;
                 ObjectIdentifier::builder()
                     .key(key)
                     .build()
@@ -1337,14 +1336,14 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(());
         }
 
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
         let marker = Self::dir_marker_key_of(&key)?;
 
         with_retries_customized(
@@ -1380,10 +1379,10 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
 
         Ok(self
             .list_objects(target_label, op_label, bucket, &key)
@@ -1420,10 +1419,10 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
 
         self.list_objects(target_label, op_label, bucket, &key)
             .await?
@@ -1452,14 +1451,14 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(false);
         }
 
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
 
         let to_delete = self
             .list_objects(target_label, op_label, bucket, &key)
@@ -1486,16 +1485,16 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
         // The root of a namespace is a directory, also when the bucket holds no object under
         // its prefix.
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(ExistsResult::Directory);
         }
 
         let bucket = self.bucket_of(&namespace);
-        let key = self.key_of(&namespace, path)?;
+        let key = self.key_of(&namespace, &path)?;
         let op_id = format!("{bucket} - {key:?}");
 
         if self
@@ -1558,12 +1557,12 @@ impl BlobStorage for S3BlobStorage {
         // `BlobMissingError` names the path as the guest wrote it. The next line makes `from`
         // the normalized path, so keep the path of the guest first.
         let guest_from = from;
-        let from = &*normalized_blob_path(from)?;
-        let to = &*normalized_blob_path(to)?;
+        let from = normalized_blob_path(from)?;
+        let to = normalized_blob_path(to)?;
 
-        let changes_nothing = blob_copy_changes_nothing(from, to)?;
+        let changes_nothing = blob_copy_changes_nothing(&from, &to)?;
         let bucket = self.bucket_of(&namespace);
-        let from_key = self.key_of(&namespace, from)?;
+        let from_key = self.key_of(&namespace, &from)?;
 
         // A copy onto the same path writes nothing, and it still needs the blob that it reads.
         // The copy asks one thing of the storage: does the bucket hold a blob at `from`? The
@@ -1586,7 +1585,7 @@ impl BlobStorage for S3BlobStorage {
             };
         }
 
-        let to_key = self.key_of(&namespace, to)?;
+        let to_key = self.key_of(&namespace, &to)?;
         let encoded_from_key = Self::encode_copy_source_key(&from_key);
 
         let result = with_retries_customized(

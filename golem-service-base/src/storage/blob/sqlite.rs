@@ -18,7 +18,6 @@ use crate::replayable_stream::ErasedReplayableStream;
 use crate::repo::RepoError;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_child_path,
-    blob_file_name_to_string, blob_parent_to_string, blob_path_is_root, blob_path_to_string,
     normalized_blob_path,
 };
 use anyhow::{Error, anyhow};
@@ -105,11 +104,11 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let query = sqlx::query_as("SELECT value FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE;")
             .bind(Self::namespace(namespace))
-            .bind(blob_parent_to_string(path)?)
-            .bind(blob_file_name_to_string(path)?);
+            .bind(path.parent_text()?)
+            .bind(path.file_name_text()?);
 
         let result = self
             .pool
@@ -128,9 +127,9 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let result = self
-            .get_raw(target_label, op_label, namespace, path)
+            .get_raw(target_label, op_label, namespace, &path)
             .await?;
         Ok(result.map(|bytes| {
             let stream = tokio_stream::once(Ok(Bytes::from(bytes)));
@@ -147,13 +146,13 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let query = sqlx::query_as(
             "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
         )
             .bind(Self::namespace(namespace))
-            .bind(blob_parent_to_string(path)?)
-            .bind(blob_file_name_to_string(path)?);
+            .bind(path.parent_text()?)
+            .bind(path.file_name_text()?);
 
         let result = self
             .pool
@@ -174,7 +173,7 @@ impl BlobStorage for SqliteBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let size = data.len() as i64;
         let query = sqlx::query(
                     r#"
@@ -184,8 +183,8 @@ impl BlobStorage for SqliteBlobStorage {
                     "#,
                 )
                     .bind(Self::namespace(namespace))
-                    .bind(blob_parent_to_string(path)?)
-                    .bind(blob_file_name_to_string(path)?)
+                    .bind(path.parent_text()?)
+                    .bind(path.file_name_text()?)
                     .bind(data)
                     .bind(size);
 
@@ -205,14 +204,14 @@ impl BlobStorage for SqliteBlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let data = stream
             .make_stream_erased()
             .await?
             .try_collect::<Vec<_>>()
             .await?;
         let data = Bytes::from(data.concat());
-        self.put_raw(target_label, op_label, namespace, path, &data)
+        self.put_raw(target_label, op_label, namespace, &path, &data)
             .await?;
         Ok(())
     }
@@ -224,13 +223,13 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let query = sqlx::query(
             "DELETE FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
         )
         .bind(Self::namespace(namespace))
-        .bind(blob_parent_to_string(path)?)
-        .bind(blob_file_name_to_string(path)?);
+        .bind(path.parent_text()?)
+        .bind(path.file_name_text()?);
         self.pool
             .with_rw(target_label, op_label)
             .execute(query)
@@ -246,9 +245,9 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(());
         }
 
@@ -260,8 +259,8 @@ impl BlobStorage for SqliteBlobStorage {
                     "#
                 )
                 .bind(Self::namespace(namespace))
-                .bind(blob_parent_to_string(path)?)
-                .bind(blob_file_name_to_string(path)?);
+                .bind(path.parent_text()?)
+                .bind(path.file_name_text()?);
 
         self.pool
             .with_rw(target_label, op_label)
@@ -278,11 +277,11 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let query =
             sqlx::query_as("SELECT name FROM blob_storage WHERE namespace = ? AND parent = ?;")
                 .bind(Self::namespace(namespace))
-                .bind(blob_path_to_string(path)?);
+                .bind(path.text()?);
 
         let result = self
             .pool
@@ -301,8 +300,8 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        let path = &*normalized_blob_path(path)?;
-        let directory = blob_path_to_string(path)?;
+        let path = normalized_blob_path(path)?;
+        let directory = path.text()?;
 
         // Text comparisons use the BINARY collation, so the match is case-sensitive. A parent
         // below `directory` is at least `directory/` and less than `directory0`, because `0` is
@@ -344,14 +343,14 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(false);
         }
 
-        let parent = blob_parent_to_string(path)?;
-        let name = blob_file_name_to_string(path)?;
+        let parent = path.parent_text()?;
+        let name = path.file_name_text()?;
 
         // A directory that only holds blobs has no row of its own, because put_raw writes no
         // row for the parent. One statement removes the row of the directory and every row
@@ -398,16 +397,16 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
-        let path = &*normalized_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
         // The root of a namespace is a directory, also when the namespace holds no row.
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(ExistsResult::Directory);
         }
 
         let namespace = Self::namespace(namespace);
-        let parent = blob_parent_to_string(path)?;
-        let name = blob_file_name_to_string(path)?;
+        let parent = path.parent_text()?;
+        let name = path.file_name_text()?;
 
         // A directory that only holds blobs has no row of its own, because put_raw writes no
         // row for the parent. The second condition is the key range that delete_dir removes,

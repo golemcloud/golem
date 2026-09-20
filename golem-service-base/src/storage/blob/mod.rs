@@ -23,15 +23,15 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
-use std::borrow::Cow;
 use std::fmt::Debug;
-use std::path::Component;
 use std::path::{Path, PathBuf};
 
 pub mod fs;
 pub mod memory;
 pub mod s3;
 pub mod sqlite;
+
+pub(crate) use normalized_path::{NormalizedBlobPath, normalized_blob_path};
 
 /// Keeps blobs at the paths of a namespace.
 ///
@@ -256,7 +256,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         to: &Path,
     ) -> Result<(), Error> {
         // A copy onto the same path writes nothing, and it still needs the blob that it reads.
-        if blob_copy_changes_nothing(from, to)? {
+        if blob_copy_changes_nothing(&normalized_blob_path(from)?, &normalized_blob_path(to)?)? {
             return match self.exists(target_label, op_label, namespace, from).await? {
                 ExistsResult::File => Ok(()),
                 _ => Err(BlobMissingError {
@@ -298,7 +298,7 @@ pub trait BlobStorage: Debug + Send + Sync {
         to: &Path,
     ) -> Result<(), Error> {
         // A move onto the same path keeps the blob, so it is the copy and no delete.
-        if blob_copy_changes_nothing(from, to)? {
+        if blob_copy_changes_nothing(&normalized_blob_path(from)?, &normalized_blob_path(to)?)? {
             return self.copy(target_label, op_label, namespace, from, to).await;
         }
 
@@ -604,10 +604,10 @@ pub(crate) const DIR_MARKER: &str = "__dir_marker";
 /// its own object.
 ///
 /// Each operation that writes a blob applies `NoName` as well: the write operations of the
-/// in-memory and the S3 backends apply it to the path of the blob (`reject_root_blob_path`),
-/// `copy` and `move` apply it to both of their paths (`blob_copy_changes_nothing`), and the
-/// in-memory and the SQLite backends apply it to each path whose last name they read
-/// (`blob_file_name_to_string`).
+/// in-memory and the S3 backends apply it to the path of the blob
+/// (`NormalizedBlobPath::reject_root`), `copy` and `move` apply it to both of their paths
+/// (`blob_copy_changes_nothing`), and the in-memory and the SQLite backends apply it to each
+/// path whose last name they read (`NormalizedBlobPath::file_name_text`).
 ///
 /// The second group is of the object key of the S3 backend, which applies it to the full key:
 /// the namespace prefix, the separators and the name (`S3BlobStorage::key_of`). `TooLong` is
@@ -647,19 +647,21 @@ pub enum BlobNameError {
     #[error("the blob path must be valid UTF-8: {path:?}")]
     NotUtf8 { path: PathBuf },
     /// The blob path has no name in it, so it is at the root of its namespace
-    /// (`blob_path_is_root`) and names no blob. An empty path has no name in it, and so does a
-    /// path that only has `.` in it. A guest that gives an empty container name and an empty
-    /// object name makes such a path.
+    /// (`NormalizedBlobPath::is_root`) and names no blob. An empty path has no name in it, and
+    /// so does a path that only has `.` in it. A guest that gives an empty container name and
+    /// an empty object name makes such a path.
     ///
     /// A root path is a directory, and a blob cannot be where a directory is, so an operation
     /// that writes a blob at such a path gives this error: `put_raw` and `put_stream` of the
-    /// in-memory and the S3 backends (`reject_root_blob_path`), and `copy` and `move` of each
-    /// backend, at either of their two paths (`blob_copy_changes_nothing`). An operation that
-    /// reads a blob gives `Ok(None)` for a root path, and `exists` gives `Directory`.
+    /// in-memory and the S3 backends (`NormalizedBlobPath::reject_root`), and `copy` and `move`
+    /// of each backend, at either of their two paths (`blob_copy_changes_nothing`). An
+    /// operation that reads a blob gives `Ok(None)` for a root path, and `exists` gives
+    /// `Directory`.
     ///
     /// The in-memory and the SQLite backends hold a blob by the name of its directory and the
-    /// name of the blob itself (`blob_file_name_to_string`), and a root path gives no such
-    /// name, so each of them gives this error for a root path that reaches that function.
+    /// name of the blob itself (`NormalizedBlobPath::file_name_text`), and a root path gives no
+    /// such name, so each of them gives this error for a root path that reaches that
+    /// function.
     #[error("the blob path has no name in it: {path:?}")]
     NoName { path: PathBuf },
     /// The object key has `length` bytes of UTF-8, which is more than `max`, the largest
@@ -757,114 +759,209 @@ pub(crate) fn blob_path_starts_with_windows_prefix(text: &str) -> bool {
     text.starts_with(r"\\") || matches!(bytes, [letter, b':', ..] if letter.is_ascii_alphabetic())
 }
 
-/// Gives the one form of a relative blob path, or an error.
+/// Holds the one form of a blob path and the one function that makes it.
 ///
-/// The form holds the names of the path and one separator between two names. A `.` and an extra
-/// separator are not names, so they go away, and a path at the root of a namespace becomes the
-/// empty path. Two paths that name the same blob get the same form. An absolute path, a path
-/// with `..` in it, and a path with a prefix of Windows give a [`BlobNameError`], which is
-/// permanent.
-///
-/// The form is then read as text, so a path that is not valid UTF-8 gives
-/// [`BlobNameError::NotUtf8`]. `blob_path_starts_with_windows_prefix` gives
-/// [`BlobNameError::NotRelative`] for a path that Windows holds outside the namespace, and
-/// `check_blob_name` gives the rule that the text breaks. The text is what a backend stores,
-/// and the rules read `\` as a separator, which the names of the path do not
-/// (`Path::components` reads `\` as a name on unix). Every backend calls this function for
-/// every path that it gets, so every backend gives the same error for the same name, on every
-/// host.
-pub(crate) fn normalized_blob_path(path: &Path) -> Result<Cow<'_, Path>, BlobNameError> {
-    if path.is_absolute() {
-        return Err(BlobNameError::NotRelative {
-            path: path.to_path_buf(),
-        });
-    }
+/// The field of [`NormalizedBlobPath`] is private to this module, and no backend is in it, so
+/// `normalized_blob_path` is the one way to make the type.
+mod normalized_path {
+    use super::{
+        BlobNameError, blob_path_starts_with_windows_prefix, blob_path_to_string, check_blob_name,
+    };
+    use std::borrow::Cow;
+    use std::ops::Deref;
+    use std::path::{Component, Path};
 
-    let mut names_length = 0usize;
-    let mut names_count = 0usize;
-    for component in path.components() {
-        match component {
-            Component::Normal(name) => {
-                names_length += name.len();
-                names_count += 1;
-            }
-            Component::CurDir => {}
-            Component::ParentDir => {
-                return Err(BlobNameError::ParentDir {
-                    path: path.to_path_buf(),
-                });
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(BlobNameError::NotRelative {
-                    path: path.to_path_buf(),
-                });
-            }
+    /// The one form of a relative blob path (`normalized_blob_path`).
+    ///
+    /// Every backend gets the path of a caller, makes this form of it, and stores that form.
+    /// The functions that make a key of a path take this type and nothing else, so a path
+    /// that has not been through `normalized_blob_path` cannot reach them and no comment has
+    /// to say that it must not.
+    ///
+    /// The form borrows the path of the caller when that path is already in its one form, so
+    /// the common path of every operation allocates nothing.
+    ///
+    /// The type gives the path itself to a caller that reads it, and that caller has a
+    /// `&Path` (`Deref`). A caller that makes a key has to name the type, and the four
+    /// backends do: `S3BlobStorage::key_of`, `FileSystemBlobStorage::path_of`,
+    /// `InMemoryBlobStorage::blob_key`, and the parts of the key that the in-memory and the
+    /// SQLite backends bind.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct NormalizedBlobPath<'a>(Cow<'a, Path>);
+
+    impl NormalizedBlobPath<'static> {
+        /// Gives the path at the root of a namespace, which has no name in it.
+        pub(crate) fn root() -> Self {
+            Self(Cow::Borrowed(Path::new("")))
         }
     }
 
-    // The path is already in its one form when its length is exactly its names plus the one
-    // separator that sits between two names, so nothing has to be built.
-    let normalized = if names_length + names_count.saturating_sub(1) == path.as_os_str().len() {
-        Cow::Borrowed(path)
-    } else {
-        Cow::Owned(
-            path.components()
-                .filter(|component| matches!(component, Component::Normal(_)))
-                .collect(),
-        )
-    };
+    impl NormalizedBlobPath<'_> {
+        /// Tells if the path is at the root of a namespace.
+        ///
+        /// A path is at the root when it has no name in it. An empty path is at the root,
+        /// and so is a path that only has `.` in it, because the one form keeps no `.`.
+        pub(crate) fn is_root(&self) -> bool {
+            !self
+                .0
+                .components()
+                .any(|component| matches!(component, Component::Normal(_)))
+        }
 
-    // The error names the path as the caller gave it, because the guest reads the message.
-    let text = normalized.to_str().ok_or_else(|| BlobNameError::NotUtf8 {
-        path: path.to_path_buf(),
-    })?;
-    // The rule holds for the one form, so a path whose one form starts with a prefix of
-    // Windows gets the error as well, and the one form of an accepted path is accepted.
-    if blob_path_starts_with_windows_prefix(text) {
-        return Err(BlobNameError::NotRelative {
-            path: path.to_path_buf(),
-        });
+        /// Gives [`BlobNameError::NoName`] if the path is at the root of a namespace.
+        ///
+        /// A path at the root is a directory, and a blob cannot be where a directory is. A
+        /// guest can give an empty container name and an empty object name, so the path is of
+        /// the guest and the error is permanent.
+        pub(crate) fn reject_root(&self) -> Result<(), BlobNameError> {
+            if self.is_root() {
+                Err(BlobNameError::NoName {
+                    path: self.0.to_path_buf(),
+                })
+            } else {
+                Ok(())
+            }
+        }
+
+        /// Gives the text of the path, which is the key that a backend stores.
+        pub(crate) fn text(&self) -> Result<String, BlobNameError> {
+            blob_path_to_string(&self.0)
+        }
+
+        /// Gives the text of the path of the directory that holds the blob at this path.
+        ///
+        /// The root of the namespace is the empty text.
+        pub(crate) fn parent_text(&self) -> Result<String, BlobNameError> {
+            match self.0.parent() {
+                Some(parent) => blob_path_to_string(parent),
+                None => Ok(String::new()),
+            }
+        }
+
+        /// Gives the text of the last name of the path.
+        ///
+        /// A path that is not valid UTF-8 gives the same [`BlobNameError`] as
+        /// `blob_path_to_string`, which `normalized_blob_path` has already refused. A path
+        /// with no name in it is at the root of its namespace (`is_root`) and gives
+        /// [`BlobNameError::NoName`]: a guest can pick two empty names, so the path is of the
+        /// guest and so is the error. The two errors are permanent.
+        pub(crate) fn file_name_text(&self) -> Result<String, BlobNameError> {
+            self.0
+                .file_name()
+                .ok_or_else(|| BlobNameError::NoName {
+                    path: self.0.to_path_buf(),
+                })
+                .and_then(|name| {
+                    name.to_str().map(|name| name.to_string()).ok_or_else(|| {
+                        BlobNameError::NotUtf8 {
+                            path: self.0.to_path_buf(),
+                        }
+                    })
+                })
+        }
     }
-    check_blob_name(text)?;
 
-    Ok(normalized)
-}
+    impl Deref for NormalizedBlobPath<'_> {
+        type Target = Path;
 
-/// Tells if the path is at the root of a namespace.
-///
-/// A path is at the root when it has no name in it. An empty path is at the root, and so is a
-/// path that only has `.` in it.
-pub(crate) fn blob_path_is_root(path: &Path) -> bool {
-    !path
-        .components()
-        .any(|component| matches!(component, Component::Normal(_)))
-}
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
 
-/// Gives [`BlobNameError::NoName`] if the path is at the root of a namespace.
-///
-/// A path at the root is a directory, and a blob cannot be where a directory is. A guest can
-/// give an empty container name and an empty object name, so the path is of the guest and the
-/// error is permanent.
-pub(crate) fn reject_root_blob_path(path: &Path) -> Result<(), BlobNameError> {
-    if blob_path_is_root(path) {
-        Err(BlobNameError::NoName {
+    impl AsRef<Path> for NormalizedBlobPath<'_> {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    /// Gives the one form of a relative blob path, or an error.
+    ///
+    /// The form holds the names of the path and one separator between two names. A `.` and
+    /// an extra separator are not names, so they go away, and a path at the root of a
+    /// namespace becomes the empty path. Two paths that name the same blob get the same form.
+    /// An absolute path, a path with `..` in it, and a path with a prefix of Windows give a
+    /// [`BlobNameError`], which is permanent.
+    ///
+    /// The form is then read as text, so a path that is not valid UTF-8 gives
+    /// [`BlobNameError::NotUtf8`]. `blob_path_starts_with_windows_prefix` gives
+    /// [`BlobNameError::NotRelative`] for a path that Windows holds outside the namespace,
+    /// and `check_blob_name` gives the rule that the text breaks. The text is what a backend
+    /// stores, and the rules read `\` as a separator, which the names of the path do not
+    /// (`Path::components` reads `\` as a name on unix). Every backend calls this function
+    /// for every path that it gets, so every backend gives the same error for the same name,
+    /// on every host.
+    pub(crate) fn normalized_blob_path(
+        path: &Path,
+    ) -> Result<NormalizedBlobPath<'_>, BlobNameError> {
+        if path.is_absolute() {
+            return Err(BlobNameError::NotRelative {
+                path: path.to_path_buf(),
+            });
+        }
+
+        let mut names_length = 0usize;
+        let mut names_count = 0usize;
+        for component in path.components() {
+            match component {
+                Component::Normal(name) => {
+                    names_length += name.len();
+                    names_count += 1;
+                }
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    return Err(BlobNameError::ParentDir {
+                        path: path.to_path_buf(),
+                    });
+                }
+                Component::RootDir | Component::Prefix(_) => {
+                    return Err(BlobNameError::NotRelative {
+                        path: path.to_path_buf(),
+                    });
+                }
+            }
+        }
+
+        // The path is already in its one form when its length is exactly its names plus the one
+        // separator that sits between two names, so nothing has to be built.
+        let normalized = if names_length + names_count.saturating_sub(1) == path.as_os_str().len() {
+            Cow::Borrowed(path)
+        } else {
+            Cow::Owned(
+                path.components()
+                    .filter(|component| matches!(component, Component::Normal(_)))
+                    .collect(),
+            )
+        };
+
+        // The error names the path as the caller gave it, because the guest reads the message.
+        let text = normalized.to_str().ok_or_else(|| BlobNameError::NotUtf8 {
             path: path.to_path_buf(),
-        })
-    } else {
-        Ok(())
+        })?;
+        // The rule holds for the one form, so a path whose one form starts with a prefix of
+        // Windows gets the error as well, and the one form of an accepted path is accepted.
+        if blob_path_starts_with_windows_prefix(text) {
+            return Err(BlobNameError::NotRelative {
+                path: path.to_path_buf(),
+            });
+        }
+        check_blob_name(text)?;
+
+        Ok(NormalizedBlobPath(normalized))
     }
 }
 
 /// Tells if a copy from one path to the other changes nothing, or gives a [`BlobNameError`].
 ///
-/// A copy onto the same path changes nothing, because the blob is already there. The paths get
-/// their one form first, so two forms of one path are the same path. A root path at either end
+/// A copy onto the same path changes nothing, because the blob is already there. Both paths are
+/// in their one form, so two forms of one path are the same path. A root path at either end
 /// gives [`BlobNameError::NoName`], because a blob cannot be where a directory is.
-pub(crate) fn blob_copy_changes_nothing(from: &Path, to: &Path) -> Result<bool, BlobNameError> {
-    let from = normalized_blob_path(from)?;
-    let to = normalized_blob_path(to)?;
-    reject_root_blob_path(&from)?;
-    reject_root_blob_path(&to)?;
+pub(crate) fn blob_copy_changes_nothing(
+    from: &NormalizedBlobPath,
+    to: &NormalizedBlobPath,
+) -> Result<bool, BlobNameError> {
+    from.reject_root()?;
+    to.reject_root()?;
 
     Ok(from == to)
 }
@@ -876,13 +973,6 @@ pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, BlobNameError> 
         .ok_or_else(|| BlobNameError::NotUtf8 {
             path: path.to_path_buf(),
         })
-}
-
-pub(crate) fn blob_parent_to_string(path: &Path) -> Result<String, BlobNameError> {
-    match path.parent() {
-        Some(parent) => blob_path_to_string(parent),
-        None => Ok(String::new()),
-    }
 }
 
 /// Makes the path of a blob from the path of its directory and its name.
@@ -898,31 +988,10 @@ pub(crate) fn blob_child_path(directory: &str, name: &str) -> Box<Path> {
     PathBuf::from(path).into_boxed_path()
 }
 
-/// Gives the text of the last name of the path.
-///
-/// A path that is not valid UTF-8 gives the same [`BlobNameError`] as `blob_path_to_string`. A
-/// path with no name in it is at the root of its namespace (`blob_path_is_root`) and gives
-/// [`BlobNameError::NoName`]: a guest can pick two empty names, so the path is of the guest and
-/// so is the error. The two errors are permanent.
-pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, BlobNameError> {
-    path.file_name()
-        .ok_or_else(|| BlobNameError::NoName {
-            path: path.to_path_buf(),
-        })
-        .and_then(|name| {
-            name.to_str()
-                .map(|s| s.to_string())
-                .ok_or_else(|| BlobNameError::NotUtf8 {
-                    path: path.to_path_buf(),
-                })
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        BlobNameError, BlobRangeError, blob_file_name_to_string, blob_path_to_string, blob_range,
-        normalized_blob_path,
+        BlobNameError, BlobRangeError, blob_path_to_string, blob_range, normalized_blob_path,
     };
     use pretty_assertions::assert_eq;
     use std::path::{Path, PathBuf};
@@ -969,7 +1038,7 @@ mod tests {
         let paths = ["", ".", "a", "./a//b/", "/escape", "../escape", "a/../b"];
 
         let results =
-            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.into_owned()));
+            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.to_path_buf()));
 
         assert_eq!(
             results,
@@ -991,6 +1060,18 @@ mod tests {
         );
     }
 
+    /// A path that is already in its one form is the one form, and the result borrows it. Each
+    /// operation of each backend makes this form of the path that it gets, so the common path
+    /// allocates nothing.
+    #[test]
+    fn the_one_form_of_a_path_that_is_already_in_it_borrows_that_path() {
+        let path = Path::new("dir/blob");
+
+        let normalized = normalized_blob_path(path).unwrap();
+
+        assert!(std::ptr::eq(&*normalized, path));
+    }
+
     /// A path that starts with a prefix of Windows names a place outside the namespace on that
     /// host: `C:` names a drive and `\\` names a server. Windows gives such a prefix as
     /// `Component::Prefix` and unix gives it as a name of the path, so the rule reads the text
@@ -1007,7 +1088,7 @@ mod tests {
         ];
 
         let results =
-            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.into_owned()));
+            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.to_path_buf()));
 
         assert_eq!(
             results,
@@ -1025,7 +1106,7 @@ mod tests {
         let paths = ["note:1", "a/C:/b", "ab:cd", "1:/x"];
 
         let results =
-            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.into_owned()));
+            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.to_path_buf()));
 
         assert_eq!(results, paths.map(|path| Ok(PathBuf::from(path))));
     }
@@ -1047,7 +1128,7 @@ mod tests {
         ];
 
         let results =
-            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.into_owned()));
+            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.to_path_buf()));
 
         assert_eq!(
             results,
@@ -1075,8 +1156,8 @@ mod tests {
     }
 
     /// The guest gives its names as text, so only a path of another source can break this
-    /// rule. The one form of the path is text, so every backend gives the error, and each
-    /// function that reads the text of a path gives it too.
+    /// rule. `normalized_blob_path` gives the error, so no `NormalizedBlobPath` holds such a
+    /// path and the functions that read the one form cannot get one.
     #[cfg(unix)]
     #[test]
     fn a_path_that_is_not_utf8_gives_the_utf8_rule() {
@@ -1090,22 +1171,26 @@ mod tests {
 
         assert_eq!(
             (
-                normalized_blob_path(path).map(|path| path.into_owned()),
+                normalized_blob_path(path).map(|path| path.to_path_buf()),
                 blob_path_to_string(path),
-                blob_file_name_to_string(path)
             ),
-            (Err(expected.clone()), Err(expected.clone()), Err(expected))
+            (Err(expected.clone()), Err(expected))
         );
     }
 
     /// A guest picks the name of its container and the name of its object, so it can give two
     /// names that make a path with no name in it. The in-memory and the SQLite backends read
-    /// the last name of the path, and the rule is of the name, so the error is permanent.
+    /// the last name of the path, and the rule is of the name, so the error is permanent. The
+    /// one form of such a path is the empty path, and the error names that form.
     #[test]
     fn a_path_with_no_name_in_it_gives_the_name_rule() {
         let paths = ["", "."];
 
-        let results = paths.map(|path| blob_file_name_to_string(Path::new(path)));
+        let results = paths.map(|path| {
+            normalized_blob_path(Path::new(path))
+                .and_then(|path| path.file_name_text())
+                .map(|_| ())
+        });
 
         assert_eq!(
             results,
@@ -1114,7 +1199,7 @@ mod tests {
                     path: PathBuf::from("")
                 }),
                 Err(BlobNameError::NoName {
-                    path: PathBuf::from(".")
+                    path: PathBuf::from("")
                 }),
             ]
         );
