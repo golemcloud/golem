@@ -501,6 +501,14 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AgentUpdateMode",
                 "golem_common::model::worker::AgentUpdateMode",
             ),
+            (
+                "SerializableToolRpcError",
+                "golem_common::model::tool::SerializableToolRpcError",
+            ),
+            (
+                "SerializableToolError",
+                "golem_common::model::tool::SerializableToolError",
+            ),
             // oplog
             ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
             (
@@ -605,6 +613,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("MetadataEnvelope", "golem_common::schema::MetadataEnvelope"),
             ("Role", "golem_common::schema::Role"),
             ("TypeId", "golem_common::schema::TypeId"),
+            ("Tool", "golem_common::schema::tool::Tool"),
         ],
         &[
             "/v1/components/{component_id}/workers/{agent_name}/connect",

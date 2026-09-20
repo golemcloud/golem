@@ -94,3 +94,8 @@ message AgentConfigDeclarationSchema {
   repeated string path = 2;
   SchemaType value_type = 3;
 }
+
+message ComponentConfigSchema {
+  SchemaGraph schema = 1;
+  repeated AgentConfigDeclarationSchema declarations = 2;
+}

@@ -92,6 +92,7 @@ impl WorkerService {
         let route_resolver = self.services.route_resolver.clone();
         let openapi_service = self.services.openapi_service.clone();
         let auth_service = self.services.auth_service.clone();
+        let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
@@ -99,6 +100,7 @@ impl WorkerService {
                 route_resolver,
                 openapi_service,
                 auth_service,
+                mcp_capability_lookup,
                 None,
             )
             .await;
@@ -136,6 +138,7 @@ impl WorkerService {
         let route_resolver = self.services.route_resolver.clone();
         let openapi_service = self.services.openapi_service.clone();
         let auth_service = self.services.auth_service.clone();
+        let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
@@ -143,6 +146,7 @@ impl WorkerService {
                 route_resolver,
                 openapi_service,
                 auth_service,
+                mcp_capability_lookup,
                 None,
             )
             .await;

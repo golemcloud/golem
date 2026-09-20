@@ -1,7 +1,7 @@
 /** Runtime support for exact graph-backed generated tool bridges. @since 1.6.0 */
 import type * as Host from "golem:tool/host@0.1.0"
 import type * as Common from "golem:tool/common@0.1.0"
-import { Effect, Option, Scope, Stream } from "effect"
+import { Effect, Option, Stream } from "effect"
 import * as Bridge from "./Bridge.js"
 import { ToolClient } from "./host/ToolClient.js"
 import { liveToolStart, ToolTransport } from "./Tool.js"
@@ -25,10 +25,10 @@ export interface ToolInvocationResult {
 }
 /** Runtime error preserved by generated clients. @since 1.6.0 @category errors */
 export type ToolRuntimeError<E> =
-  | { readonly tag: "rpc"; readonly error: Host.RpcError }
+  | { readonly tag: "rpc"; readonly error: Host.ToolRpcError }
   | { readonly tag: "tool"; readonly error: E }
 /** Host and lifetime requirements of a generated invocation. @since 1.6.0 @category models */
-export type ToolRequirements = ToolClient | Scope.Scope
+export type ToolRequirements = ToolClient
 
 /** Started streaming invocation exposed by generated clients. @since 1.6.0 @category streams */
 export interface StartedToolInvocation<A, E, R = never> {
@@ -51,7 +51,7 @@ export interface ToolClientRuntime {
       readonly cancel: Effect.Effect<void>
     },
     ToolRuntimeError<E>,
-    ToolClient | Scope.Scope
+    ToolClient
   >
 }
 
@@ -96,25 +96,14 @@ export const createToolClientRuntime = (tool: string): ToolClientRuntime => ({
           catch: (error) => protocol("failed to encode tool input", error),
         }),
       }
-      const invocation = yield* Effect.acquireRelease(
-        Option.isSome(transport)
-          ? transport.value
-              .start(tool, path, wireInput, inputStream, stdout)
-              .pipe(Effect.mapError((error) => protocol("tool invocation failed", error)))
-          : liveToolStart(tool, path, wireInput, inputStream, stdout).pipe(
-              Effect.mapError((error) => protocol("tool invocation failed", error)),
-            ),
-        (started) => started.cancel.pipe(Effect.ignoreCause),
-      )
+      const invocation = yield* Option.isSome(transport)
+        ? transport.value
+            .start(tool, path, wireInput, inputStream, stdout)
+            .pipe(Effect.mapError((error) => protocol("tool invocation failed", error)))
+        : liveToolStart(tool, path, wireInput, inputStream, stdout).pipe(
+            Effect.mapError((error) => protocol("tool invocation failed", error)),
+          )
       const stdoutIterator = invocation.stdout?.[Symbol.asyncIterator]()
-      if (stdoutIterator?.return) {
-        yield* Effect.addFinalizer(() =>
-          Effect.tryPromise({
-            try: () => stdoutIterator.return!(),
-            catch: () => undefined,
-          }).pipe(Effect.ignoreCause),
-        )
-      }
       return {
         stdout: stdoutIterator ? byteStream<E>(stdoutIterator) : undefined,
         result: invocation.result.pipe(
@@ -162,12 +151,12 @@ export const decodeTypedSchemaValue = <A>(
 }
 
 /** Identify a WIT RPC error. @since 1.6.0 @category errors */
-export const isRpcError = (value: unknown): value is Host.RpcError =>
+export const isRpcError = (value: unknown): value is Host.ToolRpcError =>
   typeof value === "object" && value !== null && "tag" in value
 
 /** Split declared custom failures from transport failures. @since 1.6.0 @category errors */
 export const splitToolRpcError = <E>(
-  error: Host.RpcError,
+  error: Host.ToolRpcError,
   decode: (name: string, payload: TypedSchemaValue) => E,
 ): ToolRuntimeError<E> => {
   if (error.tag !== "remote-tool-error" || error.val.tag !== "custom-error")

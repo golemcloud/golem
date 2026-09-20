@@ -46,7 +46,7 @@ use golem_common::model::retry_policy::RetryPolicyId;
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::{
     CompiledToolBinding, RegisteredTool, RemoteToolDeployment, TOOL_METADATA_WIT_VERSION,
-    ToolBindingInput, ToolDeploymentMetadata, ToolName, ToolSource,
+    ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata, ToolName, ToolSource,
 };
 use golem_common::model::tool_middleware::{
     RegisteredToolMiddleware, RemoteToolMiddlewareDeployment, TOOL_MIDDLEWARE_METADATA_WIT_VERSION,
@@ -334,6 +334,11 @@ impl DeploymentContext {
             remote_tools: diff::remote_tool_deployments(
                 compiled_tools.registered_tools.clone(),
                 compiled_tools.agent_tool_bindings.clone(),
+                &self
+                    .components
+                    .values()
+                    .map(|component| (component.id, component.component_name.clone()))
+                    .collect(),
                 &published_tools,
             )?,
             published_tools,
@@ -482,10 +487,14 @@ impl DeploymentContext {
                 continue;
             }
 
-            let (component, metadata, valid, (environment_binding, valid_agent_bindings)) =
-                implementations
-                    .pop()
-                    .expect("tool implementation list is never empty");
+            let (
+                component,
+                metadata,
+                valid,
+                (environment_binding, valid_component_bindings, valid_agent_bindings),
+            ) = implementations
+                .pop()
+                .expect("tool implementation list is never empty");
             if !valid {
                 continue;
             }
@@ -514,6 +523,7 @@ impl DeploymentContext {
                 release_id: None,
                 definition: metadata.definition.clone(),
                 provision: metadata.provision.clone(),
+                component_bindings: valid_component_bindings.clone(),
                 source: source.clone(),
                 owner_account_id: component.account_id,
                 owner_account_email: component.account_email.clone(),
@@ -528,7 +538,9 @@ impl DeploymentContext {
 
                 let Some(binding) = compile_tool_binding(
                     deployment_revision,
-                    agent_type,
+                    ToolBindingOwner::AgentType {
+                        agent_type_name: agent_type.clone(),
+                    },
                     &tool_name,
                     environment_binding,
                     agent_binding,
@@ -544,6 +556,30 @@ impl DeploymentContext {
                     continue;
                 };
                 agent_tool_bindings.push(binding);
+            }
+            for (component_name, component_binding) in &valid_component_bindings {
+                let Some(owner_component) = self.components.get(component_name) else {
+                    continue;
+                };
+                if let Some(binding) = compile_tool_binding(
+                    deployment_revision,
+                    ToolBindingOwner::ComponentBaseline {
+                        component_id: owner_component.id,
+                    },
+                    &tool_name,
+                    environment_binding,
+                    Some(component_binding),
+                    None,
+                    component.account_id,
+                    &component.account_email,
+                    source.clone(),
+                    &metadata.definition.version,
+                    TOOL_METADATA_WIT_VERSION,
+                    metadata_digest,
+                    warnings,
+                ) {
+                    agent_tool_bindings.push(binding);
+                }
             }
         }
 
@@ -620,6 +656,21 @@ impl DeploymentContext {
                     errors,
                 )
             });
+            let valid_component_bindings: BTreeMap<ComponentName, ToolBindingInput> = deployment
+                .component_bindings
+                .iter()
+                .filter_map(|(component_name, binding)| {
+                    validate_tool_binding(
+                        &deployment.name,
+                        None,
+                        binding,
+                        &resolved.owner.email,
+                        &release.version,
+                        errors,
+                    )
+                    .map(|binding| (component_name.clone(), binding.clone()))
+                })
+                .collect();
             let mut valid_agent_bindings = BTreeMap::new();
             for (agent_type, binding) in &deployment.agent_bindings {
                 if !self.registered_agent_types.contains_key(agent_type) {
@@ -648,6 +699,7 @@ impl DeploymentContext {
                 release_id: Some(release.id),
                 definition: release.definition.clone(),
                 provision: deployment.provision.clone(),
+                component_bindings: valid_component_bindings.clone(),
                 source: release.source.clone(),
                 owner_account_id: release.owner_account_id,
                 owner_account_email: resolved.owner.email.clone(),
@@ -660,7 +712,9 @@ impl DeploymentContext {
             for agent_type in agent_types {
                 let Some(binding) = compile_tool_binding(
                     deployment_revision,
-                    agent_type,
+                    ToolBindingOwner::AgentType {
+                        agent_type_name: agent_type.clone(),
+                    },
                     &deployment.name,
                     environment_binding,
                     valid_agent_bindings.get(agent_type).copied(),
@@ -676,6 +730,30 @@ impl DeploymentContext {
                     continue;
                 };
                 agent_tool_bindings.push(binding);
+            }
+            for (component_name, component_binding) in &valid_component_bindings {
+                let Some(owner_component) = self.components.get(component_name) else {
+                    continue;
+                };
+                if let Some(binding) = compile_tool_binding(
+                    deployment_revision,
+                    ToolBindingOwner::ComponentBaseline {
+                        component_id: owner_component.id,
+                    },
+                    &deployment.name,
+                    environment_binding,
+                    Some(component_binding),
+                    Some(release.id),
+                    release.owner_account_id,
+                    &resolved.owner.email,
+                    release.source.clone(),
+                    &release.version,
+                    &release.metadata_version,
+                    release.metadata_digest,
+                    warnings,
+                ) {
+                    agent_tool_bindings.push(binding);
+                }
             }
         }
 
@@ -693,6 +771,7 @@ impl DeploymentContext {
         errors: &mut Vec<DeployValidationError>,
     ) -> (
         Option<&'a ToolBindingInput>,
+        BTreeMap<ComponentName, ToolBindingInput>,
         BTreeMap<AgentTypeName, &'a ToolBindingInput>,
     ) {
         let environment_binding = metadata.environment_binding.as_ref().and_then(|binding| {
@@ -705,6 +784,21 @@ impl DeploymentContext {
                 errors,
             )
         });
+        let component_bindings = metadata
+            .component_bindings
+            .iter()
+            .filter_map(|(component_name, binding)| {
+                validate_tool_binding(
+                    tool_name,
+                    None,
+                    binding,
+                    &component.account_email,
+                    &metadata.definition.version,
+                    errors,
+                )
+                .map(|binding| (component_name.clone(), binding.clone()))
+            })
+            .collect();
         let mut agent_bindings = BTreeMap::new();
         for (agent_type, binding) in &metadata.agent_bindings {
             if !self.registered_agent_types.contains_key(agent_type) {
@@ -725,7 +819,7 @@ impl DeploymentContext {
                 agent_bindings.insert(agent_type.clone(), binding);
             }
         }
-        (environment_binding, agent_bindings)
+        (environment_binding, component_bindings, agent_bindings)
     }
 
     pub fn compile_http_api_routes(
@@ -901,12 +995,22 @@ impl DeploymentContext {
         account_id: AccountId,
         deployment_revision: golem_common::model::deployment::DeploymentRevision,
         security_schemes: &HashMap<SecuritySchemeName, SecuritySchemeDetails>,
+        compiled_tools: &CompiledTools,
+        middleware_chains: &[golem_common::model::tool_middleware::CompiledToolMiddlewareChain],
         errors: &mut Vec<DeployValidationError>,
     ) -> Vec<golem_service_base::mcp::CompiledMcp> {
         let mut all_compiled_mcps = Vec::new();
 
         for (domain, mcp_deployment) in &self.mcp_deployments {
             let mut registered_agent_types = Vec::new();
+            let mut native_tools = Vec::new();
+
+            if mcp_deployment.agents.is_empty() && mcp_deployment.tools.is_empty() {
+                errors.push(DeployValidationError::McpDeploymentEmpty {
+                    mcp_deployment_domain: domain.clone(),
+                });
+                continue;
+            }
 
             let mut unique_scheme_names: HashSet<&SecuritySchemeName> = HashSet::new();
             for (agent_type, agent_options) in &mcp_deployment.agents {
@@ -927,6 +1031,114 @@ impl DeploymentContext {
 
                 if let Some(name) = &agent_options.security_scheme {
                     unique_scheme_names.insert(name);
+                }
+            }
+
+            for (tool_name, options) in &mcp_deployment.tools {
+                if options.include.is_some() && options.exclude.is_some() {
+                    errors.push(DeployValidationError::McpDeploymentInvalidTool {
+                        mcp_deployment_domain: domain.clone(),
+                        tool_name: tool_name.clone(),
+                        error: "include and exclude are mutually exclusive".to_string(),
+                    });
+                    continue;
+                }
+                let Some(component) = self.components.get(&options.owner_component) else {
+                    errors.push(DeployValidationError::McpDeploymentInvalidTool {
+                        mcp_deployment_domain: domain.clone(),
+                        tool_name: tool_name.clone(),
+                        error: format!(
+                            "owner component {} is not in this deployment",
+                            options.owner_component.0
+                        ),
+                    });
+                    continue;
+                };
+                let bound = compiled_tools.agent_tool_bindings.iter().any(|binding| {
+                    binding.tool_name == *tool_name
+                        && binding.owner
+                            == ToolBindingOwner::ComponentBaseline {
+                                component_id: component.id,
+                            }
+                        && binding.deployment_revision == deployment_revision
+                });
+                if !bound {
+                    errors.push(DeployValidationError::McpDeploymentInvalidTool {
+                        mcp_deployment_domain: domain.clone(),
+                        tool_name: tool_name.clone(),
+                        error: "effective component-baseline binding is missing".to_string(),
+                    });
+                    continue;
+                }
+                let Some(tool) = compiled_tools.registered_tools.iter().find(|tool| {
+                    tool.deployment_revision == deployment_revision
+                        && tool
+                            .definition
+                            .name()
+                            .is_some_and(|name| name == tool_name.as_str())
+                }) else {
+                    errors.push(DeployValidationError::McpDeploymentInvalidTool {
+                        mcp_deployment_domain: domain.clone(),
+                        tool_name: tool_name.clone(),
+                        error: "compiled tool definition is missing".to_string(),
+                    });
+                    continue;
+                };
+                let definition = middleware_chains
+                    .iter()
+                    .find(|chain| {
+                        chain.owner
+                            == ToolBindingOwner::ComponentBaseline {
+                                component_id: component.id,
+                            }
+                            && chain.tool_name == *tool_name
+                            && chain.deployment_revision == deployment_revision
+                    })
+                    .map(|chain| &chain.effective_definition)
+                    .unwrap_or(&tool.definition);
+                match golem_service_base::mcp::native_tool::compile_native_tool_exports(
+                    component.id,
+                    component.component_name.clone(),
+                    tool_name.clone(),
+                    definition,
+                    options.include.as_deref(),
+                    options.exclude.as_deref(),
+                ) {
+                    Ok(exports) => native_tools.extend(exports),
+                    Err(error) => errors.push(DeployValidationError::McpDeploymentInvalidTool {
+                        mcp_deployment_domain: domain.clone(),
+                        tool_name: tool_name.clone(),
+                        error,
+                    }),
+                }
+                if let Some(name) = &options.security_scheme {
+                    unique_scheme_names.insert(name);
+                }
+            }
+
+            let mut names = mcp_deployment
+                .agents
+                .keys()
+                .filter_map(|agent_name| self.registered_agent_types.get(agent_name))
+                .flat_map(|agent| {
+                    agent.agent_type.methods.iter().filter_map(|method| {
+                        let has_user_input = method.input_schema.fields().iter().any(|field| {
+                            matches!(
+                                field.source,
+                                golem_common::schema::agent::FieldSource::UserSupplied
+                            )
+                        });
+                        (has_user_input || method.read_only.is_none())
+                            .then(|| format!("{}-{}", agent.agent_type.type_name.0, method.name))
+                    })
+                })
+                .collect::<HashSet<_>>();
+            for export in &native_tools {
+                if !names.insert(export.mcp_name.clone()) {
+                    errors.push(DeployValidationError::McpDeploymentToolNameCollision {
+                        mcp_deployment_domain: domain.clone(),
+                        name: export.mcp_name.clone(),
+                    });
                 }
             }
 
@@ -954,11 +1166,14 @@ impl DeploymentContext {
                 account_id,
                 account_email: self.environment.owner_account_email.clone(),
                 environment_id: self.environment.id,
+                application_name: self.environment.application_name.clone(),
+                environment_name: self.environment.name.clone(),
                 deployment_revision,
                 domain: domain.clone(),
                 security_scheme_name,
                 security_scheme: None, // Will be resolved at runtime
                 registered_agent_types,
+                tools: native_tools,
             };
             all_compiled_mcps.push(compiled_mcp);
         }
@@ -995,105 +1210,81 @@ impl DeploymentContext {
         let mut replacements = Vec::new();
         let mut seen_secrets = HashMap::new();
 
-        for agent_type in self.registered_agent_types.values() {
-            for config in &agent_type.agent_type.config {
-                if config.source != AgentConfigSource::Secret {
-                    continue;
+        let component_declarations = self.components.values().flat_map(|component| {
+            let schema = component.metadata.config_schema();
+            schema
+                .declarations
+                .iter()
+                .map(move |declaration| (&schema.schema, declaration))
+        });
+        let agent_declarations = self.registered_agent_types.values().flat_map(|agent_type| {
+            agent_type
+                .agent_type
+                .config
+                .iter()
+                .map(move |declaration| (&agent_type.agent_type.schema, declaration))
+        });
+
+        for (declaration_graph, config) in component_declarations.chain(agent_declarations) {
+            if config.source != AgentConfigSource::Secret {
+                continue;
+            }
+
+            let canonical_agent_secret_path =
+                CanonicalAgentSecretPath::from_path_in_unknown_casing(&config.path);
+
+            // The agent-type-declared secret value type is already a
+            // schema-native `SchemaType`; pair it with the agent's shared
+            // graph defs so any `SchemaType::Ref` inside resolves.
+            let config_secret_schema = ok_or_continue!(
+                stored_agent_secret_schema(
+                    &canonical_agent_secret_path,
+                    declaration_graph,
+                    &config.value_type,
+                ),
+                errors
+            );
+
+            match seen_secrets.entry(canonical_agent_secret_path.clone()) {
+                hash_map::Entry::Vacant(e) => {
+                    e.insert(config_secret_schema.clone());
                 }
-
-                let canonical_agent_secret_path =
-                    CanonicalAgentSecretPath::from_path_in_unknown_casing(&config.path);
-
-                // The agent-type-declared secret value type is already a
-                // schema-native `SchemaType`; pair it with the agent's shared
-                // graph defs so any `SchemaType::Ref` inside resolves.
-                let config_secret_schema = ok_or_continue!(
-                    stored_agent_secret_schema(
-                        &canonical_agent_secret_path,
-                        &agent_type.agent_type.schema,
-                        &config.value_type,
-                    ),
-                    errors
-                );
-
-                match seen_secrets.entry(canonical_agent_secret_path.clone()) {
-                    hash_map::Entry::Vacant(e) => {
-                        e.insert(config_secret_schema.clone());
-                    }
-                    hash_map::Entry::Occupied(e) => {
-                        let seen_secret_schema = e.get();
-                        // Compare the two agent-declared secret types
-                        // structurally across their own graphs: each agent type
-                        // carries its own `defs`, so a raw `SchemaGraph` equality
-                        // would spuriously differ even when the secret type is
-                        // logically identical.
-                        if !is_equivalent_cross_graph(
-                            seen_secret_schema,
-                            &seen_secret_schema.root,
-                            &config_secret_schema,
-                            &config_secret_schema.root,
-                        ) {
-                            ok_or_continue!(
-                                Err(DeployValidationError::AgentSecretTypeConflict {
-                                    path: canonical_agent_secret_path
-                                }),
-                                errors
-                            );
-                        }
-                        // we already processed this secret previously, nothing to do here
-                        continue;
-                    }
-                }
-
-                if let Some(environment_agent_secret_declaration) =
-                    env_secrets.get(&canonical_agent_secret_path)
-                {
-                    // secret does exist in environment, we need to check that types are compatible with deployment
+                hash_map::Entry::Occupied(e) => {
+                    let seen_secret_schema = e.get();
+                    // Compare the two agent-declared secret types
+                    // structurally across their own graphs: each agent type
+                    // carries its own `defs`, so a raw `SchemaGraph` equality
+                    // would spuriously differ even when the secret type is
+                    // logically identical.
                     if !is_equivalent_cross_graph(
-                        &environment_agent_secret_declaration.secret_type,
-                        &environment_agent_secret_declaration.secret_type.root,
+                        seen_secret_schema,
+                        &seen_secret_schema.root,
                         &config_secret_schema,
                         &config_secret_schema.root,
                     ) {
-                        if replace_incompatible_agent_secrets {
-                            let agent_secret_default = defaults.get(&canonical_agent_secret_path);
-
-                            let agent_secret_value = ok_or_continue!(
-                                parse_default_secret_value(
-                                    &canonical_agent_secret_path,
-                                    agent_secret_default,
-                                    &config_secret_schema,
-                                ),
-                                errors
-                            );
-
-                            replacements.push(DeploymentAgentSecretReplacement {
-                                agent_secret_id: environment_agent_secret_declaration.id,
-                                current_revision: environment_agent_secret_declaration.revision,
-                                path: canonical_agent_secret_path.clone(),
-                                secret_type: config_secret_schema,
-                                secret_value: agent_secret_value,
-                            });
-                        } else {
-                            errors.push(
-                                DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
-                                    path: canonical_agent_secret_path.clone(),
-                                    agent_secret_type: Box::new(config_secret_schema),
-                                    environment_secret_type: Box::new(
-                                        environment_agent_secret_declaration
-                                            .secret_type
-                                            .clone(),
-                                    ),
-                                },
-                            );
-                        }
-
-                        continue;
+                        ok_or_continue!(
+                            Err(DeployValidationError::AgentSecretTypeConflict {
+                                path: canonical_agent_secret_path
+                            }),
+                            errors
+                        );
                     }
+                    // we already processed this secret previously, nothing to do here
+                    continue;
+                }
+            }
 
-                    // declaration exists in environment but has no value.
-                    // if default was provided as part of deployment we can set it now.
-                    if environment_agent_secret_declaration.secret_value.is_none() {
+            if let Some(environment_agent_secret_declaration) =
+                env_secrets.get(&canonical_agent_secret_path)
+            {
+                // secret does exist in environment, we need to check that types are compatible with deployment
+                if !is_equivalent_cross_graph(
+                    &environment_agent_secret_declaration.secret_type,
+                    &environment_agent_secret_declaration.secret_type.root,
+                    &config_secret_schema,
+                    &config_secret_schema.root,
+                ) {
+                    if replace_incompatible_agent_secrets {
                         let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 
                         let agent_secret_value = ok_or_continue!(
@@ -1105,16 +1296,31 @@ impl DeploymentContext {
                             errors
                         );
 
-                        if let Some(secret_value) = agent_secret_value {
-                            updates.push(DeploymentAgentSecretUpdate {
-                                agent_secret_id: environment_agent_secret_declaration.id,
-                                current_revision: environment_agent_secret_declaration.revision,
-                                new_secret_value: secret_value,
-                            });
-                        }
+                        replacements.push(DeploymentAgentSecretReplacement {
+                            agent_secret_id: environment_agent_secret_declaration.id,
+                            current_revision: environment_agent_secret_declaration.revision,
+                            path: canonical_agent_secret_path.clone(),
+                            secret_type: config_secret_schema,
+                            secret_value: agent_secret_value,
+                        });
+                    } else {
+                        errors.push(
+                            DeployValidationError::AgentSecretNotCompatibleWithEnvironmentSecret {
+                                path: canonical_agent_secret_path.clone(),
+                                agent_secret_type: Box::new(config_secret_schema),
+                                environment_secret_type: Box::new(
+                                    environment_agent_secret_declaration.secret_type.clone(),
+                                ),
+                            },
+                        );
                     }
-                } else {
-                    // secret does not yet exist in environment, create it with optional default.
+
+                    continue;
+                }
+
+                // declaration exists in environment but has no value.
+                // if default was provided as part of deployment we can set it now.
+                if environment_agent_secret_declaration.secret_value.is_none() {
                     let agent_secret_default = defaults.get(&canonical_agent_secret_path);
 
                     let agent_secret_value = ok_or_continue!(
@@ -1126,12 +1332,32 @@ impl DeploymentContext {
                         errors
                     );
 
-                    creations.push(DeploymentAgentSecretCreation {
-                        path: canonical_agent_secret_path,
-                        secret_type: config_secret_schema,
-                        secret_value: agent_secret_value,
-                    });
+                    if let Some(secret_value) = agent_secret_value {
+                        updates.push(DeploymentAgentSecretUpdate {
+                            agent_secret_id: environment_agent_secret_declaration.id,
+                            current_revision: environment_agent_secret_declaration.revision,
+                            new_secret_value: secret_value,
+                        });
+                    }
                 }
+            } else {
+                // secret does not yet exist in environment, create it with optional default.
+                let agent_secret_default = defaults.get(&canonical_agent_secret_path);
+
+                let agent_secret_value = ok_or_continue!(
+                    parse_default_secret_value(
+                        &canonical_agent_secret_path,
+                        agent_secret_default,
+                        &config_secret_schema,
+                    ),
+                    errors
+                );
+
+                creations.push(DeploymentAgentSecretCreation {
+                    path: canonical_agent_secret_path,
+                    secret_type: config_secret_schema,
+                    secret_value: agent_secret_value,
+                });
             }
         }
 
@@ -1277,7 +1503,7 @@ fn validate_tool_binding<'a>(
 #[allow(clippy::too_many_arguments)]
 fn compile_tool_binding(
     deployment_revision: golem_common::model::deployment::DeploymentRevision,
-    agent_type: &AgentTypeName,
+    owner: ToolBindingOwner,
     tool_name: &ToolName,
     environment: Option<&ToolBindingInput>,
     agent: Option<&ToolBindingInput>,
@@ -1291,10 +1517,10 @@ fn compile_tool_binding(
     warnings: &mut Vec<super::DeployValidationWarning>,
 ) -> Option<CompiledToolBinding> {
     let (binding, revealable_scope_narrowed) = diff::effective_tool_binding(environment, agent)?;
-    if revealable_scope_narrowed {
+    if revealable_scope_narrowed && let ToolBindingOwner::AgentType { agent_type_name } = &owner {
         warnings.push(super::DeployValidationWarning::ToolRevealableSecretKeysDropped(
             golem_common::base_model::deploy_validation_warning::ToolRevealableSecretKeysDropped {
-                agent_type: agent_type.clone(),
+                agent_type: agent_type_name.clone(),
                 tool_name: tool_name.clone(),
             },
         ));
@@ -1303,7 +1529,7 @@ fn compile_tool_binding(
     Some(CompiledToolBinding {
         deployment_revision,
         release_id,
-        agent_type_name: agent_type.clone(),
+        owner,
         tool_name: tool_name.clone(),
         version: version.to_string(),
         metadata_version: metadata_version.to_string(),

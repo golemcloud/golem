@@ -6,6 +6,7 @@
 
 mod append;
 mod encoding;
+mod fork;
 mod load;
 mod read;
 mod session;
@@ -42,6 +43,7 @@ pub struct DurableStreamsHandler {
     limiter: DurableStreamLoadLimiter,
     long_poll_timeout: Duration,
     max_append_body_bytes: usize,
+    forks: crate::config::DurableStreamsForksConfig,
 }
 
 impl DurableStreamsHandler {
@@ -57,6 +59,7 @@ impl DurableStreamsHandler {
             limiter: DurableStreamLoadLimiter::new(config.load.clone()),
             long_poll_timeout: config.long_poll_timeout,
             max_append_body_bytes: config.max_append_body_bytes,
+            forks: config.forks.clone(),
         }
     }
 
@@ -67,9 +70,10 @@ impl DurableStreamsHandler {
         route: &ResolvedRouteEntry,
         behaviour: &CallAgentBehaviour,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let mut suffix = classify(
+        let mut suffix = classify_route(
             behaviour.base_path_variables,
             &route.captured_path_parameters,
+            &route.route.path,
         );
         if suffix.reserved {
             return Ok(response(StatusCode::NOT_FOUND));
@@ -77,8 +81,16 @@ impl DurableStreamsHandler {
         if has_header(request, "stream-ttl") || has_header(request, "stream-expires-at") {
             return Ok(response(StatusCode::BAD_REQUEST));
         }
-        if has_header(request, "stream-forked-from") {
-            return Ok(response(StatusCode::NOT_IMPLEMENTED));
+        if suffix.fork.is_none()
+            && [
+                "stream-forked-from",
+                "stream-fork-offset",
+                "stream-fork-sub-offset",
+            ]
+            .iter()
+            .any(|name| has_header(request, name))
+        {
+            return Ok(response(StatusCode::BAD_REQUEST));
         }
 
         let generated_session =
@@ -93,7 +105,14 @@ impl DurableStreamsHandler {
         {
             return Ok(response(StatusCode::NOT_FOUND));
         }
-        let phantom = behaviour.phantom.then(|| {
+        if suffix
+            .fork
+            .as_deref()
+            .is_some_and(|fork| validate_durable_stream_session_id(fork).is_err())
+        {
+            return Ok(response(StatusCode::NOT_FOUND));
+        }
+        let root_phantom = behaviour.phantom.then(|| {
             let session = suffix.session.as_deref().unwrap_or_default();
             if behaviour.agent_mode == AgentMode::Ephemeral {
                 ephemeral_invocation_phantom_id(&IdempotencyKey::new(session.to_owned()))
@@ -101,18 +120,50 @@ impl DurableStreamsHandler {
                 stable_phantom(session)
             }
         });
-        let agent_id = CallAgentHandler::build_agent_id(
+        let root_agent_id = CallAgentHandler::build_agent_id(
             route,
             behaviour.component_id,
             &behaviour.agent_type,
             &behaviour.constructor_input,
             &behaviour.constructor_parameters,
-            phantom,
+            root_phantom,
         )?;
+        let agent_id = match suffix.fork.as_deref() {
+            Some(fork) => CallAgentHandler::build_agent_id(
+                route,
+                behaviour.component_id,
+                &behaviour.agent_type,
+                &behaviour.constructor_input,
+                &behaviour.constructor_parameters,
+                Some(fork::fork_phantom_id(&root_agent_id, fork)),
+            )?,
+            None => root_agent_id.clone(),
+        };
         match (request.underlying.method(), suffix.session, suffix.slot) {
+            (&Method::PUT, Some(session), Some(slot)) if suffix.fork.is_some() => {
+                self.fork(
+                    request,
+                    route,
+                    behaviour,
+                    &root_agent_id,
+                    &agent_id,
+                    suffix.fork.as_deref().unwrap(),
+                    &session,
+                    &slot,
+                )
+                .await
+            }
             (&Method::POST, Some(session), Some(slot)) => {
-                self.append(request, route, behaviour, &agent_id, &session, &slot)
-                    .await
+                self.append(
+                    request,
+                    route,
+                    behaviour,
+                    &agent_id,
+                    &session,
+                    &slot,
+                    suffix.fork.is_none(),
+                )
+                .await
             }
             (&Method::POST, _, _) => Ok(append::read_only_response()),
             (&Method::DELETE, Some(session), slot) => {
@@ -123,6 +174,9 @@ impl DurableStreamsHandler {
                     .await
             }
             (&Method::PUT, Some(session), slot) => {
+                if suffix.fork.is_some() {
+                    return Ok(response(StatusCode::METHOD_NOT_ALLOWED));
+                }
                 self.put(
                     request,
                     route,
@@ -236,20 +290,60 @@ fn route_method(route: &ResolvedRouteEntry) -> &str {
 
 /// Path captures after the route's own variables: `.../{session}/streams/{slot}`.
 struct Suffix {
+    fork: Option<String>,
     session: Option<String>,
     slot: Option<String>,
     reserved: bool,
 }
 
-fn classify(base_vars: u32, variables: &[String]) -> Suffix {
+fn classify_route(
+    base_vars: u32,
+    variables: &[String],
+    path: &[golem_service_base::custom_api::PathSegment],
+) -> Suffix {
     let base_vars = base_vars as usize;
-    let session = variables.get(base_vars).cloned();
-    let slot = variables.get(base_vars + 1).cloned();
+    use golem_service_base::custom_api::PathSegment::{Literal, Variable};
+    let suffix = if path.ends_with(&[
+        Literal {
+            value: "streams".into(),
+        },
+        Variable {
+            display_name: "slot".into(),
+        },
+    ]) {
+        &path[..path.len() - 2]
+    } else {
+        path
+    };
+    let is_fork = suffix.ends_with(&[
+        Literal {
+            value: "forks".into(),
+        },
+        Variable {
+            display_name: "fork".into(),
+        },
+        Literal {
+            value: "invocations".into(),
+        },
+        Variable {
+            display_name: "session".into(),
+        },
+    ]);
+    let fork = is_fork.then(|| variables.get(base_vars).cloned()).flatten();
+    let extra = usize::from(is_fork);
+    let session = variables.get(base_vars + extra).cloned();
+    let slot = variables.get(base_vars + extra + 1).cloned();
     Suffix {
+        fork,
         reserved: slot.as_deref().is_some_and(|s| s.starts_with("__ds")),
         session,
         slot,
     }
+}
+
+#[cfg(test)]
+fn classify(base_vars: u32, variables: &[String]) -> Suffix {
+    classify_route(base_vars, variables, &[])
 }
 
 fn has_header(r: &RichRequest, n: &str) -> bool {

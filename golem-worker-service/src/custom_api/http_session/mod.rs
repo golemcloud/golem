@@ -69,7 +69,7 @@ impl HttpSessionError {
 #[derive(Clone)]
 pub enum HttpSessionEvent {
     Accepted(InvocationAccepted),
-    Result(golem_api_grpc::proto::golem::worker::InvocationSessionResult),
+    Result(Box<golem_api_grpc::proto::golem::worker::InvocationSessionResult>),
     OutputItem(golem_api_grpc::proto::golem::worker::OutputStreamItem),
     OutputEnd(golem_api_grpc::proto::golem::worker::OutputStreamEnd),
     OutputError(golem_api_grpc::proto::golem::worker::OutputStreamError),
@@ -1046,7 +1046,7 @@ async fn run_session(
                                 continue;
                             }
                             output.result_value = Some(result.result.clone());
-                            permit.send(HttpSessionEvent::Result(result));
+                            permit.send(HttpSessionEvent::Result(Box::new(result)));
                         }
                         invocation_response::Response::StreamCancel(cancel) => {
                             if cancel.role() == StreamCancelRole::InputConsumer {

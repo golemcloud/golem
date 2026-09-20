@@ -500,6 +500,7 @@ pub struct DurableStreamsConfig {
     #[serde(with = "humantime_serde")]
     pub long_poll_timeout: Duration,
     pub max_append_body_bytes: usize,
+    pub forks: DurableStreamsForksConfig,
     pub load: DurableStreamsLoadConfig,
 }
 
@@ -516,6 +517,8 @@ impl SafeDisplay for DurableStreamsConfig {
             "max_append_body_bytes: {}",
             self.max_append_body_bytes
         );
+        let _ = writeln!(&mut result, "forks:");
+        let _ = writeln!(&mut result, "{}", self.forks.to_safe_string_indented());
         let _ = writeln!(&mut result, "load:");
         let _ = writeln!(&mut result, "{}", self.load.to_safe_string_indented());
         result
@@ -527,7 +530,34 @@ impl Default for DurableStreamsConfig {
         Self {
             long_poll_timeout: Duration::from_secs(30),
             max_append_body_bytes: 1024 * 1024,
+            forks: DurableStreamsForksConfig::default(),
             load: DurableStreamsLoadConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DurableStreamsForksConfig {
+    pub max_forks_per_session: u32,
+    pub max_forks_per_second: u32,
+    pub max_copied_bytes: u64,
+}
+
+impl SafeDisplay for DurableStreamsForksConfig {
+    fn to_safe_string(&self) -> String {
+        format!(
+            "max_forks_per_session: {}\nmax_forks_per_second: {}\nmax_copied_bytes: {}",
+            self.max_forks_per_session, self.max_forks_per_second, self.max_copied_bytes
+        )
+    }
+}
+
+impl Default for DurableStreamsForksConfig {
+    fn default() -> Self {
+        Self {
+            max_forks_per_session: 128,
+            max_forks_per_second: 4,
+            max_copied_bytes: 64 * 1024 * 1024,
         }
     }
 }

@@ -1100,9 +1100,10 @@ mod tests {
     };
     use golem_api_grpc::proto::golem::worker::v1::{ForkWorkerResponse, InvokeAgentSuccess};
     use golem_api_grpc::proto::golem::worker::{
-        DurableStreamHandle, DurableStreamMapping, InvocationAccepted, InvocationSessionResult,
-        InvocationStart, StreamInvocationIdentity, StreamMappingRole, invocation_request,
-        invocation_response, invocation_session_result,
+        AttachmentRevoked, DurableStreamHandle, DurableStreamMapping, InvocationAccepted,
+        InvocationRejected, InvocationRejectionReason, InvocationSessionResult, ResumeOperation,
+        StreamInvocationIdentity, StreamMappingRole, invocation_request, invocation_response,
+        invocation_session_result,
     };
     use golem_common::model::component::ComponentId;
     use prost::Message;
@@ -1115,7 +1116,10 @@ mod tests {
     #[derive(Clone, Default)]
     struct FlakyWorkerService {
         dispositions: Arc<Mutex<Vec<i32>>>,
-        streaming_starts: Arc<Mutex<Vec<InvocationStart>>>,
+        streaming_requests: Arc<Mutex<Vec<InvocationRequest>>>,
+        require_takeover: bool,
+        reject_takeover: bool,
+        detach_before_takeover: bool,
         scope_card_payloads: Arc<Mutex<Vec<Vec<u8>>>>,
         segment_requests: Arc<Mutex<Vec<DurableStreamSegmentReadRequest>>>,
         segment_responses: Arc<
@@ -1229,50 +1233,105 @@ mod tests {
                 .await
                 .transpose()?
                 .ok_or_else(|| Status::invalid_argument("missing invocation Start"))?;
-            let Some(invocation_request::Request::Start(start)) = request.request else {
-                return Err(Status::invalid_argument("expected invocation Start"));
+            let request_number = {
+                let mut requests = self.streaming_requests.lock().unwrap();
+                requests.push(request.clone());
+                requests.len()
             };
-            let invocation_number = {
-                let mut starts = self.streaming_starts.lock().unwrap();
-                starts.push(start.clone());
-                starts.len()
-            };
-            let responses = if invocation_number == 1 {
-                Vec::new()
-            } else {
-                let durable = !start.durable_input_mappings.is_empty();
-                let accepted = InvocationResponse {
-                    response: Some(invocation_response::Response::Accepted(
-                        InvocationAccepted {
-                            agent_id: start.agent_id.clone(),
-                            idempotency_key: start.idempotency_key.clone(),
-                            component_revision: Some(0),
-                            attachment_id: durable.then(|| uuid::Uuid::new_v4().into()),
-                            attempt_id: durable.then(|| start.attempt_id.unwrap()),
-                            epoch: u64::from(durable),
-                            stream_mappings: start.durable_input_mappings.clone(),
-                            environment_id: durable.then(|| start.environment_id.unwrap()),
-                            callee_fingerprint: durable
-                                .then(|| start.expected_callee_fingerprint.unwrap()),
-                            method_name: start.method_name.clone(),
-                        },
-                    )),
-                };
-                let result = InvocationResponse {
-                    response: Some(invocation_response::Response::Result(
-                        InvocationSessionResult {
-                            result: Some(invocation_session_result::Result::MethodResult(
-                                ProtoSchemaValue::try_from(SchemaValue::U64(42)).unwrap(),
+            let responses = match request.request {
+                Some(invocation_request::Request::Start(_)) if request_number == 1 => Vec::new(),
+                Some(invocation_request::Request::Start(start)) => {
+                    let accepted = InvocationResponse {
+                        response: Some(invocation_response::Response::Accepted(
+                            InvocationAccepted {
+                                agent_id: start.agent_id.clone(),
+                                idempotency_key: start.idempotency_key.clone(),
+                                component_revision: Some(0),
+                                attachment_id: Some(uuid::Uuid::from_u128(17).into()),
+                                attempt_id: start.attempt_id,
+                                epoch: 1,
+                                stream_mappings: start.durable_input_mappings.clone(),
+                                environment_id: start.environment_id,
+                                callee_fingerprint: start.expected_callee_fingerprint,
+                                method_name: start.method_name.clone(),
+                                joined_origin_observer: false,
+                                ..Default::default()
+                            },
+                        )),
+                    };
+                    let revoked = InvocationResponse {
+                        response: Some(invocation_response::Response::AttachmentRevoked(
+                            AttachmentRevoked {
+                                details: "replayed Start was fenced".to_string(),
+                            },
+                        )),
+                    };
+                    vec![Ok(accepted), Ok(revoked)]
+                }
+                Some(invocation_request::Request::ResumeAttach(_)) if request_number == 3 => {
+                    Vec::new()
+                }
+                Some(invocation_request::Request::ResumeAttach(resume)) => {
+                    let rejection = if (self.require_takeover && request_number == 4)
+                        || (self.detach_before_takeover && request_number == 5)
+                    {
+                        Some(InvocationRejectionReason::InvalidAttachmentState)
+                    } else if self.reject_takeover {
+                        Some(InvocationRejectionReason::Unauthorized)
+                    } else {
+                        None
+                    };
+                    if let Some(reason) = rejection {
+                        let response = InvocationResponse {
+                            response: Some(invocation_response::Response::Rejected(
+                                InvocationRejected {
+                                    reason: reason as i32,
+                                    error: "scripted attachment rejection".into(),
+                                    idempotency_key: resume.idempotency_key,
+                                    agent_id: resume.agent_id,
+                                    ..Default::default()
+                                },
                             )),
-                            component_revision: Some(0),
-                            agent_id: start.agent_id,
-                            idempotency_key: start.idempotency_key,
-                            agent_fingerprint: start.expected_callee_fingerprint,
-                            ..Default::default()
-                        },
-                    )),
-                };
-                vec![Ok(accepted), Ok(result)]
+                        };
+                        return Ok(Response::new(Box::pin(tokio_stream::iter(vec![Ok(
+                            response,
+                        )]))));
+                    }
+                    let accepted = InvocationResponse {
+                        response: Some(invocation_response::Response::Accepted(
+                            InvocationAccepted {
+                                agent_id: resume.agent_id.clone(),
+                                idempotency_key: resume.idempotency_key.clone(),
+                                component_revision: Some(0),
+                                attachment_id: resume.attachment_id,
+                                attempt_id: resume.attempt_id,
+                                epoch: resume.expected_epoch + 1,
+                                stream_mappings: Vec::new(),
+                                environment_id: resume.environment_id,
+                                callee_fingerprint: resume.expected_callee_fingerprint,
+                                method_name: Some("streaming-method".to_string()),
+                                joined_origin_observer: false,
+                                ..Default::default()
+                            },
+                        )),
+                    };
+                    let result = InvocationResponse {
+                        response: Some(invocation_response::Response::Result(
+                            InvocationSessionResult {
+                                result: Some(invocation_session_result::Result::MethodResult(
+                                    ProtoSchemaValue::try_from(SchemaValue::U64(42)).unwrap(),
+                                )),
+                                component_revision: Some(0),
+                                agent_id: resume.agent_id,
+                                idempotency_key: resume.idempotency_key,
+                                agent_fingerprint: resume.expected_callee_fingerprint,
+                                ..Default::default()
+                            },
+                        )),
+                    };
+                    vec![Ok(accepted), Ok(result)]
+                }
+                _ => return Err(Status::invalid_argument("expected Start or ResumeAttach")),
             };
             Ok(Response::new(Box::pin(tokio_stream::iter(responses))))
         }
@@ -1344,6 +1403,7 @@ mod tests {
             producer_environment_id: identity.environment_id,
             producer: identity.agent_id.clone(),
             expected_producer_fingerprint: identity.fingerprint,
+            producer_generation: OplogIndex::NONE,
             source_invocation: identity.invocation.clone(),
             component_revision: ComponentRevision::INITIAL,
             element_schema_fingerprint: golem_schema::schema::SchemaFingerprintV1([7; 32]),
@@ -1522,9 +1582,41 @@ mod tests {
     }
 
     #[test]
-    async fn cross_shard_streaming_rpc_retries_the_identical_start_after_response_loss() {
-        let service = FlakyWorkerService::default();
-        let streaming_starts = service.streaming_starts.clone();
+    #[test_r::timeout("30s")]
+    async fn cross_shard_streaming_rpc_resumes_after_replayed_start_is_revoked() {
+        check_streaming_attachment_retry(false, false, false).await;
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn cross_shard_streaming_rpc_takes_over_an_attached_session() {
+        check_streaming_attachment_retry(true, false, false).await;
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn cross_shard_streaming_rpc_stops_after_takeover_is_rejected() {
+        check_streaming_attachment_retry(true, true, false).await;
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn cross_shard_streaming_rpc_resumes_if_transport_detaches_before_takeover() {
+        check_streaming_attachment_retry(true, false, true).await;
+    }
+
+    async fn check_streaming_attachment_retry(
+        require_takeover: bool,
+        reject_takeover: bool,
+        detach_before_takeover: bool,
+    ) {
+        let service = FlakyWorkerService {
+            require_takeover,
+            reject_takeover,
+            detach_before_takeover,
+            ..Default::default()
+        };
+        let streaming_requests = service.streaming_requests.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -1568,6 +1660,7 @@ mod tests {
                 producer_environment_id: Some(caller_environment.into()),
                 producer: Some(caller.clone().into()),
                 expected_producer_fingerprint: Some(caller_fingerprint.0.into()),
+                producer_generation: 0,
                 source_invocation: Some(StreamInvocationIdentity {
                     callee_environment_id: Some(caller_environment.into()),
                     callee: Some(caller.clone().into()),
@@ -1581,6 +1674,12 @@ mod tests {
             role: StreamMappingRole::Input as i32,
         };
 
+        let origin = StreamInvocationIdentity {
+            callee_environment_id: Some(caller_environment.into()),
+            callee: Some(caller.clone().into()),
+            callee_fingerprint: Some(caller_fingerprint.0.into()),
+            idempotency_key: Some(IdempotencyKey::new("origin-invocation".into()).into()),
+        };
         let result = rpc
             .invoke_and_await_streaming(
                 &OwnedAgentId::new(EnvironmentId::new(), &callee),
@@ -1590,6 +1689,8 @@ mod tests {
                 vec![input_mapping],
                 AgentFingerprint::new(),
                 uuid::Uuid::new_v4(),
+                origin.clone(),
+                tokio::sync::oneshot::channel().0,
                 AccountId::new(),
                 &caller,
                 &[],
@@ -1598,15 +1699,74 @@ mod tests {
                 &AuthCtx::System,
                 None,
             )
-            .await
-            .unwrap();
+            .await;
 
+        if reject_takeover {
+            assert!(
+                matches!(result, Err(crate::services::rpc::RpcError::Denied { details })
+                if details == "scripted attachment rejection")
+            );
+        } else {
+            assert_eq!(
+                result.unwrap().value,
+                ProtoSchemaValue::try_from(SchemaValue::U64(42)).unwrap()
+            );
+        }
+        let requests = streaming_requests.lock().unwrap();
         assert_eq!(
-            result.value,
-            ProtoSchemaValue::try_from(SchemaValue::U64(42)).unwrap()
+            requests.len(),
+            4 + usize::from(require_takeover) + usize::from(detach_before_takeover)
         );
-        let starts = streaming_starts.lock().unwrap();
-        assert_eq!(starts.len(), 2);
-        assert_eq!(starts[0], starts[1]);
+        let Some(invocation_request::Request::Start(first_start)) = &requests[0].request else {
+            panic!("first request was not Start");
+        };
+        let Some(invocation_request::Request::Start(replayed_start)) = &requests[1].request else {
+            panic!("second request was not replayed Start");
+        };
+        assert_eq!(first_start, replayed_start);
+        assert_eq!(first_start.origin_invocation, Some(origin));
+        let Some(invocation_request::Request::ResumeAttach(resume)) = &requests[2].request else {
+            panic!("third request was not ResumeAttach");
+        };
+        assert_eq!(resume.idempotency_key, first_start.idempotency_key);
+        assert_eq!(resume.agent_id, first_start.agent_id);
+        assert_eq!(resume.environment_id, first_start.environment_id);
+        assert_eq!(
+            resume.expected_callee_fingerprint,
+            first_start.expected_callee_fingerprint
+        );
+        assert_eq!(resume.attachment_id, Some(uuid::Uuid::from_u128(17).into()));
+        assert_eq!(resume.expected_epoch, 1);
+        assert_eq!(resume.operation, ResumeOperation::Resume as i32);
+        assert!(resume.cursors.is_empty());
+        assert_ne!(resume.attempt_id, first_start.attempt_id);
+        let Some(invocation_request::Request::ResumeAttach(retried_resume)) = &requests[3].request
+        else {
+            panic!("fourth request was not retried ResumeAttach");
+        };
+        assert_eq!(retried_resume, resume);
+        if require_takeover {
+            let Some(invocation_request::Request::ResumeAttach(takeover)) = &requests[4].request
+            else {
+                panic!("fifth request was not ResumeAttach");
+            };
+            assert_eq!(takeover.operation, ResumeOperation::Takeover as i32);
+            assert_ne!(takeover.attempt_id, resume.attempt_id);
+            let mut expected = resume.clone();
+            expected.operation = ResumeOperation::Takeover as i32;
+            expected.attempt_id = takeover.attempt_id;
+            assert_eq!(*takeover, expected);
+            if detach_before_takeover {
+                let Some(invocation_request::Request::ResumeAttach(resumed)) = &requests[5].request
+                else {
+                    panic!("sixth request was not ResumeAttach");
+                };
+                assert_ne!(resumed.attempt_id, takeover.attempt_id);
+                assert_ne!(resumed.attempt_id, resume.attempt_id);
+                let mut expected = resume.clone();
+                expected.attempt_id = resumed.attempt_id;
+                assert_eq!(*resumed, expected);
+            }
+        }
     }
 }

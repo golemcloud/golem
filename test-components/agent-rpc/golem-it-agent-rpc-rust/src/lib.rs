@@ -307,6 +307,7 @@ pub trait StreamingRpcTarget {
     async fn consume(&self, input: AgentStream<u32>) -> Vec<u32>;
     async fn consume_strings(&self, input: AgentStream<String>) -> Vec<String>;
     async fn drop_input(&self, input: AgentStream<u32>) -> u64;
+    async fn drop_input_u64(&self, input: AgentStream<u64>) -> u64;
     async fn hold_input(&self, input: AgentStream<u32>) -> u64;
     fn produce(&self, values: Vec<u32>) -> AgentStream<u32>;
     fn produce_binary_chunks(&self, chunk_count: u32, chunk_size: u32) -> AgentStream<Bytes>;
@@ -334,6 +335,8 @@ pub trait StreamingRpcTarget {
     fn increment_scalar(&mut self) -> u64;
     fn increment_stream(&mut self) -> AgentStream<u64>;
     async fn increment_stream_input(&mut self, input: AgentStream<u64>) -> AgentStream<u64>;
+    fn increment_gated_stream(&mut self, gate: PromiseId) -> AgentStream<u64>;
+    fn increment_many_stream(&mut self) -> AgentStream<u64>;
     fn scalar_value(&self) -> u64;
     fn noop(&self);
 }
@@ -367,6 +370,11 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
     }
 
     async fn drop_input(&self, input: AgentStream<u32>) -> u64 {
+        drop(input);
+        42
+    }
+
+    async fn drop_input_u64(&self, input: AgentStream<u64>) -> u64 {
         drop(input);
         42
     }
@@ -611,6 +619,23 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
         self.increment_stream()
     }
 
+    fn increment_gated_stream(&mut self, gate: PromiseId) -> AgentStream<u64> {
+        self.scalar += 1;
+        let value = self.scalar;
+        let (mut writer, stream) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one(value).await.unwrap();
+            golem_rust::await_promise(&gate).await;
+            writer.write_one(value).await.unwrap();
+        });
+        stream
+    }
+
+    fn increment_many_stream(&mut self) -> AgentStream<u64> {
+        self.scalar += 1;
+        agent_stream(std::iter::repeat_n(self.scalar, 10_000).collect())
+    }
+
     fn scalar_value(&self) -> u64 {
         self.scalar
     }
@@ -679,6 +704,14 @@ pub trait StreamingRpcCaller {
     ) -> StreamingRpcBenchmarkResult;
     fn create_input_gate(&self) -> PromiseId;
     async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32>;
+    async fn fork_drop_inherited_output(
+        &self,
+        gate: PromiseId,
+        original_agent_id: String,
+        forwarded_drop: bool,
+    ) -> Vec<u64>;
+    async fn drop_new_increment_output(&self);
+    async fn streaming_increment(&self, synchronous: bool) -> Vec<u64>;
     async fn atomic_streaming_increment(
         &self,
         gate: PromiseId,
@@ -808,6 +841,33 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         golem_rust::create_promise()
     }
 
+    async fn streaming_increment(&self, synchronous: bool) -> Vec<u64> {
+        let output = if synchronous {
+            let rpc = WasmRpc::new(
+                "StreamingRpcTarget",
+                encode_single_parameter(self.name.clone()),
+                None,
+                Vec::new(),
+            );
+            let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
+            let result = rpc
+                .invoke_and_await("increment_stream", input, None)
+                .unwrap();
+            AgentStream::<u64>::from_value(
+                &golem_rust::decode_schema_value(result.result.unwrap()).unwrap(),
+            )
+            .unwrap()
+        } else {
+            StreamingRpcTargetClient::get(self.name.clone())
+                .increment_stream_input(agent_stream(vec![13, 29]))
+                .await
+        };
+        output
+            .collect()
+            .await
+            .expect("failed to drain increment stream")
+    }
+
     async fn atomic_streaming_increment(
         &self,
         gate: PromiseId,
@@ -868,6 +928,39 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             .collect()
             .await
             .expect("failed to collect transformed input after caller recovery")
+    }
+
+    async fn fork_drop_inherited_output(
+        &self,
+        gate: PromiseId,
+        original_agent_id: String,
+        forwarded_drop: bool,
+    ) -> Vec<u64> {
+        let output = StreamingRpcTargetClient::get(self.name.clone())
+            .increment_gated_stream(gate)
+            .await;
+        if golem_rust::get_self_metadata().unwrap().agent_id.agent_id == original_agent_id {
+            output.collect().await.expect("original caller output")
+        } else if forwarded_drop {
+            assert_eq!(
+                StreamingRpcTargetClient::get(format!("{}-forwarded-drop", self.name))
+                    .drop_input_u64(output)
+                    .await,
+                42
+            );
+            Vec::new()
+        } else {
+            drop(output);
+            Vec::new()
+        }
+    }
+
+    async fn drop_new_increment_output(&self) {
+        drop(
+            StreamingRpcTargetClient::get(self.name.clone())
+                .increment_many_stream()
+                .await,
+        );
     }
 
     async fn call_producer_error(&self) -> Vec<u32> {

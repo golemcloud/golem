@@ -271,6 +271,7 @@ impl ReconstructionClaimState {
         self.active_bodies.subscribe()
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub(crate) async fn wait_for_fences(&self) {
         let mut active = self.active_fences.subscribe();
         tracing::debug!(

@@ -18,8 +18,8 @@ use crate::base_model::agent::{AgentConfigSource, AgentTypeName, Snapshotting};
 use crate::model::Empty as ModelEmpty;
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
-    AgentTypeKind, AgentTypeSchema, AutoInjectedKind, FieldSource, InputSchema, NamedField,
-    OutputSchema, RegisteredAgentTypeSchema,
+    AgentTypeKind, AgentTypeSchema, AutoInjectedKind, ComponentConfigSchema, FieldSource,
+    InputSchema, NamedField, OutputSchema, RegisteredAgentTypeSchema,
 };
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::MetadataEnvelope;
@@ -376,6 +376,34 @@ impl TryFrom<proto::AgentConfigDeclarationSchema> for AgentConfigDeclarationSche
                     "Missing field: AgentConfigDeclarationSchema.value_type".to_string()
                 })?
                 .try_into()?,
+        })
+    }
+}
+
+impl From<ComponentConfigSchema> for proto::ComponentConfigSchema {
+    fn from(value: ComponentConfigSchema) -> Self {
+        Self {
+            schema: Some(value.schema.into()),
+            declarations: value.declarations.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl TryFrom<proto::ComponentConfigSchema> for ComponentConfigSchema {
+    type Error = String;
+
+    fn try_from(value: proto::ComponentConfigSchema) -> Result<Self, Self::Error> {
+        Ok(Self {
+            schema: value
+                .schema
+                .map(TryInto::try_into)
+                .transpose()?
+                .unwrap_or_else(SchemaGraph::empty),
+            declarations: value
+                .declarations
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
         })
     }
 }

@@ -57,6 +57,9 @@ final class internalToolMiddlewareField(
   val countFlag: Boolean = false
 ) extends StaticAnnotation
 
+/** Marks the generated invocation-local installation parameters argument. */
+final class internalToolMiddlewareParameters() extends StaticAnnotation
+
 /**
  * Overrides a tool method's command name and declares command aliases. On a
  * subtree method the `name` also renames the grafted child root.

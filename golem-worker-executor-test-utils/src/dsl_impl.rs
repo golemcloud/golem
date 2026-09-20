@@ -561,6 +561,8 @@ impl TestDsl for TestWorkerExecutor {
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
+            origin_invocation: None,
+            external_tool: None,
         })
         .await?;
         Ok(())
@@ -607,6 +609,8 @@ impl TestDsl for TestWorkerExecutor {
                 expected_callee_fingerprint: None,
                 durable_input_mappings: Vec::new(),
                 scope_card: None,
+                origin_invocation: None,
+                external_tool: None,
             })
             .await?;
 
@@ -619,6 +623,9 @@ impl TestDsl for TestWorkerExecutor {
             ),
             Some(golem_api_grpc::proto::golem::worker::invocation_session_result::Result::NoResult(_))
             | None => None,
+            Some(golem_api_grpc::proto::golem::worker::invocation_session_result::Result::ToolResult(_)) => {
+                return Err(anyhow!("agent invocation returned an external-tool result"));
+            }
         };
         Ok(AgentResult::new(value))
     }

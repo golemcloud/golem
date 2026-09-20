@@ -33,6 +33,8 @@ use golem_service_base::custom_api::{AgentRouteMode, PathSegment, RouteMatch};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashSet};
 
+mod durable_streams;
+
 pub struct HttpApiOpenApiSpec;
 
 impl HttpApiOpenApiSpec {
@@ -74,7 +76,18 @@ impl HttpApiOpenApiSpec {
         let routes: Vec<_> = routes
             .iter()
             .filter(|route| match &route.behavior {
-                RichRouteBehaviour::CallAgent(inner) => inner.route_mode == AgentRouteMode::Rest,
+                RichRouteBehaviour::CallAgent(inner) => {
+                    inner.route_mode == AgentRouteMode::Rest
+                        || (matches!(
+                            route.route_match.method(),
+                            Some(golem_common::model::agent::HttpMethod::Put(_))
+                        ) && route
+                            .path
+                            .iter()
+                            .filter(|segment| !matches!(segment, PathSegment::Literal { .. }))
+                            .count()
+                            == inner.base_path_variables as usize)
+                }
                 RichRouteBehaviour::CorsPreflight(_) => !ds_only_paths.contains(&route.path),
                 _ => true,
             })
@@ -95,7 +108,16 @@ impl HttpApiOpenApiSpec {
             }
         }
 
-        for (route, route_schema) in routes.iter().zip(document.per_route.iter()) {
+        // Emit synthesized DS paths first. Explicit literal routes take
+        // precedence over the compiled DS slot wildcard in the HTTP router.
+        let mut ordered: Vec<_> = routes.iter().zip(document.per_route.iter()).collect();
+        ordered.sort_by_key(|(_, schema)| {
+            !schema
+                .call_agent
+                .as_ref()
+                .is_some_and(|call| call.stream_slots.is_some())
+        });
+        for (route, route_schema) in ordered {
             let Some(method) = route.route_match.method() else {
                 continue;
             };
@@ -103,6 +125,22 @@ impl HttpApiOpenApiSpec {
                 .clone()
                 .try_into()
                 .map_err(|e| format!("Invalid route method: {e}"))?;
+            if route_schema
+                .call_agent
+                .as_ref()
+                .is_some_and(|call| call.stream_slots.is_some())
+            {
+                durable_streams::emit(
+                    route,
+                    route_schema,
+                    graph,
+                    &mut component_schemas,
+                    &mut security_schemes,
+                    &mut paths,
+                )?;
+                continue;
+            }
+
             let mut operation =
                 build_operation(route, route_schema, graph, &mut component_schemas)?;
             if let RichRouteBehaviour::CallAgent(inner) = &route.behavior
@@ -111,6 +149,7 @@ impl HttpApiOpenApiSpec {
                 operation.as_object_mut().unwrap().remove("operationId");
             }
             operation["security"] = build_security(&route.security, &mut security_schemes)?;
+
             let mut path = render_full_path(&route.path);
             if matches!(
                 route.route_match,
@@ -121,7 +160,37 @@ impl HttpApiOpenApiSpec {
             ) {
                 path.push('/');
             }
-            let path_item = paths.entry(path).or_default();
+            let canonical = paths
+                .iter()
+                .find(|(candidate, item)| {
+                    item.contains_key("x-golem-route-mode")
+                        && candidate
+                            .split('/')
+                            .map(template_segment)
+                            .eq(path.split('/').map(template_segment))
+                })
+                .map(|(candidate, _)| candidate.clone())
+                .unwrap_or_else(|| path.clone());
+            if canonical != path
+                && let Some(parameters) = operation["parameters"].as_array_mut()
+            {
+                for parameter in parameters {
+                    if parameter["in"] == "path" {
+                        for (from, to) in path.split('/').zip(canonical.split('/')) {
+                            if let (Some(from), Some(to)) = (capture_name(from), capture_name(to))
+                                && parameter["name"] == from
+                            {
+                                parameter["name"] = json!(to);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            let path_item = paths.entry(canonical).or_default();
+            if path_item.contains_key("x-golem-route-mode") {
+                operation["x-golem-route-mode"] = json!("rest");
+            }
             insert_operation(path_item, method.as_str(), operation)?;
         }
 
@@ -479,23 +548,41 @@ pub(super) fn render_full_path(path_segments: &[PathSegment]) -> String {
     format!("/{suffix}")
 }
 
-fn insert_operation(
+fn capture_name(segment: &str) -> Option<&str> {
+    segment.strip_prefix('{')?.strip_suffix('}')
+}
+
+fn template_segment(segment: &str) -> std::borrow::Cow<'_, str> {
+    if capture_name(segment).is_some() {
+        "{}".into()
+    } else {
+        urlencoding::decode(segment).unwrap_or_else(|_| segment.into())
+    }
+}
+
+pub(super) fn insert_operation(
     path_item: &mut Map<String, Value>,
     method: &str,
     operation: Value,
 ) -> Result<(), String> {
     let key = match method {
-        "GET" => "get",
-        "POST" => "post",
-        "PUT" => "put",
-        "DELETE" => "delete",
-        "PATCH" => "patch",
-        "OPTIONS" => "options",
-        "HEAD" => "head",
-        "TRACE" => "trace",
+        "GET" | "get" => "get",
+        "POST" | "post" => "post",
+        "PUT" | "put" => "put",
+        "DELETE" | "delete" => "delete",
+        "PATCH" | "patch" => "patch",
+        "OPTIONS" | "options" => "options",
+        "HEAD" | "head" => "head",
+        "TRACE" | "trace" => "trace",
         _ => return Ok(()),
     };
-    if path_item.contains_key(key) {
+    if path_item.contains_key(key)
+        && !(path_item
+            .get("x-golem-route-mode")
+            .is_some_and(|mode| mode == "durable-streams")
+            && path_item[key]["x-golem-route-mode"] != "rest"
+            && operation["x-golem-route-mode"] == "rest")
+    {
         return Err("Duplicate generated operation".into());
     }
     path_item.insert(key.to_string(), operation);

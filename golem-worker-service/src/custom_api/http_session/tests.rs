@@ -196,6 +196,7 @@ fn mapping(high_water: Option<u64>) -> DurableStreamMapping {
         handle: Some(DurableStreamHandle {
             format_version: 1,
             stream_id: Some(uuid(101)),
+            producer_generation: 0,
             producer_environment_id: Some(EnvironmentId {
                 value: Some(uuid(3)),
             }),
@@ -305,6 +306,9 @@ fn accepted(epoch: u64, high_water: Option<u64>) -> InvocationResponse {
             }),
             callee_fingerprint: Some(uuid(4)),
             method_name: Some("run".into()),
+            tool_name: None,
+            command_path: vec![],
+            joined_origin_observer: false,
         },
     ))
 }

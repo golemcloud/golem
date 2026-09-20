@@ -20,8 +20,8 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::tool::{
-    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolDeploymentState, ToolName,
-    ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingOwner,
+    ToolDeploymentState, ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
@@ -91,6 +91,7 @@ fn registered_tool(
             schema: SchemaGraph::empty(),
         },
         provision: ToolProvisionConfig::default(),
+        component_bindings: Default::default(),
         source: ToolSource::Component {
             component_id,
             component_revision,
@@ -111,7 +112,9 @@ fn binding(
     CompiledToolBinding {
         deployment_revision: tool.deployment_revision,
         release_id: tool.release_id,
-        agent_type_name: agent_type.clone(),
+        owner: ToolBindingOwner::AgentType {
+            agent_type_name: agent_type.clone(),
+        },
         tool_name: tool_name.clone(),
         version: tool.definition.version.clone(),
         metadata_version: tool.metadata_version.clone(),
@@ -157,10 +160,13 @@ pub(crate) fn deployment_state(
         })
         .collect();
 
+    let owner = ToolBindingOwner::AgentType {
+        agent_type_name: agent_type.clone(),
+    };
     ToolDeploymentState {
         deployment_revision,
         registered_tools,
-        agent_tool_bindings: BTreeMap::from([(agent_type.clone(), bindings)]),
+        tool_bindings: BTreeMap::from([(owner, bindings)]),
         registered_tool_middlewares: BTreeMap::new(),
         tool_middleware_chains: BTreeMap::new(),
     }
@@ -179,17 +185,19 @@ fn set_agent_bindings(
             (name.clone(), binding(agent_type, &name, tool))
         })
         .collect();
-    deployment
-        .agent_tool_bindings
-        .insert(agent_type.clone(), bindings);
+    let owner = ToolBindingOwner::AgentType {
+        agent_type_name: agent_type.clone(),
+    };
+    deployment.tool_bindings.insert(owner, bindings);
 }
 
-fn add_unimplemented_middleware(
+fn add_missing_component_middleware(
     deployment: &mut ToolDeploymentState,
     agent_type: &AgentTypeName,
     tool_name: &ToolName,
     component_revision: ComponentRevision,
-) {
+) -> ComponentId {
+    let component_id = ComponentId::new();
     let middleware_name = ToolMiddlewareName::try_from("test-middleware").unwrap();
     let registered = RegisteredToolMiddleware {
         deployment_revision: deployment.deployment_revision,
@@ -200,10 +208,11 @@ fn add_unimplemented_middleware(
             aliases: Vec::new(),
             doc: Doc::default(),
             scope: ToolMiddlewareScope::Universal,
+            parameter_schema: SchemaGraph::empty(),
         },
         provision: ToolProvisionConfig::default(),
         source: ToolMiddlewareSource::Component {
-            component_id: ComponentId::new(),
+            component_id,
             component_revision,
             component_name: ComponentName("test-middleware-component".to_string()),
         },
@@ -215,8 +224,12 @@ fn add_unimplemented_middleware(
     let effective_definition = deployment.registered_tools[tool_name].definition.clone();
     let occurrence = CompiledToolMiddlewareOccurrence {
         middleware: registered.clone(),
-        parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        parameters: golem_common::schema::TypedSchemaValue::new(
+            registered.definition.parameter_schema.clone(),
+            golem_common::schema::SchemaValue::Record { fields: vec![] },
+        ),
         provision: ToolProvisionConfig::default(),
+        config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
@@ -228,19 +241,23 @@ fn add_unimplemented_middleware(
     deployment
         .registered_tool_middlewares
         .insert(middleware_name, registered);
+    let owner = ToolBindingOwner::AgentType {
+        agent_type_name: agent_type.clone(),
+    };
     deployment.tool_middleware_chains.insert(
-        agent_type.clone(),
+        owner.clone(),
         BTreeMap::from([(
             tool_name.clone(),
             CompiledToolMiddlewareChain {
                 deployment_revision: deployment.deployment_revision,
-                agent_type_name: agent_type.clone(),
+                owner,
                 tool_name: tool_name.clone(),
                 effective_definition,
                 occurrences: vec![occurrence],
             },
         )]),
     );
+    component_id
 }
 
 fn summary(name: &str, component_id: ComponentId) -> ToolSummary {
@@ -539,13 +556,24 @@ async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
     let tool_name = ToolName::try_from("remote-search").unwrap();
     let publisher_account_id = AccountId::new();
     let publisher_account_email = AccountEmail::new("publisher@example.com");
+    let tool_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let tool_component = executor
+        .update_component(&tool_component.id, &host_api_tests.wasm_name)
+        .await?;
+    let tool_component_id = tool_component.id;
+    let tool_component_revision = tool_component.revision;
     assert_ne!(publisher_account_id, context.account_id);
+    assert_ne!(tool_component_id, component.id);
+    assert_ne!(tool_component_revision, component.revision);
 
     let mut component_deployment = deployment_state(
         &agent_type,
         1,
-        component.revision,
-        &[(tool_name.as_str(), component.id, true)],
+        tool_component_revision,
+        &[(tool_name.as_str(), tool_component_id, true)],
     );
     let registered = component_deployment
         .registered_tools
@@ -553,9 +581,12 @@ async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
         .unwrap();
     registered.owner_account_id = publisher_account_id;
     registered.owner_account_email = publisher_account_email.clone();
+    let owner = ToolBindingOwner::AgentType {
+        agent_type_name: agent_type.clone(),
+    };
     let binding = component_deployment
-        .agent_tool_bindings
-        .get_mut(&agent_type)
+        .tool_bindings
+        .get_mut(&owner)
         .unwrap()
         .get_mut(&tool_name)
         .unwrap();
@@ -611,8 +642,8 @@ async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
     registered.owner_account_email = publisher_account_email.clone();
     registered.source = host_source.clone();
     let binding = host_deployment
-        .agent_tool_bindings
-        .get_mut(&agent_type)
+        .tool_bindings
+        .get_mut(&owner)
         .unwrap()
         .get_mut(&tool_name)
         .unwrap();
@@ -671,7 +702,7 @@ async fn tool_invocation_uses_caller_owned_tagged_snapshot_dispatch(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn durable_tool_invocation_rejects_nonempty_middleware_chain(
+async fn durable_tool_invocation_fails_when_middleware_component_is_missing(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -700,7 +731,12 @@ async fn durable_tool_invocation_rejects_nonempty_middleware_chain(
         component.revision,
         &[(tool_name.as_str(), component.id, true)],
     );
-    add_unimplemented_middleware(&mut deployment, &agent_type, &tool_name, component.revision);
+    let missing_component = add_missing_component_middleware(
+        &mut deployment,
+        &agent_type,
+        &tool_name,
+        component.revision,
+    );
     service.set_tool_deployment(
         context.default_environment_id,
         component.id,
@@ -719,16 +755,15 @@ async fn durable_tool_invocation_rejects_nonempty_middleware_chain(
             "tool_rpc_invoke_and_await_result",
             data_value!(tool_name.as_str(), Vec::<String>::new(), String::new()),
         )
-        .await?
-        .into_typed::<Result<(), String>>()?;
+        .await;
 
+    let error = result.expect_err("missing middleware component must fail the invocation");
     assert!(
-        result.as_ref().is_err_and(|error| {
-            error.contains("RemoteInternalError")
-                && error.contains("tool middleware invocation is not implemented by the executor")
-                && !error.contains("InvalidToolName")
-        }),
-        "a nonempty middleware chain must fail closed before base tool dispatch: {result:?}"
+        error.to_string().contains(&format!(
+            "No such component found: {missing_component}/{}",
+            component.revision
+        )),
+        "dispatch must resolve the pinned middleware rather than bypass it: {error}"
     );
     assert_eq!(service.tool_activation_calls(), 1);
 

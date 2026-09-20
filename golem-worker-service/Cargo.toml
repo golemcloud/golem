@@ -44,6 +44,7 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 cookie = { workspace = true }

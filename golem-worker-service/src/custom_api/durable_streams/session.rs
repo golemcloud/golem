@@ -95,6 +95,7 @@ impl DurableStreamsHandler {
         let start = InvocationStart {
             agent_id: Some(agent_id.clone().into()),
             method_name: Some(behaviour.method_name.clone()),
+            external_tool: None,
             input: Some(input),
             idempotency_key: Some(IdempotencyKey::new(session.to_owned()).into()),
             context: Some(InvocationContext {
@@ -114,6 +115,7 @@ impl DurableStreamsHandler {
             expected_callee_fingerprint: None,
             durable_input_mappings: vec![],
             scope_card: None,
+            origin_invocation: None,
         };
         self.worker_service
             .create_stream_session(agent_id, start)
@@ -290,8 +292,19 @@ impl DurableStreamsHandler {
                 "deleted": metadata.tombstoned,
             }));
         }
+        let fork = read
+            .fork
+            .as_ref()
+            .map(|fork| {
+                Ok::<_, RequestHandlerError>(serde_json::json!({
+                    "sourcePath": fork.source_path,
+                    "forkOffset": offset_text(&fork.fork_offset)?,
+                    "subOffset": fork.sub_offset,
+                }))
+            })
+            .transpose()?;
         let body = serde_json::to_vec(
-            &serde_json::json!({"session": session, "streams": streams, "closed": closed}),
+            &serde_json::json!({"session": session, "streams": streams, "closed": closed, "fork": fork}),
         )
         .map_err(anyhow::Error::from)?;
         let mut result = body_response(StatusCode::OK, body, "application/json");

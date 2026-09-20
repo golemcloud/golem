@@ -2630,6 +2630,234 @@ async fn test_mixed_agent_and_tool_component_deployment_e2e() {
     assert!(outputs.success_or_dump());
 }
 
+#[test]
+#[timeout("15 minutes")]
+async fn tool_invoke_stdout_contains_only_raw_bytes() {
+    let mut ctx = TestContext::new();
+    let app_name = "tool-raw-stdout";
+
+    let failed = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--stdout",
+                "--",
+                "emit",
+            ],
+            &[],
+        )
+        .await;
+    assert!(!failed.success());
+    assert!(failed.stdout().is_empty());
+    assert!(
+        !failed.stderr.is_empty(),
+        "failure diagnostics must reach stderr"
+    );
+
+    ctx.start_server().await;
+    fs::create_dir_all(ctx.cwd_path_join(app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            "tool-raw-stdout:provider",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: tool-raw-stdout
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              tool-raw-stdout:provider:
+                dir: .
+                templates: rust
+                tools:
+                  raw-output: {{}}
+
+            tools:
+              raw-output: {{}}
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        indoc! { r#"
+            use golem_rust::agentic::OutputStream;
+            use golem_rust::{tool_definition, tool_implementation};
+
+            #[tool_definition(version = "1.0.0")]
+            pub trait RawOutput {
+                async fn emit(&self, stdout: OutputStream);
+                fn repeat(&self, text: String, count: u32) -> String;
+            }
+
+            struct RawOutputImpl;
+
+            #[tool_implementation]
+            impl RawOutput for RawOutputImpl {
+                async fn emit(&self, mut stdout: OutputStream) {
+                    stdout.write(vec![0, 0xff, b'R', b'A', b'W']).await.unwrap();
+                }
+
+                fn repeat(&self, text: String, count: u32) -> String {
+                    text.repeat(count as usize)
+                }
+            }
+        "# },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let help = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--",
+                "repeat",
+                "--help",
+            ],
+            &[],
+        )
+        .await;
+    assert!(help.success(), "{}", String::from_utf8_lossy(&help.stderr));
+    assert!(String::from_utf8_lossy(help.stdout()).contains("repeat"));
+    let repeated = ctx
+        .cli_with_input(
+            [
+                "--format",
+                "json",
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "--idempotency-key",
+                "structured-cli-repeat",
+                "raw-output",
+                "--",
+                "repeat",
+                "a b",
+                "3",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        repeated.success(),
+        "{}",
+        String::from_utf8_lossy(&repeated.stderr)
+    );
+    assert!(String::from_utf8_lossy(repeated.stdout()).contains("a ba ba b"));
+
+    let lookup = ctx
+        .cli_with_input(
+            [
+                "--format",
+                "json",
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "--lookup",
+                "--idempotency-key",
+                "structured-cli-repeat",
+                "raw-output",
+                "--",
+                "repeat",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        lookup.success(),
+        "{}",
+        String::from_utf8_lossy(&lookup.stderr)
+    );
+    assert!(String::from_utf8_lossy(lookup.stdout()).contains("a ba ba b"));
+
+    let output = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--stdout",
+                "--",
+                "emit",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        output.success(),
+        "tool invocation failed with code {:?}: {}",
+        output.exit_code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout(), &[0, 0xff, b'R', b'A', b'W']);
+
+    let output = ctx
+        .cli_with_input(
+            [
+                cmd::TOOL,
+                cmd::INVOKE,
+                "--component",
+                "tool-raw-stdout:provider",
+                "raw-output",
+                "--stdout",
+                "--output",
+                "raw.bin",
+                "--",
+                "emit",
+            ],
+            &[],
+        )
+        .await;
+    assert!(
+        output.success(),
+        "file-output invocation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read(ctx.cwd_path_join("raw.bin")).unwrap(),
+        [0, 0xff, b'R', b'A', b'W']
+    );
+    assert!(
+        !output.stdout().is_empty(),
+        "file mode retains its report on stdout"
+    );
+}
+
 /// End-to-end test for the Rust guest agent bridge: a provider component
 /// defines a real `CounterAgent`, the app manifest lists it under
 /// `dependencies.agents`, and a consumer component calls it through the

@@ -294,6 +294,7 @@ fn create_serialization_poem_serde_equivalence() {
     use crate::model::environment::EnvironmentId;
 
     let entry = PublicOplogEntry::Create(CreateParams {
+        owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         timestamp: Timestamp::now_utc().rounded(),
         agent_id: AgentId {
             component_id: ComponentId(

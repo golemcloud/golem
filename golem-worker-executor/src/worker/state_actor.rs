@@ -187,8 +187,8 @@ enum StatusJob {
         entry: Box<OplogEntry>,
         _worker_keepalive: Arc<dyn Any + Send + Sync>,
         _instance_guard: OwnedMutexGuard<WorkerInstance>,
-        _card_event_boundary_guard: OwnedMutexGuard<()>,
-        done: oneshot::Sender<()>,
+        _card_event_boundary_guard: Option<OwnedMutexGuard<()>>,
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
     AppendInvocationIfVersion {
         entry: Box<OplogEntry>,
@@ -334,6 +334,13 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     .commit_and_update_state(CommitLevel::Always, None)
                                     .await;
                                 state.ensure_status_attached().await;
+                                if state.detached.load(Ordering::Acquire) {
+                                    Err(WorkerExecutorError::runtime(
+                                        "Committed worker status could not be reconstructed",
+                                    ))
+                                } else {
+                                    Ok(())
+                                }
                             },
                             done,
                         )
@@ -513,8 +520,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         entry: OplogEntry,
         worker: Arc<Worker<Ctx>>,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
-        card_event_boundary_guard: OwnedMutexGuard<()>,
-    ) {
+        card_event_boundary_guard: Option<OwnedMutexGuard<()>>,
+    ) -> Result<(), WorkerExecutorError> {
         let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
         self.commit
             .run_status_job(|done| StatusJob::AppendAndCommitAttached {
@@ -551,6 +558,14 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         self.commit
             .run_status_job(|done| StatusJob::AttachedStatus { done })
             .await
+    }
+
+    pub async fn try_attached_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        self.reattach_worker_status().await;
+        self.commit
+            .run_status_job(|done| StatusJob::NonDetachedStatus { done })
+            .await
+            .ok_or_else(|| WorkerExecutorError::runtime("Worker status could not be reconstructed"))
     }
 
     /// Returns the published status, asserting it is attached to the oplog. Serialized behind

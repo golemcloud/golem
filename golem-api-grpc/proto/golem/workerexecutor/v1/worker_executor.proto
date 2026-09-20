@@ -72,6 +72,7 @@ service WorkerExecutor {
   rpc CreateStreamSession(golem.worker.InvocationStart) returns (CreateStreamSessionResponse);
   rpc ReadStreamSlot(ReadStreamSlotRequest) returns (stream ReadStreamSlotResponse);
   rpc AppendToStreamSlot(AppendToStreamSlotRequest) returns (AppendToStreamSlotResponse);
+  rpc ForkStreamSlot(ForkStreamSlotRequest) returns (ForkStreamSlotResponse);
   rpc ProcessOplogEntries(ProcessOplogEntriesRequest) returns (ProcessOplogEntriesResponse);
   rpc DeliverCardTransfer(DeliverCardTransferRequest) returns (DeliverCardTransferResponse);
 }
@@ -601,6 +602,8 @@ message ReadStreamSlotSuccess {
   bool tombstoned = 11;
   // Direction from the invocation's pinned schema, not the current deployment.
   bool writable = 12;
+  // Creation provenance for an exported fork, independent of subsequent progress.
+  ForkStreamSlotSuccess fork = 13;
 }
 
 message ReadStreamSlotResponse {
@@ -608,6 +611,59 @@ message ReadStreamSlotResponse {
     ReadStreamSlotSuccess success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
     golem.common.Empty not_found = 3;
+  }
+}
+
+// Only the authenticated custom-API gateway may submit an export fork. Source and target
+// belong to the same component/environment, and session/slot must belong to expected_method.
+message ForkStreamSlotRequest {
+  golem.worker.AgentId source_agent_id = 1;
+  golem.worker.AgentId target_agent_id = 2;
+  golem.common.EnvironmentId environment_id = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
+  string session = 5;
+  string slot = 6;
+  string expected_method = 7;
+  string source_path = 8;
+  // Absent means the source tail at first admission. Present contains a canonical 24-byte cursor.
+  optional bytes fork_offset = 9;
+  uint64 sub_offset = 10;
+  optional string content_type = 11;
+  uint32 max_forks_per_session = 12;
+  uint32 max_forks_per_second = 13;
+  uint64 max_copied_bytes = 14;
+  bytes initial_content = 15;
+  bool closed = 16;
+}
+
+message ForkStreamSlotSuccess {
+  bool replayed = 1;
+  string source_path = 2;
+  bytes fork_offset = 3;
+  uint64 sub_offset = 4;
+  uint64 oplog_index = 5;
+}
+
+message ForkStreamSlotRejection {
+  enum Reason {
+    UNSPECIFIED = 0;
+    NOT_FOUND = 1;
+    CONFLICT = 2;
+    INVALID_OFFSET = 3;
+    TOO_LARGE = 4;
+    RATE_LIMITED = 5;
+    READ_ONLY = 6;
+  }
+  Reason reason = 1;
+  uint64 copied_bytes = 2;
+  uint64 retry_after_seconds = 3;
+}
+
+message ForkStreamSlotResponse {
+  oneof result {
+    ForkStreamSlotSuccess success = 1;
+    ForkStreamSlotRejection rejected = 2;
+    golem.worker.v1.WorkerExecutionError failure = 3;
   }
 }
 

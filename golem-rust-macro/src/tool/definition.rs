@@ -374,7 +374,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             __command_path: ::std::vec::Vec<::std::string::String>,
             __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
             mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
-            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::host::ToolStdoutWriter>,
+            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolStdoutWriter>,
             __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
         ) -> golem_rust::agentic::ToolInvokeFuture
         where
@@ -453,7 +453,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             __command_path: ::std::vec::Vec<::std::string::String>,
             __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
             __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
-            __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::host::ToolStdoutWriter>,
+            __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolStdoutWriter>,
             __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
         ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
         where
@@ -487,14 +487,14 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             __input_graph: golem_rust::SchemaGraph,
             mut __input_fields: ::std::vec::Vec<golem_rust::agentic::CanonicalInputValue>,
             mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
-            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::host::ToolStdoutWriter>,
+            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolStdoutWriter>,
             __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
         ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
         where
             Self: Sized + 'a,
         {
             ::std::boxed::Box::pin(async move {
-                fn __encode_success_value<T: golem_rust::IntoSchema + ?Sized>(
+                async fn __encode_success_value<T: golem_rust::IntoSchema + ?Sized>(
                     __value: &T,
                 ) -> ::std::result::Result<
                     golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult,
@@ -502,7 +502,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                 > {
                     let __value = golem_rust::IntoTypedSchemaValue::into_typed_schema_value(__value)
                         .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidResult(__err.to_string()))?;
-                    let __value = golem_rust::encode_typed_schema_value(&__value)
+                    let __value = golem_rust::encode_typed_schema_value_async(&__value).await
                         .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidResult(__err.to_string()))?;
                     ::std::result::Result::Ok(golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult {
                         result: ::std::option::Option::Some(__value),
@@ -520,7 +520,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                     })
                 }
 
-                fn __encode_custom_error<T: golem_rust::agentic::ToolErrorSchema + ?Sized>(
+                async fn __encode_custom_error<T: golem_rust::agentic::ToolErrorSchema + ?Sized>(
                     __error: &T,
                 ) -> ::std::result::Result<
                     golem_rust::golem_agentic::exports::golem::tool::guest::ToolError,
@@ -528,11 +528,11 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                 > {
                     let (__name, __value) = golem_rust::agentic::ToolErrorSchema::to_error_payload_value(__error)
                         .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidResult(__err.to_string()))?;
-                    let __value = golem_rust::encode_typed_schema_value(&__value)
+                    let __value = golem_rust::encode_typed_schema_value_async(&__value).await
                         .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidResult(__err.to_string()))?;
                     ::std::result::Result::Ok(
                         golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::CustomError(
-                            golem_rust::schema::tool::wit::wire::CustomToolError {
+                            golem_rust::schema::wit::wire::CustomToolError {
                                 name: __name,
                                 payload: __value,
                             }
@@ -600,7 +600,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                         };
                         return __subtool_invoker(
                             __subtool_path,
-                            golem_rust::encode_typed_schema_value_owned(__subtool_input)
+                            golem_rust::encode_typed_schema_value_async(&__subtool_input).await
                                 .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(__err.to_string()))?,
                             __stdin,
                             __stdout,
@@ -792,21 +792,21 @@ fn encode_invocation_result(
         match ok {
             Some(_) => quote! {
                 match #call {
-                    ::std::result::Result::Ok(__value) => return __encode_success_value(&__value),
-                    ::std::result::Result::Err(__error) => return ::std::result::Result::Err(__encode_custom_error(&__error)?),
+                    ::std::result::Result::Ok(__value) => return __encode_success_value(&__value).await,
+                    ::std::result::Result::Err(__error) => return ::std::result::Result::Err(__encode_custom_error(&__error).await?),
                 }
             },
             None => quote! {
                 match #call {
                     ::std::result::Result::Ok(()) => return __encode_success_unit(),
-                    ::std::result::Result::Err(__error) => return ::std::result::Result::Err(__encode_custom_error(&__error)?),
+                    ::std::result::Result::Err(__error) => return ::std::result::Result::Err(__encode_custom_error(&__error).await?),
                 }
             },
         }
     } else {
         match ok {
             Some(_) => quote! {
-                return __encode_success_value(&#call);
+                return __encode_success_value(&#call).await;
             },
             None => quote! {
                 #call;
