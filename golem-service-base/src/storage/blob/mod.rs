@@ -485,10 +485,11 @@ pub struct BlobRangeError {
 /// storage holds no blob at it.
 ///
 /// The default `copy` of [`BlobStorage`] reads the blob at its source path and gives this error
-/// when the storage holds none there. The default `move` is that copy and then a delete of the
-/// source, so it gives the error too, and it deletes nothing. A guest picks the source container
-/// name and the source object name of `copy_object` and of `move_object`, so the path is of the
-/// guest.
+/// when the storage holds none there. The S3 backend has a `copy` of its own, which sends one
+/// `CopyObject` request and gives this error for the code `NoSuchKey` of the source key. The
+/// default `move` is a copy and then a delete of the source, so it gives the error too, and it
+/// deletes nothing. A guest picks the source container name and the source object name of
+/// `copy_object` and of `move_object`, so the path is of the guest.
 ///
 /// The error is permanent. `blob_store_error` in
 /// `golem_worker_executor::services::blob_store` maps it to `BlobStoreError::NotFound`, and

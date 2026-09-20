@@ -15,8 +15,9 @@
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult,
-    ListedBlob, blob_path_is_root, blob_path_to_string, blob_range, normalized_blob_path,
+    BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
+    BlobStorageNamespace, ExistsResult, ListedBlob, blob_path_is_root, blob_path_to_string,
+    blob_range, normalized_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -62,6 +63,19 @@ const HTTP_OK: u16 = 200;
 /// A response with this HTTP status tells the backend that the range has no byte in the
 /// object (RFC 9110, section 15.5.17). `get_raw_slice` gives a `BlobRangeError` for it.
 const RANGE_NOT_SATISFIABLE: u16 = 416;
+
+/// The code that S3 gives in the body of the error of a key that is not there.
+///
+/// The S3 model (`com.amazonaws.s3#NoSuchKey`) holds the code with the status 404 and the
+/// message "The specified key does not exist.". MinIO holds the same code and status
+/// (`ErrNoSuchKey` in `cmd/api-errors.go`) and gives it for the source of a `CopyObject`
+/// (`CopyObjectHandler` in `cmd/object-handlers.go`).
+///
+/// `GetObject` has no use for this code: the model names `NoSuchKey` as an error of that
+/// operation, so the SDK gives the `GetObjectError::NoSuchKey` variant for it. `CopyObject`
+/// names one error only, `ObjectNotInActiveTierError`, so `is_copy_source_missing` reads this
+/// code out of the metadata of a `CopyObjectError`.
+const NO_SUCH_KEY_CODE: &str = "NoSuchKey";
 
 /// The name of the object that records a directory, because S3 has no directories.
 ///
@@ -665,12 +679,36 @@ impl S3BlobStorage {
         true
     }
 
+    /// Tells whether a `CopyObject` error says that the source key is not there.
+    ///
+    /// The SDK gives the error as `CopyObjectError::Unhandled` and keeps the code of the body
+    /// in the metadata of the error: `CopyObject` names `ObjectNotInActiveTierError` as its one
+    /// error of the service, so `de_copy_object_http_error` in
+    /// `aws_sdk_s3::protocol_serde::shape_copy_object` makes every other code a generic error.
+    /// The code of that metadata is what this reads.
+    ///
+    /// The status of the response is not what this reads, and a predicate of the status 404
+    /// would be wrong: S3 can give the error of a copy in a response with the status 200, and
+    /// the SDK reads the error out of the body of such a response
+    /// (`CopyObjectResponseDeserializer` in `aws_sdk_s3::operation::copy_object`, and "Response
+    /// and special errors" in the S3 API reference of `CopyObject`).
+    fn is_copy_source_missing(error: &CopyObjectError) -> bool {
+        error.meta().code() == Some(NO_SUCH_KEY_CODE)
+    }
+
+    /// Tells whether the retry loop sends a `CopyObject` request again after an error.
+    ///
+    /// A source key that is not there stops the loop: a retry cannot make the bucket hold that
+    /// key, so each retry of it is work with no result, and `copy` gives a [`BlobMissingError`]
+    /// for it.
     fn is_copy_object_error_retriable(error: &SdkError<CopyObjectError>) -> bool {
         match error {
-            SdkError::ServiceError(service_error) => !matches!(
-                service_error.err(),
-                CopyObjectError::ObjectNotInActiveTierError(_)
-            ),
+            SdkError::ServiceError(service_error) => {
+                !matches!(
+                    service_error.err(),
+                    CopyObjectError::ObjectNotInActiveTierError(_)
+                ) && !Self::is_copy_source_missing(service_error.err())
+            }
             _ => true,
         }
     }
@@ -706,6 +744,26 @@ impl S3BlobStorage {
         match error {
             SdkError::ServiceError(service_error)
                 if Self::is_final_get_object_error(service_error.err(), service_error.raw()) =>
+            {
+                None
+            }
+            _ => Some(Self::error_string(error)),
+        }
+    }
+
+    /// Gives the text that the retry loop (`with_retries_customized` in `golem_common::retries`)
+    /// records for a `CopyObject` error, or `None` for an error that the loop does not record
+    /// and does not count as a failure.
+    ///
+    /// A source key that is not there (`is_copy_source_missing`) stays out of the error log and
+    /// out of the failure counter, as a missing key of a `GetObject` and of a `HeadObject` does
+    /// (`get_object_error_as_loggable`, `head_object_error_as_loggable`): a guest picks the
+    /// source name, S3 did the work of the request, and the error goes to the guest. Every
+    /// other error gets its text.
+    fn copy_object_error_as_loggable(error: &SdkError<CopyObjectError>) -> Option<String> {
+        match error {
+            SdkError::ServiceError(service_error)
+                if Self::is_copy_source_missing(service_error.err()) =>
             {
                 None
             }
@@ -1437,6 +1495,15 @@ impl BlobStorage for S3BlobStorage {
         }
     }
 
+    /// Writes the blob at `from` to `to` with one `CopyObject` request, and keeps the blob at
+    /// `from`. S3 reads the source and writes the target, so no byte of the object comes to
+    /// this process.
+    ///
+    /// A `from` with no object at it gives a [`BlobMissingError`], as the default `copy` of
+    /// [`BlobStorage`] does. One request gives that error: `is_copy_object_error_retriable`
+    /// stops the retry loop at it. `move` is the default one, which is this copy and then a
+    /// delete of the source, so a source that is not there gives the error from the copy and
+    /// deletes nothing.
     async fn copy(
         &self,
         target_label: &'static str,
@@ -1452,7 +1519,7 @@ impl BlobStorage for S3BlobStorage {
         let to_key = self.key_of(&namespace, to)?;
         let encoded_from_key = Self::encode_copy_source_key(&from_key);
 
-        with_retries_customized(
+        let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {from_key:?} -> {to_key:?}")),
@@ -1470,12 +1537,23 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_copy_object_error_retriable,
-            Self::sdk_error_as_loggable_string,
+            Self::copy_object_error_as_loggable,
             false,
         )
-        .await?;
+        .await;
 
-        Ok(())
+        match result {
+            Ok(_) => Ok(()),
+            Err(SdkError::ServiceError(service_error))
+                if Self::is_copy_source_missing(service_error.err()) =>
+            {
+                Err(BlobMissingError {
+                    path: from.to_path_buf(),
+                }
+                .into())
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 }
 

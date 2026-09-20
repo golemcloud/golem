@@ -193,8 +193,9 @@ pub struct DefaultBlobStoreService {
 /// permanent like a name that S3 does not accept as an object key.
 ///
 /// [`BlobMissingError`] is not a name error: the storage accepts the name, and holds no blob at
-/// it. The default `copy` of the blob storage gives it for a source path with no blob at it, and
-/// the default `move` is that copy and then a delete, so [`BlobStoreService::copy_object`] and
+/// it. The default `copy` of the blob storage gives it for a source path with no blob at it, the
+/// S3 backend gives it for a `CopyObject` whose source key is not there, and the default `move`
+/// is a copy and then a delete, so [`BlobStoreService::copy_object`] and
 /// [`BlobStoreService::move_object`] give [`BlobStoreError::NotFound`] for a source object that
 /// the guest names and that is not there. A retry cannot make the storage hold that object, so
 /// the error is permanent.

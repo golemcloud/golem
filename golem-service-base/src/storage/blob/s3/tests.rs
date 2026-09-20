@@ -15,7 +15,8 @@
 use super::S3BlobStorage;
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::storage::blob::{
-    BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
+    BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
+    ExistsResult, ListedBlob,
 };
 use aws_sdk_s3::config::http::{HttpRequest, HttpResponse};
 use aws_sdk_s3::config::retry::RetryConfig;
@@ -57,6 +58,7 @@ struct SentRequest {
     method: String,
     uri: String,
     range: Option<String>,
+    copy_source: Option<String>,
     body: String,
 }
 
@@ -66,6 +68,10 @@ impl SentRequest {
             method: request.method().to_string(),
             uri: request.uri().to_string(),
             range: request.headers().get("range").map(str::to_string),
+            copy_source: request
+                .headers()
+                .get("x-amz-copy-source")
+                .map(str::to_string),
             body: request
                 .body()
                 .bytes()
@@ -305,6 +311,14 @@ fn name_error(error: anyhow::Error) -> Option<BlobNameError> {
     error.downcast_ref::<BlobNameError>().cloned()
 }
 
+/// Gives the `BlobMissingError` of an error of the blob storage, or `None` for another error.
+///
+/// `blob_store_error` in `golem_worker_executor::services::blob_store` downcasts the same way,
+/// and makes a `BlobStoreError::NotFound`, which is permanent, of what it gets.
+fn missing_error(error: anyhow::Error) -> Option<BlobMissingError> {
+    error.downcast_ref::<BlobMissingError>().cloned()
+}
+
 /// The lines that a subscriber wrote, one JSON object for each event.
 #[derive(Clone, Default)]
 struct LogLines(Arc<Mutex<Vec<u8>>>);
@@ -414,6 +428,9 @@ const INVALID_RANGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Cod
 const INTERNAL_ERROR: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>We encountered an internal error</Message></Error>"#;
 
 const NO_SUCH_KEY: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>"#;
+
+/// The body of the response of a `CopyObject` that S3 did.
+const COPY_RESULT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><LastModified>2015-10-21T07:28:00.000Z</LastModified><ETag>"9b2cf535f27731c974343645a3985328"</ETag></CopyObjectResult>"#;
 
 fn delete_result_with_error(key: &str, code: &str, message: &str) -> String {
     format!(
@@ -1627,6 +1644,208 @@ async fn create_dir_at_a_root_path_sends_no_request() {
             .map(|request| request.uri.clone())
             .collect::<Vec<_>>(),
         Vec::<String>::new()
+    );
+}
+
+/// Gives the method, the target and the copy source of each request, in the order of the
+/// requests. A `CopyObject` is a `PUT` of the target key with the source key in its
+/// `x-amz-copy-source` header, so these three show which request is a copy.
+fn copy_requests(requests: &SentRequests) -> Vec<(String, String, Option<String>)> {
+    sent(requests)
+        .iter()
+        .map(|request| {
+            (
+                request.method.clone(),
+                request.uri.clone(),
+                request.copy_source.clone(),
+            )
+        })
+        .collect()
+}
+
+/// Gives the one `CopyObject` request of a copy from `from` to `to` in `namespace()`.
+fn one_copy_request(from: &str, to: &str) -> Vec<(String, String, Option<String>)> {
+    let prefix = namespace_prefix();
+    vec![(
+        "PUT".to_string(),
+        format!("http://s3.test/custom-data/{prefix}/{to}?x-id=CopyObject"),
+        Some(format!("/custom-data/{prefix}/{from}")),
+    )]
+}
+
+#[test]
+async fn copy_gives_a_missing_error_for_a_source_that_is_not_there_and_sends_one_request() {
+    // The S3 model names one error of `CopyObject`, `ObjectNotInActiveTierError`, so a source
+    // key that is not there comes as the code `NoSuchKey` in the body of the response, which
+    // the SDK keeps in the metadata of a `CopyObjectError::Unhandled`. The backend reads that
+    // code, gives the `BlobMissingError` that the default `copy` gives, and sends the request
+    // one time: a retry cannot make the bucket hold the source key. The storage sends 3
+    // requests for a retriable error, which `copy_retries_a_server_error` holds.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, NO_SUCH_KEY));
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), copy_requests(&requests)),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("from")
+            })),
+            one_copy_request("from", "to")
+        )
+    );
+}
+
+#[test]
+async fn move_gives_a_missing_error_for_a_source_that_is_not_there_and_deletes_nothing() {
+    // `move` is the default one of `BlobStorage`: the copy comes first, and the delete of the
+    // source comes after it. The copy gives the error, so the delete does not run and the one
+    // request of the move is that copy. No backend has a `move` of its own.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, NO_SUCH_KEY));
+
+    let result = storage
+        .r#move(
+            "test",
+            "move",
+            namespace(),
+            Path::new("from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), copy_requests(&requests)),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("from")
+            })),
+            one_copy_request("from", "to")
+        )
+    );
+}
+
+#[test]
+async fn copy_retries_a_server_error() {
+    // The first request gets a 500 and the second gets the result of the copy. The test of a
+    // missing source key matches one code, so every other error of the service keeps its retry.
+    let (storage, requests) = scripted_storage("", |_, earlier| match earlier {
+        0 => Answer::new(500, INTERNAL_ERROR),
+        _ => Answer::new(200, COPY_RESULT),
+    });
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), sent(&requests).len()),
+        (Ok(()), 2)
+    );
+}
+
+#[test]
+async fn copy_reads_the_code_of_the_error_and_not_the_status_of_the_response() {
+    // A `CopyObject` can get an error in a response with the status 200: the SDK reads the body
+    // of such a response, sees the `Error` element and makes the error of it
+    // (`CopyObjectResponseDeserializer` in `aws_sdk_s3::operation::copy_object`, and "Response
+    // and special errors" in the S3 API reference of `CopyObject`). The backend reads the code
+    // of the error out of its metadata, so the status of the response does not change what the
+    // copy gives.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, NO_SUCH_KEY));
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), copy_requests(&requests)),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("from")
+            })),
+            one_copy_request("from", "to")
+        )
+    );
+}
+
+#[test]
+async fn copy_keeps_a_source_that_is_not_there_out_of_the_error_log() {
+    // The missing source key is not retriable, so that copy sends 1 request. The copy that gets
+    // a server error is the control. The blob storage sends 3 requests for it: the first 2
+    // record a warning, which is not in the error log, and the last records an error and counts
+    // a failure. A missing key of a `GetObject` and of a `HeadObject` has the same policy: the
+    // guest picks the name, S3 did the work of the request, and the error goes to the guest.
+    //
+    // The source key of a copy is in the `x-amz-copy-source` header, and the target key is in
+    // the URI, so the script reads the header to find which copy the request is.
+    let (storage, requests) = scripted_storage("", |request, _| {
+        if request
+            .copy_source
+            .as_deref()
+            .is_some_and(|source| source.ends_with("missing"))
+        {
+            Answer::new(404, NO_SUCH_KEY)
+        } else {
+            Answer::new(500, INTERNAL_ERROR)
+        }
+    });
+    let ops = ["copy-404", "copy-500"];
+    let copy = |from: &'static str, op_label: &'static str| {
+        storage.copy(
+            "test",
+            op_label,
+            namespace(),
+            Path::new(from),
+            Path::new("to"),
+        )
+    };
+    let failures_before = ops.map(external_call_failures);
+
+    let ((missing, failing), errors) = with_error_log(async {
+        (
+            copy("missing", ops[0]).await.map_err(missing_error),
+            copy("failing", ops[1]).await.map_err(missing_error),
+        )
+    })
+    .await;
+    let failures = ops
+        .map(external_call_failures)
+        .iter()
+        .zip(failures_before)
+        .map(|(after, before)| after - before)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (missing, failing, errors, failures, sent(&requests).len()),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("missing")
+            })),
+            Err(None),
+            vec![ops[1].to_string()],
+            vec![0.0, 1.0],
+            4
+        )
     );
 }
 
