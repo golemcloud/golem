@@ -16,7 +16,8 @@ use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::types::ObjectMetadata;
 use golem_service_base::storage::blob::{
-    BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult,
+    BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
+    ExistsResult,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -66,6 +67,12 @@ pub trait BlobStoreService: Send + Sync {
         container_name: String,
     ) -> Result<bool, BlobStoreError>;
 
+    /// Writes the source object to `destination_container_name` and
+    /// `destination_object_name`, and keeps the source object.
+    ///
+    /// A source object that is not there gives [`BlobStoreError::NotFound`], which is permanent,
+    /// so the guest gets it at once, the executor does not retry it, and the operation writes
+    /// nothing.
     async fn copy_object(
         &self,
         environment_id: EnvironmentId,
@@ -135,6 +142,12 @@ pub trait BlobStoreService: Send + Sync {
         container_name: String,
     ) -> Result<Vec<String>, BlobStoreError>;
 
+    /// Writes the source object to `destination_container_name` and
+    /// `destination_object_name`, and then deletes the source object.
+    ///
+    /// The write comes before the delete, so a source object that is not there gives the same
+    /// permanent [`BlobStoreError::NotFound`] as [`BlobStoreService::copy_object`], and the
+    /// operation deletes nothing.
     async fn move_object(
         &self,
         environment_id: EnvironmentId,
@@ -167,8 +180,9 @@ pub struct DefaultBlobStoreService {
 /// Gives the `BlobStoreError` of an error of the blob storage.
 ///
 /// A [`BlobRangeError`] and a [`BlobNameError`] are errors of the input of the guest, so they
-/// become [`BlobStoreError::InvalidInput`], which `classify_blob_store_error` in
-/// `crate::durable_host::blobstore` makes permanent. Each other error becomes
+/// become [`BlobStoreError::InvalidInput`]. A [`BlobMissingError`] becomes
+/// [`BlobStoreError::NotFound`]. `classify_blob_store_error` in
+/// `crate::durable_host::blobstore` makes each of the three permanent. Each other error becomes
 /// [`BlobStoreError::TransientBackend`], which is transient, so the executor retries the
 /// operation. Each method of [`DefaultBlobStoreService`] maps its errors with this function,
 /// so an error of the input is permanent at each of them.
@@ -177,11 +191,20 @@ pub struct DefaultBlobStoreService {
 /// the guest chose and that the storage cannot use, so each of them is permanent, whichever
 /// backend gives it. The path rules are in it too, so a `..` name and an absolute name are
 /// permanent like a name that S3 does not accept as an object key.
+///
+/// [`BlobMissingError`] is not a name error: the storage accepts the name, and holds no blob at
+/// it. The default `copy` of the blob storage gives it for a source path with no blob at it, and
+/// the default `move` is that copy and then a delete, so [`BlobStoreService::copy_object`] and
+/// [`BlobStoreService::move_object`] give [`BlobStoreError::NotFound`] for a source object that
+/// the guest names and that is not there. A retry cannot make the storage hold that object, so
+/// the error is permanent.
 fn blob_store_error(err: anyhow::Error) -> BlobStoreError {
     if let Some(range) = err.downcast_ref::<BlobRangeError>() {
         BlobStoreError::InvalidInput(range.to_string())
     } else if let Some(name) = err.downcast_ref::<BlobNameError>() {
         BlobStoreError::InvalidInput(name.to_string())
+    } else if let Some(missing) = err.downcast_ref::<BlobMissingError>() {
+        BlobStoreError::NotFound(missing.to_string())
     } else {
         BlobStoreError::TransientBackend(err.to_string())
     }
@@ -503,8 +526,8 @@ mod tests {
     use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use golem_service_base::storage::blob::{
-        BlobMetadata, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
-        ExistsResult, ListedBlob,
+        BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
+        BlobStorageNamespace, ExistsResult, ListedBlob,
     };
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -1062,6 +1085,67 @@ mod tests {
         );
     }
 
+    /// A guest picks the source container name and the source object name of `copy_object` and
+    /// of `move_object`, and a source object that is not there gives a permanent
+    /// `BlobStoreError::NotFound`. The name is good, so it is not an error of the name: the
+    /// storage holds no object at it, and a retry cannot make the storage hold it.
+    ///
+    /// The error names the path of the source object, and `move_object` deletes nothing.
+    async fn test_a_source_that_is_not_there_is_not_found(blob_store: &impl BlobStoreService) {
+        let environment_id = EnvironmentId::new();
+        blob_store
+            .create_container(environment_id, "container1".to_string())
+            .await
+            .unwrap();
+        blob_store
+            .write_data(environment_id, "container1", "obj1", &[1])
+            .await
+            .unwrap();
+
+        let copied = blob_store
+            .copy_object(
+                environment_id,
+                "container1".to_string(),
+                "missing".to_string(),
+                "container1".to_string(),
+                "obj2".to_string(),
+            )
+            .await;
+        let moved = blob_store
+            .move_object(
+                environment_id,
+                "container1".to_string(),
+                "missing".to_string(),
+                "container1".to_string(),
+                "obj3".to_string(),
+            )
+            .await;
+
+        let expected = format!(
+            "Not found: {}",
+            BlobMissingError {
+                path: PathBuf::from("container1/missing"),
+            }
+        );
+        assert_eq!(
+            [copied, moved].map(|result| result
+                .err()
+                .map(|error| (error.to_string(), classify_blob_store_error(&error)))),
+            [
+                Some((expected.clone(), HostFailureKind::Permanent)),
+                Some((expected, HostFailureKind::Permanent)),
+            ]
+        );
+        assert_eq!(
+            blob_store
+                .list_objects(environment_id, "container1".to_string())
+                .await
+                .unwrap(),
+            vec!["obj1"],
+            "a source that is not there writes and deletes nothing"
+        );
+    }
+
     fn in_memory_blob_store() -> impl BlobStoreService {
         let blob_storage = Arc::new(InMemoryBlobStorage::new());
         DefaultBlobStoreService::new(blob_storage)
@@ -1135,6 +1219,12 @@ mod tests {
         let tempdir = TempDir::new().unwrap();
         let blob_store = fs_blob_store(tempdir.path()).await;
         test_a_parent_name_is_invalid_input(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_source_that_is_not_there_is_not_found_in_memory() {
+        let blob_store = in_memory_blob_store();
+        test_a_source_that_is_not_there_is_not_found(&blob_store).await;
     }
 
     #[test]

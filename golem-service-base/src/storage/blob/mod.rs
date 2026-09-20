@@ -186,6 +186,11 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<ExistsResult, Error>;
 
+    /// Writes the blob at `from` to `to`, and keeps the blob at `from`.
+    ///
+    /// A `from` with no blob at it gives an error that downcasts to [`BlobMissingError`], and
+    /// writes nothing to `to`. One read gives that error, and it is permanent, so the operation
+    /// does no more work.
     async fn copy(
         &self,
         target_label: &'static str,
@@ -202,10 +207,18 @@ pub trait BlobStorage: Debug + Send + Sync {
                 self.put_raw(target_label, op_label, namespace, to, &data)
                     .await
             }
-            None => Err(anyhow!("Blob storage entry not found: {from:?}")),
+            None => Err(BlobMissingError {
+                path: from.to_path_buf(),
+            }
+            .into()),
         }
     }
 
+    /// Writes the blob at `from` to `to`, and then deletes the blob at `from`.
+    ///
+    /// The copy comes before the delete, so each error of `copy` is an error of `move` and the
+    /// blob at `from` stays. A `from` with no blob at it gives [`BlobMissingError`] from the
+    /// default `copy`.
     async fn r#move(
         &self,
         target_label: &'static str,
@@ -464,6 +477,29 @@ pub struct BlobRangeError {
     pub start: u64,
     /// The offset of the last byte of the range.
     pub end: u64,
+}
+
+/// The storage has no blob at a path that an operation reads.
+///
+/// The name is good: the rules of [`BlobNameError`] accept it, and the backend can use it. The
+/// storage holds no blob at it.
+///
+/// The default `copy` of [`BlobStorage`] reads the blob at its source path and gives this error
+/// when the storage holds none there. The default `move` is that copy and then a delete of the
+/// source, so it gives the error too, and it deletes nothing. A guest picks the source container
+/// name and the source object name of `copy_object` and of `move_object`, so the path is of the
+/// guest.
+///
+/// The error is permanent. `blob_store_error` in
+/// `golem_worker_executor::services::blob_store` maps it to `BlobStoreError::NotFound`, and
+/// `classify_blob_store_error` in `golem_worker_executor::durable_host::blobstore` makes that
+/// permanent, so the guest gets the error at once and the executor does not retry it: a retry
+/// cannot make the storage hold the blob.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("the blob storage has no blob at the path {path:?}")]
+pub struct BlobMissingError {
+    /// The path of the blob that the storage does not hold.
+    pub path: PathBuf,
 }
 
 /// The error of a blob name that the storage cannot use.
