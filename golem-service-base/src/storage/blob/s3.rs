@@ -107,6 +107,14 @@ pub enum BlobNameError {
     /// The last segment of the object key is [`DIR_MARKER`], the name of the object that the
     /// backend writes to record a directory. The blob listing leaves that name out, so a blob
     /// with that name would stay out of a snapshot.
+    ///
+    /// The rule applies to a directory name too, and a collision is the reason. `create_dir`
+    /// of `x/__dir_marker` writes its marker object at the key `x/__dir_marker/__dir_marker`,
+    /// while `exists` of `x/__dir_marker` sends a HEAD for the key `x/__dir_marker`, which is
+    /// the marker object of the directory `x`. `exists` would give `File` for a directory
+    /// that the guest had just made, and `get_metadata` would give the size of the marker
+    /// object of `x`. The rule keeps that one key for the backend, so the collision cannot
+    /// happen.
     #[error(
         "the last segment of the blob name is {marker}, which the S3 backend keeps for the object that records a directory",
         marker = DIR_MARKER
@@ -294,11 +302,15 @@ impl S3BlobStorage {
     ///
     /// `path` is the one form of a relative blob path (`normalized_blob_path`). The key is the
     /// prefix of the namespace, then `/`, then `path`. The key of the root of a namespace is
-    /// the prefix. The prefix holds the environment id, so the key is never empty.
+    /// the prefix and a `/` after it, which is what `Path::join` gives for an empty path. The
+    /// prefix holds the environment id, so the key is never empty.
     ///
-    /// Each request of the backend gets its key from this function or from
-    /// `dir_marker_key_of`, so each key that the backend sends satisfies the rules of
-    /// [`BlobNameError`].
+    /// Each key that the backend makes of a blob path comes from this function or from
+    /// `dir_marker_key_of`, so each such key satisfies the rules of [`BlobNameError`]. Two
+    /// things that the backend sends are not keys of a blob path: `list_objects` and
+    /// `prefix_has_objects` send a key of this function with a `/` at its end as a prefix,
+    /// and `delete_dir` sends the keys of the response of a listing, which are the keys of
+    /// objects that the bucket holds.
     fn key_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> Result<String, Error> {
         let key = blob_path_to_string(&self.prefix_of(namespace).join(path))?;
         Ok(Self::checked_key(key)?)
@@ -307,11 +319,26 @@ impl S3BlobStorage {
     /// Gives the key of the object that records the directory at `key`, or a
     /// [`BlobNameError`]. `key` comes from `key_of`.
     ///
+    /// The key of a root path ends with `/`, so this function uses a separator before
+    /// [`DIR_MARKER`] only when `key` does not end with one. A key with two separators in a
+    /// row is a key that MinIO rejects.
+    ///
     /// The object has the name [`DIR_MARKER`] in the directory, so its key is longer than
-    /// `key`. S3 measures the key of the object, so it is the key that has to fit
-    /// [`MAX_KEY_BYTES`]. The other rules hold for it when they hold for `key`.
+    /// `key`. S3 measures the key of the object, so it is that key which has to fit
+    /// [`MAX_KEY_BYTES`], and the length is the one rule that this function applies. The NUL
+    /// rule and the dot-segment rule hold for the marker key when they hold for `key`, which
+    /// `checked_key` has already applied to `key`, because [`DIR_MARKER`] has no NUL byte and
+    /// is neither `.` nor `..`. The reserved rule cannot hold for the marker key: its last
+    /// segment is [`DIR_MARKER`] by construction, because this is the object that the backend
+    /// keeps that name for.
+    ///
+    /// A key that fits [`MAX_KEY_BYTES`] can have a marker key that does not, so a caller
+    /// that looks for a directory reads the error as "this directory has no marker object"
+    /// (`exists`, `get_metadata`), and only the caller that writes the marker gives the error
+    /// to the guest (`create_dir`).
     fn dir_marker_key_of(key: &str) -> Result<String, BlobNameError> {
-        Self::checked_length(format!("{key}/{DIR_MARKER}"))
+        let separator = if key.ends_with('/') { "" } else { "/" };
+        Self::checked_length(format!("{key}{separator}{DIR_MARKER}"))
     }
 
     /// Applies the rules of [`BlobNameError`] to an object key. Gives the key when it
@@ -968,7 +995,13 @@ impl BlobStorage for S3BlobStorage {
             })),
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
-                    let marker = Self::dir_marker_key_of(&key)?;
+                    // The marker key is longer than the key of the directory, so it can go
+                    // past the limit for a key that fits it (`dir_marker_key_of`). The
+                    // backend sends no key that S3 rejects, so a directory with such a key
+                    // has no marker object, and nothing is at the path.
+                    let Ok(marker) = Self::dir_marker_key_of(&key) else {
+                        return Ok(None);
+                    };
                     let dir_marker_head_result = with_retries_customized(
                         target_label,
                         op_label,
@@ -1372,53 +1405,60 @@ impl BlobStorage for S3BlobStorage {
             Ok(_) => Ok(ExistsResult::File),
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
-                    let marker = Self::dir_marker_key_of(&key)?;
-                    let dir_marker_head_result = with_retries_customized(
-                        target_label,
-                        op_label,
-                        Some(op_id),
-                        &self.config.retries,
-                        &(self.client.clone(), bucket, marker),
-                        |(client, bucket, marker)| {
-                            Box::pin(async move {
-                                client
-                                    .head_object()
-                                    .bucket(*bucket)
-                                    .key(marker.clone())
-                                    .send()
-                                    .await
-                            })
-                        },
-                        Self::is_head_object_error_retriable,
-                        Self::head_object_error_as_loggable,
-                        false,
-                    )
-                    .await;
-                    match dir_marker_head_result {
-                        Ok(_) => Ok(ExistsResult::Directory),
-                        Err(SdkError::ServiceError(service_error)) => {
-                            match service_error.into_err() {
-                                HeadObjectError::NotFound(_) => {
-                                    // S3 has no real directories: an implicit
-                                    // directory can exist (because of nested
-                                    // objects or markers) without an explicit
-                                    // `__dir_marker` of its own. Match the
-                                    // filesystem and in-memory backends by
-                                    // reporting a directory whenever any object
-                                    // exists under this path's prefix.
-                                    if self
-                                        .prefix_has_objects(target_label, op_label, bucket, &key)
-                                        .await?
-                                    {
-                                        Ok(ExistsResult::Directory)
-                                    } else {
-                                        Ok(ExistsResult::DoesNotExist)
+                    let marker_exists = match Self::dir_marker_key_of(&key) {
+                        Ok(marker) => {
+                            let dir_marker_head_result = with_retries_customized(
+                                target_label,
+                                op_label,
+                                Some(op_id),
+                                &self.config.retries,
+                                &(self.client.clone(), bucket, marker),
+                                |(client, bucket, marker)| {
+                                    Box::pin(async move {
+                                        client
+                                            .head_object()
+                                            .bucket(*bucket)
+                                            .key(marker.clone())
+                                            .send()
+                                            .await
+                                    })
+                                },
+                                Self::is_head_object_error_retriable,
+                                Self::head_object_error_as_loggable,
+                                false,
+                            )
+                            .await;
+                            match dir_marker_head_result {
+                                Ok(_) => true,
+                                Err(SdkError::ServiceError(service_error)) => {
+                                    match service_error.into_err() {
+                                        HeadObjectError::NotFound(_) => false,
+                                        err => return Err(err.into()),
                                     }
                                 }
-                                err => Err(err.into()),
+                                Err(err) => return Err(err.into()),
                             }
                         }
-                        Err(err) => Err(err.into()),
+                        // The marker key is longer than the key of the directory, so it can
+                        // go past the limit for a key that fits it (`dir_marker_key_of`). The
+                        // backend sends no key that S3 rejects, so a directory with such a
+                        // key has no marker object. A child of it can still fit the limit, so
+                        // the prefix below decides.
+                        Err(_) => false,
+                    };
+
+                    // S3 has no real directories: an implicit directory can exist (because of
+                    // nested objects or markers) without an explicit `__dir_marker` of its
+                    // own. Match the filesystem and in-memory backends and give a directory
+                    // whenever any object is under the prefix of this path.
+                    if marker_exists
+                        || self
+                            .prefix_has_objects(target_label, op_label, bucket, &key)
+                            .await?
+                    {
+                        Ok(ExistsResult::Directory)
+                    } else {
+                        Ok(ExistsResult::DoesNotExist)
                     }
                 }
                 err => Err(err.into()),

@@ -15,7 +15,7 @@
 use super::S3BlobStorage;
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::storage::blob::{
-    BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob,
+    BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
 };
 use aws_sdk_s3::config::http::{HttpRequest, HttpResponse};
 use aws_sdk_s3::config::retry::RetryConfig;
@@ -101,6 +101,7 @@ struct Answer {
     status: u16,
     content_range: Option<&'static str>,
     content_length: Option<usize>,
+    last_modified: Option<&'static str>,
     body_reads: Option<Arc<AtomicUsize>>,
     body: String,
     transport_error: Option<ConnectorError>,
@@ -112,9 +113,20 @@ impl Answer {
             status,
             content_range: None,
             content_length: None,
+            last_modified: None,
             body_reads: None,
             body: body.into(),
             transport_error: None,
+        }
+    }
+
+    /// The response to a `HEAD` of an object that is in the bucket. `get_metadata` reads the
+    /// time of the last change of the object from the header, so a response without it makes
+    /// `get_metadata` panic.
+    fn object_head() -> Self {
+        Self {
+            last_modified: Some("Wed, 21 Oct 2015 07:28:00 GMT"),
+            ..Self::new(200, "")
         }
     }
 
@@ -157,6 +169,7 @@ impl Answer {
         let status = StatusCode::try_from(self.status).unwrap();
         let content_range = self.content_range;
         let content_length = self.content_length;
+        let last_modified = self.last_modified;
         let mut response = HttpResponse::new(status, self.into_body());
         response
             .headers_mut()
@@ -170,6 +183,11 @@ impl Answer {
             response
                 .headers_mut()
                 .insert("content-length", content_length.to_string());
+        }
+        if let Some(last_modified) = last_modified {
+            response
+                .headers_mut()
+                .insert("last-modified", last_modified);
         }
         response
     }
@@ -1272,9 +1290,19 @@ async fn create_dir_writes_the_marker_and_the_listing_leaves_it_out() {
         ],
         None,
     );
+    // A `HEAD` of `tree` itself finds nothing, because S3 has no directory object of its own,
+    // and the listing that `exists` falls back on (the one with `start-after`) finds nothing
+    // either. The object at `tree/__dir_marker` is therefore the one thing that can make
+    // `exists` give `Directory`.
     let (storage, requests) = scripted_storage("", move |request, _| {
         if request.is_list_objects() {
-            Answer::new(200, listing.clone())
+            if request.uri.contains("start-after") {
+                Answer::new(200, list_page(&[], None))
+            } else {
+                Answer::new(200, listing.clone())
+            }
+        } else if request.method == "HEAD" && !request.uri.ends_with("__dir_marker") {
+            Answer::new(404, "")
         } else {
             Answer::new(200, "")
         }
@@ -1284,6 +1312,10 @@ async fn create_dir_writes_the_marker_and_the_listing_leaves_it_out() {
         .create_dir("test", "create-dir", namespace(), Path::new("tree"))
         .await
         .unwrap();
+    let marked = storage
+        .exists("test", "exists", namespace(), Path::new("tree"))
+        .await
+        .unwrap();
     let listed = storage
         .list_blobs_below("test", "list", namespace(), Path::new("tree"))
         .await
@@ -1291,6 +1323,7 @@ async fn create_dir_writes_the_marker_and_the_listing_leaves_it_out() {
 
     assert_eq!(
         (
+            marked,
             listed.into_vec(),
             sent(&requests)
                 .iter()
@@ -1303,8 +1336,14 @@ async fn create_dir_writes_the_marker_and_the_listing_leaves_it_out() {
                 .collect::<Vec<_>>()
         ),
         (
+            ExistsResult::Directory,
             vec![listed_blob("tree/a", 1)],
-            vec![("PUT".to_string(), true), ("GET".to_string(), false)]
+            vec![
+                ("PUT".to_string(), true),
+                ("HEAD".to_string(), false),
+                ("HEAD".to_string(), true),
+                ("GET".to_string(), false)
+            ]
         )
     );
 }
@@ -1332,6 +1371,238 @@ async fn create_dir_rejects_a_directory_whose_marker_does_not_fit_the_key_limit(
             Err(Some(BlobNameError::TooLong { length: 1037 })),
             1
         )
+    );
+}
+
+#[test]
+async fn exists_tells_the_truth_for_a_name_whose_marker_does_not_fit_the_key_limit() {
+    // The key of a name of 975 bytes has 1012 bytes, so the key of the marker of a directory
+    // with that name has 1025 and does not fit. A child of that directory still fits: the key
+    // of a child with a name of one byte has 1014 bytes. No marker object of such a directory
+    // can be there, so `exists` sends no request for one, and the objects below the prefix
+    // decide. A name that is too long for a marker is a name that a blob can still have, so
+    // an error here would tell a guest that its question is invalid when the answer is
+    // `Directory` or `DoesNotExist`.
+    let name = "a".repeat(975);
+    let prefix = namespace_prefix();
+    let with_a_child = list_page(&[(format!("{prefix}/{name}/c"), 1)], None);
+    let (with_child, with_child_requests) = scripted_storage("", move |request, _| {
+        if request.is_list_objects() {
+            Answer::new(200, with_a_child.clone())
+        } else {
+            Answer::new(404, "")
+        }
+    });
+    let (empty, empty_requests) = scripted_storage("", |request, _| {
+        if request.is_list_objects() {
+            Answer::new(200, list_page(&[], None))
+        } else {
+            Answer::new(404, "")
+        }
+    });
+
+    let directory = with_child
+        .exists("test", "exists", namespace(), Path::new(&name))
+        .await
+        .map_err(name_error);
+    let nothing = empty
+        .exists("test", "exists", namespace(), Path::new(&name))
+        .await
+        .map_err(name_error);
+
+    let with_child_sent = sent(&with_child_requests);
+    let empty_sent = sent(&empty_requests);
+    assert_eq!(
+        (
+            directory,
+            nothing,
+            with_child_sent
+                .iter()
+                .chain(empty_sent.iter())
+                .map(|request| (request.method.clone(), request.uri.contains("__dir_marker")))
+                .collect::<Vec<_>>()
+        ),
+        (
+            Ok(ExistsResult::Directory),
+            Ok(ExistsResult::DoesNotExist),
+            vec![
+                ("HEAD".to_string(), false),
+                ("GET".to_string(), false),
+                ("HEAD".to_string(), false),
+                ("GET".to_string(), false)
+            ]
+        )
+    );
+}
+
+#[test]
+async fn get_metadata_gives_none_for_a_missing_name_whose_marker_does_not_fit_the_key_limit() {
+    // The key of a name of 987 bytes has 1024 bytes, the most that S3 accepts, so the key of
+    // the marker of a directory with that name has 1037 and does not fit. `put_raw` writes a
+    // blob at that name, so a question about it is a valid question, and the answer is that
+    // nothing is there: one `HEAD` of the name, no request for a marker, and `None`.
+    let name = "a".repeat(987);
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, ""));
+
+    let metadata = storage
+        .get_metadata("test", "get-metadata", namespace(), Path::new(&name))
+        .await
+        .map(|metadata| metadata.is_some())
+        .map_err(name_error);
+
+    assert_eq!(
+        (
+            metadata,
+            sent(&requests)
+                .iter()
+                .map(|request| (request.method.clone(), request.uri.contains("__dir_marker")))
+                .collect::<Vec<_>>()
+        ),
+        (Ok(false), vec![("HEAD".to_string(), false)])
+    );
+}
+
+#[test]
+async fn the_marker_key_of_a_root_path_has_one_separator() {
+    // The key of a root path is the prefix of the namespace and a `/` after it, so a marker
+    // key that always puts a separator of its own before the marker would have `//` in it.
+    // MinIO rejects such a key with `XMinioInvalidObjectName`, and no rule of `BlobNameError`
+    // reads the marker key, so nothing else would catch it.
+    let prefix = namespace_prefix();
+    let (storage, requests) = scripted_storage("", |request, _| {
+        if request.uri.ends_with("__dir_marker") {
+            Answer::new(200, "")
+        } else {
+            Answer::new(404, "")
+        }
+    });
+
+    let root = storage
+        .exists("test", "exists", namespace(), Path::new(""))
+        .await
+        .map_err(name_error);
+
+    assert_eq!(
+        (
+            root,
+            sent(&requests)
+                .iter()
+                .map(|request| request.uri.clone())
+                .collect::<Vec<_>>()
+        ),
+        (
+            Ok(ExistsResult::Directory),
+            vec![
+                format!("http://s3.test/custom-data/{prefix}/"),
+                format!("http://s3.test/custom-data/{prefix}/__dir_marker"),
+            ]
+        )
+    );
+}
+
+#[test]
+async fn the_reserved_rule_keeps_the_marker_object_of_a_directory_free() {
+    // `create_dir("x")` records the directory `x` with an object at the key
+    // `<prefix>/x/__dir_marker`, and `exists` reads that object as the mark of the directory.
+    // `exists` sends its first `HEAD` for the key of the path itself, as the second request
+    // below shows, so `exists("x/__dir_marker")` would send a `HEAD` for
+    // `<prefix>/x/__dir_marker`, find the marker object of `x`, and give `File` for a
+    // directory that the guest had just made. `get_metadata` would give the size of that
+    // object, and `create_dir("x/__dir_marker")` would write its own marker one level below
+    // it. The reserved rule keeps that one key for the backend: the three calls give the
+    // permanent error and send no request.
+    let prefix = namespace_prefix();
+    let (storage, requests) = scripted_storage("", |request, _| {
+        if request.method != "HEAD" {
+            Answer::new(200, "")
+        } else if request.uri.ends_with("__dir_marker") {
+            Answer::object_head()
+        } else {
+            Answer::new(404, "")
+        }
+    });
+    let marker_path = Path::new("x/__dir_marker");
+
+    storage
+        .create_dir("test", "create-dir", namespace(), Path::new("x"))
+        .await
+        .unwrap();
+    let directory = storage
+        .exists("test", "exists", namespace(), Path::new("x"))
+        .await
+        .map_err(name_error);
+    let created = storage
+        .create_dir("test", "create-dir", namespace(), marker_path)
+        .await
+        .map_err(name_error);
+    let checked = storage
+        .exists("test", "exists", namespace(), marker_path)
+        .await
+        .map_err(name_error);
+    let described = storage
+        .get_metadata("test", "get-metadata", namespace(), marker_path)
+        .await
+        .map(|metadata| metadata.is_some())
+        .map_err(name_error);
+
+    assert_eq!(
+        (
+            directory,
+            created,
+            checked,
+            described,
+            sent(&requests)
+                .iter()
+                .map(|request| (request.method.clone(), request.uri.clone()))
+                .collect::<Vec<_>>()
+        ),
+        (
+            Ok(ExistsResult::Directory),
+            Err(Some(BlobNameError::Reserved)),
+            Err(Some(BlobNameError::Reserved)),
+            Err(Some(BlobNameError::Reserved)),
+            vec![
+                (
+                    "PUT".to_string(),
+                    format!("http://s3.test/custom-data/{prefix}/x/__dir_marker?x-id=PutObject")
+                ),
+                (
+                    "HEAD".to_string(),
+                    format!("http://s3.test/custom-data/{prefix}/x")
+                ),
+                (
+                    "HEAD".to_string(),
+                    format!("http://s3.test/custom-data/{prefix}/x/__dir_marker")
+                ),
+            ]
+        )
+    );
+}
+
+#[test]
+async fn create_dir_at_a_root_path_sends_no_request() {
+    // A path with no name in it is the root of the namespace, which needs no marker object:
+    // the prefix of the namespace is there as soon as one object is below it. This is what
+    // the matrix test `create_dir_at_a_root_path_leaves_nothing_behind` states for every
+    // backend, and the S3 half of it belongs here, because a marker object at the root of a
+    // namespace stays out of every listing of the backend: `list_dir` and `list_blobs_below`
+    // leave the marker of the directory that they list out, so no call of `BlobStorage` could
+    // see a stray one.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+
+    for root_path in ["", ".", "./", "././"] {
+        storage
+            .create_dir("test", "create-dir", namespace(), Path::new(root_path))
+            .await
+            .unwrap_or_else(|err| panic!("create_dir({root_path:?}) gave {err}"));
+    }
+
+    assert_eq!(
+        sent(&requests)
+            .iter()
+            .map(|request| request.uri.clone())
+            .collect::<Vec<_>>(),
+        Vec::<String>::new()
     );
 }
 

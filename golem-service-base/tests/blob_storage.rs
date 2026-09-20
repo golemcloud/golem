@@ -2320,6 +2320,19 @@ async fn create_dir_at_a_root_path_leaves_nothing_behind(
         environment_id: EnvironmentId(Uuid::new_v4()),
     };
 
+    // One blob is at the root, so the root is there to list on every backend, and the listing
+    // below has one thing that it must hold.
+    storage
+        .put_raw(
+            "create_dir_at_a_root_path_leaves_nothing_behind",
+            "put-blob",
+            namespace.clone(),
+            Path::new("only-blob"),
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
     // Every one of these paths is at the root of the namespace, because none of them has a name
     // in it.
     for root_path in ["", ".", "./", "././"] {
@@ -2333,44 +2346,26 @@ async fn create_dir_at_a_root_path_leaves_nothing_behind(
             .await
             .unwrap_or_else(|err| panic!("create_dir({root_path:?}) failed: {err}"));
 
-        // The S3 backend marks a directory with a blob named `__dir_marker` inside it, so a
-        // marker at the root of the namespace reads back as a blob of that name.
+        // The listing of the root holds the one blob and nothing more. The S3 backend records a
+        // directory with an object named `__dir_marker` inside it, and the name is now one that
+        // the backend keeps for itself, so this test cannot read such an object back by its
+        // name. The S3 unit test `create_dir_at_a_root_path_sends_no_request` states the same
+        // thing for that backend, on the request that `create_dir` would have to send.
+        let mut entries = storage
+            .list_dir(
+                "create_dir_at_a_root_path_leaves_nothing_behind",
+                "list-root",
+                namespace.clone(),
+                Path::new(""),
+            )
+            .await
+            .unwrap();
+        entries.sort();
+
         assert_eq!(
-            storage
-                .get_raw(
-                    "create_dir_at_a_root_path_leaves_nothing_behind",
-                    "get-root-marker",
-                    namespace.clone(),
-                    Path::new("__dir_marker"),
-                )
-                .await
-                .unwrap(),
-            None,
-            "create_dir({root_path:?}) left a marker at the root"
+            entries,
+            vec![Path::new("only-blob").to_path_buf()],
+            "create_dir({root_path:?}) left something at the root"
         );
     }
-
-    storage
-        .put_raw(
-            "create_dir_at_a_root_path_leaves_nothing_behind",
-            "put-blob",
-            namespace.clone(),
-            Path::new("only-blob"),
-            &Bytes::from("payload"),
-        )
-        .await
-        .unwrap();
-
-    let mut entries = storage
-        .list_dir(
-            "create_dir_at_a_root_path_leaves_nothing_behind",
-            "list-root",
-            namespace.clone(),
-            Path::new(""),
-        )
-        .await
-        .unwrap();
-    entries.sort();
-
-    assert_eq!(entries, vec![Path::new("only-blob").to_path_buf()]);
 }
