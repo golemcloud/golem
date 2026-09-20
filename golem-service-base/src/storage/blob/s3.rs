@@ -1543,9 +1543,10 @@ impl BlobStorage for S3BlobStorage {
     /// delete of the source, so a source that is not there gives the error from the copy and
     /// deletes nothing.
     ///
-    /// A copy onto the same path sends no `CopyObject` request: it reads the source and gives
-    /// the same [`BlobMissingError`] when the bucket holds no object at it. A root path at
-    /// either end gives [`BlobNameError::NoName`] (`blob_copy_changes_nothing`).
+    /// A copy onto the same path sends no `CopyObject` request: it sends one `HeadObject` for
+    /// the key of the source and gives the same [`BlobMissingError`] when the bucket holds no
+    /// object at that key. A root path at either end gives [`BlobNameError::NoName`]
+    /// (`blob_copy_changes_nothing`).
     async fn copy(
         &self,
         target_label: &'static str,
@@ -1560,19 +1561,31 @@ impl BlobStorage for S3BlobStorage {
         let from = &*normalized_blob_path(from)?;
         let to = &*normalized_blob_path(to)?;
 
+        let changes_nothing = blob_copy_changes_nothing(from, to)?;
+        let bucket = self.bucket_of(&namespace);
+        let from_key = self.key_of(&namespace, from)?;
+
         // A copy onto the same path writes nothing, and it still needs the blob that it reads.
-        if blob_copy_changes_nothing(from, to)? {
-            return match self.exists(target_label, op_label, namespace, from).await? {
-                ExistsResult::File => Ok(()),
-                _ => Err(BlobMissingError {
+        // The copy asks one thing of the storage: does the bucket hold a blob at `from`? The
+        // head of the key of that blob answers it, and a directory at the same path holds no
+        // blob, so the marker object of a directory and the keys below the path say nothing
+        // here. `exists` reads both of them, and an error of one of those later requests would
+        // reach the guest in place of the permanent error of a source that is not there, which
+        // the executor would then retry.
+        if changes_nothing {
+            let op_id = format!("{bucket} - {from_key:?}");
+            return match self
+                .head_object(target_label, op_label, bucket, from_key, op_id)
+                .await?
+            {
+                Some(_) => Ok(()),
+                None => Err(BlobMissingError {
                     path: guest_from.to_path_buf(),
                 }
                 .into()),
             };
         }
 
-        let bucket = self.bucket_of(&namespace);
-        let from_key = self.key_of(&namespace, from)?;
         let to_key = self.key_of(&namespace, to)?;
         let encoded_from_key = Self::encode_copy_source_key(&from_key);
 

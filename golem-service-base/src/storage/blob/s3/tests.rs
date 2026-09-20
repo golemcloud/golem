@@ -1965,6 +1965,87 @@ async fn copy_keeps_the_retry_of_a_bucket_that_is_not_there() {
 }
 
 #[test]
+async fn a_copy_onto_the_same_path_reads_the_key_of_the_source_and_no_more() {
+    // The copy needs a blob at its source path, and the `HeadObject` of the key of that blob
+    // gives the answer. A directory at the same path is not a blob, so the copy asks nothing
+    // about it: it sends no `HeadObject` for the marker object and no listing of the keys below
+    // the path. The copy onto the same path writes nothing, so the one request is that head.
+    let (storage, requests) = scripted_storage("", |request, _| {
+        if request.method == "HEAD" && request.uri.ends_with("/from") {
+            Answer::object_head()
+        } else {
+            Answer::new(500, INTERNAL_ERROR)
+        }
+    });
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("./from"),
+        )
+        .await;
+
+    let prefix = namespace_prefix();
+    assert_eq!(
+        (
+            result.map_err(missing_error),
+            sent(&requests)
+                .iter()
+                .map(|request| (request.method.clone(), request.uri.clone()))
+                .collect::<Vec<_>>()
+        ),
+        (
+            Ok(()),
+            vec![(
+                "HEAD".to_string(),
+                format!("http://s3.test/custom-data/{prefix}/from")
+            )]
+        )
+    );
+}
+
+#[test]
+async fn a_copy_onto_the_same_path_gives_the_missing_error_at_the_head_of_the_source() {
+    // The head of the key of the source tells that the bucket holds no blob at the path, and
+    // that answer is final: a directory at the path holds no blob either. So the copy gives the
+    // permanent `BlobMissingError` at that head, and a later request cannot turn it into an
+    // error that one more attempt can pass. The script gives an error of the transport to each
+    // request after the head, so a copy that asked more would give that error to the guest and
+    // the executor would retry a copy whose source is not there.
+    let (storage, requests) = scripted_storage("", |request, _| {
+        if request.method == "HEAD" && request.uri.ends_with("/from") {
+            // A response to a `HEAD` has no body, so the SDK reads its status.
+            Answer::new(404, "")
+        } else {
+            Answer::transport_error(ConnectorError::io("connection reset".into()))
+        }
+    });
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("from"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), sent(&requests).len()),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("from")
+            })),
+            1
+        )
+    );
+}
+
+#[test]
 async fn copy_names_the_source_path_as_the_guest_wrote_it() {
     // A guest picks the source container name and the source object name, so the guest writes
     // the path of the source. `./from` and `from` are two forms of one path, and the backend
