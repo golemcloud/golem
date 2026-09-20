@@ -8,7 +8,11 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_api_grpc::proto::golem::worker::UpdateMode;
+use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
+use golem_api_grpc::proto::golem::worker::{
+    DurableStreamMapping, StreamInvocationIdentity, UpdateMode, invocation_request,
+    invocation_response,
+};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ResumeWorkerRequest, resume_worker_response, worker_executor_client::WorkerExecutorClient,
 };
@@ -16,6 +20,9 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentInvocationMode, InvocationFreshnessDisposition, Principal};
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::durable_stream::{
+    DurableStreamReadRequest, StreamAttachmentControlRequest,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
@@ -27,6 +34,11 @@ use golem_common::model::{
 use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use golem_worker_executor::services::rpc::{
+    DurableRpcInvocationResult, DurableStreamReadError, RemoteInvocationRpc, Rpc, RpcDemand,
+    RpcError,
+};
+use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor_test_utils::{
     TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
@@ -34,7 +46,8 @@ use golem_worker_executor_test_utils::{
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
@@ -47,6 +60,70 @@ pub(crate) async fn start_with_local_resume(
     lose_resume_response: bool,
 ) -> anyhow::Result<TestWorkerExecutor> {
     start_with_resume_checkpoint(deps, context, lose_resume_response, None).await
+}
+
+#[derive(Default)]
+pub(crate) struct RemoteRpcEvidence {
+    pub(crate) sessions: std::sync::atomic::AtomicUsize,
+    pub(crate) joined_observer_acceptances: std::sync::atomic::AtomicUsize,
+    pub(crate) resume_attach_requests: std::sync::atomic::AtomicUsize,
+}
+
+/// Keeps fork activation local, but forces durable streaming RPC through the executor's tonic API.
+pub(crate) async fn start_with_remote_streaming_rpc(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) -> anyhow::Result<(TestWorkerExecutor, Arc<RemoteRpcEvidence>)> {
+    let client = Arc::new(Mutex::new(None));
+    let proxy = Arc::new(OnceLock::<Arc<dyn WorkerProxy>>::new());
+    let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
+    let evidence = Arc::new(RemoteRpcEvidence::default());
+    let environment_id = context.default_environment_id;
+    let account_id = context.account_id;
+    let executor = start_with_overrides(
+        deps,
+        context,
+        TestExecutorOverrides {
+            wrap_shard_service: Some(Arc::new({
+                let shard = shard.clone();
+                move |inner| {
+                    let _ = shard.set(inner.clone());
+                    inner
+                }
+            })),
+            wrap_worker_proxy: Some(Arc::new({
+                let client = client.clone();
+                let proxy = proxy.clone();
+                let evidence = evidence.clone();
+                move |inner| {
+                    let wrapped: Arc<dyn WorkerProxy> = Arc::new(LocalResumeProxy {
+                        inner,
+                        client: client.clone(),
+                        environment_id,
+                        component_owner_account_id: Some(account_id),
+                        evidence: Some(evidence.clone()),
+                        lose_response: Arc::new(AtomicBool::new(false)),
+                        checkpoint: Arc::new(Mutex::new(None)),
+                    });
+                    let _ = proxy.set(wrapped.clone());
+                    wrapped
+                }
+            })),
+            wrap_rpc: Some(Arc::new(move |inner| {
+                Arc::new(StreamingRemoteRpc {
+                    inner,
+                    remote: RemoteInvocationRpc::new(
+                        proxy.get().expect("worker proxy initialized").clone(),
+                        shard.get().expect("shard service initialized").clone(),
+                    ),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    *client.lock().unwrap() = Some(executor.client.clone());
+    Ok((executor, evidence))
 }
 
 async fn start_with_resume_checkpoint(
@@ -69,6 +146,8 @@ async fn start_with_resume_checkpoint(
                     inner,
                     client: target.clone(),
                     environment_id,
+                    component_owner_account_id: None,
+                    evidence: None,
                     lose_response: lose_response.clone(),
                     checkpoint: checkpoint.clone(),
                 })
@@ -81,16 +160,161 @@ async fn start_with_resume_checkpoint(
     Ok(executor)
 }
 
+struct StreamingRemoteRpc {
+    inner: Arc<dyn Rpc>,
+    remote: RemoteInvocationRpc,
+}
+
+#[async_trait]
+impl Rpc for StreamingRemoteRpc {
+    async fn create_demand(
+        &self,
+        agent: &OwnedAgentId,
+        method: &str,
+        created_by: AccountId,
+        caller: &AgentId,
+        env: &[(String, String)],
+        stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth: &AuthCtx,
+    ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        self.inner
+            .create_demand(agent, method, created_by, caller, env, stack, config, auth)
+            .await
+    }
+
+    async fn invoke_and_await(
+        &self,
+        agent: &OwnedAgentId,
+        key: Option<IdempotencyKey>,
+        freshness: InvocationFreshnessDisposition,
+        method: String,
+        input: SchemaValue,
+        created_by: AccountId,
+        caller: &AgentId,
+        env: &[(String, String)],
+        stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth: &AuthCtx,
+        card: Option<ScopeCard>,
+    ) -> Result<SchemaValue, RpcError> {
+        self.inner
+            .invoke_and_await(
+                agent, key, freshness, method, input, created_by, caller, env, stack, config, auth,
+                card,
+            )
+            .await
+    }
+
+    async fn invoke_and_await_streaming(
+        &self,
+        agent: &OwnedAgentId,
+        key: IdempotencyKey,
+        method: String,
+        input: ProtoSchemaValue,
+        mappings: Vec<DurableStreamMapping>,
+        fingerprint: AgentFingerprint,
+        attempt: uuid::Uuid,
+        origin: StreamInvocationIdentity,
+        accepted: tokio::sync::oneshot::Sender<Vec<DurableStreamMapping>>,
+        created_by: AccountId,
+        caller: &AgentId,
+        env: &[(String, String)],
+        stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth: &AuthCtx,
+        card: Option<ScopeCard>,
+    ) -> Result<DurableRpcInvocationResult, RpcError> {
+        self.remote
+            .invoke_and_await_streaming(
+                agent,
+                key,
+                method,
+                input,
+                mappings,
+                fingerprint,
+                attempt,
+                origin,
+                accepted,
+                created_by,
+                caller,
+                env,
+                stack,
+                config,
+                auth,
+                card,
+            )
+            .await
+    }
+
+    async fn control_durable_stream_attachment(
+        &self,
+        request: StreamAttachmentControlRequest,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        self.inner
+            .control_durable_stream_attachment(request, auth)
+            .await
+    }
+
+    async fn read_durable_stream_segment(
+        &self,
+        request: DurableStreamReadRequest,
+        auth: &AuthCtx,
+    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
+        self.inner.read_durable_stream_segment(request, auth).await
+    }
+
+    async fn invoke(
+        &self,
+        agent: &OwnedAgentId,
+        key: Option<IdempotencyKey>,
+        freshness: InvocationFreshnessDisposition,
+        method: String,
+        input: SchemaValue,
+        created_by: AccountId,
+        caller: &AgentId,
+        env: &[(String, String)],
+        stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        auth: &AuthCtx,
+    ) -> Result<(), RpcError> {
+        self.inner
+            .invoke(
+                agent, key, freshness, method, input, created_by, caller, env, stack, config, auth,
+            )
+            .await
+    }
+}
+
 struct LocalResumeProxy {
     inner: Arc<dyn WorkerProxy>,
     client: Arc<Mutex<Option<Client>>>,
     environment_id: EnvironmentId,
+    component_owner_account_id: Option<AccountId>,
+    evidence: Option<Arc<RemoteRpcEvidence>>,
     lose_response: Arc<AtomicBool>,
     checkpoint: Arc<Mutex<Option<Arc<tokio::sync::Notify>>>>,
 }
 
 #[async_trait]
 impl WorkerProxy for LocalResumeProxy {
+    async fn prepare(
+        &self,
+        agent: &OwnedAgentId,
+        method: &str,
+        caller: &AgentId,
+        env: HashMap<String, String>,
+        stack: InvocationContextStack,
+        config: Vec<AgentConfigEntryDto>,
+        principal: Principal,
+        auth: &AuthCtx,
+    ) -> Result<AgentFingerprint, WorkerProxyError> {
+        self.inner
+            .prepare(agent, method, caller, env, stack, config, principal, auth)
+            .await
+    }
+
     async fn resume(
         &self,
         agent_id: &AgentId,
@@ -201,7 +425,69 @@ impl WorkerProxy for LocalResumeProxy {
         golem_worker_executor::services::worker_proxy::InvocationResponseStream,
         WorkerProxyError,
     > {
-        self.inner.invoke_agent_session(request).await
+        let evidence = self.evidence.clone();
+        let account_id = self.component_owner_account_id;
+        let (requests, receiver) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            let mut request = request;
+            while let Some(mut request) = request.next().await {
+                if let Some(evidence) = &evidence {
+                    evidence.sessions.fetch_add(1, Ordering::SeqCst);
+                    match &mut request.request {
+                        Some(invocation_request::Request::Start(start)) => {
+                            start.component_owner_account_id = account_id.map(Into::into);
+                        }
+                        Some(invocation_request::Request::ResumeAttach(_)) => {
+                            evidence
+                                .resume_attach_requests
+                                .fetch_add(1, Ordering::SeqCst);
+                        }
+                        _ => {}
+                    }
+                }
+                if requests.send(request).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let mut client = self
+            .client
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("test executor connected");
+        let mut responses = client
+            .invoke_agent_session(tokio_stream::wrappers::ReceiverStream::new(receiver))
+            .await?
+            .into_inner();
+        let evidence = self.evidence.clone();
+        let (outbound, inbound) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            loop {
+                let response = responses.message().await;
+                if let Ok(Some(response)) = &response
+                    && let Some(invocation_response::Response::Accepted(accepted)) =
+                        &response.response
+                    && accepted.joined_origin_observer
+                    && let Some(evidence) = &evidence
+                {
+                    evidence
+                        .joined_observer_acceptances
+                        .fetch_add(1, Ordering::SeqCst);
+                }
+                let response = match response {
+                    Ok(Some(response)) => Ok(response),
+                    Ok(None) => break,
+                    Err(error) => Err(error),
+                };
+                if outbound.send(response).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(
+            inbound,
+        )))
     }
 
     async fn control_durable_stream_attachment(
@@ -470,6 +756,8 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         matches!(rejected.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::TooLarge as i32),
         "{rejected:?}"
     );
+    executor.interrupt(&source).await?;
+    executor.append_after_next_oplog_commit(&source);
     let lost = executor
         .client
         .clone()
@@ -482,6 +770,10 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
             Some(fork_stream_slot_response::Result::Failure(_))
         ),
         "{lost:?}"
+    );
+    assert!(
+        format!("{lost:?}").contains("lost fork resume response"),
+        "fork snapshot must be committed before staging: {lost:?}"
     );
     let fork_append = executor
         .client
@@ -508,7 +800,15 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         accepted.result,
         Some(append_to_stream_slot_response::Result::Accepted(_))
     ));
+    // Live admission must be folded before any status-cache eviction or full oplog refold.
+    let live_admissions = executor.export_fork_admissions(&source).await?;
+    assert_eq!(live_admissions.reservations.len(), 1);
+    assert!(live_admissions.reservations.contains_key(&target));
+    assert_eq!(live_admissions.session_counts.get(&session), Some(&1));
     executor.shutdown_and_wait_for_invocation_loops().await?;
+    let admitted_before_restart = executor.export_fork_admission_records(&source).await?;
+    assert_eq!(admitted_before_restart.len(), 1);
+    executor.remove_cached_status(&source).await?;
     drop(executor);
     let executor = start_with_local_resume(deps, &context, false).await?;
     let mut retry = request.clone();
@@ -528,6 +828,23 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     assert_eq!(
         receipt.fork_offset, prefix.offset,
         "default tail must retain the first cut"
+    );
+    let admitted_after_restart = executor.export_fork_admission_records(&source).await?;
+    assert_eq!(admitted_after_restart, admitted_before_restart);
+    let reconstructed = executor.export_fork_admissions(&source).await?;
+    assert_eq!(reconstructed.reservations.len(), 1);
+    assert_eq!(
+        reconstructed.reservations[&target].request_hash,
+        admitted_before_restart[0].request_hash
+    );
+    assert_eq!(reconstructed.session_counts.get(&session), Some(&1));
+    assert_eq!(
+        reconstructed.updated_millis,
+        admitted_before_restart[0].updated_millis
+    );
+    assert_eq!(
+        reconstructed.credit_millis,
+        Some(admitted_before_restart[0].credit_millis)
     );
     for (agent, expected) in [
         (&source, vec!["shared", "source-only"]),
@@ -628,6 +945,101 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     assert!(
         matches!(rejected.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::RateLimited as i32 && rejection.retry_after_seconds > 0),
         "{rejected:?}"
+    );
+
+    let concurrent_session = Uuid::new_v4().to_string();
+    let input = schema_value_to_proto_with_streams(
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                0u64,
+            ))],
+        },
+        |stream| stream.take_host_endpoint::<u64>(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let created = executor
+        .client
+        .clone()
+        .create_stream_session(InvocationStart {
+            agent_id: Some(source.clone().into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(AuthCtx::System.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            idempotency_key: Some(IdempotencyKey::new(concurrent_session.clone()).into()),
+            method_name: Some("echo".into()),
+            input: Some(input),
+            ..Default::default()
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        created.result,
+        Some(create_stream_session_response::Result::Success(_))
+    ));
+    let mut concurrent_append = append(&source, "concurrent");
+    concurrent_append.session = concurrent_session.clone();
+    let accepted = executor
+        .client
+        .clone()
+        .append_to_stream_slot(concurrent_append)
+        .await?
+        .into_inner();
+    assert!(matches!(
+        accepted.result,
+        Some(append_to_stream_slot_response::Result::Accepted(_))
+    ));
+    let concurrent_request = |target: AgentId| ForkStreamSlotRequest {
+        source_agent_id: Some(source.clone().into()),
+        target_agent_id: Some(target.into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(AuthCtx::System.into()),
+        session: concurrent_session.clone(),
+        slot: "input".into(),
+        expected_method: "echo".into(),
+        source_path: "/source/input".into(),
+        max_forks_per_session: 1,
+        max_forks_per_second: 100,
+        max_copied_bytes: 64 * 1024 * 1024,
+        ..Default::default()
+    };
+    let new_target = || {
+        AgentId::from_agent_id(
+            component.id,
+            &golem_common::phantom_agent_id!(
+                "DurableStreamAgent",
+                Uuid::new_v4(),
+                "export-fork-concurrent"
+            ),
+        )
+        .map_err(anyhow::Error::msg)
+    };
+    let left = concurrent_request(new_target()?);
+    let right = concurrent_request(new_target()?);
+    let mut left_client = executor.client.clone();
+    let mut right_client = executor.client.clone();
+    let (left, right) = tokio::join!(
+        left_client.fork_stream_slot(left),
+        right_client.fork_stream_slot(right)
+    );
+    let results = [left?.into_inner(), right?.into_inner()];
+    assert_eq!(
+        results
+            .iter()
+            .filter(|response| matches!(
+                response.result,
+                Some(fork_stream_slot_response::Result::Success(_))
+            ))
+            .count(),
+        1,
+        "{results:?}"
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|response| matches!(response.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::Conflict as i32))
+            .count(),
+        1,
+        "{results:?}"
     );
     Ok(())
 }

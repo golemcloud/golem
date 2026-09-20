@@ -62,9 +62,10 @@ struct Fixture {
 
 impl Fixture {
     async fn reopen(&self) -> Arc<dyn Oplog> {
-        build_service(self.indexed_storage.clone(), self.blob_storage.clone())
-            .await
+        let service = build_service(self.indexed_storage.clone(), self.blob_storage.clone()).await;
+        service
             .open(
+                &mut service.lock_lifecycle(&self.owned_agent_id.agent_id).await,
                 &self.owned_agent_id,
                 AgentMode::Durable,
                 None,
@@ -82,6 +83,7 @@ fn metadata(
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
+        owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         agent_id,
         env: Vec::new(),
         environment_id,
@@ -167,6 +169,7 @@ async fn open_fixture(initial_entries: u64) -> Fixture {
     let initial_metadata = metadata(agent_id, account_id, environment_id);
     let oplog = service
         .create(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             entry(0),

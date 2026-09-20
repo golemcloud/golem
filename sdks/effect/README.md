@@ -384,20 +384,27 @@ possible. The SDK intentionally has no card inspection, wallet, derivation, or i
 Standalone middleware imports only the middleware-safe entry point:
 
 ```ts
-import { universal } from "@golemcloud/effect-golem/middleware"
+import { NoParameters, universal } from "@golemcloud/effect-golem/middleware"
 
 universal({
   name: "audit",
+  parameters: NoParameters,
   handler: (invocation, underlying) =>
     underlying.invoke(invocation.commandPath, invocation.input, invocation.stdin),
 })
 ```
 
-`universal` transparently handles any tool using wire values. `typed({ presented, expected?,
-handler })` projects typed input/output/error and a definition-derived `context.underlying` client;
+`universal` transparently handles any tool using wire values. Every middleware declares an Effect
+Schema for installation `parameters`; decoded values are available as `invocation.parameters` or
+typed-handler `context.parameters`. `NoParameters` is the explicit empty-record schema.
+`typed({ parameters, presented, expected?, handler })` projects typed input/output/error and a definition-derived `context.underlying` client;
 it can present a different definition from the wrapped tool. Both support aliases, docs, and a
-per-invocation Effect `layer`. Underlying access and streams are affine, sequential, and valid only
-for that invocation.
+per-invocation Effect `layer`. Underlying access and streams are affine and valid only for that
+invocation.
+
+`parameters` must be a static Effect `Schema` (streams, secrets, and other installation-time-ineligible capabilities are rejected). `underlying.start(...)` and typed command `.start(...)` return scoped started invocations whose `get`, optional `stdout`, and `cancel` effects are independent. Calls may overlap; consume stdout and `get` concurrently when needed. Scope closure disposes the observer and owned streams but does **not** cancel the tool call—run `started.cancel` explicitly to cancel it.
+
+When a handler returns, the underlying rejects new admissions but does not implicitly cancel calls already admitted. Cleanup releases their observers after pending observation is safe. For a command declaring stdout, return/select a stream with the typed `context.stdout` callback (or the universal result's `stdout`). The SDK forwards it into the host-provided writer, calls `finish` after clean EOF, and calls `fail` on forwarding failure; middleware never owns that writer directly.
 
 There are three build worlds:
 

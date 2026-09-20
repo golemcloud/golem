@@ -33,6 +33,7 @@ pub mod golem_config;
 pub mod key_value;
 pub mod linear_memory;
 pub mod oplog;
+pub mod oplog_sweep;
 pub mod promise;
 pub mod quota;
 pub mod rdbms;

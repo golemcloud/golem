@@ -152,7 +152,6 @@ impl Verbosity {
     }
 }
 
-// TODO: flags for defining target server for "non-manifest" mode
 #[derive(Debug, Clone, Default, Args)]
 #[command(next_help_heading = "Global options")]
 pub struct GolemCliGlobalFlags {
@@ -1197,6 +1196,8 @@ pub mod environment {
 }
 
 pub mod tool {
+    use crate::model::agent::RawAgentId;
+    use chrono::{DateTime, Utc};
     use clap::{ArgGroup, Args, Subcommand};
     use golem_common::base_model::account::{AccountEmail, AccountId};
     use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
@@ -1205,6 +1206,8 @@ pub mod tool {
     use golem_common::base_model::tool_middleware::ToolMiddlewareName;
     use golem_common::base_model::tool_middleware_release::ToolMiddlewareReleaseId;
     use golem_common::base_model::tool_release::ToolReleaseId;
+    use golem_common::model::IdempotencyKey;
+    use golem_common::model::component::ComponentName;
 
     #[derive(Debug, Subcommand)]
     pub enum ToolSubcommand {
@@ -1217,6 +1220,8 @@ pub mod tool {
             /// Deployed tool name
             tool_name: ToolName,
         },
+        /// Invoke a deployed native external tool
+        Invoke(ToolInvokeArgs),
         /// Manage published tool releases
         Release {
             #[command(subcommand)]
@@ -1322,6 +1327,43 @@ pub mod tool {
             /// Published tool middleware release ID
             release_id: ToolMiddlewareReleaseId,
         },
+    }
+
+    #[derive(Debug, Args)]
+    #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
+    pub struct ToolInvokeArgs {
+        /// Existing agent that owns the invocation
+        #[arg(long)]
+        pub agent: Option<RawAgentId>,
+        /// Component used to create a fresh ephemeral invocation owner without constructing an agent
+        #[arg(long)]
+        pub component: Option<ComponentName>,
+        /// Deployed tool name
+        pub tool_name: ToolName,
+        /// Tool subcommands, arguments and options after `--`; use `-- --help` for tool help
+        #[arg(last = true, value_name = "TOOL_ARGUMENT")]
+        pub tool_args: Vec<String>,
+        /// Read raw tool stdin from this file; use `-` for process stdin
+        #[arg(long, value_name = "PATH")]
+        pub stdin: Option<std::path::PathBuf>,
+        /// Request raw tool stdout
+        #[arg(long)]
+        pub stdout: bool,
+        /// Write raw stdout to a file instead of process stdout
+        #[arg(long, requires = "stdout")]
+        pub output: Option<std::path::PathBuf>,
+        /// Enqueue without waiting
+        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output"])]
+        pub trigger: bool,
+        /// Look up an existing invocation without starting execution or input
+        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output"])]
+        pub lookup: bool,
+        /// Schedule execution at an RFC 3339 timestamp
+        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output"])]
+        pub schedule_at: Option<DateTime<Utc>>,
+        /// Idempotency key; `-` generates a fresh key
+        #[arg(long, short)]
+        pub idempotency_key: Option<IdempotencyKey>,
     }
 
     #[derive(Debug, Subcommand)]
@@ -1765,8 +1807,9 @@ pub mod worker {
             /// `/data/state.json`). Always starts with `/`.
             path: String,
             /// Local (host) path (including filename) to save the file contents
-            /// to. If omitted, the file is saved in the current directory using
-            /// the guest file basename, or output.bin if no basename is available.
+            /// to. Use `-` to write the raw bytes to stdout. If omitted, the file
+            /// is saved in the current directory using the guest file basename,
+            /// or output.bin if no basename is available.
             #[arg(long)]
             output: Option<String>,
         },
@@ -2417,7 +2460,7 @@ pub mod profile {
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
     pub enum ProfileSubcommand {
-        /// Create a new global profile, call without <PROFILE_NAME> for interactive setup
+        /// Create a new global profile, call without <NAME> for interactive setup
         #[command(after_help = crate::command_examples::PROFILE_NEW)]
         New {
             /// Name of the newly created profile
@@ -2925,6 +2968,7 @@ pub fn builtin_exec_subcommands() -> BTreeSet<String> {
 fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static str> {
     match target {
         ShowClapHelpTarget::AppNew => vec!["new"],
+        ShowClapHelpTarget::ProfileNew => vec!["profile", "new"],
     }
 }
 
@@ -3020,6 +3064,84 @@ mod test {
         }
 
         assert!(GolemCliCommand::try_parse_from(["golem", "environment", "tool", "list"]).is_err());
+    }
+
+    #[test]
+    fn tool_invoke_enforces_live_io_argument_ownership() {
+        let base = [
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "native",
+        ];
+        for suffix in [
+            &["--trigger", "--stdin", "-"][..],
+            &["--trigger", "--stdout"][..],
+            &["--lookup", "--input", "{}"][..],
+            &["--lookup", "--stdin", "-"][..],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(base.into_iter().chain(suffix.iter().copied()))
+                    .is_err(),
+                "unexpectedly accepted {suffix:?}"
+            );
+        }
+        assert!(
+            GolemCliCommand::try_parse_from(base.into_iter().chain([
+                "--stdin",
+                "-",
+                "--stdout",
+                "--output",
+                "result.bin"
+            ]))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn tool_invoke_passes_tool_options_after_separator_unchanged() {
+        let parsed = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "native",
+            "--",
+            "query",
+            "--stdout",
+            "--help",
+            "-vv",
+            "--",
+            "-file",
+        ])
+        .unwrap();
+        let GolemCliSubcommand::Tool {
+            subcommand: crate::command::tool::ToolSubcommand::Invoke(args),
+        } = parsed.subcommand
+        else {
+            panic!()
+        };
+        assert!(args.stdout);
+        assert_eq!(
+            args.tool_args,
+            ["query", "--stdout", "--help", "-vv", "--", "-file"]
+        );
+        assert!(
+            GolemCliCommand::try_parse_from([
+                "golem",
+                "tool",
+                "invoke",
+                "--component",
+                "example:component",
+                "native",
+                "query",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

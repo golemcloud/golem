@@ -281,6 +281,14 @@ for (const imported of WebAssembly.Module.imports(module)) {
   }
   if (
     imported.kind === "function" &&
+    imported.module === "golem:tool/streams@0.1.0"
+  ) {
+    importObject[imported.module] ??= {}
+    importObject[imported.module][imported.name] = () => 0
+    continue
+  }
+  if (
+    imported.kind === "function" &&
     imported.module === "golem:tool/host@0.1.0"
   ) {
     importObject[imported.module] ??= {}

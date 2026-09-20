@@ -12,13 +12,13 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AgentResourceDescription, AgentStatus, AgentStatusRecord, DurableStreamSessionIndex,
-    FailedUpdateRecord, IdempotencyKey, InvocationResultMembership, OplogProcessorCheckpointState,
-    OwnedAgentId, PendingCardEventRef, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
-    ReceivedCardTransferIndex, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
-    SuccessfulUpdateRecord, Timestamp,
+    AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord,
+    DurableStreamSessionIndex, ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey,
+    InvocationResultMembership, OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
+    ReceivedCardTransferState, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
 };
-use golem_common::serialization::deserialize;
+use golem_common::serialization::{deserialize, try_deserialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 /// Like calculate_last_known_status, but assumes that the oplog exists and has at least a Create entry in it.
@@ -423,7 +423,7 @@ where
         };
         let Some(status) = baseline
             .durable_stream_sessions
-            .get(&attached.session_key.idempotency_key)
+            .get(&attached.session_key)
             .cloned()
         else {
             continue;
@@ -436,7 +436,7 @@ where
         if !status.validate_initial_attachment_reference(*attached_idx, attached) {
             baseline
                 .durable_stream_sessions
-                .insert(attached.session_key.idempotency_key.clone(), status);
+                .insert(attached.session_key.clone(), status);
             continue;
         }
         let persisted_referent;
@@ -464,7 +464,7 @@ where
                 );
                 baseline
                     .durable_stream_sessions
-                    .insert(attached.session_key.idempotency_key.clone(), status);
+                    .insert(attached.session_key.clone(), status);
             }
             _ => {
                 status.lifecycle_error = Some(
@@ -473,7 +473,7 @@ where
                 );
                 baseline
                     .durable_stream_sessions
-                    .insert(attached.session_key.idempotency_key.clone(), status);
+                    .insert(attached.session_key.clone(), status);
             }
         }
     }
@@ -591,6 +591,11 @@ fn update_status_with_precomputed_regions(
         &deleted_regions,
         &new_entries,
     )?;
+    let export_fork_admissions = calculate_export_fork_admissions(
+        last_known.export_fork_admissions,
+        &deleted_regions,
+        &new_entries,
+    )?;
     let mut pending_durable_stream_cancellations = last_known.pending_durable_stream_cancellations;
     for (index, entry) in &new_entries {
         if deleted_regions.is_in_deleted_region(*index) {
@@ -605,7 +610,7 @@ fn update_status_with_precomputed_regions(
                 StreamSessionRecord::ConsumerCancelIntent(intent) => {
                     if !pending_durable_stream_cancellations.iter().any(|existing| {
                         existing.session_key == intent.session_key
-                            && existing.stream_id == intent.stream_id
+                            && existing.source == intent.source
                     }) {
                         pending_durable_stream_cancellations.insert(intent.clone());
                     }
@@ -702,6 +707,7 @@ fn update_status_with_precomputed_regions(
         invocation_results,
         received_card_transfers,
         durable_stream_sessions,
+        export_fork_admissions,
         has_durable_stream_history,
         pending_durable_stream_cancellations,
         current_idempotency_key,
@@ -1440,6 +1446,82 @@ fn calculate_durable_stream_sessions(
         }
     }
     Ok(sessions)
+}
+
+// Atomic jumps retain admitted external effects. Reverts force a fold from an earlier baseline,
+// where records in their deleted regions are excluded before this index is reconstructed.
+fn calculate_export_fork_admissions(
+    mut admissions: ExportForkAdmissions,
+    deleted_regions: &DeletedRegions,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> Result<ExportForkAdmissions, String> {
+    for (oplog_idx, entry) in entries {
+        if deleted_regions.is_in_deleted_region(*oplog_idx) {
+            continue;
+        }
+        if let OplogEntry::Create { instance_id, .. } = entry {
+            admissions = ExportForkAdmissions {
+                owner_fingerprint: Some(AgentFingerprint(*instance_id)),
+                ..Default::default()
+            };
+            continue;
+        }
+        let OplogEntry::StreamSession { record, .. } = entry else {
+            continue;
+        };
+        let decoded;
+        let record = match record {
+            OplogPayload::Inline(record) => record.as_ref(),
+            OplogPayload::SerializedInline {
+                cached: Some(record),
+                ..
+            }
+            | OplogPayload::External {
+                cached: Some(record),
+                ..
+            } => record.as_ref(),
+            OplogPayload::SerializedInline {
+                bytes,
+                cached: None,
+            } => {
+                decoded = try_deserialize(bytes)
+                    .map_err(|error| {
+                        format!("failed to decode inline durable stream session record: {error}")
+                    })?
+                    .ok_or_else(|| {
+                        "failed to decode inline durable stream session record: unsupported serialization version"
+                            .to_string()
+                    })?;
+                &decoded
+            }
+            OplogPayload::External { cached: None, .. } => {
+                return Err("durable stream session record payload has not been loaded".into());
+            }
+        };
+        if let StreamSessionRecord::ExportForkAdmitted(record) = record {
+            if admissions.owner_fingerprint != Some(record.candidate.export.source_fingerprint) {
+                continue;
+            }
+            if !admissions.reservations.contains_key(&record.target) {
+                let count = admissions
+                    .session_counts
+                    .entry(record.candidate.export.session.clone())
+                    .or_default();
+                *count = count.saturating_add(1);
+            }
+            admissions.reservations.insert(
+                record.target.clone(),
+                golem_common::model::ExportForkReservation {
+                    oplog_index: *oplog_idx,
+                    request_hash: record.request_hash.clone(),
+                    session: record.candidate.export.session.clone(),
+                },
+            );
+            admissions.updated_millis = record.updated_millis;
+            admissions.credit_millis = Some(record.credit_millis);
+        }
+    }
+    Ok(admissions)
 }
 
 #[allow(clippy::type_complexity)]

@@ -67,7 +67,7 @@ for root in "${GENERATED_ROOTS[@]}"; do
     continue
   fi
   find "$root" -type f \
-    \( -name 'moon.pkg' -o -name 'stub.mbt' -o -name '*_test.mbt' -o -name '*_wbtest.mbt' \) \
+    \( -name 'moon.pkg' -o -name 'stub.mbt' -o -name 'stream_transfer.mbt' -o -name '*_test.mbt' -o -name '*_wbtest.mbt' \) \
     -print0 |
     while IFS= read -r -d '' file; do
       destination="$preserved_root/$file"
@@ -119,7 +119,7 @@ if ! diff -qr "$tmp_root/ordinary/async-core" "$tmp_root/combined/async-core" ||
   exit 1
 fi
 
-echo "==> Splitting oversized middleware argument lifts"
+echo "==> Validating middleware argument lifts"
 python3 scripts/split-middleware-lift.py \
   "$tmp_root/middleware/gen-tool-middleware/interface/golem/tool/tool-middleware-guest/ffi.mbt"
 python3 scripts/split-middleware-lift.py \

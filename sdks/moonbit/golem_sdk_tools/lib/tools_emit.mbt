@@ -1827,7 +1827,7 @@ fn emit_invocation_value(command : ToolCommandInfo, value : String) -> String {
   ignore(command)
   "Ok(@tool.invocation_result_value(" +
   value +
-  ") catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@toolCommon.ToolError::InvalidResult(message) => return Err(@toolCommon.ToolError::InvalidResult(message))\nerror => raise error })"
+  ") catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@types.ToolError::InvalidResult(message) => return Err(@types.ToolError::InvalidResult(message))\nerror => raise error })"
 }
 
 ///|
@@ -1844,7 +1844,7 @@ fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String 
   error_type +
   "::to_error_payload_value(" +
   error_value +
-  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@toolCommon.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @tool.encode_error_payload(payload) catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@toolCommon.ToolError::InvalidResult(message) => return Err(@toolCommon.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@toolCommon.ToolError::CustomError({ name: __golem_error_name, payload }))\n}"
+  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@types.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @tool.encode_error_payload(payload) catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@types.ToolError::InvalidResult(message) => return Err(@types.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@types.ToolError::CustomError({ name: __golem_error_name, payload }))\n}"
 }
 
 ///|
@@ -1936,9 +1936,9 @@ fn emit_invoker(
   buf.write_string(
     "///|\n#warnings(\"-alert_wit_bindgen\")\nasync fn " +
     name +
-    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @tool.ProviderStdout?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {\n  let __golem_def = " +
+    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @tool.ProviderStdout?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @types.ToolError] {\n  let __golem_def = " +
     descriptor_name(tool, symbol_scope) +
-    "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return @tool.reject_wire_invocation(__golem_input, __golem_stdin, @toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
+    "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return @tool.reject_wire_invocation(__golem_input, __golem_stdin, @types.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
     escape_string_lit(context) +
     "\") catch { __golem_error => return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error) }\n",
   )
@@ -1982,12 +1982,12 @@ fn emit_invoker(
     buf.write_string("    " + pair.0.to_string() + " => {\n")
     if input_stream_source(command) is None {
       buf.write_string(
-        "      if __golem_stdin is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"command does not accept a stdin stream\"))\n      }\n",
+        "      if __golem_stdin is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"command does not accept a stdin stream\"))\n      }\n",
       )
     }
     if output_stream_source(command) is None {
       buf.write_string(
-        "      if __golem_stdout is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"command does not accept a stdout stream\"))\n      }\n",
+        "      if __golem_stdout is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"command does not accept a stdout stream\"))\n      }\n",
       )
     }
     for arg in args {
@@ -2013,13 +2013,13 @@ fn emit_invoker(
           buf.write_string(
             "      let " +
             arg.source +
-            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
+            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
           )
         Hidden(OutputStream) =>
           buf.write_string(
             "      let " +
             arg.source +
-            " = match __golem_stdout {\n        Some(__golem_output) => __golem_output\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidInput(\"required stdout stream is missing\"))\n      }\n",
+            " = match __golem_stdout {\n        Some(__golem_output) => __golem_output\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"required stdout stream is missing\"))\n      }\n",
           )
         _ => ()
       }
@@ -2046,7 +2046,7 @@ fn emit_invoker(
     )
   }
   buf.write_string(
-    "    _ => @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @toolCommon.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n}\n\n",
+    "    _ => @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n}\n\n",
   )
 }
 

@@ -110,15 +110,6 @@ impl RedisKeyValueStorage {
                 "agent:rejected_periodic_snapshots:{}",
                 agent_id.to_redis_key()
             )),
-            KeyValueStorageNamespace::ExportForkAdmissions {
-                environment_id,
-                agent_id,
-                fingerprint,
-            } => Some(format!(
-                "export-fork-admissions:{environment_id}:{}:{}",
-                agent_id.to_redis_key(),
-                fingerprint.0
-            )),
             KeyValueStorageNamespace::RunningWorkers => None,
             KeyValueStorageNamespace::Promise { .. } => Some("promises".to_string()),
             KeyValueStorageNamespace::Schedule => None,

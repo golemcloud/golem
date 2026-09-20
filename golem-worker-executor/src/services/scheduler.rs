@@ -14,8 +14,7 @@
 
 use crate::metrics::oplog::record_scheduled_archive;
 use crate::metrics::promises::record_scheduled_promise_completed;
-use crate::services::HasOplog;
-use crate::services::oplog::{EphemeralOplog, MultiLayerOplog, Oplog, OplogService};
+use crate::services::oplog::{ArchiveWait, OplogService};
 use crate::services::promise::PromiseService;
 use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
@@ -30,6 +29,7 @@ use golem_common::model::RetryConfig;
 use golem_common::model::agent::Principal;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{
     AgentFingerprint, AgentInvocation, OwnedAgentId, ScheduleId, ScheduledAction, ShardId,
@@ -70,14 +70,19 @@ pub trait SchedulerWorkerAccess {
         owned_agent_id: &OwnedAgentId,
     ) -> Option<AgentFingerprint>;
 
+    /// See [`WorkerActivator::worker_is_cached`].
+    async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool;
+
     async fn activate_worker(
         &self,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<(), WorkerExecutorError>;
-    async fn open_oplog(
+    async fn archive_oplog(
         &self,
         owned_agent_id: &OwnedAgentId,
-    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError>;
+        last_oplog_index: OplogIndex,
+        wait: ArchiveWait,
+    ) -> Result<Option<bool>, WorkerExecutorError>;
 
     // enqueue an invocation to the worker
     async fn enqueue_invocation(
@@ -90,6 +95,20 @@ pub trait SchedulerWorkerAccess {
         worker_parent: Option<golem_common::model::AgentId>,
         worker_creation_principal: Principal,
     ) -> Result<(), WorkerExecutorError>;
+
+    async fn enqueue_exact_existing(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        target_worker_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError>;
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        invocation: AgentInvocation,
+        component_revision: ComponentRevision,
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 #[async_trait]
@@ -101,6 +120,10 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         self.deref().active_worker_fingerprint(owned_agent_id).await
     }
 
+    async fn worker_is_cached(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        self.deref().worker_is_cached(owned_agent_id).await
+    }
+
     async fn activate_worker(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -108,22 +131,15 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         self.deref().activate_worker(owned_agent_id).await
     }
 
-    async fn open_oplog(
+    async fn archive_oplog(
         &self,
         owned_agent_id: &OwnedAgentId,
-    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
-        let worker = self
-            .get_or_create_suspended(
-                owned_agent_id,
-                None,
-                Vec::new(),
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-                Principal::anonymous(),
-            )
-            .await?;
-        Ok(worker.oplog())
+        last_oplog_index: OplogIndex,
+        wait: ArchiveWait,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        self.deref()
+            .archive_oplog(owned_agent_id, last_oplog_index, wait)
+            .await
     }
 
     async fn enqueue_invocation(
@@ -153,6 +169,28 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         Worker::start_if_needed(worker).await?;
 
         Ok(())
+    }
+
+    async fn enqueue_exact_existing(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        target_worker_fingerprint: AgentFingerprint,
+        invocation: AgentInvocation,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.deref()
+            .enqueue_exact_existing(owned_agent_id, target_worker_fingerprint, invocation)
+            .await
+    }
+
+    async fn enqueue_ephemeral_external_tool(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        invocation: AgentInvocation,
+        component_revision: ComponentRevision,
+    ) -> Result<(), WorkerExecutorError> {
+        self.deref()
+            .enqueue_ephemeral_external_tool(owned_agent_id, component_revision, invocation)
+            .await
     }
 }
 
@@ -524,79 +562,46 @@ impl SchedulerServiceDefault {
                 debug!("Running scheduled archive oplog for {account_id}/{owned_agent_id}");
 
                 if self.oplog_service.exists(&owned_agent_id, agent_mode).await {
-                    let current_last_index = self
-                        .oplog_service
-                        .get_last_index(&owned_agent_id, agent_mode)
+                    let start = Instant::now();
+                    let archive_result = self
+                        .with_lease_renewal(
+                            schedule_id,
+                            lease_owner,
+                            self.worker_access.archive_oplog(
+                                &owned_agent_id,
+                                last_oplog_index,
+                                ArchiveWait::Queued,
+                            ),
+                        )
                         .await;
-                    if current_last_index == last_oplog_index {
-                        // Need to create the `Worker` instance to avoid race conditions
-                        match self.worker_access.open_oplog(&owned_agent_id).await {
-                            Ok(oplog) => {
-                                let start = Instant::now();
-                                let archive_result = self
-                                    .with_lease_renewal(schedule_id, lease_owner, async {
-                                        match MultiLayerOplog::try_archive(&oplog).await {
-                                            Some(r) => Some(r),
-                                            None => EphemeralOplog::try_archive(&oplog).await,
-                                        }
-                                    })
-                                    .await;
-                                let archive_result = match archive_result {
-                                    Ok(result) => result,
-                                    Err(error) => {
-                                        warn!(
-                                            schedule_id = %schedule_id,
-                                            agent_id = owned_agent_id.to_string(),
-                                            "Stopped scheduled oplog archival because lease renewal failed: {error}"
-                                        );
-                                        return false;
-                                    }
-                                };
-                                if let Some(more) = archive_result {
-                                    record_scheduled_archive(start.elapsed(), more);
-                                    if more {
-                                        self.schedule(
-                                            now.add(next_after),
-                                            ScheduledAction::ArchiveOplog {
-                                                account_id,
-                                                owned_agent_id,
-                                                agent_mode,
-                                                last_oplog_index,
-                                                next_after,
-                                            },
-                                        )
-                                        .await;
-                                    } else {
-                                        info!(
-                                            agent_id = owned_agent_id.to_string(),
-                                            "Deleting cached status of fully archived worker"
-                                        );
-                                        // The oplog is fully archived, so we can also delete the cached worker status
-                                        if let Err(error) = self
-                                            .worker_service
-                                            .remove_cached_status(&owned_agent_id)
-                                            .await
-                                        {
-                                            error!(
-                                                agent_id = owned_agent_id.to_string(),
-                                                "Failed to delete the cached status of a fully archived worker: {error}"
-                                            );
-                                            return false;
-                                        }
-                                    }
-                                }
-                            }
-                            Err(error) => {
-                                error!(
-                                    agent_id = owned_agent_id.to_string(),
-                                    "Failed to activate worker for archiving: {error}"
-                                );
-                                return false;
+                    match archive_result {
+                        Ok(Ok(Some(more))) => {
+                            record_scheduled_archive(start.elapsed(), more);
+                            if more {
+                                self.schedule(
+                                    now.add(next_after),
+                                    ScheduledAction::ArchiveOplog {
+                                        account_id,
+                                        owned_agent_id,
+                                        agent_mode,
+                                        last_oplog_index,
+                                        next_after,
+                                    },
+                                )
+                                .await;
                             }
                         }
+                        Ok(Ok(None)) => {}
+                        Ok(Err(error)) => {
+                            error!(agent_id = %owned_agent_id, error = %error, "Failed to archive worker oplog");
+                            return false;
+                        }
+                        Err(error) => {
+                            warn!(schedule_id = %schedule_id, agent_id = %owned_agent_id, error = %error,
+                                "Stopped scheduled oplog archival because lease renewal failed");
+                            return false;
+                        }
                     }
-
-                    // TODO: metrics
                 }
                 true
             }
@@ -606,6 +611,33 @@ impl SchedulerServiceDefault {
                 invocation,
                 target_worker_fingerprint,
             } => {
+                if matches!(&*invocation, AgentInvocation::ExternalTool { .. }) {
+                    return match self
+                        .worker_access
+                        .enqueue_exact_existing(
+                            &owned_agent_id,
+                            target_worker_fingerprint,
+                            *invocation,
+                        )
+                        .await
+                    {
+                        Ok(true) => true,
+                        Ok(false) => {
+                            info!(
+                                agent_id = owned_agent_id.to_string(),
+                                "Dropping stale scheduled external-tool invocation"
+                            );
+                            true
+                        }
+                        Err(error) => {
+                            error!(
+                                agent_id = owned_agent_id.to_string(),
+                                "Failed to enqueue scheduled external-tool invocation: {error}"
+                            );
+                            false
+                        }
+                    };
+                }
                 // A mismatch means the original worker was deleted and recreated — drop the stale
                 // invocation silently.
                 let stale = match self
@@ -673,18 +705,27 @@ impl SchedulerServiceDefault {
                 parent: worker_parent,
                 creation_principal: worker_creation_principal,
             } => {
-                let result = self
-                    .worker_access
-                    .enqueue_invocation(
-                        &owned_agent_id,
-                        *invocation,
-                        Some(worker_env),
-                        worker_agent_config,
-                        Some(component_revision),
-                        worker_parent,
-                        *worker_creation_principal,
-                    )
-                    .await;
+                let result = if matches!(&*invocation, AgentInvocation::ExternalTool { .. }) {
+                    self.worker_access
+                        .enqueue_ephemeral_external_tool(
+                            &owned_agent_id,
+                            *invocation,
+                            component_revision,
+                        )
+                        .await
+                } else {
+                    self.worker_access
+                        .enqueue_invocation(
+                            &owned_agent_id,
+                            *invocation,
+                            Some(worker_env),
+                            worker_agent_config,
+                            Some(component_revision),
+                            worker_parent,
+                            *worker_creation_principal,
+                        )
+                        .await
+                };
 
                 match result {
                     Ok(()) => true,
@@ -780,7 +821,7 @@ impl SchedulerService for SchedulerServiceDefault {
 
 #[cfg(test)]
 mod tests {
-    use crate::services::oplog::{Oplog, OplogService, PrimaryOplogService};
+    use crate::services::oplog::{ArchiveWait, OplogService, PrimaryOplogService};
     use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{
         SchedulerService, SchedulerServiceDefault, SchedulerWorkerAccess,
@@ -839,6 +880,10 @@ mod tests {
             None
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -846,10 +891,12 @@ mod tests {
             Ok(())
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -862,6 +909,24 @@ mod tests {
             _component_revision: Option<ComponentRevision>,
             _worker_parent: Option<golem_common::model::AgentId>,
             _worker_creation_principal: Principal,
+        ) -> Result<(), WorkerExecutorError> {
+            unimplemented!()
+        }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            unimplemented!()
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
         ) -> Result<(), WorkerExecutorError> {
             unimplemented!()
         }
@@ -886,6 +951,10 @@ mod tests {
             Some(self.fingerprint)
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -893,10 +962,12 @@ mod tests {
             Ok(())
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -918,6 +989,34 @@ mod tests {
             };
             self.executions.lock().unwrap().push(idempotency_key.value);
             Ok(())
+        }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            target_worker_fingerprint: AgentFingerprint,
+            invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            if target_worker_fingerprint != self.fingerprint {
+                return Ok(false);
+            }
+            let AgentInvocation::AgentMethod {
+                idempotency_key, ..
+            } = invocation
+            else {
+                unreachable!()
+            };
+            self.executions.lock().unwrap().push(idempotency_key.value);
+            Ok(true)
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!()
         }
     }
 
@@ -946,6 +1045,10 @@ mod tests {
             panic!("ephemeral schedules must not look up a target fingerprint")
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -953,10 +1056,12 @@ mod tests {
             unreachable!()
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unreachable!()
         }
 
@@ -991,6 +1096,37 @@ mod tests {
                 Ok(())
             }
         }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            owned_agent_id: &OwnedAgentId,
+            invocation: AgentInvocation,
+            component_revision: ComponentRevision,
+        ) -> Result<(), WorkerExecutorError> {
+            let principal = invocation
+                .principal()
+                .cloned()
+                .ok_or_else(|| WorkerExecutorError::invalid_request("missing principal"))?;
+            self.enqueue_invocation(
+                owned_agent_id,
+                invocation,
+                None,
+                Vec::new(),
+                Some(component_revision),
+                None,
+                principal,
+            )
+            .await
+        }
     }
 
     #[async_trait]
@@ -1002,6 +1138,10 @@ mod tests {
             Some(self.fingerprint)
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1009,10 +1149,12 @@ mod tests {
             Ok(())
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -1029,6 +1171,28 @@ mod tests {
             self.enqueue_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            if target_worker_fingerprint != self.fingerprint {
+                return Ok(false);
+            }
+            self.enqueue_count.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!()
+        }
     }
 
     struct FailingActivationWorkerAccess {
@@ -1044,6 +1208,10 @@ mod tests {
             None
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1052,10 +1220,12 @@ mod tests {
             Err(WorkerExecutorError::runtime("injected activation failure"))
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -1068,6 +1238,24 @@ mod tests {
             _component_revision: Option<ComponentRevision>,
             _worker_parent: Option<golem_common::model::AgentId>,
             _worker_creation_principal: Principal,
+        ) -> Result<(), WorkerExecutorError> {
+            unimplemented!()
+        }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            unimplemented!()
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
         ) -> Result<(), WorkerExecutorError> {
             unimplemented!()
         }
@@ -1088,6 +1276,10 @@ mod tests {
             Some(self.fingerprint)
         }
 
+        async fn worker_is_cached(&self, _owned_agent_id: &OwnedAgentId) -> bool {
+            unimplemented!()
+        }
+
         async fn activate_worker(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1095,10 +1287,12 @@ mod tests {
             Ok(())
         }
 
-        async fn open_oplog(
+        async fn archive_oplog(
             &self,
             _owned_agent_id: &OwnedAgentId,
-        ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+            _last_oplog_index: OplogIndex,
+            _wait: ArchiveWait,
+        ) -> Result<Option<bool>, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -1117,6 +1311,31 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
             self.in_flight.fetch_sub(1, Ordering::SeqCst);
             Ok(())
+        }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            if target_worker_fingerprint != self.fingerprint {
+                return Ok(false);
+            }
+            let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(true)
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!()
         }
     }
 
@@ -1147,7 +1366,11 @@ mod tests {
             unimplemented!()
         }
 
-        async fn remove(&self, _owned_agent_id: &OwnedAgentId) -> Result<(), WorkerExecutorError> {
+        async fn remove(
+            &self,
+            _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+            _owned_agent_id: &OwnedAgentId,
+        ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
 

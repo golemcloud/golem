@@ -17,7 +17,7 @@ import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
-import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/host@0.1.0';
+import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
 import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
 import {
   schemaValueFromWit,

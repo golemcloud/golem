@@ -14,7 +14,7 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanCursor, ScanResume,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -243,6 +243,28 @@ impl IndexedStorage for RedisIndexedStorage {
         Ok((cursor, keys))
     }
 
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        // Plain `scan`: a `SCAN` cursor walks the hash space, so deleting keys behind it moves
+        // nothing, and a key present for the whole iteration comes back at least once.
+        let cursor = resume
+            .map(|resume| resume.into_cursor("Redis"))
+            .transpose()?
+            .unwrap_or(0);
+        let (next, keys) = self
+            .scan(svc_name, api_name, namespace, prefix, cursor, count)
+            .await?;
+        let next = (next != 0).then_some(ScanResume::Cursor(next));
+        Ok((next, keys))
+    }
+
     async fn append(
         &self,
         svc_name: &'static str,
@@ -321,41 +343,29 @@ impl IndexedStorage for RedisIndexedStorage {
         Ok(())
     }
 
-    async fn publish_staged(
+    async fn move_if_absent(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        agent_id: &golem_common::model::AgentId,
-        agent_mode: golem_common::model::agent::AgentMode,
-        stage_key: &str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
         target_key: &str,
         expected_last_id: u64,
     ) -> Result<bool, IndexedStorageError> {
-        let stage = Self::composite_key(
-            IndexedStorageNamespace::StagedOpLog {
-                agent_id: agent_id.clone(),
-                agent_mode,
-            },
-            stage_key,
-        );
-        let target = Self::composite_key(
-            IndexedStorageNamespace::OpLog {
-                agent_id: agent_id.clone(),
-                agent_mode,
-            },
-            target_key,
-        );
+        let source = Self::composite_key(source_namespace, source_key);
+        let target = Self::composite_key(target_namespace, target_key);
         match self
             .redis
             .with(svc_name, api_name)
-            .publish_staged_stream(stage, target, expected_last_id)
+            .move_stream_if_absent(source, target, expected_last_id)
             .await
             .map_err(|error| Self::classify_append_error(error, true))?
         {
             1 => Ok(true),
             0 => Ok(false),
             _ => Err(IndexedStorageError::Other(
-                "staged oplog is missing, empty, gapped, or has an unexpected tip".to_string(),
+                "source index is missing, empty, gapped, or has an unexpected tip".to_string(),
             )),
         }
     }
@@ -445,6 +455,21 @@ impl IndexedStorage for RedisIndexedStorage {
 
         let result = self.process_stream(svc_name, entity_name, items)?;
         Ok(result.into_iter().next())
+    }
+
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        // Streams have no id-only read, so this reads the payload too.
+        Ok(self
+            .last(svc_name, api_name, entity_name, namespace, key)
+            .await?
+            .map(|(id, _)| id))
     }
 
     async fn closest(

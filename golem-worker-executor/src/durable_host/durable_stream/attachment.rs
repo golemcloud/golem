@@ -22,6 +22,7 @@ impl DurableStreamStore {
         &self,
         context: Option<&StreamWriteContext>,
         key: StreamAttachmentKey,
+        reader_id: LocalStreamReaderId,
         source_offset: StreamOffset,
         consumer_read_ordinal: u64,
     ) -> Result<bool, StreamStoreError> {
@@ -30,6 +31,7 @@ impl DurableStreamStore {
                 .commit_source_unavailable_overlay_owned(
                     &context,
                     key,
+                    reader_id,
                     source_offset,
                     consumer_read_ordinal,
                 )
@@ -42,6 +44,7 @@ impl DurableStreamStore {
         &self,
         context: &StreamWriteContext,
         key: StreamAttachmentKey,
+        reader_id: LocalStreamReaderId,
         source_offset: StreamOffset,
         consumer_read_ordinal: u64,
     ) -> Result<bool, StreamStoreError> {
@@ -51,10 +54,53 @@ impl DurableStreamStore {
         {
             return Err(StreamStoreError::InvalidAttachmentState);
         }
+        let mut metadata = SessionControlMetadata::default();
+        self.refresh_control_metadata(&key.session_key, &mut metadata)
+            .await
+            .map_err(StreamStoreError::Oplog)?;
+        if !metadata.readers_for_attachment(&key).contains(&reader_id) {
+            return Err(StreamStoreError::InvalidAttachmentState);
+        }
+        let introducing = self
+            .oplog
+            .read_exact(reader_id.introducing_oplog_index, 1)
+            .await
+            .into_iter()
+            .next()
+            .filter(|(index, _)| *index == reader_id.introducing_oplog_index)
+            .ok_or_else(|| {
+                StreamStoreError::CorruptHistory(
+                    "consumer reader introducing record is missing".to_string(),
+                )
+            })?;
+        let OplogEntry::StreamSession { record, .. } = introducing.1 else {
+            return Err(StreamStoreError::CorruptHistory(
+                "consumer reader was not introduced by a stream-session record".to_string(),
+            ));
+        };
+        let introducing = self
+            .oplog
+            .download_payload(record)
+            .await
+            .map_err(StreamStoreError::Oplog)?;
+        let session_key = crate::worker::stream_session_record_reference(&introducing, reader_id)
+            .ok_or_else(|| {
+            StreamStoreError::CorruptHistory(
+                "consumer reader introducing record has no matching binding".to_string(),
+            )
+        })?;
+        if session_key.qualify(
+            self.environment_id,
+            &self.producer,
+            self.producer_fingerprint,
+        ) != key.session_key
+        {
+            return Err(StreamStoreError::InvalidAttachmentState);
+        }
         let mut index = self
             .index_for([ProducerMetadataKey::ConsumerHead(
                 key.session_key.clone(),
-                key.stream_id,
+                reader_id,
             )])
             .await?;
         let current = self.oplog.current_oplog_index().await;
@@ -76,18 +122,19 @@ impl DurableStreamStore {
                 let OplogEntry::StreamSession { record, .. } = entry else {
                     continue;
                 };
-                let mut record = self
+                let record = self
                     .oplog
                     .download_payload(record)
                     .await
                     .map_err(StreamStoreError::Oplog)?;
-                self.fork_lineage
-                    .project_session_payload(oplog_index, &mut record)
-                    .map_err(StreamStoreError::CorruptHistory)?;
                 match record {
                     StreamSessionRecord::ConsumerItemValue(record)
-                        if record.session_key == key.session_key
-                            && record.stream_id == key.stream_id =>
+                        if record.session_key.qualify(
+                            key.consumer_environment_id,
+                            &key.consumer,
+                            key.expected_consumer_fingerprint,
+                        ) == key.session_key
+                            && record.reader_id == reader_id =>
                     {
                         if record.consumer_read_ordinal != source_offsets.len() as u64 {
                             return Err(StreamStoreError::CorruptHistory(
@@ -106,8 +153,12 @@ impl DurableStreamStore {
                         }
                     }
                     StreamSessionRecord::ConsumerTerminal(record)
-                        if record.session_key == key.session_key
-                            && record.stream_id == key.stream_id =>
+                        if record.session_key.qualify(
+                            key.consumer_environment_id,
+                            &key.consumer,
+                            key.expected_consumer_fingerprint,
+                        ) == key.session_key
+                            && record.reader_id == reader_id =>
                     {
                         if record.consumer_read_ordinal != source_offsets.len() as u64 {
                             return Err(StreamStoreError::CorruptHistory(
@@ -117,8 +168,7 @@ impl DurableStreamStore {
                         source_offsets.push(record.source_offset);
                     }
                     StreamSessionRecord::SourceUnavailable(record)
-                        if record.key.session_key == key.session_key
-                            && record.key.stream_id == key.stream_id =>
+                        if record.session_key == session_key && record.reader_id == reader_id =>
                     {
                         if record.consumer_read_ordinal != source_offsets.len() as u64 {
                             return Err(StreamStoreError::CorruptHistory(
@@ -141,8 +191,7 @@ impl DurableStreamStore {
             }
         }
         if let Some(existing) = overlay {
-            return if existing.key == key
-                && existing.source_offset == source_offset
+            return if existing.source_offset == source_offset
                 && existing.consumer_read_ordinal == consumer_read_ordinal
             {
                 Ok(true)
@@ -155,16 +204,26 @@ impl DurableStreamStore {
         }
         let record = StreamSessionRecord::SourceUnavailable(StreamSourceUnavailableRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            key,
+            session_key,
+            reader_id,
             source_offset,
             consumer_read_ordinal,
         });
-        let entity_parent_start_index = index.session_entity_parent_start_index(
-            crate::worker::stream_session_record_key(&record)
-                .expect("source-unavailable record always identifies a session"),
-        );
-        index.apply_session_references(entity_parent_start_index, &record)?;
-        index.apply_consumer_journal_record(&record)?;
+        let session_key = crate::worker::stream_session_record_key(
+            &record,
+            self.environment_id,
+            &self.producer,
+            self.producer_fingerprint,
+        )
+        .expect("source-unavailable record always identifies a session");
+        let entity_parent_start_index = index.session_entity_parent_start_index(&session_key);
+        index.apply_session_references(
+            entity_parent_start_index,
+            &record,
+            self.environment_id,
+            &self.producer,
+            self.producer_fingerprint,
+        )?;
         context.begin_durable_effect();
         self.oplog
             .add(OplogEntry::stream_session(
@@ -181,6 +240,7 @@ impl DurableStreamStore {
     pub async fn consumer_source_unavailable(
         &self,
         key: &StreamAttachmentKey,
+        reader_id: LocalStreamReaderId,
     ) -> Result<Option<StreamOffset>, StreamStoreError> {
         if key.consumer_environment_id != self.environment_id
             || key.consumer != self.producer
@@ -194,14 +254,13 @@ impl DurableStreamStore {
         let index = self
             .index_for([ProducerMetadataKey::ConsumerHead(
                 key.session_key.clone(),
-                key.stream_id,
+                reader_id,
             )])
             .await?;
         Ok(index
             .consumer_journals
-            .get(&(key.session_key.clone(), key.stream_id))
-            .and_then(|journal| journal.source_unavailable.as_ref())
-            .and_then(|(recorded_key, offset)| (recorded_key == key).then_some(*offset)))
+            .get(&(key.session_key.clone(), reader_id))
+            .and_then(|journal| journal.source_unavailable))
     }
 
     async fn persist_attachment_record(
@@ -227,7 +286,12 @@ impl DurableStreamStore {
             ));
         }
         let mut index = self
-            .index_for(ProducerMetadataKey::session_record(&record))
+            .index_for(ProducerMetadataKey::session_record(
+                &record,
+                self.environment_id,
+                &self.producer,
+                self.producer_fingerprint,
+            ))
             .await?;
         let stream_id = match &record {
             StreamSessionRecord::AttachmentPrepared(record) => record.key.stream_id,
@@ -238,7 +302,13 @@ impl DurableStreamStore {
         };
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
         let mut updated = index.clone();
-        updated.apply_session_references(entity_parent_start_index, &record)?;
+        updated.apply_session_references(
+            entity_parent_start_index,
+            &record,
+            self.environment_id,
+            &self.producer,
+            self.producer_fingerprint,
+        )?;
         let outcome = updated.apply_attachment_record(
             &record,
             self.environment_id,
@@ -498,7 +568,7 @@ impl DurableStreamStore {
                     StreamCascadeDependentResult::ConsumerIncarnationChanged
                 }
                 ConsumerAttachmentStatus::Prepared | ConsumerAttachmentStatus::Active => {
-                    let inspection = probe
+                    let inspections = probe
                         .journal_inspection(&key)
                         .await?
                         .ok_or(StreamStoreError::InvalidAttachmentState)?;
@@ -510,39 +580,52 @@ impl DurableStreamStore {
                             .ok_or(StreamStoreError::UnknownStream(key.stream_id))?
                             .offsets()
                     };
-                    if inspection.source_offsets.len() > producer_offsets.len()
-                        || producer_offsets[..inspection.source_offsets.len()]
-                            != inspection.source_offsets
-                    {
-                        return Err(StreamStoreError::CorruptHistory(
-                            "consumer journal is not an exact prefix of producer history"
-                                .to_string(),
-                        ));
-                    }
-                    if inspection.source_offsets.len() == producer_offsets.len() {
-                        StreamCascadeDependentResult::ConsumerJournalComplete
-                    } else {
-                        let first_unjournaled_offset =
-                            producer_offsets[inspection.source_offsets.len()];
-                        if let Some(existing) = inspection.source_unavailable {
-                            if existing != first_unjournaled_offset {
-                                return Err(StreamStoreError::CorruptHistory(
+                    let mut first_missing = None;
+                    for inspection in inspections {
+                        if inspection.source_offsets.len() > producer_offsets.len()
+                            || producer_offsets[..inspection.source_offsets.len()]
+                                != inspection.source_offsets
+                        {
+                            return Err(StreamStoreError::CorruptHistory(
+                                "consumer journal is not an exact prefix of producer history"
+                                    .to_string(),
+                            ));
+                        }
+                        if inspection.source_offsets.len() != producer_offsets.len() {
+                            let first_unjournaled_offset =
+                                producer_offsets[inspection.source_offsets.len()];
+                            if let Some(existing) = inspection.source_unavailable {
+                                if existing != first_unjournaled_offset {
+                                    return Err(StreamStoreError::CorruptHistory(
                                     "source-unavailable overlay does not identify the first unjournaled producer position"
                                         .to_string(),
                                 ));
+                                }
+                            } else {
+                                probe
+                                    .commit_source_unavailable(
+                                        &key,
+                                        inspection.reader_id,
+                                        first_unjournaled_offset,
+                                        inspection.source_offsets.len() as u64,
+                                    )
+                                    .await?;
                             }
-                        } else {
-                            probe
-                                .commit_source_unavailable(
-                                    &key,
-                                    first_unjournaled_offset,
-                                    inspection.source_offsets.len() as u64,
-                                )
-                                .await?;
+                            first_missing = Some(
+                                first_missing
+                                    .map_or(first_unjournaled_offset, |offset: StreamOffset| {
+                                        offset.min(first_unjournaled_offset)
+                                    }),
+                            );
                         }
-                        StreamCascadeDependentResult::SourceUnavailable {
-                            first_unjournaled_offset,
+                    }
+                    match first_missing {
+                        Some(first_unjournaled_offset) => {
+                            StreamCascadeDependentResult::SourceUnavailable {
+                                first_unjournaled_offset,
+                            }
                         }
+                        None => StreamCascadeDependentResult::ConsumerJournalComplete,
                     }
                 }
             };
@@ -591,7 +674,9 @@ impl DurableStreamStore {
             .iter()
             .filter_map(|(stream_id, stream)| {
                 (!stream.terminal).then_some((
-                    *stream_id,
+                    index
+                        .local_stream_id(*stream_id)
+                        .expect("open stream has a registration"),
                     stream.next_sequence,
                     *index
                         .entity_parent_start_indices
@@ -618,7 +703,6 @@ impl DurableStreamStore {
                         StreamCancelRecord {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             stream_id,
-                            producer_fingerprint,
                             sequence,
                             offset: StreamOffset::new(oplog_index, 0),
                             authored_by: StreamTerminalAuthor::Protocol,
@@ -763,7 +847,13 @@ impl DurableStreamStore {
             ))
             .await;
         self.commit(context).await;
-        index.apply_session_references(entity_parent_start_index, &record)?;
+        index.apply_session_references(
+            entity_parent_start_index,
+            &record,
+            self.environment_id,
+            &self.producer,
+            self.producer_fingerprint,
+        )?;
         index.apply_deletion_record(
             &record,
             self.environment_id,

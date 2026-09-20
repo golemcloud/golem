@@ -33,6 +33,14 @@ pub(super) struct AppliedWriteBatch {
     pub(super) newly_registered_stream_count: usize,
 }
 
+pub(super) struct MaterializedStreamItemsRecord {
+    pub stream_id: StreamId,
+    pub first_sequence: u64,
+    pub nested_stream_ids: Vec<StreamRecordReference>,
+    pub payload: StreamItemsPayload,
+    pub offsets: Vec<StreamOffset>,
+}
+
 impl DurableStreamStore {
     #[cfg(test)]
     /// Appends values in producer order and returns only after their durable receipt.
@@ -59,7 +67,7 @@ impl DurableStreamStore {
             .coordinates
             .get(coordinate)
             .and_then(|stream_id| index.registrations.get(stream_id))
-            .map(|registration| registration.handle.clone()))
+            .map(|registration| registration.issue(self.generation())))
     }
 
     /// Returns the latest committed offset and terminal state for a validated handle.
@@ -71,7 +79,7 @@ impl DurableStreamStore {
         if index
             .registrations
             .get(&handle.stream_id)
-            .is_none_or(|registration| &registration.handle != handle)
+            .is_none_or(|registration| !registration.accepts(handle, self.generation()))
         {
             return Err(StreamStoreError::InvalidHandle);
         }
@@ -208,7 +216,7 @@ impl DurableStreamStore {
                 "session metadata points at a non-session record".into(),
             ));
         };
-        let mut record = self
+        let record = self
             .oplog
             .download_payload(record)
             .await
@@ -218,16 +226,13 @@ impl DurableStreamStore {
                 "unsupported or malformed durable Stream Session record version".into(),
             ));
         }
-        self.fork_lineage
-            .project_session_payload(oplog_index, &mut record)
-            .map_err(StreamStoreError::CorruptHistory)?;
         Ok(record)
     }
 
     pub(super) async fn read_item_batch(
         &self,
         oplog_index: OplogIndex,
-    ) -> Result<StreamItemsRecord, StreamStoreError> {
+    ) -> Result<MaterializedStreamItemsRecord, StreamStoreError> {
         let OplogEntry::StreamItems { record, .. } = self.oplog.read(oplog_index).await else {
             return Err(StreamStoreError::CorruptHistory(
                 "stream batch index points at a non-item record".into(),
@@ -241,50 +246,69 @@ impl DurableStreamStore {
         self.fork_lineage
             .project_item_batch(oplog_index, &mut record)
             .map_err(StreamStoreError::CorruptHistory)?;
-        Ok(record)
+        Ok(MaterializedStreamItemsRecord {
+            stream_id: qualify_local_stream(
+                record.stream_id,
+                self.environment_id,
+                &self.producer,
+                self.producer_fingerprint,
+            )?,
+            first_sequence: record.first_sequence,
+            nested_stream_ids: record.nested_stream_ids,
+            payload: record.payload,
+            offsets: record.offsets,
+        })
     }
 
     pub(super) async fn resolve_nested_handles(
         &self,
-        stream_ids: &[StreamId],
+        references: &[StreamRecordReference],
     ) -> Result<Vec<DurableStreamHandle>, StreamStoreError> {
-        if stream_ids.is_empty() {
+        if references.is_empty() {
             return Ok(Vec::new());
         }
+        let local_stream_ids = references
+            .iter()
+            .filter_map(|reference| match reference {
+                StreamRecordReference::Local(local_id) => Some(
+                    qualify_local_stream(
+                        *local_id,
+                        self.environment_id,
+                        &self.producer,
+                        self.producer_fingerprint,
+                    )
+                    .map(|stream_id| (*local_id, stream_id)),
+                ),
+                StreamRecordReference::Foreign(_) => None,
+            })
+            .collect::<Result<HashMap<_, _>, _>>()?;
         let index = self
             .index_for(
-                stream_ids
-                    .iter()
-                    .flat_map(|id| {
-                        [
-                            ProducerMetadataKey::Stream(*id),
-                            ProducerMetadataKey::Reference(*id),
-                        ]
-                    })
+                local_stream_ids
+                    .values()
+                    .map(|id| ProducerMetadataKey::Stream(*id))
                     .collect::<Vec<_>>(),
             )
             .await?;
-        stream_ids
+        references
             .iter()
-            .map(|stream_id| {
-                index
-                    .registrations
-                    .get(stream_id)
-                    .map(|registration| registration.handle.clone())
-                    .or_else(|| {
-                        index
-                            .referenced_handles
-                            .get(stream_id)
-                            .map(|(handle, _)| handle.clone())
-                    })
-                    .ok_or(StreamStoreError::UnknownStream(*stream_id))
+            .map(|reference| match reference {
+                StreamRecordReference::Local(local_id) => {
+                    let stream_id = local_stream_ids[local_id];
+                    index
+                        .registrations
+                        .get(&stream_id)
+                        .map(|registration| registration.issue(self.generation()))
+                        .ok_or(StreamStoreError::UnknownStream(stream_id))
+                }
+                StreamRecordReference::Foreign(handle) => Ok(handle.clone()),
             })
             .collect()
     }
 
     async fn materialize_item_batch(
         &self,
-        record: &StreamItemsRecord,
+        record: &MaterializedStreamItemsRecord,
     ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
         self.materialize_item_batch_range(record, record.first_sequence, usize::MAX)
             .await
@@ -292,7 +316,7 @@ impl DurableStreamStore {
 
     pub(super) async fn materialize_item_batch_range(
         &self,
-        record: &StreamItemsRecord,
+        record: &MaterializedStreamItemsRecord,
         first_sequence: u64,
         limit: usize,
     ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
@@ -323,6 +347,7 @@ impl DurableStreamStore {
                     packed_u8_batch_end,
                     terminal_author: None,
                     nested_handles: nested_handles.clone(),
+                    nested_references: record.nested_stream_ids.clone(),
                     payload,
                 })
             })
@@ -717,14 +742,8 @@ impl DurableStreamStore {
 
         let mut keys = vec![ProducerMetadataKey::Stream(stream_id)];
         for source in &nested_sources {
-            match source {
-                NestedStreamWrite::Register(request) => {
-                    keys.extend(ProducerMetadataKey::registration(request))
-                }
-                NestedStreamWrite::Forward(handle) => {
-                    keys.push(ProducerMetadataKey::Stream(handle.stream_id));
-                    keys.push(ProducerMetadataKey::Reference(handle.stream_id));
-                }
+            if let NestedStreamWrite::Register(request) = source {
+                keys.extend(ProducerMetadataKey::registration(request));
             }
         }
         keys.push(ProducerMetadataKey::Batch(stream_id, first_sequence));
@@ -757,24 +776,45 @@ impl DurableStreamStore {
             if let Some(oplog_index) = stream.batches.get(&first_sequence).copied() {
                 drop(index);
                 let record = self.read_item_batch(oplog_index).await?;
+                let local_stream_ids = record
+                    .nested_stream_ids
+                    .iter()
+                    .filter_map(|reference| match reference {
+                        StreamRecordReference::Local(local_id) => Some(
+                            qualify_local_stream(
+                                *local_id,
+                                self.environment_id,
+                                &self.producer,
+                                self.producer_fingerprint,
+                            )
+                            .map(|stream_id| (*local_id, stream_id)),
+                        ),
+                        StreamRecordReference::Foreign(_) => None,
+                    })
+                    .collect::<Result<HashMap<_, _>, _>>()?;
                 let index = self
                     .index_for(
-                        record
-                            .nested_stream_ids
-                            .iter()
-                            .map(|id| ProducerMetadataKey::Stream(*id))
-                            .collect::<Vec<_>>(),
+                        local_stream_ids
+                            .values()
+                            .map(|stream_id| ProducerMetadataKey::Stream(*stream_id)),
                     )
                     .await?;
                 let matches = record.payload == payload
                     && record.nested_stream_ids.len() == nested_sources.len()
                     && record.nested_stream_ids.iter().zip(&nested_sources).all(
-                        |(stream_id, source)| match source {
-                            NestedStreamWrite::Register(request) => index
+                        |(reference, source)| match (reference, source) {
+                            (
+                                StreamRecordReference::Local(local_id),
+                                NestedStreamWrite::Register(request),
+                            ) => index
                                 .registrations
-                                .get(stream_id)
+                                .get(&local_stream_ids[local_id])
                                 .is_some_and(|record| registration_matches(record, request)),
-                            NestedStreamWrite::Forward(handle) => stream_id == &handle.stream_id,
+                            (
+                                StreamRecordReference::Foreign(recorded),
+                                NestedStreamWrite::Forward(handle),
+                            ) => recorded == handle,
+                            _ => false,
                         },
                     );
                 drop(index);
@@ -863,12 +903,14 @@ impl DurableStreamStore {
         for source in &nested_sources {
             if let NestedStreamWrite::Forward(handle) = source
                 && (handle.format_version != DURABLE_STREAM_FORMAT_VERSION
-                    || index.referenced_handles.get(&handle.stream_id).is_none_or(
-                        |(referenced_handle, referenced_sessions)| {
-                            referenced_handle != handle
-                                || !referenced_sessions.contains(&session_key)
-                        },
-                    ))
+                    || index
+                        .session_stream_mappings
+                        .get(&session_key)
+                        .is_none_or(|mappings| {
+                            !mappings.iter().any(|(known, _)| {
+                                known == &StreamRecordReference::Foreign(handle.clone())
+                            })
+                        }))
             {
                 return Err(StreamStoreError::InvalidHandle);
             }
@@ -945,6 +987,12 @@ impl DurableStreamStore {
             })
             .and_then(|registration| registration.session_mapping.as_ref())
             .map(|mapping| mapping.session_key.clone());
+        let local_stream_id = index.local_stream_id(stream_id)?;
+        let local_nested_stream_ids = index
+            .registrations
+            .iter()
+            .map(|(id, registration)| (*id, LocalStreamId(registration.registration_oplog_index)))
+            .collect::<HashMap<_, _>>();
 
         let environment_id = self.environment_id;
         let producer = self.producer.clone();
@@ -965,18 +1013,18 @@ impl DurableStreamStore {
                 let mut newly_registered_by_coordinate = HashMap::with_capacity(registration_count);
                 for (position, request) in registrations_for_entry.into_iter().enumerate() {
                     let oplog_index = OplogIndex::from_u64(first_index.as_u64() + position as u64);
+                    let coordinate = request.coordinate.clone();
                     let registration = registration_record(
                         oplog_index,
                         environment_id,
                         producer.clone(),
                         producer_fingerprint,
                         request,
+                        Some((stream_id, local_stream_id)),
                     );
-                    newly_registered_stream_ids.push(registration.handle.stream_id);
-                    newly_registered_by_coordinate.insert(
-                        registration.coordinate.clone(),
-                        registration.handle.stream_id,
-                    );
+                    let local_id = LocalStreamId(oplog_index);
+                    newly_registered_stream_ids.push(local_id);
+                    newly_registered_by_coordinate.insert(coordinate, local_id);
                     records.push(DurableStreamOplogRecord::Registered(
                         entity_parent_start_index,
                         registration,
@@ -987,12 +1035,19 @@ impl DurableStreamStore {
                     .map(|source| match source {
                         NestedStreamWrite::Register(request) => existing_nested
                             .get(&request.coordinate)
-                            .or_else(|| newly_registered_by_coordinate.get(&request.coordinate))
-                            .copied()
+                            .map(|id| StreamRecordReference::Local(local_nested_stream_ids[id]))
+                            .or_else(|| {
+                                newly_registered_by_coordinate
+                                    .get(&request.coordinate)
+                                    .copied()
+                                    .map(StreamRecordReference::Local)
+                            })
                             .expect(
                                 "every validated nested stream is existing or newly registered",
                             ),
-                        NestedStreamWrite::Forward(handle) => handle.stream_id,
+                        NestedStreamWrite::Forward(handle) => {
+                            StreamRecordReference::Foreign(handle.clone())
+                        }
                     })
                     .collect();
                 let item_index =
@@ -1006,8 +1061,7 @@ impl DurableStreamStore {
                     entity_parent_start_index,
                     StreamItemsRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        stream_id,
-                        producer_fingerprint,
+                        stream_id: local_stream_id,
                         first_sequence,
                         nested_stream_ids,
                         newly_registered_stream_ids,
@@ -1128,7 +1182,7 @@ impl DurableStreamStore {
                         .download_payload(record)
                         .await
                         .map_err(StreamStoreError::Oplog)?;
-                    registered_ids.extend_from_slice(&record.newly_registered_stream_ids);
+                    let new_local_ids = record.newly_registered_stream_ids.clone();
                     events.extend(index.apply_item_batch(
                         oplog_index,
                         entity_parent_start_index,
@@ -1137,7 +1191,14 @@ impl DurableStreamStore {
                         self.environment_id,
                         &self.producer,
                         self.producer_fingerprint,
+                        self.generation(),
                     )?);
+                    registered_ids.extend(
+                        new_local_ids
+                            .into_iter()
+                            .map(|id| index.runtime_stream_id(id))
+                            .collect::<Result<Vec<_>, _>>()?,
+                    );
                 }
                 OplogEntry::StreamEnd {
                     entity_parent_start_index,
@@ -1166,7 +1227,13 @@ impl DurableStreamStore {
                         .download_payload(record)
                         .await
                         .map_err(StreamStoreError::Oplog)?;
-                    index.apply_session_references(entity_parent_start_index, &record)?;
+                    index.apply_session_references(
+                        entity_parent_start_index,
+                        &record,
+                        self.environment_id,
+                        &self.producer,
+                        self.producer_fingerprint,
+                    )?;
                     match record {
                         StreamSessionRecord::ExternalProducerState(record) => {
                             index.apply_external_producer_state(&record);

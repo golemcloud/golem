@@ -31,7 +31,6 @@ mod terminals;
 pub(crate) mod tests;
 
 pub use catch_up::DurableCatchUpReader;
-pub(crate) use external_input::validate_external_input_payload;
 pub use items::StreamHead;
 pub use metadata::{
     ProducerMetadataKey, ProducerMetadataRow, ProducerSessionMetadata, ProducerStreamMetadata,
@@ -66,19 +65,21 @@ use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::durable_stream::{
     AttachedStreamSegmentRequest, AttachmentId, DEFAULT_LIVE_JOIN_BUFFER_SIZE,
     DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle, ExternalProducerId, InputStreamHighWater,
-    MAX_DURABLE_STREAM_ITEM_SIZE, MAX_DURABLE_STREAMS_PER_SESSION,
-    MAX_NEW_STREAM_HANDLES_PER_VALUE, MAX_PACKED_U8_STREAM_ITEM_SIZE,
-    MAX_STREAM_VALUE_TRAVERSAL_DEPTH, STREAM_ATTACHMENT_LEASE_TTL_MILLIS, SessionStreamRole,
-    StreamAttachmentActivatedRecord, StreamAttachmentControlOperation,
-    StreamAttachmentControlRequest, StreamAttachmentFinalizationReason,
-    StreamAttachmentFinalizedRecord, StreamAttachmentKey, StreamAttachmentPreparedRecord,
-    StreamAttachmentRenewedRecord, StreamCancelReason, StreamCancelRecord, StreamCancelRole,
-    StreamCascadeDependentResult, StreamCascadeOutboxRecord, StreamEndRecord, StreamEndResult,
-    StreamExternalProducerStateRecord, StreamId, StreamInvocationId, StreamItemsPayload,
-    StreamItemsRecord, StreamOffset, StreamProducerDeletingRecord, StreamRegisteredRecord,
-    StreamRegistrationCoordinate, StreamSessionAttachedRecord, StreamSessionFinishedRecord,
-    StreamSessionInputHighWaterRecord, StreamSessionKey, StreamSessionMapping,
-    StreamSessionMappingRecord, StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind,
+    LocalStreamId, LocalStreamReaderId, MAX_DURABLE_STREAM_ITEM_SIZE,
+    MAX_DURABLE_STREAMS_PER_SESSION, MAX_NEW_STREAM_HANDLES_PER_VALUE,
+    MAX_PACKED_U8_STREAM_ITEM_SIZE, MAX_STREAM_VALUE_TRAVERSAL_DEPTH,
+    STREAM_ATTACHMENT_LEASE_TTL_MILLIS, SessionStreamRole, StreamAttachmentActivatedRecord,
+    StreamAttachmentControlOperation, StreamAttachmentControlRequest,
+    StreamAttachmentFinalizationReason, StreamAttachmentFinalizedRecord, StreamAttachmentKey,
+    StreamAttachmentPreparedRecord, StreamAttachmentRenewedRecord, StreamBindingRecord,
+    StreamCancelReason, StreamCancelRecord, StreamCancelRole, StreamCascadeDependentResult,
+    StreamCascadeOutboxRecord, StreamEndRecord, StreamEndResult, StreamExternalProducerStateRecord,
+    StreamId, StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
+    StreamProducerDeletingRecord, StreamRecordReference, StreamRegisteredRecord,
+    StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamRegistrationRecordCoordinate,
+    StreamSessionAttachedRecord, StreamSessionFinishedRecord, StreamSessionInputHighWaterRecord,
+    StreamSessionKey, StreamSessionMapping, StreamSessionMappingRecord,
+    StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind,
     StreamSourceUnavailableRecord, StreamTerminalAuthor, StreamTopologyPreparedRecord,
 };
 use golem_common::base_model::environment::EnvironmentId;
@@ -103,12 +104,171 @@ use tokio_util::sync::CancellationToken;
 /// Stable producer-side facts required to register a stream in an invocation session.
 pub struct ProducerRegistrationRequest {
     pub coordinate: StreamRegistrationCoordinate,
-    pub source_invocation: StreamInvocationId,
+    pub source_invocation: StreamRegistrationInvocation,
     pub entity_parent_start_index: Option<OplogIndex>,
     pub component_revision: ComponentRevision,
     pub element_schema_fingerprint: SchemaFingerprintV1,
     pub source_kind: StreamSourceKind,
     pub session_mapping: Option<StreamSessionMapping>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, desert_rust::BinaryCodec)]
+pub struct RegisteredStream {
+    pub record: StreamRegisteredRecord,
+    pub registration_oplog_index: OplogIndex,
+    pub handle: DurableStreamHandle,
+    pub coordinate: StreamRegistrationCoordinate,
+    pub session_mapping: Option<StreamSessionMapping>,
+}
+
+fn qualify_local_stream(
+    local_id: LocalStreamId,
+    environment_id: EnvironmentId,
+    producer: &AgentId,
+    producer_fingerprint: AgentFingerprint,
+) -> Result<StreamId, StreamStoreError> {
+    StreamId::derive(environment_id, producer, producer_fingerprint, local_id.0)
+        .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))
+}
+
+fn materialize_stream_reference(
+    reference: &StreamRecordReference,
+    environment_id: EnvironmentId,
+    producer: &AgentId,
+    producer_fingerprint: AgentFingerprint,
+) -> Result<StreamId, StreamStoreError> {
+    match reference {
+        StreamRecordReference::Local(local_id) => {
+            qualify_local_stream(*local_id, environment_id, producer, producer_fingerprint)
+        }
+        StreamRecordReference::Foreign(handle) => Ok(handle.stream_id),
+    }
+}
+
+impl RegisteredStream {
+    pub(crate) fn resolve(
+        record: StreamRegisteredRecord,
+        registration_oplog_index: OplogIndex,
+        environment_id: EnvironmentId,
+        producer: &AgentId,
+        producer_fingerprint: AgentFingerprint,
+    ) -> Result<Self, StreamStoreError> {
+        let source_invocation = match &record.source_invocation {
+            StreamRegistrationInvocation::Local(idempotency_key) => StreamInvocationId {
+                callee_environment_id: environment_id,
+                callee: producer.clone(),
+                callee_fingerprint: producer_fingerprint,
+                idempotency_key: idempotency_key.clone(),
+            },
+            StreamRegistrationInvocation::Remote(invocation) => invocation.clone(),
+        };
+        let session_mapping = record
+            .session_role
+            .map(|role| -> Result<_, StreamStoreError> {
+                Ok(StreamSessionMapping {
+                    session_key: source_invocation.clone(),
+                    attachment_id: AttachmentId::primary(
+                        source_invocation.callee_environment_id,
+                        &source_invocation.callee,
+                        &source_invocation.idempotency_key,
+                    )
+                    .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?,
+                    role,
+                })
+            })
+            .transpose()?;
+        let stream_id = StreamId::derive(
+            environment_id,
+            producer,
+            producer_fingerprint,
+            registration_oplog_index,
+        )
+        .map_err(|error| StreamStoreError::CorruptHistory(error.to_string()))?;
+        let handle = DurableStreamHandle {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            stream_id,
+            producer_environment_id: environment_id,
+            producer: producer.clone(),
+            expected_producer_fingerprint: producer_fingerprint,
+            producer_generation: OplogIndex::NONE,
+            source_invocation,
+            component_revision: record.component_revision,
+            element_schema_fingerprint: record.element_schema_fingerprint,
+        };
+        let coordinate = match &record.coordinate {
+            StreamRegistrationRecordCoordinate::Root {
+                invocation,
+                root_kind,
+                recursive_value_path,
+            } => {
+                let invocation_id = match invocation {
+                    StreamRegistrationInvocation::Local(key) => StreamInvocationId {
+                        callee_environment_id: environment_id,
+                        callee: producer.clone(),
+                        callee_fingerprint: producer_fingerprint,
+                        idempotency_key: key.clone(),
+                    },
+                    StreamRegistrationInvocation::Remote(invocation) => invocation.clone(),
+                };
+                StreamRegistrationCoordinate::Root {
+                    invocation_id,
+                    root_kind: *root_kind,
+                    recursive_value_path: recursive_value_path.clone(),
+                }
+            }
+            StreamRegistrationRecordCoordinate::Nested {
+                parent_stream,
+                parent_producer_sequence,
+                recursive_value_path,
+            } => StreamRegistrationCoordinate::Nested {
+                parent_stream_id: materialize_stream_reference(
+                    parent_stream,
+                    environment_id,
+                    producer,
+                    producer_fingerprint,
+                )?,
+                parent_producer_sequence: *parent_producer_sequence,
+                recursive_value_path: recursive_value_path.clone(),
+            },
+        };
+        Ok(Self {
+            record,
+            registration_oplog_index,
+            handle,
+            coordinate,
+            session_mapping,
+        })
+    }
+
+    pub(crate) fn issue(&self, generation: OplogIndex) -> DurableStreamHandle {
+        let mut handle = self.handle.clone();
+        handle.producer_generation = generation;
+        handle
+    }
+
+    pub(crate) fn accepts(&self, handle: &DurableStreamHandle, generation: OplogIndex) -> bool {
+        handle.producer_generation == generation && self.issue(generation) == *handle
+    }
+}
+
+impl std::ops::Deref for RegisteredStream {
+    type Target = StreamRegisteredRecord;
+
+    fn deref(&self) -> &Self::Target {
+        &self.record
+    }
+}
+
+impl std::ops::DerefMut for RegisteredStream {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.record
+    }
+}
+
+impl std::borrow::Borrow<StreamRegisteredRecord> for RegisteredStream {
+    fn borrow(&self) -> &StreamRegisteredRecord {
+        &self.record
+    }
 }
 
 #[derive(Clone)]
@@ -164,6 +324,7 @@ pub struct CommittedProducerStreamEvent {
     pub packed_u8_batch_end: Option<StreamOffset>,
     pub terminal_author: Option<StreamTerminalAuthor>,
     pub nested_handles: Vec<DurableStreamHandle>,
+    pub nested_references: Vec<StreamRecordReference>,
     pub payload: CommittedProducerStreamEventPayload,
 }
 
@@ -319,20 +480,19 @@ struct ProducerStreamIndex {
     fork_lineage: StreamForkLineage,
     applied_fork_cuts: BTreeMap<OplogIndex, Arc<HashSet<StreamId>>>,
     loaded_metadata: HashSet<metadata::ProducerMetadataKey>,
-    registrations: HashMap<StreamId, StreamRegisteredRecord>,
+    registrations: HashMap<StreamId, RegisteredStream>,
+    local_stream_ids: HashMap<LocalStreamId, StreamId>,
     entity_parent_start_indices: HashMap<StreamId, Option<OplogIndex>>,
-    referenced_handles: HashMap<StreamId, (DurableStreamHandle, HashSet<StreamSessionKey>)>,
-    fork_aliases: HashMap<StreamId, DurableStreamHandle>,
     coordinates: HashMap<StreamRegistrationCoordinate, StreamId>,
     streams: HashMap<StreamId, IndexedProducerStream>,
     stream_sessions: HashMap<StreamId, StreamSessionKey>,
     stream_roles: HashMap<StreamId, SessionStreamRole>,
     session_stream_mappings:
-        HashMap<StreamSessionKey, HashSet<(DurableStreamHandle, SessionStreamRole)>>,
+        HashMap<StreamSessionKey, HashSet<(StreamRecordReference, SessionStreamRole)>>,
     session_stream_counts: HashMap<StreamSessionKey, usize>,
     session_count: u64,
     session_pages: HashMap<u64, Vec<StreamSessionKey>>,
-    session_consumer_streams: HashMap<StreamSessionKey, HashSet<StreamId>>,
+    session_consumer_streams: HashMap<StreamSessionKey, HashSet<LocalStreamReaderId>>,
     session_entity_parent_start_indices: HashMap<StreamSessionKey, Option<OplogIndex>>,
     open_session_streams: HashMap<StreamSessionKey, HashSet<StreamId>>,
     invocation_results: HashMap<StreamSessionKey, OplogIndex>,
@@ -345,7 +505,7 @@ struct ProducerStreamIndex {
     batch_positions: HashMap<(StreamId, OplogIndex), (u64, u64)>,
     complete_for_deletion: bool,
     cascade_outbox: HashMap<StreamAttachmentKey, StreamCascadeDependentResult>,
-    consumer_journals: HashMap<(StreamSessionKey, StreamId), IndexedConsumerJournal>,
+    consumer_journals: HashMap<(StreamSessionKey, LocalStreamReaderId), IndexedConsumerJournal>,
     external_producer_heads:
         HashMap<(StreamSessionKey, StreamId, ExternalProducerId), IndexedExternalProducer>,
     external_producer_offsets:
@@ -361,7 +521,7 @@ pub struct IndexedConsumerJournal {
     next_read_ordinal: u64,
     terminal: bool,
     last_source_offset: Option<StreamOffset>,
-    source_unavailable: Option<(StreamAttachmentKey, StreamOffset)>,
+    source_unavailable: Option<StreamOffset>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -466,10 +626,12 @@ pub struct DurableStreamStore {
     pub(crate) fork_lineage: Arc<StreamForkLineage>,
     applied_fork_cuts: BTreeMap<OplogIndex, Arc<HashSet<StreamId>>>,
     commit: DurableStreamCommit,
+    worker_tasks: std::sync::OnceLock<crate::worker::tasks::WorkerTasks>,
     control_metadata_provider: std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode)>,
     environment_id: EnvironmentId,
     producer: AgentId,
     producer_fingerprint: AgentFingerprint,
+    producer_generation: OplogIndex,
     index: Mutex<ProducerStreamIndex>,
     poisoned: AtomicBool,
     retirement: CancellationToken,
@@ -494,12 +656,19 @@ pub struct DurableStreamStore {
 }
 
 impl DurableStreamStore {
-    pub(crate) fn owns_current_activity(&self) -> bool {
-        self.durable_activity.is_current()
+    pub(crate) fn qualify_session(
+        &self,
+        session: &StreamRegistrationInvocation,
+    ) -> StreamSessionKey {
+        session.qualify(
+            self.environment_id,
+            &self.producer,
+            self.producer_fingerprint,
+        )
     }
 
-    pub(crate) fn fork_lineage(&self) -> &StreamForkLineage {
-        &self.fork_lineage
+    pub(crate) fn owns_current_activity(&self) -> bool {
+        self.durable_activity.is_current()
     }
 
     /// Present only when this store applied the marker during reconstruction.
@@ -515,6 +684,15 @@ impl DurableStreamStore {
             .cuts()
             .iter()
             .find_map(|(marker, cut)| (*marker == index).then_some((cut, retained.as_ref())))
+    }
+
+    pub(crate) fn set_worker_tasks(&self, tasks: crate::worker::tasks::WorkerTasks) {
+        assert!(self.worker_tasks.set(tasks).is_ok());
+    }
+
+    pub(crate) fn tasks(&self) -> &crate::worker::tasks::WorkerTasks {
+        self.worker_tasks
+            .get_or_init(|| self.oplog.task_owner().cloned().unwrap_or_default())
     }
 
     pub(crate) async fn load(
@@ -597,8 +775,6 @@ impl DurableStreamStore {
                 if lineage.deleted_regions().is_in_deleted_region(oplog_index) {
                     continue;
                 }
-                let (author, author_fingerprint) =
-                    lineage.author_at(oplog_index, &owner, producer_fingerprint);
                 match entry {
                     OplogEntry::StreamRegistered {
                         entity_parent_start_index,
@@ -611,7 +787,7 @@ impl DurableStreamStore {
                             .map_err(StreamStoreError::Oplog)?;
                         if matches!(
                             &record.coordinate,
-                            StreamRegistrationCoordinate::Nested { .. }
+                            StreamRegistrationRecordCoordinate::Nested { .. }
                         ) {
                             pending_nested_registrations.push((
                                 oplog_index,
@@ -629,9 +805,9 @@ impl DurableStreamStore {
                                 oplog_index,
                                 entity_parent_start_index,
                                 record,
-                                author.environment_id,
-                                &author.agent_id,
-                                author_fingerprint,
+                                environment_id,
+                                producer,
+                                producer_fingerprint,
                             )?;
                         }
                     }
@@ -649,9 +825,15 @@ impl DurableStreamStore {
                             entity_parent_start_index,
                             std::mem::take(&mut pending_nested_registrations),
                             record,
-                            author.environment_id,
-                            &author.agent_id,
-                            author_fingerprint,
+                            environment_id,
+                            producer,
+                            producer_fingerprint,
+                            lineage
+                                .cuts()
+                                .iter()
+                                .rev()
+                                .find_map(|(marker, cut)| cut.revert.is_some().then_some(*marker))
+                                .unwrap_or(OplogIndex::NONE),
                         )?;
                     }
                     OplogEntry::StreamEnd {
@@ -673,7 +855,7 @@ impl DurableStreamStore {
                             oplog_index,
                             entity_parent_start_index,
                             record,
-                            author_fingerprint,
+                            producer_fingerprint,
                         )?;
                     }
                     OplogEntry::StreamCancel {
@@ -695,7 +877,7 @@ impl DurableStreamStore {
                             oplog_index,
                             entity_parent_start_index,
                             record,
-                            author_fingerprint,
+                            producer_fingerprint,
                         )?;
                     }
                     OplogEntry::StreamSession {
@@ -713,6 +895,9 @@ impl DurableStreamStore {
                             .download_payload(record)
                             .await
                             .map_err(StreamStoreError::Oplog)?;
+                        if lineage.resets_control(oplog_index, &record) {
+                            continue;
+                        }
                         if let StreamSessionRecord::ForkCut(record) = &record {
                             let expected = lineage
                                 .cuts()
@@ -731,25 +916,42 @@ impl DurableStreamStore {
                                 .insert(oplog_index, Arc::new(changes.changed_streams));
                             continue;
                         }
-                        index.apply_session_references(entity_parent_start_index, &record)?;
-                        index.apply_result_offset(oplog_index, &record);
+                        index.apply_session_references(
+                            entity_parent_start_index,
+                            &record,
+                            environment_id,
+                            producer,
+                            producer_fingerprint,
+                        )?;
+                        index.apply_result_offset(
+                            oplog_index,
+                            &record,
+                            environment_id,
+                            producer,
+                            producer_fingerprint,
+                        );
                         if let StreamSessionRecord::ExternalProducerState(value) = &record {
                             index.apply_external_producer_state(value);
                         }
                         index.apply_deletion_record(
                             &record,
-                            author.environment_id,
-                            &author.agent_id,
-                            author_fingerprint,
+                            environment_id,
+                            producer,
+                            producer_fingerprint,
                         )?;
                         index.apply_attachment_record(
                             &record,
-                            author.environment_id,
-                            &author.agent_id,
-                            author_fingerprint,
+                            environment_id,
+                            producer,
+                            producer_fingerprint,
                         )?;
                         if let StreamSessionRecord::Finished(record) = &record {
-                            index.apply_finished(record)?;
+                            index.apply_finished(
+                                record,
+                                environment_id,
+                                producer,
+                                producer_fingerprint,
+                            )?;
                         }
                     }
                     _ => {
@@ -800,6 +1002,13 @@ impl DurableStreamStore {
                 "Durable stream producer index recovered"
             );
         }
+        let producer_generation = index
+            .fork_lineage
+            .cuts()
+            .iter()
+            .rev()
+            .find_map(|(marker, cut)| cut.revert.is_some().then_some(*marker))
+            .unwrap_or(OplogIndex::NONE);
         let fork_lineage = Arc::new(std::mem::take(&mut index.fork_lineage));
         let applied_fork_cuts = std::mem::take(&mut index.applied_fork_cuts);
         Ok(Arc::new_cyclic(|self_weak| Self {
@@ -808,10 +1017,12 @@ impl DurableStreamStore {
             fork_lineage,
             applied_fork_cuts,
             commit,
+            worker_tasks: std::sync::OnceLock::new(),
             control_metadata_provider: std::sync::OnceLock::new(),
             environment_id,
             producer,
             producer_fingerprint,
+            producer_generation,
             index: Mutex::new(index),
             poisoned: AtomicBool::new(false),
             retirement: CancellationToken::new(),
@@ -864,6 +1075,10 @@ impl DurableStreamStore {
     /// Returns the durable producer identity that fences recreated agents.
     pub fn fingerprint(&self) -> AgentFingerprint {
         self.producer_fingerprint
+    }
+
+    pub(crate) fn generation(&self) -> OplogIndex {
+        self.producer_generation
     }
 }
 

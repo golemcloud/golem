@@ -114,7 +114,7 @@ fn invoke_agent_session_once<'a>(
 
 #[derive(Debug)]
 enum OneShotInvocationSessionResult {
-    Success(AgentInvocationOutput),
+    Success(Box<AgentInvocationOutput>),
     Rejected(InvocationRejected),
     Failure(InvocationFailure),
     ProtocolFailure(String),
@@ -140,7 +140,17 @@ fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceErr
         Ok(InvocationRejectionReason::Unauthorized) => {
             WorkerServiceError::AuthError(AuthServiceError::CouldNotAuthenticate)
         }
-        Ok(InvocationRejectionReason::Internal) => WorkerServiceError::Internal(rejected.error),
+        Ok(InvocationRejectionReason::Internal) => match rejected.worker_error {
+            Some(worker_error) => worker_error
+                .try_into()
+                .map(WorkerServiceError::GolemError)
+                .unwrap_or_else(|error| {
+                    WorkerServiceError::Internal(format!(
+                        "failed to decode worker execution error: {error}"
+                    ))
+                }),
+            None => WorkerServiceError::Internal(rejected.error),
+        },
         _ => WorkerServiceError::TypeChecker(rejected.error),
     }
 }
@@ -172,6 +182,19 @@ fn decode_invocation_result(
         }
         invocation_session_result::Result::NoResult(_) => {
             AgentInvocationResult::AgentInitialization
+        }
+        invocation_session_result::Result::ToolResult(result) => {
+            let result: golem_common::model::oplog::PublicExternalToolResult = result.try_into()?;
+            AgentInvocationResult::ExternalTool {
+                result: match result {
+                    golem_common::model::oplog::PublicExternalToolResult::Success(result) => {
+                        Ok(result)
+                    }
+                    golem_common::model::oplog::PublicExternalToolResult::Failure(error) => {
+                        Err(error)
+                    }
+                },
+            }
         }
     };
     let invocation_status = wire.status.and_then(|status| {
@@ -249,6 +272,7 @@ where
                 terminal_outcome = Some(match finished.outcome {
                     Some(invocation_session_completion::Outcome::Success(_)) => result
                         .take()
+                        .map(Box::new)
                         .map(OneShotInvocationSessionResult::Success)
                         .ok_or_else(|| Status::internal("invocation completed without a result")),
                     Some(invocation_session_completion::Outcome::Failure(failure)) => {
@@ -288,6 +312,19 @@ where
 
 #[async_trait]
 pub trait WorkerClient: Send + Sync {
+    async fn prepare(
+        &self,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(AgentId, AgentFingerprint)>;
+
     async fn create(
         &self,
         agent_id: &AgentId,
@@ -492,6 +529,16 @@ pub trait WorkerClient: Send + Sync {
     ) -> WorkerResult<InvocationResponseStream> {
         Err(WorkerServiceError::Internal(
             "invocation sessions are not supported by this worker client".to_string(),
+        ))
+    }
+
+    async fn invoke_agent_session_one_shot(
+        &self,
+        _agent_id: &AgentId,
+        _start: InvocationStart,
+    ) -> WorkerResult<AgentInvocationOutput> {
+        Err(WorkerServiceError::Internal(
+            "one-shot invocation sessions are not supported by this worker client".to_string(),
         ))
     }
 
@@ -762,6 +809,56 @@ impl HasWorkerExecutorClients for WorkerExecutorWorkerClient {
 
 #[async_trait]
 impl WorkerClient for WorkerExecutorWorkerClient {
+    async fn prepare(
+        &self,
+        agent_id: &AgentId,
+        environment_variables: HashMap<String, String>,
+        config: Vec<AgentConfigEntryDto>,
+        ignore_already_existing: bool,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx,
+        invocation_context: Option<InvocationContext>,
+        principal: Option<golem_api_grpc::proto::golem::component::Principal>,
+    ) -> WorkerResult<(AgentId, AgentFingerprint)> {
+        let agent_id_clone = agent_id.clone();
+        let fingerprint = self
+            .call_worker_executor(
+                agent_id.clone(),
+                "prepare_worker",
+                move |client| {
+                    Box::pin(client.prepare_worker(CreateWorkerRequest {
+                        agent_id: Some(agent_id_clone.clone().into()),
+                        env: environment_variables.clone(),
+                        config: config.clone().into_iter().map(Into::into).collect(),
+                        component_owner_account_id: Some(account_id.into()),
+                        environment_id: Some(environment_id.into()),
+                        ignore_already_existing,
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        principal: principal.clone(),
+                        invocation_context: invocation_context.clone(),
+                    }))
+                },
+                |response| match response.into_inner() {
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Success(
+                            workerexecutor::v1::CreateWorkerSuccessResponse {
+                                instance_id: Some(id),
+                            },
+                        )),
+                    } => Ok(AgentFingerprint(id.into())),
+                    workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(workerexecutor::v1::create_worker_response::Result::Failure(error)),
+                    } => Err(error.into()),
+                    workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
+                },
+                WorkerServiceError::InternalCallError,
+            )
+            .await?;
+
+        Ok((agent_id.clone(), fingerprint))
+    }
+
     async fn create(
         &self,
         agent_id: &AgentId,
@@ -849,10 +946,18 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 },
                 |response| Ok(WorkerStream::new(response.into_inner())),
                 |error| match error {
-                    CallWorkerExecutorError::FailedToConnectToPod(status)
-                        if status.code() == Code::NotFound =>
-                    {
-                        WorkerServiceError::AgentNotFound(agent_id_err.clone())
+                    CallWorkerExecutorError::FailedToConnectToPod(status) => {
+                        if status.code() == Code::NotFound {
+                            WorkerServiceError::AgentNotFound(agent_id_err.clone())
+                        } else if let Some(error) =
+                            WorkerExecutorError::from_status_details(&status)
+                        {
+                            WorkerServiceError::GolemError(error)
+                        } else {
+                            WorkerServiceError::InternalCallError(
+                                CallWorkerExecutorError::FailedToConnectToPod(status),
+                            )
+                        }
                     }
                     _ => WorkerServiceError::InternalCallError(error),
                 },
@@ -1912,6 +2017,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         durable_input_mappings: Vec::new(),
                         scope_card: scope_card.clone(),
                         origin_invocation: None,
+                        external_tool: None,
                     };
                     Box::pin(run_one_shot_invocation_session(
                         worker_executor_client,
@@ -1919,7 +2025,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     ))
                 },
                 |outcome| match outcome {
-                    OneShotInvocationSessionResult::Success(output) => Ok(output),
+                    OneShotInvocationSessionResult::Success(output) => Ok(*output),
                     OneShotInvocationSessionResult::Rejected(rejected) => {
                         Err(decode_invocation_rejection(rejected).into())
                     }
@@ -1977,6 +2083,55 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 )
             })?;
         Ok(Box::pin(response.into_inner()))
+    }
+
+    async fn invoke_agent_session_one_shot(
+        &self,
+        agent_id: &AgentId,
+        start: InvocationStart,
+    ) -> WorkerResult<AgentInvocationOutput> {
+        let agent_id = agent_id.clone();
+        let first_dispatch = Arc::new(AtomicBool::new(true));
+        self.call_worker_executor(
+            agent_id,
+            "invoke_agent_session",
+            move |worker_executor_client| {
+                let mut start = start.clone();
+                let requested = if start.freshness_disposition
+                    == golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh
+                        as i32
+                {
+                    InvocationFreshnessDisposition::KnownFresh
+                } else {
+                    InvocationFreshnessDisposition::MayExist
+                };
+                start.freshness_disposition = match freshness_disposition_for_dispatch(
+                    requested,
+                    &first_dispatch,
+                ) {
+                    InvocationFreshnessDisposition::KnownFresh => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32,
+                    InvocationFreshnessDisposition::MayExist => golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32,
+                };
+                Box::pin(run_one_shot_invocation_session(
+                    worker_executor_client,
+                    start,
+                ))
+            },
+            |outcome| match outcome {
+                OneShotInvocationSessionResult::Success(output) => Ok(*output),
+                OneShotInvocationSessionResult::Rejected(rejected) => {
+                    Err(decode_invocation_rejection(rejected).into())
+                }
+                OneShotInvocationSessionResult::Failure(failure) => {
+                    Err(decode_invocation_failure(failure).into())
+                }
+                OneShotInvocationSessionResult::ProtocolFailure(details) => {
+                    Err(WorkerExecutorError::invalid_request(details).into())
+                }
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
     }
 
     async fn control_export_stream(
@@ -2046,7 +2201,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             )),
         }
     }
-
     async fn control_durable_stream_attachment(
         &self,
         producer_agent_id: &AgentId,
@@ -2476,6 +2630,7 @@ mod one_shot_session_tests {
         state
             .validate_trusted_request(&InvocationRequest {
                 request: Some(invocation_request::Request::Start(InvocationStart {
+                    method_name: Some("run".to_string()),
                     input: Some(SchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),
@@ -2691,12 +2846,14 @@ mod rejection_mapping_tests {
     use golem_common::model::agent::{InvocationFreshnessDisposition, Principal};
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::AgentError as OplogAgentError;
     use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
     use golem_common::model::{AgentId, RetryConfig, RoutingTable, ShardEpoch};
     use golem_service_base::clients::shard_manager::{
         BatchRenewalEntry, QuotaError, ShardLease, ShardLeaseError, ShardManager,
         ShardManagerError, ShardRegistration,
     };
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::grpc::client::{GrpcClientConfig, MultiTargetGrpcClient};
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
@@ -2726,6 +2883,52 @@ mod rejection_mapping_tests {
         assert!(matches!(
             public_error_for_rejection(InvocationRejectionReason::Validation),
             agent_error::Error::BadRequest(_)
+        ));
+    }
+
+    #[test]
+    fn typed_pre_acceptance_rejection_preserves_previous_invocation_failure() {
+        let expected = WorkerExecutorError::PreviousInvocationFailed {
+            error: OplogAgentError::Unknown("guest failure".to_string()),
+            stderr: "guest stderr".to_string(),
+        };
+        let rejection = InvocationRejected {
+            reason: InvocationRejectionReason::Internal as i32,
+            error: expected.to_string(),
+            worker_error: Some(expected.clone().into()),
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            decode_invocation_rejection(rejection),
+            super::WorkerServiceError::GolemError(error) if error == expected
+        ));
+    }
+
+    #[test]
+    fn rejection_reason_remains_authoritative_with_typed_worker_error() {
+        let validation: AgentError = decode_invocation_rejection(InvocationRejected {
+            reason: InvocationRejectionReason::Validation as i32,
+            error: "invalid request".to_string(),
+            worker_error: Some(WorkerExecutorError::invalid_request("invalid request").into()),
+            ..Default::default()
+        })
+        .into();
+        let unauthorized: AgentError = decode_invocation_rejection(InvocationRejected {
+            reason: InvocationRejectionReason::Unauthorized as i32,
+            error: "unauthorized".to_string(),
+            worker_error: Some(WorkerExecutorError::InvalidAccount.into()),
+            ..Default::default()
+        })
+        .into();
+
+        assert!(matches!(
+            validation.error,
+            Some(agent_error::Error::BadRequest(_))
+        ));
+        assert!(matches!(
+            unauthorized.error,
+            Some(agent_error::Error::Unauthorized(_))
         ));
     }
 
@@ -2873,6 +3076,7 @@ mod rejection_mapping_tests {
         );
 
         unimplemented_unary!(create_worker, CreateWorkerRequest, CreateWorkerResponse);
+        unimplemented_unary!(prepare_worker, CreateWorkerRequest, CreateWorkerResponse);
         unimplemented_unary!(delete_worker, DeleteWorkerRequest, DeleteWorkerResponse);
         unimplemented_unary!(
             complete_promise,
@@ -2998,6 +3202,7 @@ mod rejection_mapping_tests {
                             idempotency_key,
                             agent_id,
                             component_revision: None,
+                            worker_error: None,
                         },
                     )),
                 },

@@ -27,9 +27,10 @@ use super::{HasAgentWebhooksService, HasEnvironmentStateService, HasExternalDura
 use crate::durable_host::durable_stream::{DurableStreamStore, StreamStoreError};
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::metrics::workers::record_worker_call;
+use crate::model::ExecutionStatus;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogServiceOps};
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -45,9 +46,8 @@ use crate::services::{
     active_agents, agent_types, blob_store, card, component, golem_config, key_value, oplog,
     promise, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
 };
-use crate::services::{HasOplog, HasRdbmsService, HasWorkerForkService, rdbms};
-use crate::storage::keyvalue::KeyValueStorage;
-use crate::worker::Worker;
+use crate::services::{HasRdbmsService, HasWorkerForkService, rdbms};
+use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -57,14 +57,14 @@ use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::base_model::regions::DeletedRegionsBuilder;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentMode, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogIndexRange};
 use golem_common::model::{AgentFingerprint, AgentMetadata, Timestamp};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
+use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
@@ -100,7 +100,6 @@ pub trait WorkerForkService: Send + Sync {
 }
 
 pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
-    pub export_fork_admission: Arc<admission::ExportForkAdmission>,
     pub rpc: Arc<dyn Rpc>,
     pub active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     pub agent_types: Arc<dyn agent_types::AgentTypesService>,
@@ -363,7 +362,6 @@ impl<Ctx: WorkerCtx> HasNativeToolCatalog<Ctx> for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
-            export_fork_admission: self.export_fork_admission.clone(),
             rpc: self.rpc.clone(),
             active_agents: self.active_agents.clone(),
             agent_types: self.agent_types.clone(),
@@ -407,7 +405,6 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         rpc: Arc<dyn Rpc>,
         active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
         engine: Arc<wasmtime::Engine>,
@@ -448,7 +445,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         leak_sentinel: Arc<()>,
     ) -> Self {
         Self {
-            export_fork_admission: Arc::new(admission::ExportForkAdmission::new(key_value_storage)),
             rpc,
             active_agents,
             agent_types,
@@ -495,6 +491,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(OwnedAgentId, OwnedAgentId), WorkerExecutorError> {
+        OwnerKind::ComponentAgent
+            .validate_instance_name(&target_agent_id.agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
         let second_index = OplogIndex::INITIAL.next();
 
         if oplog_index_cut_off < second_index {
@@ -523,12 +522,18 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let owned_source_agent_id = OwnedAgentId::new(environment_id, source_agent_id);
 
-        self.worker_service
+        let source_metadata = self
+            .worker_service
             .get(&owned_source_agent_id)
             .await?
             .ok_or(WorkerExecutorError::worker_not_found(
                 source_agent_id.clone(),
             ))?;
+        if source_metadata.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
+            return Err(WorkerExecutorError::invalid_request(
+                "External-tool owners cannot be forked",
+            ));
+        }
 
         Ok((owned_source_agent_id, owned_target_agent_id))
     }
@@ -555,6 +560,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             "Copying source oplog of worker {fork_account_id}/{source_agent_id} to {target_agent_id} up to index {oplog_index_cut_off}"
         );
 
+        let mut source_lifecycle = self
+            .oplog_service
+            .lock_lifecycle(&source_agent_id.agent_id)
+            .await;
         let (owned_source_agent_id, owned_target_agent_id) = self
             .validate_worker_forking(
                 source_agent_id.environment_id,
@@ -567,31 +576,37 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let target_agent_id = owned_target_agent_id.agent_id.clone();
         let environment_id = owned_target_agent_id.environment_id;
 
-        let source_worker_instance = Worker::get_or_create_suspended(
-            self,
-            &owned_source_agent_id,
-            None,
-            Vec::new(),
-            None,
-            None,
-            &InvocationContextStack::fresh(),
-            Principal::anonymous(),
-        )
-        .await?;
-
-        let initial_source_worker_metadata = source_worker_instance.get_initial_worker_metadata();
+        let source = self
+            .worker_service
+            .get(&owned_source_agent_id)
+            .await?
+            .ok_or_else(|| {
+                WorkerExecutorError::worker_not_found(owned_source_agent_id.agent_id())
+            })?;
+        let initial_source_worker_metadata = source.initial_worker_metadata;
         if initial_source_worker_metadata.fingerprint != source_fingerprint {
             return Err(WorkerExecutorError::invalid_request(
                 "Fork source was recreated",
             ));
         }
-        if source_worker_instance.agent_mode() != AgentMode::Durable {
+        let agent_mode = initial_source_worker_metadata.agent_mode;
+        if agent_mode != AgentMode::Durable {
             return Err(WorkerExecutorError::invalid_request(
                 "Only durable agents can be forked",
             ));
         }
+        let source_status = calculate_last_known_status_with_checkpoint(
+            self,
+            &owned_source_agent_id,
+            agent_mode,
+            source.last_known_status,
+        )
+        .await
+        .map_err(WorkerExecutorError::runtime)?
+        .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_source_agent_id.agent_id()))?;
 
         let instance_id = Uuid::new_v4();
+        let source_oplog_metadata = initial_source_worker_metadata.clone();
 
         // Use the source worker's `created_by` (the component owner) rather
         // than `fork_account_id` (the fork caller). This ensures the forked
@@ -601,6 +616,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // See https://github.com/golemcloud/golem/issues/3099
         let target_worker_metadata = AgentMetadata {
             agent_id: target_agent_id.clone(),
+            owner_kind: initial_source_worker_metadata.owner_kind,
             created_by: initial_source_worker_metadata.created_by,
             created_by_email: initial_source_worker_metadata.created_by_email,
             environment_id,
@@ -611,19 +627,49 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             last_known_status: initial_source_worker_metadata.last_known_status.clone(),
             original_phantom_id: initial_source_worker_metadata.original_phantom_id,
             fingerprint: AgentFingerprint(instance_id),
-            agent_mode: source_worker_instance.agent_mode(),
+            agent_mode,
         };
 
-        let source_oplog = source_worker_instance.oplog();
+        let source_oplog = self
+            .oplog_service
+            .open(
+                &mut source_lifecycle,
+                &owned_source_agent_id,
+                agent_mode,
+                None,
+                source_oplog_metadata,
+                read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
+                    arc_swap::ArcSwap::from_pointee(source_status),
+                )),
+                read_only_lock::std::ReadOnlyLock::new(Arc::new(std::sync::RwLock::new(
+                    ExecutionStatus::Suspended {
+                        agent_mode,
+                        timestamp: Timestamp::now_utc(),
+                    },
+                ))),
+            )
+            .await;
+        let source_oplog = Ctx::wrap_oplog(
+            owned_source_agent_id.clone(),
+            source_oplog,
+            self.extra_deps.clone(),
+        );
+        let read_source = |index| {
+            let source = &owned_source_agent_id;
+            async move {
+                self.oplog_service
+                    .read_exact(source, agent_mode, index, 1)
+                    .await
+                    .remove(&index)
+                    .expect("fork source oplog entry is missing")
+            }
+        };
 
         // Copy the inclusive prefix. Ordinary calls recover from that prefix, even if their
         // terminal or delivery marker is absent. Atomic and transaction outcomes remain paired.
-        source_worker_instance
-            .commit_oplog_and_update_state(CommitLevel::Always)
-            .await;
         let committed_end = self
             .oplog_service
-            .get_last_index(&owned_source_agent_id, AgentMode::Durable)
+            .get_last_index(&owned_source_agent_id, agent_mode)
             .await;
         // Debug playback exposes only its target prefix, even when storage contains later entries.
         let readable_end = committed_end.min(source_oplog.current_oplog_index().await);
@@ -646,7 +692,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         .await
         .map_err(WorkerExecutorError::runtime)?;
         if let Some(spanning) = crate::worker::cut_point::find_construct_spanning_cut_point(
-            |idx| source_oplog.read(idx),
+            read_source,
             oplog_index_cut_off,
             source_oplog_end,
             &source_skipped_regions,
@@ -677,7 +723,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         })?;
         fork_cut.export = export.map(|candidate| candidate.export.clone());
 
-        let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
+        let initial_oplog_entry = read_source(OplogIndex::INITIAL).await;
         let initial_size = golem_common::serialization::serialize(&initial_oplog_entry)
             .map_err(WorkerExecutorError::runtime)?
             .len() as u64;
@@ -692,7 +738,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .oplog_service
             .create_staged(
                 &owned_target_agent_id,
-                source_worker_instance.agent_mode(),
+                agent_mode,
                 stage_id,
                 target_worker_metadata,
             )
@@ -712,7 +758,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         for oplog_index in oplog_range {
             let mut entry = rewrite_forked_oplog_entry(
-                source_oplog.read(oplog_index).await,
+                read_source(oplog_index).await,
                 &owned_source_agent_id.agent_id,
                 &owned_target_agent_id.agent_id,
             );
@@ -722,12 +768,13 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     .len() as u64,
             );
             payload::copy_entry_payloads(&mut entry, |payload_id, md5_hash| {
-                let source_oplog = &source_oplog;
                 let new_oplog = &new_oplog;
+                let source = &owned_source_agent_id;
                 let external_payload_bytes = external_payload_bytes.clone();
                 async move {
-                    let bytes = source_oplog
-                        .download_raw_payload(payload_id, md5_hash)
+                    let bytes = self
+                        .oplog_service
+                        .download_raw_payload(source, agent_mode, payload_id, md5_hash)
                         .await?;
                     external_payload_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
                     new_oplog.upload_raw_payload(bytes).await
@@ -801,7 +848,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             if deleted_regions.is_in_deleted_region(oplog_index) {
                 continue;
             }
-            let entry = source_oplog.read(oplog_index).await;
+            let entry = read_source(oplog_index).await;
             match &entry {
                 OplogEntry::PendingUpdate { description, .. } => {
                     pending_update_revisions.push(*description.target_revision());
@@ -835,10 +882,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     continue;
                 }
                 if let OplogEntry::PendingAgentInvocation { payload, .. } =
-                    source_oplog.read(pending_index).await
+                    read_source(pending_index).await
                     && matches!(
-                        source_oplog
-                            .download_payload(payload)
+                        self.oplog_service
+                            .download_payload(&owned_source_agent_id, agent_mode, payload)
                             .await
                             .map_err(WorkerExecutorError::runtime)?,
                         golem_common::model::AgentInvocationPayload::AgentInitialization { .. }
@@ -872,13 +919,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         if let Some(candidate) = export
             && (candidate.initial.is_some() || candidate.export.closed)
         {
-            let mapping = fork_cut
-                .streams
-                .iter()
-                .find(|mapping| Some(mapping.source.stream_id) == fork_cut.selected_stream_id)
-                .ok_or_else(|| {
-                    WorkerExecutorError::runtime("Fork selected input mapping is missing")
-                })?;
+            let selected = fork_cut.selected_stream_id.ok_or_else(|| {
+                WorkerExecutorError::runtime("Fork selected input registration is missing")
+            })?;
             let producer = DurableStreamStore::load(
                 new_oplog.clone(),
                 environment_id,
@@ -888,11 +931,21 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             )
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            let mapping = producer
+                .materialize_binding(&golem_common::model::durable_stream::StreamBindingRecord {
+                    transport_stream_id: 0,
+                    source: golem_common::model::durable_stream::StreamRecordReference::Local(
+                        selected,
+                    ),
+                    role: golem_common::model::durable_stream::SessionStreamRole::Input,
+                })
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
             let result = producer
                 .append_external_input(
                     None,
-                    &mapping.continuation.source_invocation,
-                    mapping.continuation.stream_id,
+                    &mapping.handle.source_invocation,
+                    mapping.handle.stream_id,
                     candidate.initial.clone(),
                     candidate.export.closed,
                     None,
@@ -908,6 +961,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 ));
             }
         }
+        drop(source_oplog);
+        drop(source_lifecycle);
         Ok((
             new_oplog,
             copied_bytes.saturating_add(external_payload_bytes.load(Ordering::Relaxed)),
@@ -963,11 +1018,12 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 oplog.commit(CommitLevel::Always).await;
                 let last = oplog.current_oplog_index().await;
                 drop(oplog);
-                match self
+                let target_lifecycle = self.oplog_service.lock_lifecycle(&target.agent_id).await;
+                let publication = self
                     .oplog_service
                     .publish_staged(&target, AgentMode::Durable, stage_id, last)
-                    .await
-                {
+                    .await;
+                let result = match publication {
                     Ok(true) => Ok(()),
                     outcome => {
                         if publication::existing_fork(
@@ -985,7 +1041,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                             )))
                         }
                     }
-                }
+                };
+                drop(target_lifecycle);
+                result
             }
             .await;
             // Each attempt has its own writer. Cleanup must never remove the winner's payloads.
@@ -1021,6 +1079,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         match entry {
             OplogEntry::Create {
                 timestamp,
+                owner_kind,
                 agent_mode,
                 component_revision,
                 env,
@@ -1037,6 +1096,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             } => Some(OplogEntry::Create {
                 timestamp,
                 agent_id: agent_id.clone(),
+                owner_kind,
                 agent_mode,
                 component_revision,
                 env,
@@ -1164,6 +1224,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::agent::Principal;
     use golem_common::model::card::{CardId, InvocationWalletPin, WalletVersionToken};
     use golem_common::model::component::ComponentId;
     use golem_common::model::invocation_context::TraceId;

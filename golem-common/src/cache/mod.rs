@@ -489,7 +489,7 @@ impl<
         key: &K,
         f1: F1,
         f2: F2,
-    ) -> Result<PendingOrFinal<PV, V>, E>
+    ) -> Result<PendingOrFinal<PV, V, E>, E>
     where
         F1: FnOnce() -> PV,
         F2: FnOnce(&PV) -> Pin<Box<dyn Future<Output = Result<V, E>> + Send>> + Send + 'static,
@@ -550,7 +550,10 @@ impl<
                         });
                     }
 
-                    Ok(PendingOrFinal::Pending(pending_value))
+                    Ok(PendingOrFinal::Pending(PendingValue {
+                        value: pending_value,
+                        completion: tx.subscribe(),
+                    }))
                 }
                 Item::Cached { value, .. } => {
                     record_cache_hit(self.name);
@@ -636,6 +639,27 @@ impl<
                 Item::Pending { .. } => false,
             })
             .await
+            .is_some();
+        if removed {
+            let count = self.state.count.fetch_sub(1, Ordering::SeqCst);
+            record_cache_size(self.name, count.saturating_sub(1));
+        }
+        removed
+    }
+
+    /// Synchronous conditional removal for owners releasing their last reference from `Drop`.
+    /// Pending entries are never removed.
+    pub fn remove_if_cached_sync<F>(&self, key: &K, predicate: F) -> bool
+    where
+        F: Fn(&V) -> bool,
+    {
+        let removed = self
+            .state
+            .items
+            .remove_if_sync(key, |item| match item {
+                Item::Cached { value, .. } => predicate(value),
+                Item::Pending { .. } => false,
+            })
             .is_some();
         if removed {
             let count = self.state.count.fetch_sub(1, Ordering::SeqCst);
@@ -916,8 +940,13 @@ pub enum BackgroundEvictionMode {
     OlderThan { ttl: Duration, period: Duration },
 }
 
-pub enum PendingOrFinal<PV, V> {
-    Pending(PV),
+pub struct PendingValue<PV, V, E> {
+    pub value: PV,
+    pub completion: tokio::sync::watch::Receiver<Option<Result<V, E>>>,
+}
+
+pub enum PendingOrFinal<PV, V, E = ()> {
+    Pending(PendingValue<PV, V, E>),
     Final(V),
 }
 

@@ -14,13 +14,14 @@
 
 use super::*;
 use crate::durable_host::durable_stream::{
-    CommittedProducerStreamEventPayload, ExternalAppendOutcome, ExternalProducer,
-    StreamHandleReadResult, StreamStoreError,
+    CommittedProducerStreamEventPayload, DurableStreamStore, ExternalAppendOutcome,
+    ExternalProducer, StreamHandleReadResult, StreamStoreError,
 };
 use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_common::model::durable_stream::{
-    DurableStreamHandle, DurableStreamReadRequest, ExternalProducerId, StreamHandleReadRequest,
-    StreamItemsPayload, StreamOffset, StreamSessionKey,
+    DurableStreamHandle, DurableStreamReadRequest, ExternalProducerId, PersistedInvocationTarget,
+    StreamHandleReadRequest, StreamItemsPayload, StreamOffset, StreamRegistrationInvocation,
+    StreamSessionKey,
 };
 use golem_common::model::invocation_session_public::validate_durable_stream_session_id;
 use golem_common::schema::{
@@ -414,7 +415,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
         let descriptor = &prepared.attempt.invocation;
-        if expected_method.is_some_and(|expected| expected != descriptor.method_name) {
+        let PersistedInvocationTarget::AgentMethod { method_name } = &descriptor.target else {
+            return Ok(None);
+        };
+        if expected_method.is_some_and(|expected| expected != method_name) {
             return Ok(None);
         }
         let component = self
@@ -433,7 +437,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let method = agent
             .methods
             .iter()
-            .find(|method| method.name == descriptor.method_name)
+            .find(|method| method.name == *method_name)
             .ok_or_else(|| WorkerExecutorError::runtime("persisted agent method is missing"))?;
         let mut candidates = method
             .input_schema
@@ -472,8 +476,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let source = if status.tombstoned_slots.contains(name) {
             SlotSource::Tombstoned
         } else if schema.writable {
+            let mappings = self
+                .durable_stream_producer()
+                .await?
+                .materialize_bindings(&prepared.stream_mappings)
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            let input = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(
+                descriptor.invocation_value.as_slice(),
+            )
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+            .value
+            .ok_or_else(|| WorkerExecutorError::runtime("persisted invocation input is missing"))?;
             SlotSource::Stream(
-                schema.extract_handle(&descriptor.invocation_value, &descriptor.stream_handles)?,
+                schema.extract_handle(
+                    &input.encode_to_vec(),
+                    &mappings
+                        .into_iter()
+                        .map(|mapping| mapping.handle)
+                        .collect::<Vec<_>>(),
+                )?,
             )
         } else if let Some(result_index) = status.invocation_result {
             let StreamSessionRecord::InvocationResult(result) =
@@ -484,7 +506,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ));
             };
             if schema.is_stream {
-                SlotSource::Stream(schema.extract_handle(&result.result, &result.output_streams)?)
+                let mappings = self
+                    .durable_stream_producer()
+                    .await?
+                    .materialize_bindings(&result.stream_mappings)
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                SlotSource::Stream(
+                    schema.extract_handle(
+                        &result.result,
+                        &mappings
+                            .into_iter()
+                            .map(|mapping| mapping.handle)
+                            .collect::<Vec<_>>(),
+                    )?,
+                )
             } else {
                 SlotSource::Value {
                     encoded: result.result,
@@ -514,7 +550,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             SchemaType::U8 { .. }
         ) && schema.is_stream;
         Ok(Some(Slot {
-            session: prepared.attempt.session_key,
+            session: StreamRegistrationInvocation::Local(prepared.session_key).qualify(
+                self.owned_agent_id.environment_id,
+                &self.owned_agent_id.agent_id,
+                self.initial_worker_metadata.fingerprint,
+            ),
             name: name.to_owned(),
             slots,
             graph: SchemaGraph {
@@ -711,24 +751,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         else {
             return Ok(ExportStreamControlResult::NotFound);
         };
-        if prepared.attempt.invocation.method_name != request.expected_method {
+        if !matches!(&prepared.attempt.invocation.target,
+            PersistedInvocationTarget::AgentMethod { method_name } if *method_name == request.expected_method)
+        {
             return Ok(ExportStreamControlResult::NotFound);
         }
         let producer = self.durable_stream_producer().await?;
-        let streams = StreamSession::new(
+        let streams = StreamSession::open(
             producer.clone(),
             self.oplog.clone(),
-            prepared.attempt.session_key.clone(),
+            StreamRegistrationInvocation::Local(prepared.session_key.clone()),
             prepared.stream_mappings.iter().cloned(),
         )
+        .await
+        .map_err(WorkerExecutorError::runtime)?
         .with_rpc(self.rpc())
         .with_consumer_journal(self.durable_stream_consumer_journal())
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         if let Some(name) = request.slot {
             let worker = self.clone();
+            let session_key = streams.session_key.clone();
             producer
                 .run_admitted(None, 0, true, move |owner, admission| async move {
-                    let lock = owner.session_lock(&prepared.attempt.session_key);
+                    let lock = owner.session_lock(&session_key);
                     let guard = lock.lock_owned().await;
                     let Some(slot) = worker
                         .resolve_stream_slot(
@@ -780,77 +825,135 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Validates and durably appends a batch to one writable stream slot.
+    ///
+    /// The slot is resolved and the batch committed under the session lock, so a concurrent
+    /// slot or session deletion cannot tombstone the slot between the check and the commit.
     pub async fn append_to_stream_slot(
-        &self,
+        self: &Arc<Self>,
         request: AppendToStreamSlotRequest,
     ) -> Result<AppendToStreamSlotResult, WorkerExecutorError> {
+        validate_durable_stream_session_id(&request.session)
+            .map_err(WorkerExecutorError::invalid_request)?;
         let producer = self.durable_stream_producer().await?;
-        let Some(slot) = producer
-            .with_metadata_activity(self.resolve_stream_slot(
-                &request.session,
-                &request.slot,
-                Some(&request.expected_method),
-            ))
+        let Some(prepared) = producer
+            .with_metadata_activity(
+                self.prepared_stream_session(&IdempotencyKey::new(request.session.clone())),
+            )
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??
         else {
             return Ok(AppendToStreamSlotResult::NotFound);
         };
-        if matches!(slot.source, SlotSource::Tombstoned) {
-            return Ok(AppendToStreamSlotResult::Gone);
-        }
-        if !slot.writable {
-            return Ok(AppendToStreamSlotResult::ReadOnly);
-        }
-        let SlotSource::Stream(handle) = slot.source else {
-            return Err(WorkerExecutorError::runtime("input slot has no stream"));
-        };
-        let payload = match request.payload {
-            Some(AppendStreamSlotPayload::PackedU8(bytes)) if slot.bytes => {
-                Some(StreamItemsPayload::PackedU8(bytes))
-            }
-            Some(AppendStreamSlotPayload::Values(values)) if !slot.bytes => {
-                for encoded in &values {
-                    let proto = ProtoValue::decode(encoded.as_slice())
-                        .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-                    let value: SchemaValue = proto
-                        .try_into()
-                        .map_err(WorkerExecutorError::invalid_request)?;
-                    validate_value(&slot.graph, &slot.graph.root, &value).map_err(|errors| {
-                        WorkerExecutorError::invalid_request(format!(
-                            "invalid stream item: {errors:?}"
-                        ))
-                    })?;
-                }
-                Some(StreamItemsPayload::Values(values))
-            }
-            None => None,
-            _ => {
-                return Err(WorkerExecutorError::invalid_request(
-                    "payload does not match stream content type",
-                ));
-            }
-        };
-        producer
-            .validate_handle(&handle)
-            .await
-            .map_err(append_error)?;
+        let payload = request.payload.map(|payload| match payload {
+            AppendStreamSlotPayload::PackedU8(bytes) => StreamItemsPayload::PackedU8(bytes),
+            AppendStreamSlotPayload::Values(values) => StreamItemsPayload::Values(values),
+        });
+        let external_producer = request.producer.map(|producer| ExternalProducer {
+            id: ExternalProducerId::Client(producer.id),
+            epoch: producer.epoch,
+            sequence: producer.sequence,
+        });
+        let retained_bytes = DurableStreamStore::external_input_reservation(
+            payload.as_ref(),
+            external_producer.as_ref(),
+        );
+        let worker = self.clone();
+        let session_key =
+            producer.qualify_session(&StreamRegistrationInvocation::Local(prepared.session_key));
         let result = producer
-            .append_external_input(
+            .run_admitted(
                 None,
-                &slot.session,
-                handle.stream_id,
-                payload,
-                request.close,
-                request.producer.map(|producer| ExternalProducer {
-                    id: ExternalProducerId::Client(producer.id),
-                    epoch: producer.epoch,
-                    sequence: producer.sequence,
-                }),
+                retained_bytes,
+                false,
+                move |owner, admission| async move {
+                    let lock = owner.session_lock(&session_key);
+                    let _guard = lock.lock_owned().await;
+                    let Some(slot) = owner
+                        .with_metadata_activity(worker.resolve_stream_slot(
+                            &request.session,
+                            &request.slot,
+                            Some(&request.expected_method),
+                        ))
+                        .await??
+                    else {
+                        return Ok::<_, AdmittedAppendError>(AppendToStreamSlotResult::NotFound);
+                    };
+                    if matches!(slot.source, SlotSource::Tombstoned) {
+                        return Ok(AppendToStreamSlotResult::Gone);
+                    }
+                    if !slot.writable {
+                        return Ok(AppendToStreamSlotResult::ReadOnly);
+                    }
+                    let SlotSource::Stream(handle) = slot.source else {
+                        return Err(WorkerExecutorError::runtime("input slot has no stream").into());
+                    };
+                    match &payload {
+                        Some(StreamItemsPayload::PackedU8(_)) if slot.bytes => {}
+                        Some(StreamItemsPayload::Values(values)) if !slot.bytes => {
+                            for encoded in values {
+                                let proto =
+                                    ProtoValue::decode(encoded.as_slice()).map_err(|error| {
+                                        WorkerExecutorError::invalid_request(error.to_string())
+                                    })?;
+                                let value: SchemaValue = proto
+                                    .try_into()
+                                    .map_err(WorkerExecutorError::invalid_request)?;
+                                validate_value(&slot.graph, &slot.graph.root, &value).map_err(
+                                    |errors| {
+                                        WorkerExecutorError::invalid_request(format!(
+                                            "invalid stream item: {errors:?}"
+                                        ))
+                                    },
+                                )?;
+                            }
+                        }
+                        None => {}
+                        _ => {
+                            return Err(WorkerExecutorError::invalid_request(
+                                "payload does not match stream content type",
+                            )
+                            .into());
+                        }
+                    }
+                    owner.validate_handle(&handle).await?;
+                    DurableStreamStore::validate_external_input(payload.as_ref())?;
+                    let result = owner
+                        .append_external_input_admitted(
+                            &admission,
+                            &slot.session,
+                            handle.stream_id,
+                            payload,
+                            request.close,
+                            external_producer,
+                        )
+                        .await?;
+                    Ok(AppendToStreamSlotResult::from(result))
+                },
             )
             .await
-            .map_err(append_error)?;
-        Ok(match result {
+            .map_err(|AdmittedAppendError(error)| error)?;
+        Ok(result)
+    }
+}
+
+/// Error of an admitted slot append: store errors are classified like direct append errors.
+struct AdmittedAppendError(WorkerExecutorError);
+
+impl From<StreamStoreError> for AdmittedAppendError {
+    fn from(error: StreamStoreError) -> Self {
+        Self(append_error(error))
+    }
+}
+
+impl From<WorkerExecutorError> for AdmittedAppendError {
+    fn from(error: WorkerExecutorError) -> Self {
+        Self(error)
+    }
+}
+
+impl From<ExternalAppendOutcome> for AppendToStreamSlotResult {
+    fn from(result: ExternalAppendOutcome) -> Self {
+        match result {
             ExternalAppendOutcome::Accepted(offset) => AppendToStreamSlotResult::Accepted(offset),
             ExternalAppendOutcome::Duplicate {
                 offset,
@@ -867,7 +970,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             ExternalAppendOutcome::Closed => AppendToStreamSlotResult::Closed,
             ExternalAppendOutcome::NotFound => AppendToStreamSlotResult::NotFound,
-        })
+        }
     }
 }
 
@@ -984,6 +1087,7 @@ mod tests {
             producer_environment_id: environment,
             producer: id,
             expected_producer_fingerprint: fingerprint,
+            producer_generation: OplogIndex::NONE,
             source_invocation: source,
             component_revision: golem_common::model::component::ComponentRevision::INITIAL,
             element_schema_fingerprint: golem_schema::schema::SchemaFingerprintV1([0; 32]),

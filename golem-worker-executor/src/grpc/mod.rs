@@ -336,6 +336,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn create_worker_internal(
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
+        wait_until_loaded: bool,
     ) -> Result<AgentFingerprint, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
@@ -407,6 +408,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         .await?;
 
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+
+        if !wait_until_loaded {
+            return Ok(fingerprint);
+        }
 
         let mut subscription = self.events().subscribe();
         let start_attempt = Worker::start_if_needed(worker.clone()).await?;
@@ -571,9 +576,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker = Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
-        worker
-            .control_durable_stream_attachment(control)
+        let scope = crate::worker::tasks::TaskScope::default();
+        scope
+            .bind(&worker.tasks)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        scope
+            .run(worker.control_durable_stream_attachment(control))
             .await
+            .ok_or_else(|| WorkerExecutorError::invalid_request("Worker is being deleted"))?
             .map(durable_stream_attachment_control_response::Result::Replayed)
     }
 
@@ -1035,6 +1045,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+        let agent_id = request.agent_id()?;
+        if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
+            self.ensure_worker_belongs_to_this_executor(&agent_id)?;
+            let worker = Worker::get_exact_existing_suspended(
+                self,
+                &OwnedAgentId::new(request.environment_id()?, &agent_id),
+                request.principal(),
+            )
+            .await?;
+            Worker::start_if_needed(worker.clone()).await?;
+            return Ok(worker);
+        }
         self.get_or_create_with_freshness(request, InvocationFreshnessDisposition::MayExist)
             .await
     }
@@ -1067,6 +1089,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     > {
         let agent_id = request.agent_id()?;
         let environment_id = request.environment_id()?;
+        if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
+            self.ensure_worker_belongs_to_this_executor(&agent_id)?;
+            let owner = OwnedAgentId::new(environment_id, &agent_id);
+            if Worker::<Ctx>::get_latest_metadata(self, &owner)
+                .await?
+                .is_none()
+            {
+                return Ok(None);
+            }
+            return Worker::get_exact_existing_suspended_for_response(
+                self,
+                &owner,
+                request.principal(),
+            )
+            .await
+            .map(Some);
+        }
 
         let owned_agent_id = self
             .canonicalize_owned_agent_id(&OwnedAgentId::new(environment_id, &agent_id))
@@ -2052,12 +2091,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
 
-        let (worker, _response_lease) = self
-            .get_or_create_pending_with_freshness(
-                &request,
-                InvocationFreshnessDisposition::MayExist,
-            )
-            .await?;
+        let (worker, _response_lease) =
+            if golem_common::model::agent::OwnerKind::is_reserved_instance_name(
+                &owned_agent_id.agent_id.agent_id,
+            ) {
+                Worker::get_exact_existing_suspended_for_response(
+                    self,
+                    &owned_agent_id,
+                    request.principal(),
+                )
+                .await?
+            } else {
+                self.get_or_create_pending_with_freshness(
+                    &request,
+                    InvocationFreshnessDisposition::MayExist,
+                )
+                .await?
+            };
         worker
             .receive_card_transfer(transfer_id, source_card_id, card)
             .await
@@ -2124,6 +2174,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         Ok(golem::worker::AgentMetadata {
             agent_id: Some(metadata.agent_id.into()),
+            owner_kind: metadata.owner_kind.into(),
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             config: metadata
@@ -2202,7 +2253,48 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         );
 
         match self
-            .create_worker_internal(request)
+            .create_worker_internal(request, true)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(fingerprint) => record.succeed(Ok(Response::new(
+                golem::workerexecutor::v1::CreateWorkerResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::create_worker_response::Result::Success(
+                            golem::workerexecutor::v1::CreateWorkerSuccessResponse {
+                                instance_id: Some(fingerprint.0.into()),
+                            },
+                        ),
+                    ),
+                },
+            ))),
+            Err(mut err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::v1::CreateWorkerResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::create_worker_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &mut err,
+            ),
+        }
+    }
+
+    async fn prepare_worker(
+        &self,
+        request: Request<golem::workerexecutor::v1::CreateWorkerRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::CreateWorkerResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "prepare_worker",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+
+        match self
+            .create_worker_internal(request, false)
             .instrument(record.span.clone())
             .await
         {

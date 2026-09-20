@@ -19,8 +19,10 @@ pub mod types;
 mod tests;
 
 use crate::model::agent::AgentTypeName;
+use crate::model::card::PermissionTarget;
 use crate::model::card::ScopeCard;
 use crate::model::component::ComponentRevision;
+use crate::model::durable_stream::StreamInvocationId;
 use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::payload::external_durable_stream::{
@@ -171,6 +173,8 @@ oplog_payload! {
             idempotency_key: IdempotencyKey,
             method_name: String,
             input: SchemaValue,
+            #[schema(skip)]
+            logical_streaming_origin: Option<StreamInvocationId>,
             #[schema(skip)]
             #[transient(None::<AgentTypeName>)]
             remote_agent_type: Option<AgentTypeName>, // enriched field, only filled when exposed as public oplog entry
@@ -360,9 +364,15 @@ oplog_payload! {
             method_name: String,
             decision: Result<(), SerializableRpcError>,
         },
+        GolemToolResponseSecretHoldAdmission {
+            value: TypedSchemaValue,
+            #[schema(skip)]
+            targets: Vec<PermissionTarget>,
+        },
         EntityInvocation {
             metadata: Vec<u8>,
             input: TypedSchemaValue,
+            stream_session_idempotency_key: IdempotencyKey,
         },
         GolemToolInvocationRejected {
             attempt_ordinal: u64,
@@ -707,6 +717,9 @@ oplog_payload! {
         GolemRpcActivate {
             result: Result<AgentFingerprint, SerializableRpcError>
         },
+        GolemToolResponseSecretHoldAdmission {
+            admitted: bool,
+        },
         EntityInvocation {
             result: Result<TypedSchemaValue, String>
         },
@@ -953,6 +966,7 @@ pub mod host_functions {
         (GolemApiGetAgents => "golem::api::get-agents", "get-next", GolemApiGetAgents, GolemApiAgents),
         (WasiCliEnvironmentGetEnvironment => "cli::environment", "get-environment", CliEnvironmentGetEnvironment, CliEnvironmentGetEnvironment),
         (GolemRpcWasmRpcActivate => "golem::rpc::wasm-rpc", "activate", GolemRpcActivate, GolemRpcActivate),
+        (GolemToolResponseSecretHoldAdmission => "golem::tool::internal", "response-secret-hold-admission", GolemToolResponseSecretHoldAdmission, GolemToolResponseSecretHoldAdmission),
         (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),
         (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation),
         (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType)

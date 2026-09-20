@@ -87,9 +87,7 @@ pub(crate) async fn existing_fork(
         StreamSessionRecord::ForkCut(record)
             if record.request_hash == hash
                 && record.cut_index == cut
-                && record.target == target.agent_id
-                && record.target_environment_id == target.environment_id
-                && record.target_fingerprint.0 == *instance_id =>
+                && record.creation_fingerprint.0 == *instance_id =>
         {
             Ok(true)
         }
@@ -159,7 +157,9 @@ mod tests {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::durable_stream::StreamForkCutRecord;
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, RetryConfig};
+    use golem_common::model::{
+        AgentId, AgentMetadata, AgentStatusRecord, RetryConfig, agent::OwnerKind,
+    };
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use std::sync::Arc;
     use test_r::test;
@@ -258,6 +258,7 @@ mod tests {
                 stage_id,
                 AgentMetadata {
                     agent_id: target.agent_id.clone(),
+                    owner_kind: OwnerKind::ComponentAgent,
                     env: vec![],
                     environment_id: target.environment_id,
                     created_by: account,
@@ -276,6 +277,7 @@ mod tests {
         stage
             .add(OplogEntry::create(
                 target.agent_id.clone(),
+                OwnerKind::ComponentAgent,
                 AgentMode::Durable,
                 ComponentRevision::INITIAL,
                 vec![],
@@ -294,20 +296,13 @@ mod tests {
         let record = StreamSessionRecord::ForkCut(StreamForkCutRecord {
             format_version: 1,
             request_hash: hash.to_vec(),
+            creation_fingerprint: fingerprint,
             export: None,
-            source_environment_id: source.environment_id,
-            source: source.agent_id,
-            source_fingerprint,
-            target_environment_id: target.environment_id,
-            target: target.agent_id.clone(),
-            target_fingerprint: fingerprint,
             cut_index: cut,
             revert: None,
             epoch_floor: 1,
             selected_stream_id: None,
             retained_through: None,
-            streams: vec![],
-            sessions: vec![],
         });
         let record = stage.upload_payload(&record).await.unwrap();
         stage

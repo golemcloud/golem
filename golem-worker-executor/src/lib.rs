@@ -71,6 +71,7 @@ use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
+use crate::services::oplog_sweep::OplogSweeper;
 use crate::services::promise::{DefaultPromiseService, DefaultPromiseWorkerAccess, PromiseService};
 use crate::services::quota::QuotaService;
 use crate::services::registry_event_subscriber::WorkerExecutorRegistryInvalidationHandler;
@@ -175,6 +176,10 @@ impl Drop for RunDetails {
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
+    /// Called after the complete service graph has been assembled and before it is moved into the
+    /// servers. In-process harnesses can retain a clone to exercise internal admission paths.
+    fn capture_services(&self, _services: &All<Ctx>) {}
+
     fn create_native_tool_catalog(
         &self,
     ) -> anyhow::Result<Arc<crate::native_tool::NativeToolCatalog<Ctx>>> {
@@ -350,7 +355,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         active_agents: Arc<ActiveAgents<Ctx>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<Ctx>>,
@@ -390,7 +394,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             services::external_durable_stream::DefaultExternalDurableStreamService::new()?,
         );
         let worker_fork = Arc::new(DefaultWorkerFork::new(
-            key_value_storage,
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
                 shard_service.clone(),
@@ -848,6 +851,8 @@ pub async fn create_worker_executor_impl<
             Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), idx));
         oplog_archives.push(svc);
     }
+    // The sweeper is built further down, once the worker activator exists.
+    let sweep_archives = oplog_archives.clone();
     let oplog_archives = NEVec::try_from_vec(oplog_archives);
 
     let base_oplog_service: Arc<dyn OplogService> = match oplog_archives {
@@ -1009,6 +1014,23 @@ pub async fn create_worker_executor_impl<
         shutdown_token.clone(),
     );
 
+    // Tracked by `shutdown` rather than the join set, so on termination the sweeper gets
+    // `SHUTDOWN_GRACE` to finish the archive step it is in before the join set is aborted.
+    let oplog_sweeper = OplogSweeper::over_layers(
+        golem_config.oplog.sweep.clone(),
+        indexed_storage.clone(),
+        &sweep_archives,
+        shard_service.clone(),
+        component_service.clone(),
+        Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx>>),
+    );
+    shutdown.spawn({
+        let shutdown_token = shutdown_token.clone();
+        async move {
+            oplog_sweeper.run(shutdown_token).await;
+        }
+    });
+
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
 
     let direct_invocation_auth_service =
@@ -1021,7 +1043,6 @@ pub async fn create_worker_executor_impl<
     let all = bootstrap
         .create_services(
             direct_invocation_auth_service,
-            key_value_storage.clone(),
             active_agents,
             engine,
             linker,
@@ -1178,6 +1199,7 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let leak_detector = worker_executor_impl.leak_detector();
     let invocation_loops = worker_executor_impl.active_agents().invocation_loops();
+    bootstrap.capture_services(&worker_executor_impl);
 
     crate::metrics::runtime::install_runtime_metrics(
         runtime.clone(),

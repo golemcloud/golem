@@ -350,7 +350,7 @@ fn strict_equality_preserves_doc_and_version_fields_in_literal_defaults() {
 }
 
 #[test]
-fn structural_requires_expected_error_vocabulary_but_allows_additions() {
+fn error_vocabulary_flows_from_inner_to_expected() {
     fn error(name: &str) -> ErrorCase {
         ErrorCase {
             name: name.into(),
@@ -363,15 +363,6 @@ fn structural_requires_expected_error_vocabulary_but_allows_additions() {
     let mut expected = tool(SchemaType::string());
     expected.commands.nodes[0].body.as_mut().unwrap().errors = vec![error("expected")];
     let missing = tool(SchemaType::string());
-    assert!(
-        compile_tool_compatibility(
-            &expected,
-            &missing,
-            ToolCompatibilityMode::StructuralSubtype
-        )
-        .is_err()
-    );
-
     let mut additional = expected.clone();
     additional.commands.nodes[0]
         .body
@@ -379,13 +370,23 @@ fn structural_requires_expected_error_vocabulary_but_allows_additions() {
         .unwrap()
         .errors
         .push(error("additional"));
+    for mode in [
+        ToolCompatibilityMode::StructuralSubtype,
+        ToolCompatibilityMode::Nominal,
+    ] {
+        let compiled = compile_tool_compatibility(&expected, &missing, mode).unwrap();
+        assert!(!compiled.commands[0].forward_unknown_errors);
+        assert!(compiled.commands[0].errors.is_empty());
+        let errors = compile_tool_compatibility(&expected, &additional, mode).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.path.ends_with(".error.additional"))
+        );
+    }
     assert!(
-        compile_tool_compatibility(
-            &expected,
-            &additional,
-            ToolCompatibilityMode::StructuralSubtype
-        )
-        .is_ok()
+        compile_tool_compatibility(&expected, &missing, ToolCompatibilityMode::StrictEquality)
+            .is_err()
     );
 }
 
@@ -849,4 +850,523 @@ fn reordered_enum_and_flags_map_source_indices_to_target_indices() {
             node => panic!("unexpected projection node: {node:?}"),
         }
     }
+}
+
+struct TestStreams {
+    projected: Vec<Option<ProjectionPlan>>,
+    discarded: usize,
+}
+
+impl ProjectionStreamHandler for TestStreams {
+    fn project_stream(
+        &mut self,
+        stream: crate::schema::SchemaValueStream,
+        item_plan: Option<ProjectionPlan>,
+    ) -> Result<crate::schema::SchemaValueStream, String> {
+        self.projected.push(item_plan);
+        Ok(stream)
+    }
+
+    fn discard_stream(&mut self, _stream: crate::schema::SchemaValueStream) {
+        self.discarded += 1;
+    }
+}
+
+#[test]
+fn evaluator_applies_compiled_reordering_and_discards_values() {
+    let expected = tool(record(&["first", "second"]));
+    let inner = tool(record(&["second", "first", "discarded"]));
+    let compiled =
+        compile_tool_compatibility(&expected, &inner, ToolCompatibilityMode::StructuralSubtype)
+            .unwrap();
+    let plan = compiled.commands[0].result.as_ref().unwrap();
+    let mut streams = TestStreams {
+        projected: vec![],
+        discarded: 0,
+    };
+    let projected = apply_projection(
+        plan,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("second".into()),
+                SchemaValue::String("first".into()),
+                SchemaValue::String("gone".into()),
+            ],
+        },
+        &mut streams,
+    )
+    .unwrap();
+    assert_eq!(
+        projected,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("first".into()),
+                SchemaValue::String("second".into())
+            ]
+        }
+    );
+}
+
+#[test]
+fn evaluator_remaps_flags_and_rejects_dynamic_mismatch() {
+    let source = SchemaType::flags(vec!["b".into(), "a".into()]);
+    let target = SchemaType::flags(vec!["a".into(), "c".into(), "b".into()]);
+    let mut errors = vec![];
+    let plan = compile_plan(
+        &SchemaGraph::empty(),
+        &source,
+        &SchemaGraph::empty(),
+        &target,
+        ToolCompatibilityMode::StructuralSubtype,
+        "flags",
+        &mut errors,
+    )
+    .unwrap();
+    let mut streams = TestStreams {
+        projected: vec![],
+        discarded: 0,
+    };
+    assert_eq!(
+        apply_projection(
+            &plan,
+            SchemaValue::Flags {
+                bits: vec![true, false]
+            },
+            &mut streams
+        )
+        .unwrap(),
+        SchemaValue::Flags {
+            bits: vec![false, false, true]
+        }
+    );
+
+    let plan = dynamic_plan(
+        SchemaGraph::anonymous(SchemaType::string()),
+        SchemaGraph::anonymous(SchemaType::u32()),
+    );
+    assert!(apply_projection(&plan, SchemaValue::String("no".into()), &mut streams).is_err());
+}
+
+#[test]
+#[cfg(feature = "host")]
+fn evaluator_returns_nonidentity_stream_item_plan_and_closes_discarded_stream() {
+    let source_item = record(&["kept", "discarded"]);
+    let target_item = record(&["kept"]);
+    let source = SchemaType::record(vec![
+        NamedFieldType {
+            name: "kept".into(),
+            body: SchemaType::stream(Some(source_item)),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "discarded".into(),
+            body: SchemaType::stream(None),
+            metadata: Default::default(),
+        },
+    ]);
+    let target = SchemaType::record(vec![NamedFieldType {
+        name: "kept".into(),
+        body: SchemaType::stream(Some(target_item)),
+        metadata: Default::default(),
+    }]);
+    let mut errors = vec![];
+    let plan = compile_plan(
+        &SchemaGraph::empty(),
+        &source,
+        &SchemaGraph::empty(),
+        &target,
+        ToolCompatibilityMode::StructuralSubtype,
+        "stream",
+        &mut errors,
+    )
+    .unwrap();
+    let retained = crate::schema::SchemaValueStream::from_host_endpoint(1_u8);
+    let discarded = crate::schema::SchemaValueStream::from_host_endpoint(2_u8);
+    let mut streams = TestStreams {
+        projected: vec![],
+        discarded: 0,
+    };
+    apply_projection(
+        &plan,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::Stream(retained),
+                SchemaValue::Stream(discarded),
+            ],
+        },
+        &mut streams,
+    )
+    .unwrap();
+    assert_eq!(streams.projected.len(), 1);
+    assert!(streams.projected[0].is_some());
+    assert_eq!(streams.discarded, 1);
+}
+
+#[test]
+#[cfg(feature = "host")]
+fn equivalent_stream_projection_preserves_endpoint_without_calling_handler() {
+    let stream_type = SchemaType::stream(Some(record(&["value"])));
+    let mut errors = vec![];
+    let plan = compile_plan(
+        &SchemaGraph::empty(),
+        &stream_type,
+        &SchemaGraph::empty(),
+        &stream_type,
+        ToolCompatibilityMode::StructuralSubtype,
+        "stream",
+        &mut errors,
+    )
+    .unwrap();
+    assert!(matches!(plan.nodes[plan.root], ProjectionNode::Identity));
+
+    let endpoint = crate::schema::SchemaValueStream::from_host_endpoint(7_u8);
+    let cell = endpoint.cell_id();
+    let mut streams = TestStreams {
+        projected: vec![],
+        discarded: 0,
+    };
+    let SchemaValue::Stream(output) =
+        apply_projection(&plan, SchemaValue::Stream(endpoint), &mut streams).unwrap()
+    else {
+        panic!("stream result expected")
+    };
+    assert_eq!(output.cell_id(), cell);
+    assert!(streams.projected.is_empty());
+}
+
+#[cfg(feature = "host")]
+struct FailingStreams {
+    project_calls: usize,
+    discarded_endpoints: Vec<u8>,
+}
+
+#[cfg(feature = "host")]
+impl ProjectionStreamHandler for FailingStreams {
+    fn project_stream(
+        &mut self,
+        stream: crate::schema::SchemaValueStream,
+        _item_plan: Option<ProjectionPlan>,
+    ) -> Result<crate::schema::SchemaValueStream, String> {
+        self.project_calls += 1;
+        if self.project_calls == 2 {
+            self.discarded_endpoints
+                .push(stream.take_host_endpoint::<u8>()?);
+            Err("relay failed".into())
+        } else {
+            Ok(stream)
+        }
+    }
+
+    fn discard_stream(&mut self, stream: crate::schema::SchemaValueStream) {
+        self.discarded_endpoints
+            .push(stream.take_host_endpoint::<u8>().unwrap());
+    }
+}
+
+#[test]
+#[cfg(feature = "host")]
+fn later_stream_failure_discards_transferred_output_and_unvisited_sibling() {
+    let source_item = record(&["kept", "discarded"]);
+    let target_item = record(&["kept"]);
+    let source_stream = SchemaType::stream(Some(source_item));
+    let target_stream = SchemaType::stream(Some(target_item));
+    let source = SchemaType::tuple(vec![
+        source_stream.clone(),
+        source_stream.clone(),
+        source_stream,
+    ]);
+    let target = SchemaType::tuple(vec![
+        target_stream.clone(),
+        target_stream.clone(),
+        target_stream,
+    ]);
+    let mut errors = vec![];
+    let plan = compile_plan(
+        &SchemaGraph::empty(),
+        &source,
+        &SchemaGraph::empty(),
+        &target,
+        ToolCompatibilityMode::StructuralSubtype,
+        "streams",
+        &mut errors,
+    )
+    .unwrap();
+    let mut streams = FailingStreams {
+        project_calls: 0,
+        discarded_endpoints: vec![],
+    };
+    let result = apply_projection(
+        &plan,
+        SchemaValue::Tuple {
+            elements: [1_u8, 2, 3]
+                .into_iter()
+                .map(|id| {
+                    SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(id))
+                })
+                .collect(),
+        },
+        &mut streams,
+    );
+    assert!(result.is_err());
+    assert_eq!(streams.project_calls, 2);
+    assert_eq!(streams.discarded_endpoints, vec![2, 1, 3]);
+}
+
+#[test]
+#[cfg(feature = "host")]
+fn invalid_record_discard_index_errors_and_disposes_input_stream() {
+    let stream_type = SchemaType::record(vec![NamedFieldType {
+        name: "value".into(),
+        body: SchemaType::stream(None),
+        metadata: Default::default(),
+    }]);
+    let plan = ProjectionPlan {
+        source_schema: SchemaGraph::anonymous(stream_type.clone()),
+        target_schema: SchemaGraph::anonymous(stream_type),
+        nodes: vec![ProjectionNode::Record {
+            fields: vec![],
+            discard: vec![1],
+        }],
+        root: 0,
+    };
+    let mut streams = FailingStreams {
+        project_calls: 0,
+        discarded_endpoints: vec![],
+    };
+    assert!(
+        apply_projection(
+            &plan,
+            SchemaValue::Record {
+                fields: vec![SchemaValue::Stream(
+                    crate::schema::SchemaValueStream::from_host_endpoint(9_u8)
+                )],
+            },
+            &mut streams,
+        )
+        .is_err()
+    );
+    assert_eq!(streams.discarded_endpoints, vec![9]);
+}
+
+#[test]
+#[cfg(feature = "host")]
+fn boundary_validation_failures_dispose_streams() {
+    let source_failure = ProjectionPlan {
+        source_schema: SchemaGraph::anonymous(SchemaType::string()),
+        target_schema: SchemaGraph::anonymous(SchemaType::string()),
+        nodes: vec![ProjectionNode::Identity],
+        root: 0,
+    };
+    let target_failure = ProjectionPlan {
+        source_schema: SchemaGraph::anonymous(SchemaType::stream(None)),
+        target_schema: SchemaGraph::anonymous(SchemaType::string()),
+        nodes: vec![ProjectionNode::Identity],
+        root: 0,
+    };
+    let mut streams = FailingStreams {
+        project_calls: 0,
+        discarded_endpoints: vec![],
+    };
+
+    let source_error = apply_projection(
+        &source_failure,
+        SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(10_u8)),
+        &mut streams,
+    )
+    .unwrap_err();
+    let target_error = apply_projection(
+        &target_failure,
+        SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(11_u8)),
+        &mut streams,
+    )
+    .unwrap_err();
+
+    assert_eq!(source_error.path, "source");
+    assert_eq!(target_error.path, "target");
+    assert_eq!(streams.discarded_endpoints, vec![10, 11]);
+}
+
+#[test]
+#[cfg(feature = "host")]
+fn provisional_dynamic_checked_rejection_discards_input_stream() {
+    let plan = ProjectionPlan {
+        source_schema: SchemaGraph::anonymous(SchemaType::stream(None)),
+        target_schema: SchemaGraph::anonymous(SchemaType::string()),
+        nodes: vec![ProjectionNode::DynamicChecked],
+        root: 0,
+    };
+    let mut streams = FailingStreams {
+        project_calls: 0,
+        discarded_endpoints: vec![],
+    };
+
+    assert!(
+        apply_projection(
+            &plan,
+            SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(12_u8)),
+            &mut streams,
+        )
+        .is_err()
+    );
+    assert_eq!(streams.discarded_endpoints, vec![12]);
+}
+
+#[test]
+#[cfg(feature = "host")]
+fn provisional_malformed_stream_plan_discards_input_stream() {
+    let plan = ProjectionPlan {
+        source_schema: SchemaGraph::anonymous(SchemaType::stream(None)),
+        target_schema: SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::string()))),
+        nodes: vec![ProjectionNode::Stream { item: Some(0) }],
+        root: 0,
+    };
+    let mut streams = FailingStreams {
+        project_calls: 0,
+        discarded_endpoints: vec![],
+    };
+
+    assert!(
+        apply_projection(
+            &plan,
+            SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(13_u8)),
+            &mut streams,
+        )
+        .is_err()
+    );
+    assert_eq!(streams.discarded_endpoints, vec![13]);
+}
+
+#[test]
+#[cfg(feature = "host")]
+fn malformed_nodes_discard_all_still_owned_streams_once() {
+    let stream = SchemaType::stream(None);
+    let record = SchemaType::record(vec![
+        NamedFieldType {
+            name: "first".into(),
+            body: stream.clone(),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "second".into(),
+            body: stream.clone(),
+            metadata: Default::default(),
+        },
+    ]);
+    let plans = [
+        ProjectionPlan {
+            source_schema: SchemaGraph::anonymous(stream.clone()),
+            target_schema: SchemaGraph::anonymous(stream.clone()),
+            nodes: vec![],
+            root: 0,
+        },
+        ProjectionPlan {
+            source_schema: SchemaGraph::anonymous(record.clone()),
+            target_schema: SchemaGraph::anonymous(SchemaType::record(vec![])),
+            nodes: vec![ProjectionNode::Record {
+                fields: vec![],
+                discard: vec![0, 0],
+            }],
+            root: 0,
+        },
+    ];
+    let values = [
+        SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(14_u8)),
+        SchemaValue::Record {
+            fields: [15_u8, 16]
+                .map(|id| {
+                    SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(id))
+                })
+                .into(),
+        },
+    ];
+    let mut streams = FailingStreams {
+        project_calls: 0,
+        discarded_endpoints: vec![],
+    };
+
+    for (plan, value) in plans.iter().zip(values) {
+        assert!(apply_projection(plan, value, &mut streams).is_err());
+    }
+    assert_eq!(streams.discarded_endpoints, vec![14, 15, 16]);
+}
+
+#[test]
+#[cfg(feature = "host")]
+fn map_key_failure_also_discards_its_unprocessed_value() {
+    let stream = SchemaType::stream(None);
+    let plan = ProjectionPlan {
+        source_schema: SchemaGraph::anonymous(SchemaType::map(stream.clone(), stream.clone())),
+        target_schema: SchemaGraph::anonymous(SchemaType::map(SchemaType::string(), stream)),
+        nodes: vec![
+            ProjectionNode::DynamicChecked,
+            ProjectionNode::Identity,
+            ProjectionNode::Map { key: 0, value: 1 },
+        ],
+        root: 2,
+    };
+    let mut streams = FailingStreams {
+        project_calls: 0,
+        discarded_endpoints: vec![],
+    };
+    let value = SchemaValue::Map {
+        entries: vec![(
+            SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(17_u8)),
+            SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(18_u8)),
+        )],
+    };
+
+    assert!(apply_projection(&plan, value, &mut streams).is_err());
+    assert_eq!(streams.discarded_endpoints, vec![17, 18]);
+}
+
+#[cfg(feature = "host")]
+struct NestedDiscardStreams {
+    discarded: Vec<u8>,
+}
+
+#[cfg(feature = "host")]
+impl ProjectionStreamHandler for NestedDiscardStreams {
+    fn project_stream(
+        &mut self,
+        stream: crate::schema::SchemaValueStream,
+        _item_plan: Option<ProjectionPlan>,
+    ) -> Result<crate::schema::SchemaValueStream, String> {
+        Ok(stream)
+    }
+
+    fn discard_stream(&mut self, stream: crate::schema::SchemaValueStream) {
+        self.discarded
+            .push(stream.take_host_endpoint::<u8>().unwrap());
+    }
+}
+
+#[test]
+#[cfg(feature = "host")]
+fn source_rejection_discards_nested_and_sibling_streams() {
+    let plan = ProjectionPlan {
+        source_schema: SchemaGraph::anonymous(SchemaType::string()),
+        target_schema: SchemaGraph::anonymous(SchemaType::string()),
+        nodes: vec![ProjectionNode::Identity],
+        root: 0,
+    };
+    let mut streams = NestedDiscardStreams { discarded: vec![] };
+    let value = SchemaValue::Tuple {
+        elements: vec![
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::Tuple {
+                    elements: [21_u8, 22]
+                        .map(|id| {
+                            SchemaValue::Stream(
+                                crate::schema::SchemaValueStream::from_host_endpoint(id),
+                            )
+                        })
+                        .into(),
+                })),
+            },
+            SchemaValue::Stream(crate::schema::SchemaValueStream::from_host_endpoint(23_u8)),
+        ],
+    };
+
+    assert!(apply_projection(&plan, value, &mut streams).is_err());
+    assert_eq!(streams.discarded, vec![21, 22, 23]);
 }

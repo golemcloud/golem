@@ -114,9 +114,11 @@ mod cmd {
     pub static LIST: &str = "list";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
+    pub static PROFILE: &str = "profile";
     pub static REGISTER: &str = "register";
     pub static REPL: &str = "repl";
     pub static TEMPLATES: &str = "templates";
+    pub static TOOL: &str = "tool";
 }
 
 mod flag {

@@ -44,6 +44,7 @@ pub(super) enum RetainedCommittedEvents {
         bytes: Arc<Vec<u8>>,
         batch_end: StreamOffset,
         nested_handles: Arc<Vec<DurableStreamHandle>>,
+        nested_references: Arc<Vec<StreamRecordReference>>,
     },
 }
 
@@ -161,6 +162,7 @@ impl DurableStreamStore {
                 && event.packed_u8_batch_end == events[0].packed_u8_batch_end
                 && event.terminal_author.is_none()
                 && event.nested_handles == events[0].nested_handles
+                && event.nested_references == events[0].nested_references
         }) && events[0].packed_u8_batch_end == events.last().map(|event| event.offset);
         let batches = if packed {
             let bytes: Vec<_> = events
@@ -171,6 +173,7 @@ impl DurableStreamStore {
                 })
                 .collect();
             let nested_handles = events[0].nested_handles.clone();
+            let nested_references = events[0].nested_references.clone();
             vec![RetainedCommittedBatch {
                 encoded_event_bytes: None,
                 retained_bytes: std::mem::size_of::<RetainedCommittedBatch>()
@@ -190,6 +193,7 @@ impl DurableStreamStore {
                         .packed_u8_batch_end
                         .expect("materialized packed batch has an end offset"),
                     nested_handles: Arc::new(nested_handles),
+                    nested_references: Arc::new(nested_references),
                 },
             }]
         } else {
@@ -289,6 +293,7 @@ impl DurableStreamStore {
                     bytes: packed_bytes,
                     batch_end,
                     nested_handles,
+                    nested_references,
                     ..
                 } => {
                     let available = packed_bytes.len().saturating_sub(start);
@@ -315,6 +320,7 @@ impl DurableStreamStore {
                         packed_u8_batch_end: Some(*batch_end),
                         terminal_author: None,
                         nested_handles: (**nested_handles).clone(),
+                        nested_references: (**nested_references).clone(),
                         payload: CommittedProducerStreamEventPayload::PackedU8(u8::MAX),
                     };
                     let event_bound = encoded_event_bytes(&representative);
@@ -338,6 +344,7 @@ impl DurableStreamStore {
                             packed_u8_batch_end: Some(*batch_end),
                             terminal_author: None,
                             nested_handles: (**nested_handles).clone(),
+                            nested_references: (**nested_references).clone(),
                             payload: CommittedProducerStreamEventPayload::PackedU8(
                                 packed_bytes[index],
                             ),
@@ -407,15 +414,25 @@ impl DurableStreamStore {
     ) -> QueuedDurableEvent<CommittedProducerStreamEvent> {
         let oplog = self.oplog.clone();
         let lineage = self.fork_lineage.clone();
+        let owner = OwnedAgentId::new(self.environment_id, &self.producer);
+        let owner_fingerprint = self.producer_fingerprint;
         QueuedDurableEvent::Terminal {
             offset,
             load: Arc::new(move |offset| {
                 let oplog = oplog.clone();
                 let lineage = lineage.clone();
+                let owner = owner.clone();
                 Box::pin(async move {
-                    metadata::read_terminal_event(oplog.as_ref(), &lineage, stream_id, offset)
-                        .await
-                        .map_err(|_| DurableLiveStreamBusError::PublicationAborted)
+                    metadata::read_terminal_event(
+                        oplog.as_ref(),
+                        &lineage,
+                        &owner,
+                        owner_fingerprint,
+                        stream_id,
+                        offset,
+                    )
+                    .await
+                    .map_err(|_| DurableLiveStreamBusError::PublicationAborted)
                 })
             }),
         }

@@ -138,7 +138,7 @@ impl Diffable for AgentTypeProvisionConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTypeInitialPermission {
     #[serde(skip_serializing_if = "Vec::is_empty")]

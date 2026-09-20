@@ -14,8 +14,7 @@
 
 use crate::durable_host::durable_stream::SessionControlMetadata;
 use crate::durable_host::durable_stream::metadata::{
-    ProducerMetadataKey, ProducerMetadataProjection, ProducerMetadataRow,
-    project_producer_metadata, resolve_producer_locator,
+    ProducerMetadataKey, ProducerMetadataProjection, ProducerMetadataRow, project_producer_metadata,
 };
 use crate::services::activity::spawn_with_activity;
 use crate::services::oplog::{OplogService, OplogServiceOps};
@@ -25,7 +24,9 @@ use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
-use golem_common::base_model::durable_stream::{StreamId, StreamSessionKey, StreamSessionRecord};
+use golem_common::base_model::durable_stream::{
+    LocalStreamReaderId, StreamSessionKey, StreamSessionRecord,
+};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{
@@ -40,24 +41,6 @@ pub(super) const METADATA_FIELD: &str = "coverage";
 const SESSION_FIELD_PREFIX: &str = "session:";
 pub(crate) const CONSUMER_JOURNAL_INDEX_PAGE_SIZE: u64 = 256;
 const RECOVERY_CATALOGUE_PAGE_SIZE: u64 = 256;
-
-#[derive(desert_rust::BinaryCodec)]
-struct ConsumerJournalPrefix {
-    session: StreamSessionKey,
-    stream: StreamId,
-    count: u64,
-}
-
-fn consumer_journal_prefix_field(
-    key: &StreamSessionKey,
-    stream: StreamId,
-) -> Result<String, String> {
-    Ok(format!(
-        "journal-prefix:{}:{}",
-        hex::encode(serialize(key)?),
-        stream.0
-    ))
-}
 
 fn recovery_catalogue_field(page: u64) -> String {
     format!("recovery:{page}")
@@ -79,13 +62,13 @@ fn stream_control_index_field(key: &StreamSessionKey) -> Result<String, String> 
 
 fn consumer_journal_index_field(
     key: &StreamSessionKey,
-    stream: StreamId,
+    reader: LocalStreamReaderId,
     page: u64,
 ) -> Result<String, String> {
     Ok(format!(
         "journal:{}:{}:{page}",
         hex::encode(serialize(key)?),
-        stream.0
+        hex::encode(serialize(&reader)?)
     ))
 }
 
@@ -206,7 +189,6 @@ impl StreamSessionIndexService {
                 }
                 let result = async {
                     let mut rows = Vec::with_capacity(keys.len());
-                    let mut aliases = HashMap::new();
                     for (key, value) in keys.iter().zip(values.into_iter().skip(1)) {
                         if matches!(key, ProducerMetadataKey::Lineage) {
                             rows.push(Some(ProducerMetadataRow::Lineage(
@@ -218,45 +200,8 @@ impl StreamSessionIndexService {
                             )));
                             continue;
                         }
-                        let authority_stream = match key {
-                            ProducerMetadataKey::Attachment(_, stream, _, _)
-                            | ProducerMetadataKey::AttachmentPosition(_, stream, _, _)
-                            | ProducerMetadataKey::ActiveAttachmentCount(_, stream)
-                            | ProducerMetadataKey::ExternalProducerHead(_, stream, _)
-                            | ProducerMetadataKey::ExternalProducerSequence(_, stream, _, _, _) => {
-                                Some(*stream)
-                            }
-                            ProducerMetadataKey::Cascade(key) => Some(key.stream_id),
-                            _ => None,
-                        };
-                        let retired =
-                            authority_stream.is_some_and(|stream| {
-                                metadata.as_ref().is_some_and(|metadata| {
-                                    metadata.stream_fork_lineage.cuts().iter().any(
-                                        |(position, cut)| {
-                                            *position <= covered
-                                                && cut.streams.iter().any(|mapping| {
-                                                    mapping.source.stream_id == stream
-                                                })
-                                        },
-                                    )
-                                })
-                            });
-                        if retired {
-                            rows.push(None);
-                            continue;
-                        }
                         let row = value.map(|bytes| deserialize(&bytes)).transpose()?;
-                        rows.push(
-                            resolve_producer_locator(
-                                this.kv.as_ref(),
-                                Self::namespace(&id),
-                                key,
-                                row,
-                                &mut aliases,
-                            )
-                            .await?,
-                        );
+                        rows.push(row);
                     }
                     Ok::<_, String>((covered, rows))
                 }
@@ -508,7 +453,7 @@ impl StreamSessionIndexService {
         &self,
         id: &OwnedAgentId,
         key: &StreamSessionKey,
-        stream: StreamId,
+        reader: LocalStreamReaderId,
         page: u64,
     ) -> Result<Vec<OplogIndex>, String> {
         let namespace = Self::namespace(id);
@@ -519,7 +464,7 @@ impl StreamSessionIndexService {
                 .get_raw(namespace.clone(), METADATA_FIELD)
                 .await?;
             let result = self
-                .read_consumer_page_inner(&namespace, key, stream, page)
+                .read_consumer_page_inner(&namespace, key, reader, page)
                 .await;
             let current = self
                 .kv
@@ -536,54 +481,25 @@ impl StreamSessionIndexService {
         &self,
         namespace: &KeyValueStorageNamespace,
         key: &StreamSessionKey,
-        stream: StreamId,
+        reader: LocalStreamReaderId,
         page: u64,
     ) -> Result<Option<Vec<OplogIndex>>, String> {
-        let start = page
-            .checked_mul(CONSUMER_JOURNAL_INDEX_PAGE_SIZE)
+        page.checked_mul(CONSUMER_JOURNAL_INDEX_PAGE_SIZE)
             .ok_or("consumer journal page overflow")?;
-        let mut session = key.clone();
-        let mut stream = stream;
-        let mut limit = u64::MAX;
-        let mut seen = HashSet::new();
-        loop {
-            if !seen.insert((session.clone(), stream)) {
-                return Err("consumer journal prefix cycle".into());
-            }
-            let row: Option<Vec<OplogIndex>> = self
-                .kv
-                .with_entity("stream_session_index", "read_consumer_journal", "page")
-                .get(
-                    namespace.clone(),
-                    &consumer_journal_index_field(&session, stream, page)?,
-                )
-                .await?;
-            if let Some(mut row) = row {
-                row.truncate(
-                    limit
-                        .saturating_sub(start)
-                        .min(CONSUMER_JOURNAL_INDEX_PAGE_SIZE) as usize,
-                );
-                return Ok(Some(row));
-            }
-            let prefix: Option<ConsumerJournalPrefix> = self
-                .kv
-                .with_entity("stream_session_index", "read_consumer_journal", "prefix")
-                .get(
-                    namespace.clone(),
-                    &consumer_journal_prefix_field(&session, stream)?,
-                )
-                .await?;
-            let Some(prefix) = prefix else {
-                return Ok(None);
-            };
-            limit = limit.min(prefix.count);
-            if start >= limit {
-                return Ok(None);
-            }
-            session = prefix.session;
-            stream = prefix.stream;
+        let row: Option<Vec<OplogIndex>> = self
+            .kv
+            .with_entity("stream_session_index", "read_consumer_journal", "page")
+            .get(
+                namespace.clone(),
+                &consumer_journal_index_field(key, reader, page)?,
+            )
+            .await?;
+        if let Some(ref row) = row
+            && row.len() as u64 > CONSUMER_JOURNAL_INDEX_PAGE_SIZE
+        {
+            return Err("consumer journal index page exceeds its bound".into());
         }
+        Ok(row)
     }
 
     pub async fn lookup_control_metadata(
@@ -874,10 +790,11 @@ impl StreamSessionIndexService {
                 .iter()
                 .any(|(index, cut)| {
                     *index > previously_discovered
-                        && cut
-                            .revert
-                            .as_ref()
-                            .is_some_and(|region| region.start <= metadata.covered_through)
+                        && (cut.cut_index <= metadata.covered_through
+                            || cut
+                                .revert
+                                .as_ref()
+                                .is_some_and(|region| region.start <= metadata.covered_through))
                 })
             {
                 self.refold_and_publish(id, mode, horizon, &namespace, expected.as_deref())
@@ -897,7 +814,7 @@ impl StreamSessionIndexService {
                 let record = oplog.download_payload(id, mode, record.clone()).await?;
                 if !matches!(
                     record.coordinate,
-                    golem_common::model::durable_stream::StreamRegistrationCoordinate::Nested { .. }
+                    golem_common::model::durable_stream::StreamRegistrationRecordCoordinate::Nested { .. }
                 ) || physical_chunk_end >= horizon
                 {
                     break;
@@ -954,7 +871,6 @@ impl StreamSessionIndexService {
                 let mut updates = HashMap::<IdempotencyKey, DurableStreamSessionStatus>::new();
                 let mut controls = HashMap::<StreamSessionKey, SessionControlMetadata>::new();
                 let mut journal_pages = HashMap::<String, Vec<OplogIndex>>::new();
-                let mut journal_prefixes = Vec::new();
                 let mut resume_offsets = HashMap::<String, OplogIndex>::new();
                 let mut consumer_deleting = None;
                 for (idx, entry) in &entries {
@@ -983,6 +899,9 @@ impl StreamSessionIndexService {
                     let OplogEntry::StreamSession { record, .. } = entry else {
                         continue;
                     };
+                    let producer_fingerprint = metadata.producer_fingerprint.ok_or_else(|| {
+                        "stream session records require producer fingerprint metadata".to_string()
+                    })?;
                     let decoded;
                     let record = match record {
                         OplogPayload::Inline(value) => value.as_ref(),
@@ -1007,70 +926,39 @@ impl StreamSessionIndexService {
                         }
                     };
                     if let StreamSessionRecord::ForkCut(cut) = record {
-                        let fork = producer_fields.fork.as_ref();
-                        if !cut.sessions.is_empty() && fork.is_none() {
-                            return Err("fork control projection is missing producer state".into());
-                        }
-                        if let Some(fork) = fork {
-                        for source in &fork.source_sessions {
-                            let old: SessionControlMetadata = self
-                                .kv
-                                .with_entity("stream_session_index", "read_control", "session")
-                                .get(namespace.clone(), &stream_control_index_field(source)?)
-                                .await?
-                                .unwrap_or_default();
-                            let target = cut
-                                .sessions
-                                .iter()
-                                .find(|mapping| &mapping.source == source)
-                                .map_or(source, |mapping| &mapping.continuation);
-                            let mut projected = old.for_fork(source, cut, &fork.retained_streams)?;
-                            if source == target {
+                        if let Some(fork) = producer_fields.fork.as_ref() {
+                            for key in &fork.sessions {
+                                let old = if let Some(control) = controls.remove(key) {
+                                    control
+                                } else {
+                                    self.kv
+                                        .with_entity(
+                                            "stream_session_index",
+                                            "read_control",
+                                            "session",
+                                        )
+                                        .get(namespace.clone(), &stream_control_index_field(key)?)
+                                        .await?
+                                        .unwrap_or_default()
+                                };
+                                let mut projected = old.for_fork(cut)?;
                                 projected.assign_recovery_slot(old.recovery_slot());
-                            }
-                            for (stream, count) in old.consumer_record_counts() {
-                                let next = cut
-                                    .streams
-                                    .iter()
-                                    .find(|mapping| mapping.source.stream_id == *stream)
-                                    .map_or(*stream, |mapping| mapping.continuation.stream_id);
-                                if (source != target || next != *stream)
-                                    && projected.consumer_record_counts().contains_key(&next)
-                                {
-                                    journal_prefixes.push((
-                                        consumer_journal_prefix_field(target, next)?,
-                                        serialize(&ConsumerJournalPrefix {
-                                            session: source.clone(),
-                                            stream: *stream,
-                                            count: *count,
-                                        })?,
-                                    ));
+                                controls.insert(key.clone(), projected);
+                                let field = Self::field(&key.idempotency_key);
+                                let status: Option<DurableStreamSessionStatus> = self.kv
+                                    .with_entity("stream_session_index", "read", "session")
+                                    .get(namespace.clone(), &field)
+                                    .await?;
+                                if let Some(mut status) = status {
+                                    status.apply_record(*idx, record);
+                                    updates.insert(key.idempotency_key.clone(), status);
                                 }
-                            }
-                            if source != target {
-                                let mut retired = SessionControlMetadata::default();
-                                retired.assign_recovery_slot(old.recovery_slot());
-                                retired.advance_coverage(*idx);
-                                controls.insert(source.clone(), retired);
-                            }
-                            controls.insert(target.clone(), projected);
-                        }
-                        }
-                        for mapping in &cut.sessions {
-                            let old: Option<DurableStreamSessionStatus> = self
-                                .kv
-                                .with_entity("stream_session_index", "read", "session")
-                                .get(
-                                    namespace.clone(),
-                                    &Self::field(&mapping.source.idempotency_key),
-                                )
-                                .await?;
-                            if let Some(mut status) = old {
-                                status.apply_record(*idx, record);
-                                updates.insert(mapping.continuation.idempotency_key.clone(), status);
                             }
                         }
                         consumer_deleting = Some(None);
+                        continue;
+                    }
+                    if metadata.stream_fork_lineage.resets_control(*idx, record) {
                         continue;
                     }
                     if let StreamSessionRecord::ConsumerDeleting(record) = record {
@@ -1078,7 +966,12 @@ impl StreamSessionIndexService {
                     }
                     if let StreamSessionRecord::ResumeAttempt(record) = record {
                         let field = stream_resume_index_field(
-                            &record.attempt.session_key,
+                            &StreamSessionKey {
+                                callee_environment_id: id.environment_id,
+                                callee: id.agent_id.clone(),
+                                callee_fingerprint: producer_fingerprint,
+                                idempotency_key: record.session_key.clone(),
+                            },
                             record.attempt.attempt_id,
                         )?;
                         if let std::collections::hash_map::Entry::Vacant(entry) =
@@ -1092,37 +985,42 @@ impl StreamSessionIndexService {
                             entry.insert(old.unwrap_or(*idx));
                         }
                     }
-                    if let Some(key) = crate::worker::stream_session_record_key(record) {
-                        if !controls.contains_key(key) {
+                    if let Some(key) = crate::worker::stream_session_record_key(
+                        record,
+                        id.environment_id,
+                        &id.agent_id,
+                        producer_fingerprint,
+                    ) {
+                        if !controls.contains_key(&key) {
                             let old: Option<SessionControlMetadata> = self
                                 .kv
                                 .with_entity("stream_session_index", "read_control", "session")
-                                .get(namespace.clone(), &stream_control_index_field(key)?)
+                                .get(namespace.clone(), &stream_control_index_field(&key)?)
                                 .await?;
                             controls.insert(key.clone(), old.unwrap_or_default());
                         }
-                        let control = controls.get_mut(key).unwrap();
-                        let stream = match record {
+                        let control = controls.get_mut(&key).unwrap();
+                        let reader = match record {
                             StreamSessionRecord::ConsumerItemValue(record) => {
-                                Some(record.stream_id)
+                                Some(record.reader_id)
                             }
                             StreamSessionRecord::ConsumerTerminal(record) => {
-                                Some(record.stream_id)
+                                Some(record.reader_id)
                             }
                             StreamSessionRecord::SourceUnavailable(record) => {
-                                Some(record.key.stream_id)
+                                Some(record.reader_id)
                             }
                             _ => None,
                         };
-                        if let Some(stream) = stream {
-                            let count = control.consumer_record_count(stream);
+                        if let Some(reader) = reader {
+                            let count = control.consumer_record_count(reader);
                             let field = consumer_journal_index_field(
-                                key,
-                                stream,
+                                &key,
+                                reader,
                                 count / CONSUMER_JOURNAL_INDEX_PAGE_SIZE,
                             )?;
                             if !journal_pages.contains_key(&field) {
-                                let old = self.read_consumer_page_inner(&namespace, key, stream, count / CONSUMER_JOURNAL_INDEX_PAGE_SIZE).await?;
+                                let old = self.read_consumer_page_inner(&namespace, &key, reader, count / CONSUMER_JOURNAL_INDEX_PAGE_SIZE).await?;
                                 journal_pages.insert(field.clone(), old.unwrap_or_default());
                             }
                             let page = journal_pages.get_mut(&field).unwrap();
@@ -1134,9 +1032,16 @@ impl StreamSessionIndexService {
                             }
                             page.push(*idx);
                         }
-                        control.apply(*idx, key, record);
+                        control.apply(
+                            *idx,
+                            &key,
+                            record,
+                            id.environment_id,
+                            &id.agent_id,
+                            producer_fingerprint,
+                        );
                     }
-                    let Some(key) = record_key(record).cloned() else {
+                    let Some(key) = record.local_session_key().cloned() else {
                         continue;
                     };
                     if !updates.contains_key(&key) {
@@ -1202,7 +1107,6 @@ impl StreamSessionIndexService {
                     .map(|(key, value)| Ok((Self::field(&key), serialize(&value)?)))
                     .collect::<Result<_, String>>()?;
                 fields.extend(producer_fields.rows);
-                fields.append(&mut journal_prefixes);
                 for (key, value) in controls {
                     fields.push((stream_control_index_field(&key)?, serialize(&value)?));
                 }
@@ -1381,24 +1285,5 @@ impl StreamSessionIndexService {
             }
         }
         Ok(value.first_prepared.map(|_| value))
-    }
-}
-
-fn record_key(record: &StreamSessionRecord) -> Option<&IdempotencyKey> {
-    match record {
-        StreamSessionRecord::Prepared(value) => Some(&value.attempt.session_key.idempotency_key),
-        StreamSessionRecord::Attached(value) => Some(&value.session_key.idempotency_key),
-        StreamSessionRecord::ResumeAttempt(value) => {
-            Some(&value.attempt.session_key.idempotency_key)
-        }
-        StreamSessionRecord::Detached(value) => Some(&value.session_key.idempotency_key),
-        StreamSessionRecord::InvocationResult(value) => Some(&value.session_key.idempotency_key),
-        StreamSessionRecord::Finished(value) => Some(&value.session_key.idempotency_key),
-        StreamSessionRecord::ConsumerCancelApplied(value) => {
-            Some(&value.intent.session_key.idempotency_key)
-        }
-        StreamSessionRecord::Tombstoned(value) => Some(&value.session_key.idempotency_key),
-        StreamSessionRecord::CancelRequested(value) => Some(&value.session_key.idempotency_key),
-        _ => None,
     }
 }

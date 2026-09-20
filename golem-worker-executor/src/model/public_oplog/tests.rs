@@ -20,7 +20,8 @@ use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::entity::{
-    EntityActivation, EntityActivationPolicy, ExecutableTarget, FilesystemCapability,
+    EntityActivation, EntityActivationPolicy, EntityInvocationPlan, EntityInvocationPlanLayer,
+    EntityInvocationPlanReference, ExecutableTarget, FilesystemCapability,
     ToolInvocationDescriptor, ToolMiddlewareName,
 };
 use golem_common::model::environment::EnvironmentId;
@@ -55,7 +56,10 @@ use golem_common::model::{
     AgentFingerprint, AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp, TransactionId,
 };
 use golem_common::read_only_lock;
-use golem_common::schema::{IntoTypedSchemaValue, SecretValuePayload};
+use golem_common::schema::tool::{CommandTree, Tool};
+use golem_common::schema::{
+    IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, SecretValuePayload,
+};
 use golem_service_base::model::component::Component;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use prost::Message;
@@ -67,6 +71,14 @@ use uuid::Uuid;
 /// Component service stub for entries whose rendering must not need component
 /// metadata (`Start`/`End`/`Cancelled` host call entries).
 struct PanicComponentService;
+
+fn test_tool_definition() -> Tool {
+    Tool {
+        version: "1.0.0".to_string(),
+        commands: CommandTree { nodes: Vec::new() },
+        schema: SchemaGraph::empty(),
+    }
+}
 
 #[async_trait]
 impl ComponentService for PanicComponentService {
@@ -111,6 +123,7 @@ fn make_agent_metadata(
 ) -> AgentMetadata {
     AgentMetadata {
         agent_id,
+        owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         env: vec![],
         environment_id,
         created_by,
@@ -157,7 +170,9 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
             binding: Box::new(CompiledToolBinding {
                 deployment_revision,
                 release_id: None,
-                agent_type_name: AgentTypeName("Agent".to_string()),
+                owner: golem_common::model::tool::ToolBindingOwner::AgentType {
+                    agent_type_name: AgentTypeName("Agent".to_string()),
+                },
                 tool_name: tool_name.clone(),
                 version: "1".to_string(),
                 metadata_version: "1".to_string(),
@@ -179,6 +194,7 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
         AgentEntity::ToolMiddleware(middleware_name) => EntityActivationPolicy::ToolMiddleware {
             middleware_name: middleware_name.clone(),
             provision: ToolProvisionConfig::default(),
+            config_keys_readable: Default::default(),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: ToolFilesystemAccess::Unset,
@@ -200,19 +216,65 @@ fn test_entity_request(
     operation: Option<EntityInvocationDescriptor>,
     input: TypedSchemaValue,
 ) -> HostRequest {
+    let activation = test_entity_activation(&entity);
+    let plan = match &entity {
+        AgentEntity::Tool(_) => {
+            EntityInvocationPlan::new(vec![EntityInvocationPlanLayer::Tool { activation }])
+        }
+        AgentEntity::ToolMiddleware(_) => EntityInvocationPlan::new(vec![
+            EntityInvocationPlanLayer::Middleware {
+                activation,
+                parameters: TypedSchemaValue::new(
+                    SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),
+                    SchemaValue::Tuple {
+                        elements: Vec::new(),
+                    },
+                ),
+                expected_definition: None,
+                presented_definition: None,
+                next_effective_definition: test_tool_definition(),
+                compatibility: None,
+            },
+            EntityInvocationPlanLayer::Tool {
+                activation: test_entity_activation(&AgentEntity::Tool(
+                    ToolName::try_from("test").unwrap(),
+                )),
+            },
+        ]),
+    }
+    .unwrap();
     let metadata = EntityInvocationRequest {
-        activation: test_entity_activation(&entity),
         entity,
         calling_principal: Principal::Agent(AgentPrincipal {
             agent_id: owner.agent_id.clone(),
         }),
         call_mode,
-        operation,
-        principal: None,
+        operation: operation.unwrap_or_else(|| {
+            EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+                attempt_ordinal: 0,
+                command_path: vec!["test".to_string()],
+                args: Vec::new(),
+                has_stdin: false,
+                has_stdout: false,
+                declares_stdout: false,
+                output_contract: golem_common::model::entity::ToolOutputContract {
+                    result: None,
+                    errors: Vec::new(),
+                },
+            })
+        }),
+        principal: Principal::Agent(AgentPrincipal {
+            agent_id: owner.agent_id.clone(),
+        }),
+        plan: EntityInvocationPlanReference::Root { plan },
+        assume_idempotence: true,
     };
     HostRequestEntityInvocation {
         metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
         input,
+        stream_session_idempotency_key: golem_common::model::IdempotencyKey::new(
+            "entity-stream-session".to_string(),
+        ),
     }
     .into()
 }
@@ -241,6 +303,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -304,6 +367,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -384,7 +448,12 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         Some(EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
             attempt_ordinal: 0,
             command_path: vec!["files".to_string(), "lookup".to_string()],
-            args: vec!["configured-secret-rendering".to_string()],
+            args: golem_common::model::card::ToolInvocationPattern::from_command_and_args(
+                &[],
+                &["configured-secret-rendering"],
+            )
+            .unwrap()
+            .args,
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,
@@ -832,6 +901,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -975,6 +1045,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let oplog = oplog_service
         .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
             None,
@@ -1157,6 +1228,9 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
     let entity_request: HostRequest = HostRequestEntityInvocation {
         metadata: vec![1, 2, 3],
         input: entity_input.clone(),
+        stream_session_idempotency_key: golem_common::model::IdempotencyKey::new(
+            "entity-stream-session".to_string(),
+        ),
     }
     .into();
     let entity_response: HostResponse = HostResponseEntityInvocation {

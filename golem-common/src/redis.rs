@@ -610,11 +610,11 @@ return 1
         Ok(())
     }
 
-    /// Validates a staged stream and atomically renames it to a previously absent target.
-    /// Returns 1 when published, 0 when the target exists, and -1 for an invalid stage.
-    pub async fn publish_staged_stream<K>(
+    /// Validates a source stream and atomically renames it to a previously absent target.
+    /// Returns 1 when moved, 0 when the target exists, and -1 for an invalid source.
+    pub async fn move_stream_if_absent<K>(
         &self,
-        stage_key: K,
+        source_key: K,
         target_key: K,
         expected_last_id: u64,
     ) -> RedisResult<i64>
@@ -635,7 +635,7 @@ return 1
         let args: Vec<Value> = vec![
             SCRIPT.into(),
             2.into(),
-            self.prefixed_key(stage_key).into(),
+            self.prefixed_key(source_key).into(),
             self.prefixed_key(target_key).into(),
             expected_last_id.to_string().into(),
         ];

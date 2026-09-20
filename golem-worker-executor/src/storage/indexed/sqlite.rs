@@ -14,7 +14,7 @@
 
 use super::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanCursor, ScanResume,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -230,6 +230,50 @@ impl IndexedStorage for SqliteIndexedStorage {
         Ok((new_cursor, keys))
     }
 
+    async fn scan_stable(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageMetaNamespace,
+        prefix: Option<&str>,
+        resume: Option<ScanResume>,
+        count: u64,
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        // Stored keys are never empty, so `key > ''` starts the first page at the first key.
+        let after = resume
+            .map(|resume| resume.into_marker("SQLite"))
+            .transpose()?
+            .unwrap_or_default();
+        let query = match prefix {
+            Some(prefix) => {
+                let like = Self::to_like_prefix(prefix);
+                sqlx::query_as(
+                    "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? AND key LIKE ? ESCAPE '\\' ORDER BY key LIMIT ?;",
+                )
+                .bind(Self::meta_namespace(namespace))
+                .bind(after)
+                .bind(like)
+                .bind(sqlx::types::Json(count))
+            }
+            None => sqlx::query_as(
+                "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? ORDER BY key LIMIT ?;",
+            )
+            .bind(Self::meta_namespace(namespace))
+            .bind(after)
+            .bind(sqlx::types::Json(count)),
+        };
+
+        let keys = self
+            .pool
+            .with_ro(svc_name, api_name)
+            .fetch_all_as::<(String,), _>(query)
+            .await
+            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())
+            .map_err(Self::classify_repo_error)?;
+
+        Ok((super::last_key_resume(&keys, count), keys))
+    }
+
     async fn append(
         &self,
         svc_name: &'static str,
@@ -240,18 +284,6 @@ impl IndexedStorage for SqliteIndexedStorage {
         id: u64,
         value: Vec<u8>,
     ) -> Result<(), IndexedStorageError> {
-        if id == 1 {
-            return self
-                .append_many(
-                    svc_name,
-                    api_name,
-                    entity_name,
-                    &namespace,
-                    key,
-                    Arc::from([(id, Bytes::from(value))]),
-                )
-                .await;
-        }
         record_db_serialized_size(DB_TYPE, svc_name, entity_name, value.len());
         let primary_oplog_insert = matches!(
             &namespace,
@@ -307,11 +339,6 @@ impl IndexedStorage for SqliteIndexedStorage {
         self.pool
             .with_tx(svc_name, api_name, |tx| {
                 async move {
-                    if primary_oplog_insert && pairs.iter().any(|(id, _)| *id == 1) {
-                        tx.execute(sqlx::query(
-                            "INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, x'');")
-                            .bind(format!("{namespace}-present")).bind(&key)).await?;
-                    }
                     for (id, value) in pairs.iter() {
                         tx.execute(
                             sqlx::query(
@@ -339,38 +366,32 @@ impl IndexedStorage for SqliteIndexedStorage {
             })
     }
 
-    async fn publish_staged(
+    async fn move_if_absent(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
-        agent_id: &golem_common::model::AgentId,
-        agent_mode: golem_common::model::agent::AgentMode,
-        stage_key: &str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
         target_key: &str,
         expected_last_id: u64,
     ) -> Result<bool, IndexedStorageError> {
         if expected_last_id == 0 {
             return Err(IndexedStorageError::Other(
-                "staged oplog expected tip must be greater than zero".to_string(),
+                "source index expected tip must be greater than zero".to_string(),
             ));
         }
         let expected = i64::try_from(expected_last_id).map_err(|_| {
-            IndexedStorageError::Other("staged oplog tip exceeds storage range".into())
+            IndexedStorageError::Other("source index tip exceeds storage range".into())
         })?;
-        let staged_namespace = Self::namespace(IndexedStorageNamespace::StagedOpLog {
-            agent_id: agent_id.clone(),
-            agent_mode,
-        });
-        let target_namespace = Self::namespace(IndexedStorageNamespace::OpLog {
-            agent_id: agent_id.clone(),
-            agent_mode,
-        });
-        let stage_key = stage_key.to_string();
+        let source_namespace = Self::namespace(source_namespace);
+        let target_namespace = Self::namespace(target_namespace);
+        let source_key = source_key.to_string();
         let target_key = target_key.to_string();
         let result = self.pool
             .with_tx(svc_name, api_name, |tx| {
                 async move {
-                    // Acquire the write lock before reading the stage. A read-first
+                    // Acquire the write lock before reading the source. A read-first
                     // transaction cannot upgrade its snapshot after a concurrent write.
                     let claimed = tx
                         .execute(
@@ -385,25 +406,25 @@ impl IndexedStorage for SqliteIndexedStorage {
                     if claimed.rows_affected() == 0 {
                         return Ok(false);
                     }
-                    let stage: (i64, Option<i64>, Option<i64>) = tx
+                    let source: (i64, Option<i64>, Option<i64>) = tx
                         .fetch_one_as(
                             sqlx::query_as("SELECT COUNT(*), MIN(id), MAX(id) FROM index_storage WHERE namespace = ? AND key = ?;")
-                                .bind(&staged_namespace)
-                                .bind(&stage_key),
+                                .bind(&source_namespace)
+                                .bind(&source_key),
                         )
                         .await?;
-                    if stage != (expected, Some(1), Some(expected)) {
-                        return Err(RepoError::InternalError(anyhow::anyhow!("staged oplog is missing, empty, gapped, or has an unexpected tip")));
+                    if source != (expected, Some(1), Some(expected)) {
+                        return Err(RepoError::InternalError(anyhow::anyhow!("source index is missing, empty, gapped, or has an unexpected tip")));
                     }
                     tx.execute(
                         sqlx::query("UPDATE index_storage SET namespace = ?, key = ? WHERE namespace = ? AND key = ?;")
                             .bind(&target_namespace)
                             .bind(&target_key)
-                            .bind(&staged_namespace)
-                            .bind(&stage_key),
+                            .bind(&source_namespace)
+                            .bind(&source_key),
                     ).await?;
                     tx.execute(sqlx::query("DELETE FROM index_storage WHERE namespace = ? AND key = ?;")
-                        .bind(format!("{staged_namespace}-present")).bind(&stage_key)).await?;
+                        .bind(format!("{source_namespace}-present")).bind(&source_key)).await?;
                     Ok(true)
                 }.boxed()
             })
@@ -523,6 +544,28 @@ impl IndexedStorage for SqliteIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
+            .map_err(Self::classify_repo_error)
+    }
+
+    async fn last_id(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        let query = sqlx::query_as::<_, (i64,)>(
+            "SELECT id FROM index_storage WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 1;",
+        )
+        .bind(Self::namespace(namespace))
+        .bind(key);
+
+        self.pool
+            .with_ro(svc_name, api_name)
+            .fetch_optional_as::<(i64,), _>(query)
+            .await
+            .map(|op| op.map(|row| row.0 as u64))
             .map_err(Self::classify_repo_error)
     }
 
@@ -663,7 +706,15 @@ mod tests {
             }
             let results =
                 futures::future::join_all(requests.iter().map(|(store, stage, target)| {
-                    store.publish_staged("test", "publish", &agent, mode, stage, target, 1)
+                    store.move_if_absent(
+                        "test",
+                        "publish",
+                        staged.clone(),
+                        stage,
+                        visible.clone(),
+                        target,
+                        1,
+                    )
                 }))
                 .await;
             let mut winners = 0;

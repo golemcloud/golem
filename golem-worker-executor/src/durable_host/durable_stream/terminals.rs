@@ -31,7 +31,7 @@ impl DurableStreamStore {
             .registrations
             .get(&handle.stream_id)
             .ok_or(StreamStoreError::UnknownStream(handle.stream_id))?;
-        if registration.handle != *handle {
+        if !registration.accepts(handle, self.generation()) {
             return Err(StreamStoreError::InvalidHandle);
         }
         let owned_input = registration.source_kind == StreamSourceKind::AgentHostedInput
@@ -60,7 +60,7 @@ impl DurableStreamStore {
     ) -> Result<(), StreamStoreError> {
         let result = StreamEndResult::ErrorContext(resource_exhausted_error_context()?);
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
-        let producer_fingerprint = self.producer_fingerprint;
+        let local_stream_id = index.local_stream_id(stream_id)?;
         context.begin_durable_effect();
         let mut entries = self
             .oplog
@@ -69,8 +69,7 @@ impl DurableStreamStore {
                     entity_parent_start_index,
                     StreamEndRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        stream_id,
-                        producer_fingerprint,
+                        stream_id: local_stream_id,
                         sequence,
                         offset: StreamOffset::new(oplog_index, 0),
                         authored_by: StreamTerminalAuthor::Protocol,
@@ -218,7 +217,7 @@ impl DurableStreamStore {
         }
         validate_new_terminal(&index, stream_id, sequence)?;
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
-        let producer_fingerprint = self.producer_fingerprint;
+        let local_stream_id = index.local_stream_id(stream_id)?;
         context.begin_durable_effect();
         let mut entries = self
             .oplog
@@ -227,8 +226,7 @@ impl DurableStreamStore {
                     entity_parent_start_index,
                     StreamEndRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        stream_id,
-                        producer_fingerprint,
+                        stream_id: local_stream_id,
                         sequence,
                         offset: StreamOffset::new(oplog_index, 0),
                         authored_by,
@@ -348,7 +346,7 @@ impl DurableStreamStore {
         index.ensure_producer_write_allowed()?;
         validate_new_terminal(&index, stream_id, sequence)?;
         let entity_parent_start_index = index.entity_parent_start_index(stream_id)?;
-        let producer_fingerprint = self.producer_fingerprint;
+        let local_stream_id = index.local_stream_id(stream_id)?;
         context.begin_durable_effect();
         let mut entries = self
             .oplog
@@ -357,8 +355,7 @@ impl DurableStreamStore {
                     entity_parent_start_index,
                     StreamCancelRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        stream_id,
-                        producer_fingerprint,
+                        stream_id: local_stream_id,
                         sequence,
                         offset: StreamOffset::new(oplog_index, 0),
                         authored_by: StreamTerminalAuthor::Protocol,
@@ -521,6 +518,33 @@ impl DurableStreamStore {
                 .await?;
         }
         Ok(())
+    }
+
+    /// Commits and publishes a cancellation at the supplied producer sequence.
+    pub(crate) async fn cancel(
+        &self,
+        stream_id: StreamId,
+        sequence: u64,
+        role: StreamCancelRole,
+        reason: StreamCancelReason,
+        details: Option<String>,
+    ) -> Result<ProducerWriteOutcome<StreamOffset>, StreamStoreError> {
+        self.run_owned(
+            None,
+            details.as_ref().map_or(0, String::len),
+            move |owner, context| async move {
+                let index = owner.index_for_terminal([], stream_id).await?;
+                let pending = owner
+                    .commit_cancel_locked(
+                        &context, index, stream_id, sequence, role, reason, details,
+                    )
+                    .await?;
+                owner
+                    .publish_committed_cancellation(Some(&context), pending)
+                    .await
+            },
+        )
+        .await
     }
 
     /// Installs a disposable signal used to stop active source work after durable cancellation.

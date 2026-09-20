@@ -367,6 +367,9 @@ impl Services {
             environment_service.clone(),
             environment_plugin_grant_service.clone(),
             registry_change_notifier.clone(),
+            config.component_file_upload.max_concurrent_files,
+            config.component_file_upload.max_uncompressed_file_size,
+            config.component_file_upload.max_uncompressed_archive_size,
         ));
 
         let login_system = LoginSystem::new(
@@ -481,6 +484,7 @@ impl Services {
             &config.builtin_plugins,
             builtin_plugin_owner_account_id,
             &repos.plugin_repo,
+            &auth_service,
             &application_service,
             &environment_service,
             &component_service,
@@ -494,6 +498,7 @@ impl Services {
 
         crate::services::builtin_tool_provisioner::provision_builtin_tools(
             builtin_tool_owner_account_id,
+            &auth_service,
             &application_service,
             &environment_service,
             &component_service,

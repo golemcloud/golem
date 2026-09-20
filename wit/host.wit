@@ -33,6 +33,7 @@ world golem {
   import golem:permissions/wallet@0.1.0;
   import golem:permissions/kernel-introspection@0.1.0;
   import golem:tool/host@0.1.0;
+  import golem:tool/underlying@0.1.0;
 
   // Agent guest-export interfaces the executor invokes through bindgen-typed
   // APIs (replacing the legacy dynamic `Func`/`Val` dispatch + value bridge).

@@ -152,9 +152,6 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-        key_value_storage: Arc<
-            dyn golem_worker_executor::storage::keyvalue::KeyValueStorage + Send + Sync,
-        >,
         active_agents: Arc<ActiveAgents<DebugContext>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<DebugContext>>,
@@ -191,7 +188,6 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
     ) -> anyhow::Result<All<DebugContext>> {
         create_debugging_service_services(
             direct_invocation_auth_service,
-            key_value_storage,
             active_agents,
             engine,
             linker,

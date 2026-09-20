@@ -56,6 +56,10 @@ world golem-agentic {
    export golem:tool/guest@0.1.0;
 }
 
+world golem-tool-underlying-types {
+   import golem:tool/underlying@0.1.0;
+}
+
 world golem-tool-middleware {
    include golem:tool/tool-middleware@0.1.0;
 }

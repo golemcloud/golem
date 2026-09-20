@@ -26,7 +26,7 @@ priv struct TaskSchedule {
 }
 
 ///|
-let scheduler : Scheduler = { coro_id: 0, curr_coro: None, tasks: Map([]) }
+let scheduler : Scheduler = { coro_id: 0, curr_coro: None, tasks: Map([]), }
 
 ///|
 fn current_coroutine() -> Coroutine {
@@ -38,7 +38,7 @@ fn task_schedule(waitable_set : WaitableSet) -> TaskSchedule {
   match scheduler.tasks.get(waitable_set) {
     Some(schedule) => schedule
     None => {
-      let schedule = { blocking: 0, run_later: Deque([]) }
+      let schedule = { blocking: 0, run_later: Deque([]), }
       scheduler.tasks.set(waitable_set, schedule)
       schedule
     }

@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
+use crate::durable_host::{ActiveAtomicRegion, register_atomic_region_call};
 use golem_common::model::entity::{
     AgentEntity, EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
     ToolInvocationClaimIdentity,
@@ -151,6 +152,7 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
     /// Shared signal for process-equivalent executor teardown. See
     /// [`DroppedCall::executor_shutdown`].
     pub(super) executor_shutdown: tokio_util::sync::CancellationToken,
+    pub(super) runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
     /// Whether switching this call to live execution requires a recovered, synchronized agent
     /// permission-card authority boundary.
     pub(super) requires_agent_authority: bool,
@@ -175,7 +177,7 @@ pub struct DurableCallSession<Pair: HostPayloadPair, P: DropPolicy> {
 pub struct LiveCallPermit(Arc<AtomicUsize>);
 
 impl LiveCallPermit {
-    pub(super) fn new(counter: Arc<AtomicUsize>) -> Self {
+    pub(crate) fn new(counter: Arc<AtomicUsize>) -> Self {
         counter.fetch_add(1, Ordering::AcqRel);
         Self(counter)
     }
@@ -290,6 +292,24 @@ pub(super) fn unregistered_atomic_lease(
             repairable_when_incomplete,
         ))
     })
+}
+
+fn register_live_repair_atomic_lease(
+    active_atomic_regions: &mut [ActiveAtomicRegion],
+    initiation_region: Option<OplogIndex>,
+    repairable_when_incomplete: bool,
+) -> Option<Arc<AtomicRegionLease>> {
+    let initiation_region = initiation_region?;
+    let applicable_region = active_atomic_regions
+        .iter()
+        .rev()
+        .find(|region| region.begin_index <= initiation_region)
+        .map(|region| region.begin_index)?;
+    register_atomic_region_call(
+        active_atomic_regions,
+        applicable_region,
+        repairable_when_incomplete,
+    )
 }
 
 struct PreparedAccessStart<Pair: HostPayloadPair, P: DropPolicy, Ctx: WorkerCtx> {
@@ -473,7 +493,10 @@ where
             },
             ctx.state.local_live_tail(),
             ctx.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
-            matches!(ctx.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+            matches!(
+                ctx.runtime,
+                OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+            ),
             ctx.entity_tool_operation(),
             ctx.public_state.clone(),
         )
@@ -504,7 +527,7 @@ where
     Ok(outcome)
 }
 
-async fn finish_prepared_access_to_live<T, D, Ctx>(
+pub(crate) async fn finish_prepared_access_to_live<T, D, Ctx>(
     pending: PendingReplayToLive,
     primary_runtime: bool,
     store: &Accessor<T, D>,
@@ -1176,7 +1199,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ctx.state.replay_state.clone(),
                 ctx.linear_memory.clone(),
                 ctx.state.local_live_tail(),
-                matches!(ctx.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+                matches!(
+                    ctx.runtime,
+                    OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+                ),
                 ctx.entity_tool_operation(),
                 ctx.public_state.clone(),
             )
@@ -1521,7 +1547,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             replaying_incomplete_entity: ctx
                 .entity_invocation_scope()
                 .is_some_and(|scope| scope.mode() == InvocationExecutionMode::ReplayingIncomplete),
-            tool_entity: matches!(ctx.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+            tool_entity: matches!(
+                ctx.runtime,
+                OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+            ),
             tool_operation: ctx.entity_tool_operation(),
             local_live_tail: ctx.state.local_live_tail(),
             replay_state: ctx.state.replay_state.clone(),
@@ -2519,6 +2548,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             execution_scope: executed.execution_scope,
             retry: executed.retry,
             executor_shutdown: ctx.public_state.worker().shutdown_token(),
+            runtime_teardown: ctx.stream_runtime_teardown_probe(),
             requires_agent_authority: false,
             agent_auth_ctx: None,
             drop_sink: executed.drop_sink,
@@ -3524,7 +3554,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 }
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
-                    || ctx.state.live_host_call_counter(),
+                    |initiation_region, repairable_when_incomplete| {
+                        let lease = register_live_repair_atomic_lease(
+                            &mut ctx.state.active_atomic_regions,
+                            initiation_region,
+                            repairable_when_incomplete,
+                        );
+                        (ctx.state.live_host_call_counter(), lease)
+                    },
                 )?;
                 if self.requires_agent_authority {
                     match ctx.capture_agent_auth_ctx_at_boundary().await {
@@ -3622,9 +3659,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 }
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
-                    || {
+                    |initiation_region, repairable_when_incomplete| {
                         store.with(|mut access| {
-                            get_ctx(access.data_mut()).state.live_host_call_counter()
+                            let state = &mut get_ctx(access.data_mut()).state;
+                            let lease = register_live_repair_atomic_lease(
+                                &mut state.active_atomic_regions,
+                                initiation_region,
+                                repairable_when_incomplete,
+                            );
+                            (state.live_host_call_counter(), lease)
                         })
                     },
                 )?;
@@ -3726,9 +3769,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 };
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
-                    || {
+                    |initiation_region, repairable_when_incomplete| {
                         store.with(|mut access| {
-                            get_ctx(access.data_mut()).state.live_host_call_counter()
+                            let state = &mut get_ctx(access.data_mut()).state;
+                            let lease = register_live_repair_atomic_lease(
+                                &mut state.active_atomic_regions,
+                                initiation_region,
+                                repairable_when_incomplete,
+                            );
+                            (state.live_host_call_counter(), lease)
                         })
                     },
                 )?;
@@ -3897,9 +3946,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 }
                 self.prepare_incomplete_live_repair(
                     Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS,
-                    || {
+                    |initiation_region, repairable_when_incomplete| {
                         store.with(|mut access| {
-                            get_ctx(access.data_mut()).state.live_host_call_counter()
+                            let state = &mut get_ctx(access.data_mut()).state;
+                            let lease = register_live_repair_atomic_lease(
+                                &mut state.active_atomic_regions,
+                                initiation_region,
+                                repairable_when_incomplete,
+                            );
+                            (state.live_host_call_counter(), lease)
                         })
                     },
                 )?;
@@ -4196,7 +4251,10 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     fn prepare_incomplete_live_repair(
         &mut self,
         allow_live_repair: bool,
-        get_counter: impl FnOnce() -> Arc<AtomicUsize>,
+        get_live_membership: impl FnOnce(
+            Option<OplogIndex>,
+            bool,
+        ) -> (Arc<AtomicUsize>, Option<Arc<AtomicRegionLease>>),
     ) -> Result<(), WorkerExecutorError> {
         if !allow_live_repair {
             self.finished = true;
@@ -4217,9 +4275,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ),
             ));
         }
+        let repairable_when_incomplete = self.retry.can_reexecute_on_incomplete_replay();
+        let initiation_region = self
+            .execution_scope
+            .atomic_lease
+            .as_ref()
+            .and_then(|lease| lease.owner());
+        let (counter, atomic_lease) =
+            get_live_membership(initiation_region, repairable_when_incomplete);
+        self.execution_scope.atomic_lease = atomic_lease;
         self.is_live = true;
         self.persisted = true;
-        self.live_call_permit = Some(LiveCallPermit::new(get_counter()));
+        self.live_call_permit = Some(LiveCallPermit::new(counter));
         Ok(())
     }
 }
@@ -5145,6 +5212,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             execution_scope,
             retry: self.retry,
             executor_shutdown: ctx.public_state.worker().shutdown_token(),
+            runtime_teardown: ctx.stream_runtime_teardown_probe(),
             requires_agent_authority: self.requires_agent_authority,
             agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,
@@ -5245,6 +5313,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> BegunCall<Pair, P> {
             execution_scope,
             retry: self.retry,
             executor_shutdown: ctx.public_state.worker().shutdown_token(),
+            runtime_teardown: ctx.stream_runtime_teardown_probe(),
             requires_agent_authority: self.requires_agent_authority,
             agent_auth_ctx: self.agent_auth_ctx,
             drop_sink: self.drop_sink,
@@ -5260,7 +5329,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> 
         if self.finished {
             return;
         }
-        if self.executor_shutdown.is_cancelled() {
+        if self.executor_shutdown.is_cancelled() || (self.runtime_teardown)() {
             self.execution_scope.release_atomic_lease();
             tracing::debug!(
                 start_idx = %self.start_idx,
@@ -5307,5 +5376,45 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> 
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable_host::{atomic_region_surviving_members, close_atomic_region};
+    use test_r::test;
+
+    #[test]
+    fn repair_lease_parent_transfer() {
+        let outer = OplogIndex::from_u64(10);
+        let inner = OplogIndex::from_u64(20);
+        let later_sibling = OplogIndex::from_u64(30);
+        let mut regions = vec![
+            ActiveAtomicRegion::new(outer, outer.next()),
+            ActiveAtomicRegion::new(inner, inner.next()),
+        ];
+        let replay_lease = unregistered_atomic_lease(Some(inner), true).unwrap();
+
+        close_atomic_region(&mut regions, inner);
+        regions.push(ActiveAtomicRegion::new(later_sibling, later_sibling.next()));
+        let repaired = register_live_repair_atomic_lease(
+            &mut regions,
+            replay_lease.owner(),
+            replay_lease.repairable_when_incomplete(),
+        )
+        .unwrap();
+
+        assert_eq!(replay_lease.owner(), Some(inner));
+        assert_eq!(repaired.owner(), Some(outer));
+        assert!(atomic_region_surviving_members(&regions, later_sibling).is_empty());
+        assert!(Arc::ptr_eq(
+            &atomic_region_surviving_members(&regions, outer)[0],
+            &repaired
+        ));
+
+        close_atomic_region(&mut regions, later_sibling);
+        close_atomic_region(&mut regions, outer);
+        assert_eq!(repaired.owner(), None);
     }
 }

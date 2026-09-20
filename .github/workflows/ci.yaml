@@ -32,7 +32,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.3"
+  WASM_RQUICKJS_VERSION: "0.4.4"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -50,6 +50,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-save-if: 'true'
+          install-protoc: 'true'
       # Test the build tooling (dev-tools/) first so a broken tool fails fast
       - name: Test build tools (dev-tools)
         run: cargo make --profile ci dev-tools-tests
@@ -60,7 +61,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
-        timeout-minutes: 15
+        timeout-minutes: 20
       - name: Packaging all binaries with cargo-nextest
         run: |
           mkdir -pv tmp
@@ -71,7 +72,7 @@ jobs:
         run: |
           mkdir tmp/golem-binaries
           tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
-        timeout-minutes: 2
+        timeout-minutes: 5
       - name: Save packaged binaries to cache
         uses: actions/cache/save@v5
         with:
@@ -87,6 +88,8 @@ jobs:
         with:
           fetch-depth: 1
       - uses: ./.github/actions/setup-rust
+        with:
+          install-protoc: 'true'
 
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
@@ -105,6 +108,7 @@ jobs:
         with:
           use-cache: 'false'
           install-cargo-binstall: 'true'
+          install-protoc: 'true'
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
@@ -260,6 +264,7 @@ jobs:
         with:
           cache-shared-key: 'cli-dev-release-ci'
           cache-save-if: 'true'
+          install-protoc: 'true'
       - name: Build CLI test binaries
         env:
           QUIET: true
@@ -1272,6 +1277,7 @@ jobs:
         with:
           fetch-tag: 'true'
           rust-targets: ${{ matrix.platform.target }}
+          install-protoc: 'true'
 
       - name: Prepare
         run: |
@@ -1384,6 +1390,7 @@ jobs:
           fetch-tag: 'true'
           cache-shared-key: 'release'
           cache-save-if: 'true'
+          install-protoc: 'true'
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Publish all packages
@@ -1428,6 +1435,7 @@ jobs:
           rust-targets: ${{ matrix.cfg.rust-target }}
           cache-shared-key: 'release-${{ matrix.cfg.rust-target }}'
           cache-save-if: 'true'
+          install-protoc: 'true'
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Set version for all packages
