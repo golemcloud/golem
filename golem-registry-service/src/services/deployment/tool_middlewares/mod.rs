@@ -13,8 +13,11 @@
 // limitations under the License.
 
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::component::{ComponentId, ComponentName};
 use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::tool::{CompiledToolBinding, RegisteredTool, ToolBindingInput, ToolName};
+use golem_common::model::tool::{
+    CompiledToolBinding, RegisteredTool, ToolBindingInput, ToolBindingOwner, ToolName,
+};
 use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
     ToolMiddlewareInstallation, ToolMiddlewareMergeMode,
@@ -25,7 +28,9 @@ use golem_common::schema::tool::compatibility::{
 use golem_common::schema::tool::validation::{validate_tool, validate_tool_middleware};
 use golem_common::schema::tool::{ErrorCase, Tool, ToolMiddlewareScope};
 use golem_common::schema::validation::is_equivalent_cross_graph;
-use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, TypeId};
+use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, TypeId, TypedSchemaValue};
+use golem_schema::schema::render::from_untrusted_json_value;
+use golem_schema::schema::validation::validate_value;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,11 +54,12 @@ pub struct CompiledToolMiddlewareChains {
 pub fn compile_tool_middleware_chains(
     deployment_revision: DeploymentRevision,
     registered_tools: &[RegisteredTool],
-    agent_tool_bindings: &[CompiledToolBinding],
+    tool_bindings: &[CompiledToolBinding],
     middleware_registrations: &[RegisteredToolMiddleware],
     universal_installations: &[ToolMiddlewareInstallation],
     environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
     agent_tool_binding_inputs: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
+    component_names: &BTreeMap<ComponentId, ComponentName>,
     compatibility_mode: ToolCompatibilityMode,
 ) -> CompiledToolMiddlewareChains {
     let tools = registered_tools
@@ -119,7 +125,75 @@ pub fn compile_tool_middleware_chains(
         };
     }
 
-    for binding in agent_tool_bindings {
+    // Bindings are already filtered to activations that can produce chains. Installed
+    // middleware outside that set is still deployment configuration and must not evade
+    // parameter validation merely because no compiled tool binding currently selects it.
+    if tool_bindings.is_empty() {
+        validate_unselected_parameters(
+            universal_installations,
+            middleware_registrations,
+            true,
+            None,
+            None,
+            &mut errors,
+        );
+    }
+    for (tool_name, binding) in environment_tool_bindings {
+        if !tool_bindings
+            .iter()
+            .filter(|item| &item.tool_name == tool_name)
+            .any(|item| {
+                let owner_binding = match &item.owner {
+                    ToolBindingOwner::AgentType { agent_type_name } => agent_tool_binding_inputs
+                        .get(agent_type_name)
+                        .and_then(|bindings| bindings.get(tool_name)),
+                    ToolBindingOwner::ComponentBaseline { component_id } => {
+                        component_names.get(component_id).and_then(|name| {
+                            tools
+                                .get(tool_name)
+                                .and_then(|tool| tool.component_bindings.get(name))
+                        })
+                    }
+                };
+                owner_binding.is_none_or(|binding| {
+                    binding.middleware.is_none()
+                        || binding.middleware_merge_mode.unwrap_or_default()
+                            != ToolMiddlewareMergeMode::Replace
+                })
+            })
+        {
+            validate_unselected_parameters(
+                binding.middleware.as_deref().unwrap_or_default(),
+                middleware_registrations,
+                false,
+                None,
+                Some(tool_name),
+                &mut errors,
+            );
+        }
+    }
+    for (agent_type_name, bindings) in agent_tool_binding_inputs {
+        for (tool_name, binding) in bindings {
+            if !tool_bindings.iter().any(|item| {
+                matches!(
+                    &item.owner,
+                    ToolBindingOwner::AgentType { agent_type_name: owner }
+                        if owner == agent_type_name
+                ) && &item.tool_name == tool_name
+            }) {
+                validate_unselected_parameters(
+                    binding.middleware.as_deref().unwrap_or_default(),
+                    middleware_registrations,
+                    false,
+                    Some(agent_type_name),
+                    Some(tool_name),
+                    &mut errors,
+                );
+            }
+        }
+    }
+
+    for binding in tool_bindings {
         let Some(tool) = tools.get(&binding.tool_name) else {
             errors.push(diagnostic(
                 binding,
@@ -129,10 +203,15 @@ pub fn compile_tool_middleware_chains(
             continue;
         };
         let environment = environment_tool_bindings.get(&binding.tool_name);
-        let agent = agent_tool_binding_inputs
-            .get(&binding.agent_type_name)
-            .and_then(|bindings| bindings.get(&binding.tool_name));
-        let per_tool = effective_installations(environment, agent);
+        let owner_binding = match &binding.owner {
+            ToolBindingOwner::AgentType { agent_type_name } => agent_tool_binding_inputs
+                .get(agent_type_name)
+                .and_then(|bindings| bindings.get(&binding.tool_name)),
+            ToolBindingOwner::ComponentBaseline { component_id } => component_names
+                .get(component_id)
+                .and_then(|name| tool.component_bindings.get(name)),
+        };
+        let per_tool = effective_installations(environment, owner_binding);
         let mut resolved = Vec::new();
         let mut valid = true;
         for (installation, universal) in universal_installations
@@ -159,8 +238,22 @@ pub fn compile_tool_middleware_chains(
         let universal_count = universal_installations.len();
         let mut effective = tool.definition.clone();
         let mut compiled_reversed = Vec::with_capacity(resolved.len());
-        for (installation, registration, universal) in resolved.iter().rev() {
+        for (occurrence_index, (installation, registration, universal)) in
+            resolved.iter().enumerate().rev()
+        {
             let next = effective.clone();
+            let parameters = match compile_parameters(installation, registration) {
+                Ok(parameters) => Some(parameters),
+                Err(message) => {
+                    errors.push(diagnostic(
+                        binding,
+                        Some(installation.name.to_string()),
+                        format!("occurrence {} parameters: {message}", occurrence_index + 1),
+                    ));
+                    valid = false;
+                    None
+                }
+            };
             let (expected, presented, compatibility, next_effective) = match &registration
                 .definition
                 .scope
@@ -225,10 +318,14 @@ pub fn compile_tool_middleware_chains(
                 _ => unreachable!("scope was checked while resolving"),
             };
             effective = next_effective;
+            let Some(parameters) = parameters else {
+                continue;
+            };
             compiled_reversed.push(CompiledToolMiddlewareOccurrence {
                 middleware: (*registration).clone(),
-                parameters: installation.parameters.clone(),
+                parameters,
                 provision: registration.provision.clone(),
+                config_keys_readable: binding.config_keys_readable.clone(),
                 secret_keys_readable: binding.secret_keys_readable.clone(),
                 secret_keys_revealable: binding.secret_keys_revealable.clone(),
                 filesystem_access: installation.filesystem_access,
@@ -245,7 +342,7 @@ pub fn compile_tool_middleware_chains(
         debug_assert_eq!(compiled_reversed.len(), universal_count + per_tool.len());
         chains.push(CompiledToolMiddlewareChain {
             deployment_revision,
-            agent_type_name: binding.agent_type_name.clone(),
+            owner: binding.owner.clone(),
             tool_name: binding.tool_name.clone(),
             effective_definition: effective,
             occurrences: compiled_reversed,
@@ -255,6 +352,48 @@ pub fn compile_tool_middleware_chains(
         chains,
         warnings,
         errors,
+    }
+}
+
+fn compile_parameters(
+    installation: &ToolMiddlewareInstallation,
+    registration: &RegisteredToolMiddleware,
+) -> Result<TypedSchemaValue, String> {
+    let graph = &registration.definition.parameter_schema;
+    let value = from_untrusted_json_value(graph, &graph.root, &installation.parameters.0)
+        .map_err(|error| error.to_string())?;
+    validate_value(graph, &graph.root, &value).map_err(|errors| {
+        errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    })?;
+    Ok(TypedSchemaValue::new(graph.clone(), value))
+}
+
+fn validate_unselected_parameters(
+    installations: &[ToolMiddlewareInstallation],
+    registrations: &[RegisteredToolMiddleware],
+    universal: bool,
+    agent_type_name: Option<&AgentTypeName>,
+    tool_name: Option<&ToolName>,
+    errors: &mut Vec<ToolMiddlewareCompileDiagnostic>,
+) {
+    for (index, installation) in installations.iter().enumerate() {
+        let message = match resolve_registration(installation, registrations, universal) {
+            Ok(registration) => compile_parameters(installation, registration)
+                .err()
+                .map(|message| format!("occurrence {} parameters: {message}", index + 1)),
+            Err(message) => Some(message),
+        };
+        let Some(message) = message else { continue };
+        errors.push(ToolMiddlewareCompileDiagnostic {
+            agent_type_name: agent_type_name.cloned(),
+            tool_name: tool_name.cloned(),
+            middleware_name: Some(installation.name.to_string()),
+            message,
+        });
     }
 }
 
@@ -585,7 +724,10 @@ fn diagnostic(
     message: impl Into<String>,
 ) -> ToolMiddlewareCompileDiagnostic {
     ToolMiddlewareCompileDiagnostic {
-        agent_type_name: Some(binding.agent_type_name.clone()),
+        agent_type_name: match &binding.owner {
+            ToolBindingOwner::AgentType { agent_type_name } => Some(agent_type_name.clone()),
+            ToolBindingOwner::ComponentBaseline { .. } => None,
+        },
         tool_name: Some(binding.tool_name.clone()),
         middleware_name,
         message: message.into(),

@@ -10,6 +10,7 @@ import "golem/component/linear_memory.proto";
 import "golem/common/empty.proto";
 import "golem/schema/agent.proto";
 import "golem/tool/tool.proto";
+import "golem/worker/agent_config.proto";
 
 message KnownExports {
   optional string agent_guest_interface = 1;
@@ -30,7 +31,17 @@ message ComponentMetadata {
   map<string, golem.component.AgentTypeProvisionConfig> agent_type_provision_configs = 9;
   map<string, ToolDeploymentMetadata> tools = 11;
   map<string, AgentMethodStreams> agent_method_streams = 12;
-  map<string, ToolMiddlewareDeploymentMetadata> tool_middlewares = 13;
+  golem.schema.ComponentConfigSchema config_schema = 13;
+  ComponentProvisionConfig component_provision_config = 14;
+  map<string, ToolMiddlewareDeploymentMetadata> tool_middlewares = 15;
+}
+
+message ComponentProvisionConfig {
+  map<string, string> env = 1;
+  repeated golem.worker.TypedAgentConfigEntry config = 2;
+  repeated PluginInstallation plugins = 3;
+  repeated InitialAgentFile files = 4;
+  bytes initial_permissions = 5;
 }
 
 message ToolMiddlewareDeploymentMetadata {
@@ -52,6 +63,7 @@ message ToolDeploymentMetadata {
   ToolProvisionConfig provision = 2;
   optional ToolBindingInput environment_binding = 3;
   map<string, ToolBindingInput> agent_bindings = 4;
+  map<string, ToolBindingInput> component_bindings = 5;
 }
 
 message ToolProvisionConfig {

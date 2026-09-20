@@ -220,6 +220,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker.ensure_component_agent_ingress("resume")?;
         let metadata = worker.get_latest_worker_metadata().await;
 
         match resume_decision(
@@ -291,6 +292,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker.ensure_component_agent_ingress("update")?;
         let metadata = worker.get_latest_worker_metadata().await;
         if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
@@ -304,22 +306,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let component_metadata = deps
-            .component_service()
-            .get_metadata(
-                owned_agent_id.agent_id.component_id,
-                Some(metadata.last_known_status.component_revision),
-            )
-            .await?;
-
-        if let Ok(agent_id) = ParsedAgentId::parse(
-            &owned_agent_id.agent_id.agent_id,
-            &component_metadata.metadata,
-        ) && let Some(agent_type) = component_metadata
-            .metadata
-            .find_agent_type_by_name_ref(&agent_id.agent_type)
-            && agent_type.mode == AgentMode::Ephemeral
-        {
+        if metadata.agent_mode == AgentMode::Ephemeral {
             return Err(WorkerExecutorError::invalid_request(
                 "Ephemeral workers cannot be updated",
             ));
@@ -444,6 +431,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker.ensure_component_agent_ingress("revert")?;
         worker.revert_internal(target, resolved_revert).await
     }
 
@@ -532,6 +520,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_existing_suspended(deps, owned_agent_id, principal).await?;
+        worker.ensure_component_agent_ingress("plugin change")?;
         let metadata = worker.get_latest_worker_metadata().await;
         if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
@@ -547,9 +536,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await?;
         let agent_type =
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
-        let grant_id = agent_type
-            .as_ref()
-            .and_then(|agent_type| component_metadata.metadata.agent_type_plugins(agent_type))
+        let grant_id = component_metadata
+            .metadata
+            .owner_plugins(metadata.owner_kind, agent_type.as_ref())
             .and_then(|plugins| {
                 plugins
                     .iter()

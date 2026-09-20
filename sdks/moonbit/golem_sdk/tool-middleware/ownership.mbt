@@ -56,7 +56,7 @@ priv struct ResourceAcquisition {
 
 ///|
 priv struct InvocationOwnershipState {
-  mut active : Bool
+  mut active_calls : Int
   mut revoked : Bool
   mut raw_dropped : Bool
   mut next_generation : Int
@@ -79,7 +79,7 @@ pub fn OwnershipContext::new(drop_raw : () -> Unit) -> OwnershipContext {
   {
     state: {
       val: {
-        active: false,
+        active_calls: 0,
         revoked: false,
         raw_dropped: false,
         next_generation: 0,
@@ -109,23 +109,20 @@ fn[E] OwnershipContext::begin_call(
   if self.state.val.revoked {
     return Err(InvalidInput("underlying tool is no longer available"))
   }
-  if self.state.val.active {
-    return Err(InvalidInput("underlying tool invocation is already active"))
-  }
-  self.state.val.active = true
+  self.state.val.active_calls += 1
   Ok(())
 }
 
 ///|
 fn OwnershipContext::finish_call(self : OwnershipContext) -> Unit {
-  self.state.val.active = false
+  self.state.val.active_calls -= 1
   self.drop_raw_if_idle()
 }
 
 ///|
 fn OwnershipContext::drop_raw_if_idle(self : OwnershipContext) -> Unit {
   if self.state.val.revoked &&
-    !self.state.val.active &&
+    self.state.val.active_calls == 0 &&
     !self.state.val.raw_dropped {
     self.state.val.raw_dropped = true
     (self.state.val.drop_raw)()
@@ -347,7 +344,9 @@ priv enum StdinOwnershipState {
 
 ///|
 priv struct MiddlewareStdinState {
-  mut stream : @async-core.Stream[Byte]?
+  mut stream : @async-core.Stream[
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
+  ]?
   mut ownership : StdinOwnershipState
 }
 
@@ -360,9 +359,11 @@ pub struct MiddlewareStdin {
 
 ///|
 #doc(hidden)
-pub fn OwnershipContext::own_stdin(
+pub fn OwnershipContext::own_wire_stdin(
   self : OwnershipContext,
-  stream : @async-core.Stream[Byte],
+  stream : @async-core.Stream[
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
+  ],
 ) -> MiddlewareStdin {
   let state : Ref[MiddlewareStdinState] = {
     val: { stream: Some(stream), ownership: StdinAvailable, },
@@ -370,6 +371,15 @@ pub fn OwnershipContext::own_stdin(
   let owned : MiddlewareStdin = { context: self, state, }
   self.register_cleanup(fn() { owned.drop_if_available() })
   owned
+}
+
+///|
+#doc(hidden)
+pub fn OwnershipContext::own_stdin(
+  self : OwnershipContext,
+  stream : @async-core.Stream[Byte],
+) -> MiddlewareStdin {
+  self.own_wire_stdin(byte_stream_items(stream))
 }
 
 ///|
@@ -406,7 +416,10 @@ fn MiddlewareStdin::check_for_underlying(
 #doc(hidden)
 pub fn MiddlewareStdin::take_for_underlying(
   self : MiddlewareStdin,
-) -> Result[@async-core.Stream[Byte], String] {
+) -> Result[
+  @async-core.Stream[Result[FixedArray[Byte], @toolStreams.ByteStreamFailure]],
+  String,
+] {
   if self.context.is_revoked() {
     return Err("middleware invocation ownership has been revoked")
   }

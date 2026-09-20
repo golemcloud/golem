@@ -686,7 +686,7 @@ async fn __golem_tool_invoke_MoonBitStreaming(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_MoonBitStreaming()
   let __golem_index = match
     __golem_def.command_index_by_path(__golem_command_path) {
@@ -695,7 +695,7 @@ async fn __golem_tool_invoke_MoonBitStreaming(
       return @tool.reject_wire_invocation(
         __golem_input,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
   let __golem_decoded = @tool.decode_canonical_input(
@@ -720,9 +720,7 @@ async fn __golem_tool_invoke_MoonBitStreaming(
           return @tool.reject_decoded_invocation(
             __golem_decoded,
             __golem_stdin,
-            @toolCommon.ToolError::InvalidInput(
-              "required stdin stream is missing",
-            ),
+            @types.ToolError::InvalidInput("required stdin stream is missing"),
           )
       }
       let stdout = match __golem_stdout {
@@ -731,17 +729,15 @@ async fn __golem_tool_invoke_MoonBitStreaming(
           return @tool.reject_decoded_invocation(
             __golem_decoded,
             __golem_stdin,
-            @toolCommon.ToolError::InvalidInput(
-              "required stdout stream is missing",
-            ),
+            @types.ToolError::InvalidInput("required stdout stream is missing"),
           )
       }
       let __golem_value = MoonBitStreaming::stream(mode, stdin, stdout)
       Ok(
         @tool.invocation_result_value(__golem_value) catch {
           @asyncCore.Cancelled::Cancelled as error => raise error
-          @toolCommon.ToolError::InvalidResult(message) =>
-            return Err(@toolCommon.ToolError::InvalidResult(message))
+          @types.ToolError::InvalidResult(message) =>
+            return Err(@types.ToolError::InvalidResult(message))
           error => raise error
         },
       )
@@ -750,7 +746,7 @@ async fn __golem_tool_invoke_MoonBitStreaming(
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
 }
@@ -1150,7 +1146,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGrep()
   let __golem_index = match
     __golem_def.command_index_by_path(__golem_command_path) {
@@ -1159,7 +1155,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
       return @tool.reject_wire_invocation(
         __golem_input,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
   let __golem_decoded = @tool.decode_canonical_input(
@@ -1224,9 +1220,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
           return @tool.reject_decoded_invocation(
             __golem_decoded,
             __golem_stdin,
-            @toolCommon.ToolError::InvalidInput(
-              "required stdin stream is missing",
-            ),
+            @types.ToolError::InvalidInput("required stdin stream is missing"),
           )
       }
       let stdout = match __golem_stdout {
@@ -1235,9 +1229,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
           return @tool.reject_decoded_invocation(
             __golem_decoded,
             __golem_stdin,
-            @toolCommon.ToolError::InvalidInput(
-              "required stdout stream is missing",
-            ),
+            @types.ToolError::InvalidInput("required stdout stream is missing"),
           )
       }
       match
@@ -1249,8 +1241,8 @@ async fn __golem_tool_invoke_CanonicalGrep(
           Ok(
             @tool.invocation_result_value(__golem_value) catch {
               @asyncCore.Cancelled::Cancelled as error => raise error
-              @toolCommon.ToolError::InvalidResult(message) =>
-                return Err(@toolCommon.ToolError::InvalidResult(message))
+              @types.ToolError::InvalidResult(message) =>
+                return Err(@types.ToolError::InvalidResult(message))
               error => raise error
             },
           )
@@ -1260,22 +1252,19 @@ async fn __golem_tool_invoke_CanonicalGrep(
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
-                @toolCommon.ToolError::InvalidResult(
+                @types.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error,
                 ),
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
             @asyncCore.Cancelled::Cancelled as error => raise error
-            @toolCommon.ToolError::InvalidResult(message) =>
-              return Err(@toolCommon.ToolError::InvalidResult(message))
+            @types.ToolError::InvalidResult(message) =>
+              return Err(@types.ToolError::InvalidResult(message))
             error => raise error
           }
           Err(
-            @toolCommon.ToolError::CustomError({
-              name: __golem_error_name,
-              payload,
-            }),
+            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
           )
         }
       }
@@ -1285,7 +1274,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdin stream",
           ),
         )
@@ -1294,7 +1283,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
           ),
         )
@@ -1347,8 +1336,8 @@ async fn __golem_tool_invoke_CanonicalGrep(
           Ok(
             @tool.invocation_result_value(__golem_value) catch {
               @asyncCore.Cancelled::Cancelled as error => raise error
-              @toolCommon.ToolError::InvalidResult(message) =>
-                return Err(@toolCommon.ToolError::InvalidResult(message))
+              @types.ToolError::InvalidResult(message) =>
+                return Err(@types.ToolError::InvalidResult(message))
               error => raise error
             },
           )
@@ -1358,22 +1347,19 @@ async fn __golem_tool_invoke_CanonicalGrep(
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
-                @toolCommon.ToolError::InvalidResult(
+                @types.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error,
                 ),
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
             @asyncCore.Cancelled::Cancelled as error => raise error
-            @toolCommon.ToolError::InvalidResult(message) =>
-              return Err(@toolCommon.ToolError::InvalidResult(message))
+            @types.ToolError::InvalidResult(message) =>
+              return Err(@types.ToolError::InvalidResult(message))
             error => raise error
           }
           Err(
-            @toolCommon.ToolError::CustomError({
-              name: __golem_error_name,
-              payload,
-            }),
+            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
           )
         }
       }
@@ -1382,7 +1368,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
 }
@@ -2070,7 +2056,7 @@ async fn __golem_tool_invoke_CanonicalGit(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGit()
   let __golem_index = match
     __golem_def.command_index_by_path(__golem_command_path) {
@@ -2079,7 +2065,7 @@ async fn __golem_tool_invoke_CanonicalGit(
       return @tool.reject_wire_invocation(
         __golem_input,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
   let __golem_decoded = @tool.decode_canonical_input(
@@ -2116,7 +2102,7 @@ async fn __golem_tool_invoke_CanonicalGit(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdin stream",
           ),
         )
@@ -2125,7 +2111,7 @@ async fn __golem_tool_invoke_CanonicalGit(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
           ),
         )
@@ -2219,8 +2205,8 @@ async fn __golem_tool_invoke_CanonicalGit(
           Ok(
             @tool.invocation_result_value(__golem_value) catch {
               @asyncCore.Cancelled::Cancelled as error => raise error
-              @toolCommon.ToolError::InvalidResult(message) =>
-                return Err(@toolCommon.ToolError::InvalidResult(message))
+              @types.ToolError::InvalidResult(message) =>
+                return Err(@types.ToolError::InvalidResult(message))
               error => raise error
             },
           )
@@ -2230,22 +2216,19 @@ async fn __golem_tool_invoke_CanonicalGit(
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
-                @toolCommon.ToolError::InvalidResult(
+                @types.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error,
                 ),
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
             @asyncCore.Cancelled::Cancelled as error => raise error
-            @toolCommon.ToolError::InvalidResult(message) =>
-              return Err(@toolCommon.ToolError::InvalidResult(message))
+            @types.ToolError::InvalidResult(message) =>
+              return Err(@types.ToolError::InvalidResult(message))
             error => raise error
           }
           Err(
-            @toolCommon.ToolError::CustomError({
-              name: __golem_error_name,
-              payload,
-            }),
+            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
           )
         }
       }
@@ -2255,7 +2238,7 @@ async fn __golem_tool_invoke_CanonicalGit(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdin stream",
           ),
         )
@@ -2264,7 +2247,7 @@ async fn __golem_tool_invoke_CanonicalGit(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
           ),
         )
@@ -2358,8 +2341,8 @@ async fn __golem_tool_invoke_CanonicalGit(
           Ok(
             @tool.invocation_result_value(__golem_value) catch {
               @asyncCore.Cancelled::Cancelled as error => raise error
-              @toolCommon.ToolError::InvalidResult(message) =>
-                return Err(@toolCommon.ToolError::InvalidResult(message))
+              @types.ToolError::InvalidResult(message) =>
+                return Err(@types.ToolError::InvalidResult(message))
               error => raise error
             },
           )
@@ -2369,22 +2352,19 @@ async fn __golem_tool_invoke_CanonicalGit(
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
-                @toolCommon.ToolError::InvalidResult(
+                @types.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error,
                 ),
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
             @asyncCore.Cancelled::Cancelled as error => raise error
-            @toolCommon.ToolError::InvalidResult(message) =>
-              return Err(@toolCommon.ToolError::InvalidResult(message))
+            @types.ToolError::InvalidResult(message) =>
+              return Err(@types.ToolError::InvalidResult(message))
             error => raise error
           }
           Err(
-            @toolCommon.ToolError::CustomError({
-              name: __golem_error_name,
-              payload,
-            }),
+            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
           )
         }
       }
@@ -2393,7 +2373,7 @@ async fn __golem_tool_invoke_CanonicalGit(
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
 }
@@ -2773,7 +2753,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalRemote()
   let __golem_index = match
     __golem_def.command_index_by_path(__golem_command_path) {
@@ -2782,7 +2762,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
       return @tool.reject_wire_invocation(
         __golem_input,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
   let __golem_decoded = @tool.decode_canonical_input(
@@ -2797,7 +2777,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdin stream",
           ),
         )
@@ -2806,7 +2786,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
           ),
         )
@@ -2876,22 +2856,19 @@ async fn __golem_tool_invoke_CanonicalRemote(
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
-                @toolCommon.ToolError::InvalidResult(
+                @types.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error,
                 ),
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
             @asyncCore.Cancelled::Cancelled as error => raise error
-            @toolCommon.ToolError::InvalidResult(message) =>
-              return Err(@toolCommon.ToolError::InvalidResult(message))
+            @types.ToolError::InvalidResult(message) =>
+              return Err(@types.ToolError::InvalidResult(message))
             error => raise error
           }
           Err(
-            @toolCommon.ToolError::CustomError({
-              name: __golem_error_name,
-              payload,
-            }),
+            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
           )
         }
       }
@@ -2901,7 +2878,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdin stream",
           ),
         )
@@ -2910,7 +2887,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
           ),
         )
@@ -2931,22 +2908,19 @@ async fn __golem_tool_invoke_CanonicalRemote(
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
-                @toolCommon.ToolError::InvalidResult(
+                @types.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error,
                 ),
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
             @asyncCore.Cancelled::Cancelled as error => raise error
-            @toolCommon.ToolError::InvalidResult(message) =>
-              return Err(@toolCommon.ToolError::InvalidResult(message))
+            @types.ToolError::InvalidResult(message) =>
+              return Err(@types.ToolError::InvalidResult(message))
             error => raise error
           }
           Err(
-            @toolCommon.ToolError::CustomError({
-              name: __golem_error_name,
-              payload,
-            }),
+            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
           )
         }
       }
@@ -2956,7 +2930,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdin stream",
           ),
         )
@@ -2965,7 +2939,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
           ),
         )
@@ -3026,22 +3000,19 @@ async fn __golem_tool_invoke_CanonicalRemote(
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
-                @toolCommon.ToolError::InvalidResult(
+                @types.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error,
                 ),
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
             @asyncCore.Cancelled::Cancelled as error => raise error
-            @toolCommon.ToolError::InvalidResult(message) =>
-              return Err(@toolCommon.ToolError::InvalidResult(message))
+            @types.ToolError::InvalidResult(message) =>
+              return Err(@types.ToolError::InvalidResult(message))
             error => raise error
           }
           Err(
-            @toolCommon.ToolError::CustomError({
-              name: __golem_error_name,
-              payload,
-            }),
+            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
           )
         }
       }
@@ -3050,7 +3021,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
 }
@@ -3325,7 +3296,7 @@ async fn __golem_tool_invoke_CanonicalStash(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalStash()
   let __golem_index = match
     __golem_def.command_index_by_path(__golem_command_path) {
@@ -3334,7 +3305,7 @@ async fn __golem_tool_invoke_CanonicalStash(
       return @tool.reject_wire_invocation(
         __golem_input,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
   let __golem_decoded = @tool.decode_canonical_input(
@@ -3349,7 +3320,7 @@ async fn __golem_tool_invoke_CanonicalStash(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdin stream",
           ),
         )
@@ -3358,7 +3329,7 @@ async fn __golem_tool_invoke_CanonicalStash(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
           ),
         )
@@ -3395,22 +3366,19 @@ async fn __golem_tool_invoke_CanonicalStash(
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
-                @toolCommon.ToolError::InvalidResult(
+                @types.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error,
                 ),
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
             @asyncCore.Cancelled::Cancelled as error => raise error
-            @toolCommon.ToolError::InvalidResult(message) =>
-              return Err(@toolCommon.ToolError::InvalidResult(message))
+            @types.ToolError::InvalidResult(message) =>
+              return Err(@types.ToolError::InvalidResult(message))
             error => raise error
           }
           Err(
-            @toolCommon.ToolError::CustomError({
-              name: __golem_error_name,
-              payload,
-            }),
+            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
           )
         }
       }
@@ -3420,7 +3388,7 @@ async fn __golem_tool_invoke_CanonicalStash(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdin stream",
           ),
         )
@@ -3429,7 +3397,7 @@ async fn __golem_tool_invoke_CanonicalStash(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
           ),
         )
@@ -3458,22 +3426,19 @@ async fn __golem_tool_invoke_CanonicalStash(
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
-                @toolCommon.ToolError::InvalidResult(
+                @types.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error,
                 ),
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
             @asyncCore.Cancelled::Cancelled as error => raise error
-            @toolCommon.ToolError::InvalidResult(message) =>
-              return Err(@toolCommon.ToolError::InvalidResult(message))
+            @types.ToolError::InvalidResult(message) =>
+              return Err(@types.ToolError::InvalidResult(message))
             error => raise error
           }
           Err(
-            @toolCommon.ToolError::CustomError({
-              name: __golem_error_name,
-              payload,
-            }),
+            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
           )
         }
       }
@@ -3483,7 +3448,7 @@ async fn __golem_tool_invoke_CanonicalStash(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdin stream",
           ),
         )
@@ -3492,7 +3457,7 @@ async fn __golem_tool_invoke_CanonicalStash(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
           ),
         )
@@ -3521,22 +3486,19 @@ async fn __golem_tool_invoke_CanonicalStash(
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
-                @toolCommon.ToolError::InvalidResult(
+                @types.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error,
                 ),
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
             @asyncCore.Cancelled::Cancelled as error => raise error
-            @toolCommon.ToolError::InvalidResult(message) =>
-              return Err(@toolCommon.ToolError::InvalidResult(message))
+            @types.ToolError::InvalidResult(message) =>
+              return Err(@types.ToolError::InvalidResult(message))
             error => raise error
           }
           Err(
-            @toolCommon.ToolError::CustomError({
-              name: __golem_error_name,
-              payload,
-            }),
+            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
           )
         }
       }
@@ -3545,7 +3507,7 @@ async fn __golem_tool_invoke_CanonicalStash(
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
 }
@@ -3679,7 +3641,7 @@ async fn __golem_tool_invoke_CanonicalBigBound(
   __golem_stdin : @asyncCore.Stream[Byte]?,
   __golem_stdout : @tool.ProviderStdout?,
   __golem_principal : @tool.Principal,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalBigBound()
   let __golem_index = match
     __golem_def.command_index_by_path(__golem_command_path) {
@@ -3688,7 +3650,7 @@ async fn __golem_tool_invoke_CanonicalBigBound(
       return @tool.reject_wire_invocation(
         __golem_input,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
   let __golem_decoded = @tool.decode_canonical_input(
@@ -3703,7 +3665,7 @@ async fn __golem_tool_invoke_CanonicalBigBound(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdin stream",
           ),
         )
@@ -3712,7 +3674,7 @@ async fn __golem_tool_invoke_CanonicalBigBound(
         return @tool.reject_decoded_invocation(
           __golem_decoded,
           __golem_stdin,
-          @toolCommon.ToolError::InvalidInput(
+          @types.ToolError::InvalidInput(
             "command does not accept a stdout stream",
           ),
         )
@@ -3733,22 +3695,19 @@ async fn __golem_tool_invoke_CanonicalBigBound(
             Ok(payload) => payload
             Err(encode_error) =>
               return Err(
-                @toolCommon.ToolError::InvalidResult(
+                @types.ToolError::InvalidResult(
                   "failed serializing custom tool error: " + encode_error,
                 ),
               )
           }
           let payload = @tool.encode_error_payload(payload) catch {
             @asyncCore.Cancelled::Cancelled as error => raise error
-            @toolCommon.ToolError::InvalidResult(message) =>
-              return Err(@toolCommon.ToolError::InvalidResult(message))
+            @types.ToolError::InvalidResult(message) =>
+              return Err(@types.ToolError::InvalidResult(message))
             error => raise error
           }
           Err(
-            @toolCommon.ToolError::CustomError({
-              name: __golem_error_name,
-              payload,
-            }),
+            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
           )
         }
       }
@@ -3757,7 +3716,7 @@ async fn __golem_tool_invoke_CanonicalBigBound(
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
-        @toolCommon.ToolError::InvalidCommandPath(__golem_command_path),
+        @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
   }
 }

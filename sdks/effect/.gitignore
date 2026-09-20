@@ -12,6 +12,7 @@ agent-tool-middleware-template/
 tool-middleware-template/
 .template-target/
 golem-types-generated/
+wasm/*.wasm
 wasm/artifact-provenance.json
 
 # Integration test build outputs

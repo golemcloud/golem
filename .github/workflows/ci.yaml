@@ -61,7 +61,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
-        timeout-minutes: 15
+        timeout-minutes: 20
       - name: Packaging all binaries with cargo-nextest
         run: |
           mkdir -pv tmp
@@ -72,7 +72,7 @@ jobs:
         run: |
           mkdir tmp/golem-binaries
           tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
-        timeout-minutes: 2
+        timeout-minutes: 5
       - name: Save packaged binaries to cache
         uses: actions/cache/save@v5
         with:
@@ -373,6 +373,7 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
+      - merge-test-components
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -501,6 +502,12 @@ jobs:
           mkdir -pv target/dev-release-ci
           cp tmp/golem-cli-test-binaries/* target/dev-release-ci/
           chmod +x target/dev-release-ci/*
+
+      - name: Restore streaming test components
+        if: matrix.group.shard == 'agents_streaming'
+        uses: ./.github/actions/restore-test-components
+        with:
+          run-id: ${{ github.run_id }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:

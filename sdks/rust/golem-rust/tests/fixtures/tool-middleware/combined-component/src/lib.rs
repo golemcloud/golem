@@ -1,6 +1,6 @@
 use golem_rust::{
-    agent_definition, agent_implementation, tool_implementation, tool_middleware,
-    tool::ToolInvokeError,
+    agent_definition, agent_implementation, tool::ToolInvokeError, tool_implementation,
+    tool_middleware,
 };
 use middleware_definition::{
     PublicEcho, PublicEchoClient, PublicEchoMiddleware, PublicEchoUnderlying, PublicError,
@@ -51,7 +51,7 @@ impl CombinedPolicy {
 impl PublicEchoMiddleware for CombinedPolicy {
     async fn echo(
         &self,
-        underlying: &mut PublicEchoUnderlying,
+        underlying: &PublicEchoUnderlying,
         value: String,
     ) -> Result<String, ToolInvokeError<PublicError>> {
         underlying.echo(value).await
