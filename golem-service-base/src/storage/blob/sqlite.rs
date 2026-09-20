@@ -301,7 +301,8 @@ impl BlobStorage for SqliteBlobStorage {
 
         // Text comparisons use the BINARY collation, so the match is case-sensitive. A parent
         // below `directory` is at least `directory/` and less than `directory0`, because `0` is
-        // the character after `/`. This range can use the primary key.
+        // the character after `/`. The OR keeps SQLite from a search on `parent`, so it searches
+        // the primary key for `namespace` and then reads the rows of that namespace.
         let query = if directory.is_empty() {
             sqlx::query_as::<_, (String, String, i64)>(
                 "SELECT parent, name, size FROM blob_storage WHERE namespace = ? AND is_directory = FALSE;",

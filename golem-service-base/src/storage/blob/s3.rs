@@ -448,7 +448,9 @@ impl S3BlobStorage {
     ///
     /// A response that reports an error for a key is an error of that attempt, so the request
     /// goes again within the retry budget. The new attempt sends the keys that the attempt before
-    /// deleted too. The backend relies on S3 to report such a key as deleted, not as an error.
+    /// deleted too. In quiet mode, S3 gives an error only for a key that it did not delete. A
+    /// delete of a key that is not there is not an error, so a key that the attempt before
+    /// deleted gives no error.
     async fn delete_objects_request(
         &self,
         target_label: &'static str,
@@ -737,12 +739,12 @@ impl BlobStorage for S3BlobStorage {
         start: u64,
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
-        validate_relative_blob_path(path)?;
         // A `start` after `end` is an invalid range (RFC 9110, section 14.1.1). RFC 9110 lets a
         // server ignore or reject it (section 14.2), so the backend sends no request for it.
         if start > end {
             return Err(BlobRangeError { start, end }.into());
         }
+        validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;

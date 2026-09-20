@@ -592,6 +592,27 @@ async fn get_raw_slice_refuses_an_inverted_range_without_a_request() {
 }
 
 #[test]
+async fn get_raw_slice_refuses_an_inverted_range_before_it_checks_the_path() {
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, "abcdef"));
+
+    let result = storage
+        .get_raw_slice(
+            "test",
+            "get-raw-slice",
+            namespace(),
+            Path::new("../x"),
+            3,
+            2,
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(range_error), sent(&requests).len()),
+        (Err(Some(BlobRangeError { start: 3, end: 2 })), 0)
+    );
+}
+
+#[test]
 async fn get_raw_slice_turns_416_into_a_range_error_without_a_retry() {
     let (storage, requests) = scripted_storage("", |_, _| Answer::new(416, INVALID_RANGE));
 
