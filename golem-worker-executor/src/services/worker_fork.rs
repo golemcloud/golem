@@ -46,7 +46,6 @@ use crate::services::{
     promise, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
 };
 use crate::services::{HasRdbmsService, HasWorkerForkService, rdbms};
-use crate::storage::keyvalue::KeyValueStorage;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -100,7 +99,6 @@ pub trait WorkerForkService: Send + Sync {
 }
 
 pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
-    pub export_fork_admission: Arc<admission::ExportForkAdmission>,
     pub rpc: Arc<dyn Rpc>,
     pub active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     pub agent_types: Arc<dyn agent_types::AgentTypesService>,
@@ -356,7 +354,6 @@ impl<Ctx: WorkerCtx> HasNativeToolCatalog<Ctx> for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
-            export_fork_admission: self.export_fork_admission.clone(),
             rpc: self.rpc.clone(),
             active_agents: self.active_agents.clone(),
             agent_types: self.agent_types.clone(),
@@ -399,7 +396,6 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
 impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         rpc: Arc<dyn Rpc>,
         active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
         engine: Arc<wasmtime::Engine>,
@@ -439,7 +435,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         leak_sentinel: Arc<()>,
     ) -> Self {
         Self {
-            export_fork_admission: Arc::new(admission::ExportForkAdmission::new(key_value_storage)),
             rpc,
             active_agents,
             agent_types,

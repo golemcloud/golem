@@ -34,8 +34,9 @@ use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
     AttachmentId, AttemptId, PersistedStreamInvocationDescriptor, StartAttemptDescriptor,
-    StreamInvocationId, StreamSessionAttachedRecord, StreamSessionPreparedRecord,
-    StreamSessionRecord,
+    StreamExportFork, StreamExportForkAdmittedRecord, StreamExportForkCandidate,
+    StreamForkCutRecord, StreamId, StreamInvocationId, StreamSessionAttachedRecord,
+    StreamSessionPreparedRecord, StreamSessionRecord,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
@@ -46,8 +47,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
-    AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult,
+    AgentMetadata, AgentStatus, AgentStatusRecord, FailedUpdateRecord, IdempotencyKey,
     OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
     PendingUpdateRef, ReceivedCardTransferState, RetryConfig, RetryPolicyState, ScanCursor,
     SuccessfulUpdateRecord, Timestamp,
@@ -426,6 +427,511 @@ fn any_entry_moves_the_oplog_index() {
 
     assert_eq!(folded.oplog_idx, OplogIndex::from_u64(11));
     assert_ne!(folded, baseline);
+}
+
+fn export_owner_fingerprint() -> AgentFingerprint {
+    AgentFingerprint(uuid::Uuid::from_u128(1))
+}
+
+fn export_admission_baseline() -> AgentStatusRecord {
+    AgentStatusRecord {
+        export_fork_admissions: golem_common::model::ExportForkAdmissions {
+            owner_fingerprint: Some(export_owner_fingerprint()),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn export_fork_admission(target: AgentId, session: &str, updated_millis: u64) -> OplogEntry {
+    let source = AgentId {
+        component_id: target.component_id,
+        agent_id: "source".into(),
+    };
+    OplogEntry::StreamSession {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        record: OplogPayload::Inline(Box::new(StreamSessionRecord::ExportForkAdmitted(
+            StreamExportForkAdmittedRecord {
+                format_version: 1,
+                target,
+                request_hash: vec![1; 32],
+                candidate: StreamExportForkCandidate {
+                    export: StreamExportFork {
+                        source,
+                        source_environment_id: EnvironmentId::new(),
+                        source_fingerprint: export_owner_fingerprint(),
+                        source_path: "/source".into(),
+                        session: session.into(),
+                        slot: "output".into(),
+                        expected_method: "run".into(),
+                        requested_offset: None,
+                        anchor: None,
+                        sub_offset: 0,
+                        content_type: "application/octet-stream".into(),
+                        initial_content_hash: vec![2; 32],
+                        closed: false,
+                    },
+                    horizon: OplogIndex::from_u64(20),
+                    cut: OplogIndex::from_u64(10),
+                    selected: StreamId(uuid::Uuid::new_v4()),
+                    retained_through: None,
+                    initial: None,
+                },
+                updated_millis,
+                credit_millis: updated_millis + 100,
+            },
+        ))),
+    }
+}
+
+#[test]
+fn export_fork_admission_fold_is_incremental_and_idempotent_per_target() {
+    let target = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "target".into(),
+    };
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::from_u64(2),
+            export_fork_admission(target.clone(), "s", 10),
+        ),
+        (
+            OplogIndex::from_u64(3),
+            export_fork_admission(target.clone(), "s", 20),
+        ),
+    ]);
+    let rebuilt = update_status_with_new_entries(
+        AgentMode::Durable,
+        export_admission_baseline(),
+        entries.clone(),
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    let first = update_status_with_new_entries(
+        AgentMode::Durable,
+        export_admission_baseline(),
+        BTreeMap::from([(
+            OplogIndex::from_u64(2),
+            entries[&OplogIndex::from_u64(2)].clone(),
+        )]),
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    let incremental = update_status_with_new_entries(
+        AgentMode::Durable,
+        first,
+        BTreeMap::from([(
+            OplogIndex::from_u64(3),
+            entries[&OplogIndex::from_u64(3)].clone(),
+        )]),
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(incremental, rebuilt);
+    let all = rebuilt.export_fork_admissions;
+    assert_eq!(all.session_counts.get("s"), Some(&1));
+    assert_eq!(
+        all.reservations[&target].oplog_index,
+        OplogIndex::from_u64(3)
+    );
+    assert_eq!(all.credit_millis, Some(120));
+}
+
+#[test]
+fn export_fork_admission_fold_accepts_serialized_inline_payload() {
+    let target = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "target".into(),
+    };
+    let OplogEntry::StreamSession {
+        timestamp,
+        entity_parent_start_index,
+        record: OplogPayload::Inline(record),
+    } = export_fork_admission(target.clone(), "s", 10)
+    else {
+        unreachable!()
+    };
+    let bytes = golem_common::serialization::serialize(record.as_ref()).unwrap();
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(2),
+        OplogEntry::StreamSession {
+            timestamp,
+            entity_parent_start_index,
+            record: OplogPayload::SerializedInline {
+                bytes,
+                cached: None,
+            },
+        },
+    )]);
+
+    let rebuilt = update_status_with_new_entries(
+        AgentMode::Durable,
+        export_admission_baseline(),
+        entries,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+
+    assert!(
+        rebuilt
+            .export_fork_admissions
+            .reservations
+            .contains_key(&target)
+    );
+    assert_eq!(
+        rebuilt.export_fork_admissions.session_counts.get("s"),
+        Some(&1)
+    );
+}
+
+#[test]
+fn export_fork_admission_fold_accepts_cached_payloads_and_rejects_missing_external() {
+    let target = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "target".into(),
+    };
+    let OplogEntry::StreamSession {
+        record: OplogPayload::Inline(record),
+        ..
+    } = export_fork_admission(target.clone(), "s", 10)
+    else {
+        unreachable!()
+    };
+    let bytes = golem_common::serialization::serialize(record.as_ref()).unwrap();
+
+    for payload in [
+        OplogPayload::SerializedInline {
+            bytes,
+            cached: Some(Arc::new(record.as_ref().clone())),
+        },
+        OplogPayload::External {
+            payload_id: PayloadId::new(),
+            md5_hash: vec![0; 16],
+            cached: Some(Arc::new(record.as_ref().clone())),
+        },
+    ] {
+        let rebuilt = update_status_with_new_entries(
+            AgentMode::Durable,
+            export_admission_baseline(),
+            BTreeMap::from([(
+                OplogIndex::from_u64(2),
+                OplogEntry::stream_session(None, payload),
+            )]),
+            &RetryConfig::default(),
+        )
+        .unwrap();
+        assert!(
+            rebuilt
+                .export_fork_admissions
+                .reservations
+                .contains_key(&target)
+        );
+    }
+
+    let error = super::update_status_with_new_entries(
+        AgentMode::Durable,
+        export_admission_baseline(),
+        BTreeMap::from([(
+            OplogIndex::from_u64(2),
+            OplogEntry::stream_session(
+                None,
+                OplogPayload::External {
+                    payload_id: PayloadId::new(),
+                    md5_hash: vec![0; 16],
+                    cached: None,
+                },
+            ),
+        )]),
+        &RetryConfig::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        "durable stream session record payload has not been loaded"
+    );
+}
+
+#[test]
+fn export_fork_admission_fold_distinguishes_atomic_skip_revert_and_new_owner() {
+    let target = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "target".into(),
+    };
+    let admitted = export_fork_admission(target.clone(), "s", 10);
+    let region = OplogRegion::from_index_range(OplogIndex::from_u64(2)..=OplogIndex::from_u64(2));
+    let retained = super::calculate_export_fork_admissions(
+        export_admission_baseline().export_fork_admissions,
+        &DeletedRegions::new(),
+        &BTreeMap::from([
+            (OplogIndex::from_u64(2), admitted.clone()),
+            (
+                OplogIndex::from_u64(3),
+                OplogEntry::Jump {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                    jump: region.clone(),
+                },
+            ),
+        ]),
+    )
+    .unwrap();
+    assert!(retained.reservations.contains_key(&target));
+
+    let deleted = DeletedRegionsBuilder::from_regions(vec![region]).build();
+    let reverted = super::calculate_export_fork_admissions(
+        export_admission_baseline().export_fork_admissions,
+        &deleted,
+        &BTreeMap::from([(OplogIndex::from_u64(2), admitted)]),
+    )
+    .unwrap();
+    assert!(reverted.reservations.is_empty());
+
+    let cut = StreamForkCutRecord {
+        format_version: 1,
+        request_hash: vec![3; 32],
+        creation_fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+        export: None,
+        cut_index: OplogIndex::from_u64(2),
+        revert: None,
+        epoch_floor: 1,
+        selected_stream_id: None,
+        retained_through: None,
+    };
+    let unchanged = super::calculate_export_fork_admissions(
+        retained,
+        &DeletedRegions::new(),
+        &BTreeMap::from([(
+            OplogIndex::from_u64(4),
+            OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+            },
+        )]),
+    )
+    .unwrap();
+    assert!(unchanged.reservations.contains_key(&target));
+}
+
+#[test]
+fn export_fork_admission_fold_ignores_ancestor_after_reverting_before_fork_cut() {
+    let target = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "ancestor-target".into(),
+    };
+    let cut = StreamForkCutRecord {
+        format_version: 1,
+        request_hash: vec![3; 32],
+        creation_fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+        export: None,
+        cut_index: OplogIndex::from_u64(2),
+        revert: None,
+        epoch_floor: 1,
+        selected_stream_id: None,
+        retained_through: None,
+    };
+    let mut create = TestCase::builder(0).build().entries[0].oplog_entry.clone();
+    let child_fingerprint = AgentFingerprint(uuid::Uuid::from_u128(2));
+    let OplogEntry::Create { instance_id, .. } = &mut create else {
+        unreachable!()
+    };
+    *instance_id = child_fingerprint.0;
+    let entries = BTreeMap::from([
+        (OplogIndex::INITIAL, create),
+        (
+            OplogIndex::from_u64(2),
+            export_fork_admission(target.clone(), "ancestor-session", 10),
+        ),
+        (
+            OplogIndex::from_u64(3),
+            OplogEntry::stream_session(
+                None,
+                OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
+            ),
+        ),
+    ]);
+    let deleted = DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+        OplogIndex::from_u64(3)..=OplogIndex::from_u64(3),
+    )])
+    .build();
+
+    let rebuilt = super::update_status_with_precomputed_regions(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        entries,
+        &RetryConfig::default(),
+        deleted,
+        DeletedRegions::new(),
+        true,
+    )
+    .unwrap();
+
+    assert_eq!(
+        rebuilt.export_fork_admissions.owner_fingerprint,
+        Some(child_fingerprint)
+    );
+    assert!(
+        !rebuilt
+            .export_fork_admissions
+            .reservations
+            .contains_key(&target)
+    );
+    assert!(rebuilt.export_fork_admissions.session_counts.is_empty());
+}
+
+#[test]
+fn export_fork_admission_retry_before_publication_recovers_cut_and_budgets() {
+    use crate::services::worker_fork::admission::{self, Admission};
+
+    let target = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "first".into(),
+    };
+    let OplogEntry::StreamSession {
+        record: OplogPayload::Inline(template),
+        ..
+    } = export_fork_admission(target.clone(), "session", 1500)
+    else {
+        unreachable!()
+    };
+    let StreamSessionRecord::ExportForkAdmitted(template) = *template else {
+        unreachable!()
+    };
+    let original = template.candidate;
+    let accepted = admission::reserve(
+        &Default::default(),
+        target.clone(),
+        vec![1; 32],
+        original.clone(),
+        1,
+        2,
+        1500,
+    )
+    .unwrap();
+    assert_eq!(accepted.credit_millis, 1000);
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(21),
+        OplogEntry::stream_session(
+            None,
+            OplogPayload::Inline(Box::new(StreamSessionRecord::ExportForkAdmitted(accepted))),
+        ),
+    )]);
+    // No target exists yet; reconstruct solely from the source's committed admission.
+    let rebuilt = update_status_with_new_entries(
+        AgentMode::Durable,
+        export_admission_baseline(),
+        entries,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    let mut later = original.clone();
+    later.cut = OplogIndex::from_u64(30);
+    later.horizon = OplogIndex::from_u64(40);
+    assert_eq!(
+        admission::reserve(
+            &rebuilt.export_fork_admissions,
+            target.clone(),
+            vec![1; 32],
+            later.clone(),
+            0,
+            0,
+            1500
+        ),
+        Err(Admission::Existing {
+            oplog_index: OplogIndex::from_u64(21)
+        })
+    );
+    assert_eq!(
+        admission::reserve(
+            &rebuilt.export_fork_admissions,
+            target.clone(),
+            vec![2; 32],
+            later.clone(),
+            10,
+            10,
+            1500
+        ),
+        Err(Admission::Conflict)
+    );
+    let second = AgentId {
+        agent_id: "second".into(),
+        ..target.clone()
+    };
+    assert_eq!(
+        admission::reserve(
+            &rebuilt.export_fork_admissions,
+            second.clone(),
+            vec![2; 32],
+            later.clone(),
+            1,
+            2,
+            1500
+        ),
+        Err(Admission::LimitReached)
+    );
+    later.export.session = "other-session".into();
+    let second_record = admission::reserve(
+        &rebuilt.export_fork_admissions,
+        second,
+        vec![2; 32],
+        later.clone(),
+        1,
+        2,
+        1500,
+    )
+    .unwrap();
+    assert_eq!(second_record.credit_millis, 0);
+    let rebuilt = update_status_with_new_entries(
+        AgentMode::Durable,
+        rebuilt,
+        BTreeMap::from([(
+            OplogIndex::from_u64(22),
+            OplogEntry::stream_session(
+                None,
+                OplogPayload::Inline(Box::new(StreamSessionRecord::ExportForkAdmitted(
+                    second_record,
+                ))),
+            ),
+        )]),
+        &RetryConfig::default(),
+    )
+    .unwrap();
+    let third = AgentId {
+        agent_id: "third".into(),
+        ..target
+    };
+    later.export.session = "third-session".into();
+    for now in [1400, 1999] {
+        assert_eq!(
+            admission::reserve(
+                &rebuilt.export_fork_admissions,
+                third.clone(),
+                vec![3; 32],
+                later.clone(),
+                1,
+                2,
+                now
+            ),
+            Err(Admission::RateLimited {
+                retry_after_seconds: 1
+            })
+        );
+    }
+    assert_eq!(
+        admission::reserve(
+            &rebuilt.export_fork_admissions,
+            third,
+            vec![3; 32],
+            later,
+            1,
+            2,
+            2000
+        )
+        .unwrap()
+        .credit_millis,
+        0
+    );
 }
 
 #[test]
@@ -1887,12 +2393,17 @@ impl TestCaseBuilder {
         owned_agent_id: OwnedAgentId,
         component_revision: ComponentRevision,
     ) -> Self {
+        let instance_id = Uuid::new_v4();
         let status = AgentStatusRecord {
             component_revision,
             component_revision_for_replay: component_revision,
             component_size: 100,
             total_linear_memory_size: 200,
             oplog_idx: OplogIndex::INITIAL,
+            export_fork_admissions: golem_common::model::ExportForkAdmissions {
+                owner_fingerprint: Some(AgentFingerprint(instance_id)),
+                ..Default::default()
+            },
             ..Default::default()
         };
         TestCaseBuilder {
@@ -1911,7 +2422,7 @@ impl TestCaseBuilder {
                     HashSet::new(),
                     Vec::new(),
                     None,
-                    Uuid::new_v4(),
+                    instance_id,
                 ),
                 expected_status: status.clone(),
             }],

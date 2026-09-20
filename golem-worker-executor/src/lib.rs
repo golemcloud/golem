@@ -355,7 +355,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
         active_agents: Arc<ActiveAgents<Ctx>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<Ctx>>,
@@ -392,7 +391,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     ) -> anyhow::Result<All<Ctx>> {
         let native_tool_catalog = self.create_native_tool_catalog()?;
         let worker_fork = Arc::new(DefaultWorkerFork::new(
-            key_value_storage,
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
                 shard_service.clone(),
@@ -1035,7 +1033,6 @@ pub async fn create_worker_executor_impl<
     let all = bootstrap
         .create_services(
             direct_invocation_auth_service,
-            key_value_storage.clone(),
             active_agents,
             engine,
             linker,

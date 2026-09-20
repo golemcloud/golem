@@ -4,11 +4,10 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at http://license.golem.cloud/LICENSE
 
-use super::{DefaultWorkerFork, admission::Admission, stream_cut};
+use super::{DefaultWorkerFork, admission, admission::Admission, stream_cut};
 use crate::durable_host::durable_stream::DurableStreamStore;
 use crate::services::HasOplog;
 use crate::services::oplog::{CommitLevel, OplogService, OplogServiceOps};
-use crate::storage::keyvalue::KeyValueStorageNamespace;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -17,27 +16,18 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{
-    StreamExportFork, StreamForkCutRecord, StreamId, StreamItemsPayload, StreamOffset,
-    StreamSessionRecord,
+    StreamExportFork, StreamForkCutRecord, StreamItemsPayload, StreamOffset, StreamSessionRecord,
 };
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::{AgentFingerprint, AgentId, OplogIndex, OwnedAgentId, Timestamp};
 use golem_common::schema::SchemaGraph;
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
 use uuid::Uuid;
 
-#[derive(Clone, Debug, PartialEq, Eq, desert_rust::BinaryCodec)]
-pub(super) struct Candidate {
-    pub export: StreamExportFork,
-    pub horizon: OplogIndex,
-    pub cut: OplogIndex,
-    pub selected: StreamId,
-    pub retained_through: Option<StreamOffset>,
-    pub initial: Option<StreamItemsPayload>,
-}
+pub(super) use golem_common::model::durable_stream::StreamExportForkCandidate as Candidate;
 
 enum Error {
     Rejected(ForkStreamSlotRejection),
@@ -131,24 +121,18 @@ async fn execute<Ctx: WorkerCtx>(
         .await?
         .ok_or_else(|| reject(Reason::NotFound))?
         .initial_worker_metadata;
-    let namespace = KeyValueStorageNamespace::ExportForkAdmissions {
-        environment_id,
-        agent_id: source_id.clone(),
-        fingerprint: metadata.fingerprint,
-    };
-    match service
-        .export_fork_admission
-        .check(
-            namespace.clone(),
-            &target_id,
-            &request.session,
-            request.max_forks_per_session,
-            request.max_forks_per_second,
-            Timestamp::now_utc().to_millis(),
-        )
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-    {
+    let worker = Worker::find_durable_stream_worker(service, &source)
+        .await?
+        .ok_or_else(|| reject(Reason::NotFound))?;
+    let status = worker.get_export_fork_status().await?;
+    match admission::check(
+        &status.export_fork_admissions,
+        &target_id,
+        &request.session,
+        request.max_forks_per_session,
+        request.max_forks_per_second,
+        Timestamp::now_utc().to_millis(),
+    ) {
         Some(Admission::LimitReached) => return Err(reject(Reason::Conflict)),
         Some(Admission::RateLimited {
             retry_after_seconds,
@@ -161,14 +145,12 @@ async fn execute<Ctx: WorkerCtx>(
         }
         _ => {}
     }
-    let saved = service
-        .export_fork_admission
-        .candidate(namespace.clone(), &target_id)
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    let saved = status.export_fork_admissions.reservations.get(&target_id);
     let mut candidate = match saved {
-        Some(bytes) => {
-            let candidate: Candidate = deserialize(&bytes).map_err(WorkerExecutorError::runtime)?;
+        Some(record) => {
+            let candidate = worker
+                .read_export_fork_candidate(record.oplog_index)
+                .await?;
             if !matches_request(&candidate.export, request, &source_id) {
                 return Err(reject(Reason::Conflict));
             }
@@ -211,47 +193,19 @@ async fn execute<Ctx: WorkerCtx>(
             request.max_copied_bytes,
         )
         .await?;
-        let admission = service
-            .export_fork_admission
-            .reserve(
-                namespace,
+        let admission = worker
+            .reserve_export_fork(
                 target_id.clone(),
-                request.session.clone(),
                 hash.to_vec(),
-                serialize(&candidate).map_err(WorkerExecutorError::runtime)?,
+                candidate.clone(),
                 request.max_forks_per_session,
                 request.max_forks_per_second,
-                Timestamp::now_utc().to_millis(),
             )
-            .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-        match admission {
-            Admission::Reserved {
-                candidate: winner, ..
-            } => {
-                let winner: Candidate =
-                    deserialize(&winner).map_err(WorkerExecutorError::runtime)?;
-                if winner != candidate {
-                    drop(oplog);
-                    service
-                        .oplog_service
-                        .discard_staged(&target, AgentMode::Durable, stage_id)
-                        .await
-                        .map_err(WorkerExecutorError::runtime)?;
-                    stage_id = Uuid::new_v4();
-                    candidate = winner;
-                    (oplog, _) = stage(
-                        service,
-                        &source,
-                        &target_id,
-                        metadata.created_by,
-                        stage_id,
-                        hash,
-                        &candidate,
-                        request.max_copied_bytes,
-                    )
-                    .await?;
-                }
+            .await?;
+        let winner = match admission {
+            Admission::Reserved => candidate.clone(),
+            Admission::Existing { oplog_index } => {
+                worker.read_export_fork_candidate(oplog_index).await?
             }
             Admission::Conflict | Admission::LimitReached => return Err(reject(Reason::Conflict)),
             Admission::RateLimited {
@@ -263,6 +217,27 @@ async fn execute<Ctx: WorkerCtx>(
                     retry_after_seconds,
                 }));
             }
+        };
+        if winner != candidate {
+            drop(oplog);
+            service
+                .oplog_service
+                .discard_staged(&target, AgentMode::Durable, stage_id)
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            stage_id = Uuid::new_v4();
+            candidate = winner;
+            (oplog, _) = stage(
+                service,
+                &source,
+                &target_id,
+                metadata.created_by,
+                stage_id,
+                hash,
+                &candidate,
+                request.max_copied_bytes,
+            )
+            .await?;
         }
         oplog.commit(CommitLevel::Always).await;
         let last = oplog.current_oplog_index().await;

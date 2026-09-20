@@ -25,8 +25,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::SafeDisplay;
+use golem_common::model::AgentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 use std::fmt::{Debug, Display, Formatter};
@@ -849,12 +849,6 @@ pub enum KeyValueStorageNamespace {
     /// incarnation fingerprint.
     AgentRejectedPeriodicSnapshots {
         agent_id: AgentId,
-    },
-    /// Persistent fork reservations and admission counters for one source incarnation.
-    ExportForkAdmissions {
-        environment_id: EnvironmentId,
-        agent_id: AgentId,
-        fingerprint: AgentFingerprint,
     },
     Promise {
         agent_id: Arc<AgentId>,

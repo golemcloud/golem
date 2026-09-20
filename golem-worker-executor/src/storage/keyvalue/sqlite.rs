@@ -99,15 +99,6 @@ impl SqliteKeyValueStorage {
                     agent_id.to_redis_key()
                 )
             }
-            KeyValueStorageNamespace::ExportForkAdmissions {
-                environment_id,
-                agent_id,
-                fingerprint,
-            } => format!(
-                "export-fork-admissions:{environment_id}:{}:{}",
-                agent_id.to_redis_key(),
-                fingerprint.0
-            ),
             KeyValueStorageNamespace::Promise { .. } => "promise".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
             KeyValueStorageNamespace::UserDefined {

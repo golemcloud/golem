@@ -1256,6 +1256,7 @@ pub struct AgentStatusRecord {
     pub invocation_results: InvocationResultMembership,
     pub received_card_transfers: ReceivedCardTransferIndex,
     pub durable_stream_sessions: DurableStreamSessionIndex,
+    pub export_fork_admissions: ExportForkAdmissions,
     pub has_durable_stream_history: bool,
     pub pending_durable_stream_cancellations:
         HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
@@ -1310,6 +1311,7 @@ impl Default for AgentStatusRecord {
             invocation_results: InvocationResultMembership::default(),
             received_card_transfers: ReceivedCardTransferIndex::default(),
             durable_stream_sessions: DurableStreamSessionIndex::default(),
+            export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
             pending_durable_stream_cancellations: HashSet::new(),
             current_idempotency_key: None,
@@ -1332,6 +1334,22 @@ impl Default for AgentStatusRecord {
             agent_mode: AgentMode::Durable,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, BinaryCodec)]
+pub struct ExportForkAdmissions {
+    pub owner_fingerprint: Option<AgentFingerprint>,
+    pub reservations: HashMap<AgentId, ExportForkReservation>,
+    pub session_counts: HashMap<String, u32>,
+    pub updated_millis: u64,
+    pub credit_millis: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct ExportForkReservation {
+    pub oplog_index: OplogIndex,
+    pub request_hash: Vec<u8>,
+    pub session: String,
 }
 
 /// The durable target-side identity associated with a permission-card transfer ID.

@@ -118,8 +118,13 @@ the guest makes no positional host call. Cursor exhaustion alone does not publis
 The export creation receipt also records the original request, resolved anchor and initial-body
 hash. Retries use that receipt before consulting the source, so a later append or tombstone cannot
 move a default-tail cut. Initial content is schema-validated and committed in the hidden stage.
-Byte-limit failures precede quota reservation; persistent CAS admission enforces per-source rate
-and per-session counts. An inexpensive read-only precheck rejects exhausted budgets before copying.
+Byte-limit failures precede quota reservation. The source commits `ExportForkAdmitted` under the
+existing worker instance lock before publishing the target. Its chosen cut and quota charge are
+folded into `AgentStatusRecord.export_fork_admissions`; losing cached status cannot erase them.
+The immutable `Create.instance_id` excludes copied ancestor admissions even when a fork reverts
+before its creation marker. Explicit reverts discard deleted admissions, while atomic jumps retain
+them. Retired owners and failed status reconstruction reject admission. A read-only precheck rejects
+exhausted budgets before copying; no separate admission KV ledger exists.
 HTTP stream responses expose no fork headers; Golem's session manifest exposes provenance.
 Tests: `exported_fork_initial_content_and_receipt_survive_lost_resume_response`, the custom-API
 fork tests, and the CLI `reference_client_export_protocol_compatibility` scenarios.

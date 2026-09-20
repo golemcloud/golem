@@ -41,7 +41,6 @@ impl NamespaceRoutedKeyValueStorage {
             KeyValueStorageNamespace::AgentInvocationResultIndex { .. } => &self.cache,
             KeyValueStorageNamespace::AgentStatusCheckpoint { .. } => &self.cache,
             KeyValueStorageNamespace::AgentDurableStreamSessionIndex { .. } => &self.cache,
-            KeyValueStorageNamespace::ExportForkAdmissions { .. } => &self.persistent,
             _ => &self.persistent,
         }
     }

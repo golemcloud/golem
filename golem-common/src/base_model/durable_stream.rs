@@ -1274,6 +1274,29 @@ pub struct StreamExportFork {
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct StreamExportForkCandidate {
+    pub export: StreamExportFork,
+    pub horizon: OplogIndex,
+    pub cut: OplogIndex,
+    pub selected: StreamId,
+    pub retained_through: Option<StreamOffset>,
+    pub initial: Option<StreamItemsPayload>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamExportForkAdmittedRecord {
+    pub format_version: u8,
+    pub target: AgentId,
+    pub request_hash: Vec<u8>,
+    pub candidate: StreamExportForkCandidate,
+    pub updated_millis: u64,
+    pub credit_millis: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum StreamSessionRecord {
     CallerAttempt(StreamCallerAttemptRecord),
     Prepared(StreamSessionPreparedRecord),
@@ -1301,6 +1324,7 @@ pub enum StreamSessionRecord {
     Finished(StreamSessionFinishedRecord),
     Tombstoned(StreamSlotTombstonedRecord),
     CancelRequested(StreamSessionCancelRequestedRecord),
+    ExportForkAdmitted(StreamExportForkAdmittedRecord),
     ForkCut(StreamForkCutRecord),
 }
 
@@ -1353,6 +1377,7 @@ impl StreamSessionRecord {
             Self::Finished(record) => record.format_version,
             Self::Tombstoned(record) => record.format_version,
             Self::CancelRequested(record) => record.format_version,
+            Self::ExportForkAdmitted(record) => record.format_version,
             Self::ForkCut(record) => record.format_version,
         }
     }
@@ -1572,6 +1597,13 @@ impl StreamSessionRecord {
             Self::Finished(_) => true,
             Self::Tombstoned(record) => !record.slot.is_empty(),
             Self::CancelRequested(_) => true,
+            Self::ExportForkAdmitted(record) => {
+                record.request_hash.len() == 32
+                    && record.candidate.selected.0.get_version().is_some()
+                    && !record.candidate.selected.0.is_nil()
+                    && record.candidate.cut > OplogIndex::NONE
+                    && record.candidate.cut <= record.candidate.horizon
+            }
             Self::ForkCut(record) => {
                 let valid_revert = record.revert.as_ref().is_none_or(|region| {
                     record.cut_index.as_u64().checked_add(1) == Some(region.start.as_u64())

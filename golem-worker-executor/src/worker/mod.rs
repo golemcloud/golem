@@ -3098,6 +3098,82 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.state_actor.attached_status().await
     }
 
+    pub(crate) async fn get_export_fork_status(
+        &self,
+    ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        self.state_actor.try_attached_status().await
+    }
+
+    pub(crate) async fn read_export_fork_candidate(
+        &self,
+        index: OplogIndex,
+    ) -> Result<golem_common::model::durable_stream::StreamExportForkCandidate, WorkerExecutorError>
+    {
+        if let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await
+            && let StreamSessionRecord::ExportForkAdmitted(record) = self
+                .oplog
+                .download_payload(record)
+                .await
+                .map_err(WorkerExecutorError::runtime)?
+        {
+            return Ok(record.candidate);
+        }
+        Err(WorkerExecutorError::runtime(
+            "Fork admission index does not reference an admission record",
+        ))
+    }
+
+    pub(crate) async fn reserve_export_fork(
+        self: &Arc<Self>,
+        target: AgentId,
+        request_hash: Vec<u8>,
+        candidate: golem_common::model::durable_stream::StreamExportForkCandidate,
+        session_limit: u32,
+        rate_limit: u32,
+    ) -> Result<crate::services::worker_fork::admission::Admission, WorkerExecutorError> {
+        use crate::services::worker_fork::admission::{self, Admission};
+
+        let instance_guard = self.lock_non_stopping_worker_owned().await;
+        instance_guard.ensure_not_deleting()?;
+        if self.owner_retirement_requested.is_cancelled() || self.oplog.is_retired() {
+            return Err(WorkerExecutorError::runtime("Worker ownership has retired"));
+        }
+        let status = self.state_actor.try_attached_status().await?;
+        if candidate.export.source_fingerprint != self.initial_worker_metadata.fingerprint
+            || status
+                .deleted_regions
+                .is_in_deleted_region(candidate.horizon)
+        {
+            return Ok(Admission::Conflict);
+        }
+        let record = match admission::reserve(
+            &status.export_fork_admissions,
+            target,
+            request_hash,
+            candidate,
+            session_limit,
+            rate_limit,
+            Timestamp::now_utc().to_millis(),
+        ) {
+            Ok(record) => record,
+            Err(admission) => return Ok(admission),
+        };
+        let payload = self
+            .oplog
+            .upload_payload_owned(StreamSessionRecord::ExportForkAdmitted(record))
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        self.state_actor
+            .append_and_commit_attached(
+                OplogEntry::stream_session(None, payload),
+                self.clone(),
+                instance_guard,
+                None,
+            )
+            .await?;
+        Ok(Admission::Reserved)
+    }
+
     pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
         &self.owned_agent_id
     }
@@ -7468,9 +7544,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ),
                 self.clone(),
                 instance_guard,
-                boundary_guard,
+                Some(boundary_guard),
             )
-            .await;
+            .await?;
 
         Ok(())
     }
@@ -8869,6 +8945,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // at runtime in get_environment
                 let worker_env: Vec<(String, String)> = worker_env.unwrap_or_default();
                 let created_at = Timestamp::now_utc();
+                let instance_id = Uuid::now_v7();
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
                 let initial_status = AgentStatusRecord {
@@ -8884,6 +8961,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .map(|i| i.environment_plugin_grant_id)
                         .collect(),
                     invocation_results: this.config().invocation_results.membership(),
+                    export_fork_admissions: golem_common::model::ExportForkAdmissions {
+                        owner_fingerprint: Some(AgentFingerprint(instance_id)),
+                        ..Default::default()
+                    },
                     agent_mode,
                     ..Default::default()
                 };
@@ -8893,8 +8974,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // cross-environment RPC the caller may pass its own account/environment,
                 // but the worker must belong to the component's owning account and
                 // environment for correct metric attribution and quota enforcement.
-
-                let instance_id = Uuid::now_v7();
 
                 let initial_worker_metadata = AgentMetadata {
                     agent_id: owned_agent_id.agent_id(),
@@ -12380,7 +12459,8 @@ pub(crate) fn stream_session_record_key(
         )),
         StreamSessionRecord::ProducerDeleting(_)
         | StreamSessionRecord::ConsumerDeleting(_)
-        | StreamSessionRecord::ForkCut(_) => None,
+        | StreamSessionRecord::ForkCut(_)
+        | StreamSessionRecord::ExportForkAdmitted(_) => None,
     }
 }
 

@@ -46,6 +46,7 @@ use golem_common::model::card::{
 };
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
+use golem_common::model::durable_stream::{StreamExportForkAdmittedRecord, StreamSessionRecord};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
@@ -159,7 +160,9 @@ use golem_worker_executor::services::worker_enumeration::WorkerEnumerationServic
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
-use golem_worker_executor::services::{HasActiveAgents, HasAll, NoAdditionalDeps, rdbms};
+use golem_worker_executor::services::{
+    HasActiveAgents, HasAll, HasWorkerService, NoAdditionalDeps, rdbms,
+};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
 use golem_worker_executor::workerctx::{
@@ -670,6 +673,78 @@ impl TestWorkerExecutor {
         )
         .await
         .map_err(|_| anyhow!("executor invocation loops did not retire within 10s"))
+    }
+
+    pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        services
+            .worker_service()
+            .remove_cached_status(&owned_agent_id)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn export_fork_admission_records(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Vec<StreamExportForkAdmittedRecord>> {
+        use golem_worker_executor::services::HasOplogService;
+        use golem_worker_executor::services::oplog::OplogServiceOps;
+
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let oplog = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured")
+            .oplog_service();
+        let entries = oplog
+            .read_exact(
+                &owned_agent_id,
+                AgentMode::Durable,
+                OplogIndex::INITIAL,
+                oplog
+                    .get_last_index(&owned_agent_id, AgentMode::Durable)
+                    .await
+                    .as_u64(),
+            )
+            .await;
+        let mut records = Vec::new();
+        for entry in entries.into_values() {
+            if let OplogEntry::StreamSession { record, .. } = entry {
+                let record = oplog
+                    .download_payload(&owned_agent_id, AgentMode::Durable, record)
+                    .await
+                    .map_err(Error::msg)?;
+                if let StreamSessionRecord::ExportForkAdmitted(record) = record {
+                    records.push(record);
+                }
+            }
+        }
+        Ok(records)
+    }
+
+    pub async fn export_fork_admissions(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<golem_common::model::ExportForkAdmissions> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = Worker::find_durable_stream_worker(
+            self.services
+                .as_ref()
+                .expect("test service graph is captured"),
+            &owned_agent_id,
+        )
+        .await?
+        .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
+        Ok(worker
+            .get_attached_last_known_status()
+            .await
+            .export_fork_admissions
+            .clone())
     }
 
     pub async fn acquire_account_concurrent_agent_permit(

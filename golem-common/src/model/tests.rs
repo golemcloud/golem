@@ -25,13 +25,14 @@ use crate::model::{
     AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode,
     AgentStatus, AgentStatusRecord, ComponentId, DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
     DEFAULT_INVOCATION_RESULT_BLOOM_HASHES, DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
-    DurableStreamSessionIndex, DurableStreamSessionStatus, FilterComparator, IdempotencyKey,
-    InvocationResultBloom, InvocationResultMembership, PendingInvocationRef, PendingUpdateKind,
-    PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState, StringFilterComparator,
-    Timestamp,
+    DurableStreamSessionIndex, DurableStreamSessionStatus, ExportForkAdmissions, FilterComparator,
+    IdempotencyKey, InvocationResultBloom, InvocationResultMembership, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
+    StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::vec;
 use test_r::test;
@@ -992,6 +993,13 @@ fn agent_status_record_agent_mode_is_not_serialized() {
         component_revision: ComponentRevision::new(7).unwrap(),
         component_size: 1234,
         received_card_transfers,
+        export_fork_admissions: ExportForkAdmissions {
+            owner_fingerprint: Some(AgentFingerprint(Uuid::new_v4())),
+            reservations: HashMap::new(),
+            session_counts: HashMap::from([("session".to_string(), 3)]),
+            updated_millis: 1200,
+            credit_millis: Some(900),
+        },
         agent_mode: AgentMode::Ephemeral,
         ..AgentStatusRecord::default()
     };

@@ -800,7 +800,15 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         accepted.result,
         Some(append_to_stream_slot_response::Result::Accepted(_))
     ));
+    // Live admission must be folded before any status-cache eviction or full oplog refold.
+    let live_admissions = executor.export_fork_admissions(&source).await?;
+    assert_eq!(live_admissions.reservations.len(), 1);
+    assert!(live_admissions.reservations.contains_key(&target));
+    assert_eq!(live_admissions.session_counts.get(&session), Some(&1));
     executor.shutdown_and_wait_for_invocation_loops().await?;
+    let admitted_before_restart = executor.export_fork_admission_records(&source).await?;
+    assert_eq!(admitted_before_restart.len(), 1);
+    executor.remove_cached_status(&source).await?;
     drop(executor);
     let executor = start_with_local_resume(deps, &context, false).await?;
     let mut retry = request.clone();
@@ -820,6 +828,23 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     assert_eq!(
         receipt.fork_offset, prefix.offset,
         "default tail must retain the first cut"
+    );
+    let admitted_after_restart = executor.export_fork_admission_records(&source).await?;
+    assert_eq!(admitted_after_restart, admitted_before_restart);
+    let reconstructed = executor.export_fork_admissions(&source).await?;
+    assert_eq!(reconstructed.reservations.len(), 1);
+    assert_eq!(
+        reconstructed.reservations[&target].request_hash,
+        admitted_before_restart[0].request_hash
+    );
+    assert_eq!(reconstructed.session_counts.get(&session), Some(&1));
+    assert_eq!(
+        reconstructed.updated_millis,
+        admitted_before_restart[0].updated_millis
+    );
+    assert_eq!(
+        reconstructed.credit_millis,
+        Some(admitted_before_restart[0].credit_millis)
     );
     for (agent, expected) in [
         (&source, vec!["shared", "source-only"]),
@@ -920,6 +945,101 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
     assert!(
         matches!(rejected.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::RateLimited as i32 && rejection.retry_after_seconds > 0),
         "{rejected:?}"
+    );
+
+    let concurrent_session = Uuid::new_v4().to_string();
+    let input = schema_value_to_proto_with_streams(
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                0u64,
+            ))],
+        },
+        |stream| stream.take_host_endpoint::<u64>(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let created = executor
+        .client
+        .clone()
+        .create_stream_session(InvocationStart {
+            agent_id: Some(source.clone().into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(AuthCtx::System.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            idempotency_key: Some(IdempotencyKey::new(concurrent_session.clone()).into()),
+            method_name: Some("echo".into()),
+            input: Some(input),
+            ..Default::default()
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        created.result,
+        Some(create_stream_session_response::Result::Success(_))
+    ));
+    let mut concurrent_append = append(&source, "concurrent");
+    concurrent_append.session = concurrent_session.clone();
+    let accepted = executor
+        .client
+        .clone()
+        .append_to_stream_slot(concurrent_append)
+        .await?
+        .into_inner();
+    assert!(matches!(
+        accepted.result,
+        Some(append_to_stream_slot_response::Result::Accepted(_))
+    ));
+    let concurrent_request = |target: AgentId| ForkStreamSlotRequest {
+        source_agent_id: Some(source.clone().into()),
+        target_agent_id: Some(target.into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(AuthCtx::System.into()),
+        session: concurrent_session.clone(),
+        slot: "input".into(),
+        expected_method: "echo".into(),
+        source_path: "/source/input".into(),
+        max_forks_per_session: 1,
+        max_forks_per_second: 100,
+        max_copied_bytes: 64 * 1024 * 1024,
+        ..Default::default()
+    };
+    let new_target = || {
+        AgentId::from_agent_id(
+            component.id,
+            &golem_common::phantom_agent_id!(
+                "DurableStreamAgent",
+                Uuid::new_v4(),
+                "export-fork-concurrent"
+            ),
+        )
+        .map_err(anyhow::Error::msg)
+    };
+    let left = concurrent_request(new_target()?);
+    let right = concurrent_request(new_target()?);
+    let mut left_client = executor.client.clone();
+    let mut right_client = executor.client.clone();
+    let (left, right) = tokio::join!(
+        left_client.fork_stream_slot(left),
+        right_client.fork_stream_slot(right)
+    );
+    let results = [left?.into_inner(), right?.into_inner()];
+    assert_eq!(
+        results
+            .iter()
+            .filter(|response| matches!(
+                response.result,
+                Some(fork_stream_slot_response::Result::Success(_))
+            ))
+            .count(),
+        1,
+        "{results:?}"
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|response| matches!(response.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::Conflict as i32))
+            .count(),
+        1,
+        "{results:?}"
     );
     Ok(())
 }

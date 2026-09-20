@@ -1211,6 +1211,10 @@ impl WorkerService for DefaultWorkerService {
                         total_linear_memory_size: initial_total_linear_memory_size,
                         active_plugins: initial_active_plugins,
                         invocation_results: self.config.invocation_results.membership(),
+                        export_fork_admissions: golem_common::model::ExportForkAdmissions {
+                            owner_fingerprint: Some(AgentFingerprint(instance_id)),
+                            ..Default::default()
+                        },
                         agent_mode,
                         ..AgentStatusRecord::default()
                     },
