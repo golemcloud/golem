@@ -956,6 +956,12 @@ jobs:
           wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
           wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
+      - name: Build shared host-free HTTP contract
+        working-directory: sdks/ts
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @golemcloud/golem-ts-sdk run build:http-router
+
       - name: Install dependencies
         working-directory: sdks/effect
         run: npm ci
@@ -1006,6 +1012,13 @@ jobs:
             sdks/effect/golem-types
           if-no-files-found: error
 
+      - name: Upload shared HTTP contract for Windows declaration build
+        uses: actions/upload-artifact@v4
+        with:
+          name: golem-effect-http-contract
+          path: sdks/ts/packages/golem-ts-sdk/dist/http-router.*
+          if-no-files-found: error
+
   check-golem-effect-package-windows:
     runs-on: windows-latest
     needs: build-golem-effect
@@ -1026,6 +1039,11 @@ jobs:
         with:
           name: golem-effect-sdk-windows
           path: sdks/effect
+      - name: Download shared HTTP contract
+        uses: actions/download-artifact@v4
+        with:
+          name: golem-effect-http-contract
+          path: sdks/ts/packages/golem-ts-sdk/dist
       - name: Build package declarations
         working-directory: sdks/effect
         run: npm run build

@@ -67,6 +67,12 @@ jobs:
         working-directory: sdks/effect
         run: npm ci
 
+      - name: Build shared host-free HTTP contract
+        working-directory: sdks/ts
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @golemcloud/golem-ts-sdk run build:http-router
+
       - name: Run quality gates
         working-directory: sdks/effect
         run: |

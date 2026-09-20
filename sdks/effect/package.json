@@ -153,6 +153,7 @@
   "devDependencies": {
     "@effect/vitest": "4.0.0-rc.117",
     "@eslint/js": "^9.17.0",
+    "@golemcloud/golem-ts-sdk": "file:../ts/packages/golem-ts-sdk",
     "@rollup/plugin-commonjs": "^29.0.2",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-terser": "^1.0.0",

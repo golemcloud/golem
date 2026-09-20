@@ -18,12 +18,40 @@ const external = (id) =>
   id === "agent-guest" ||
   id === "node:sqlite" ||
   id === "effect" ||
+  id === "effect/unstable/http" ||
+  id === "effect/unstable/httpapi" ||
   id === "@golemcloud/effect-golem" ||
   id.startsWith("@golemcloud/effect-golem/") ||
   id.startsWith("golem:") ||
   id.startsWith("wasi:")
 
+const httpFacades = [
+  ["effect/unstable/http", "GolemHttp", "effect-http"],
+  ["effect/unstable/httpapi", "GolemHttpApi", "effect-httpapi"],
+].map(([specifier, namespace, name]) => ({
+  input: `\0${name}`,
+  output: { file: `dist/${name}.mjs`, format: "esm" },
+  external: ["effect"],
+  plugins: [
+    {
+      name: "shared-effect-http",
+      resolveId(id) {
+        return id === `\0${name}` ? id : null
+      },
+      async load(id) {
+        if (id !== `\0${name}`) return null
+        const names = Object.keys(await import(specifier))
+        return (
+          `import { ${namespace} } from "effect";\n` +
+          names.map((key) => `export const ${key} = ${namespace}.${key};`).join("\n")
+        )
+      },
+    },
+  ],
+}))
+
 export default defineConfig([
+  ...httpFacades,
   {
     input: "src/index.ts",
     output: {

@@ -384,12 +384,14 @@ env = { NPX_BIN = "npx.cmd" }
 description = "Builds every Effect SDK bundle and template artifact when outputs are missing or stale"
 cwd = "./sdks/effect"
 script_runner = "@duckscript"
-env = { NPM_BIN = "npm" }
+env = { NPM_BIN = "npm", NPX_BIN = "npx" }
 script = '''
 fresh = exec %{NPM_BIN} run check:artifacts
 fresh_ok = eq ${fresh.code} 0
 if not ${fresh_ok}
     echo "Effect SDK artifacts are stale; rebuilding"
+    exec --fail-on-error %{NPX_BIN} pnpm --dir ../ts install --frozen-lockfile
+    exec --fail-on-error %{NPX_BIN} pnpm --dir ../ts --filter @golemcloud/golem-ts-sdk run build:http-router
     exec --fail-on-error %{NPM_BIN} ci
     exec --fail-on-error %{NPM_BIN} run build
     exec --fail-on-error %{NPM_BIN} run build-agent-template
@@ -400,7 +402,7 @@ end
 '''
 
 [tasks.build-sdk-effect.windows]
-env = { NPM_BIN = "npm.cmd" }
+env = { NPM_BIN = "npm.cmd", NPX_BIN = "npx.cmd" }
 
 [tasks.clean-sdk-effect]
 description = "Cleans generated Effect SDK bundles, wrappers, declarations, and WASM artifacts"
