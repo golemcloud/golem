@@ -1019,6 +1019,49 @@ mod tests {
         );
     }
 
+    /// A guest picks the name of a container and the name of an object, and two empty names
+    /// make a path with no name in it, which is the root of the namespace. A name of `.` makes
+    /// the same path, because a `.` is not a name. The in-memory and the SQLite backends read
+    /// the last name of the path, so the name breaks a rule of the backend and the guest gets
+    /// a permanent error: the executor does not retry a name that can never work.
+    ///
+    /// The filesystem backend and the S3 backend are not here. The two of them read no last
+    /// name of the path, so the two of them give no such error: for these same names each of
+    /// them gives `Ok(None)`, the metadata of the root of the namespace, or an error of its
+    /// own. #3911 holds the decision of what a backend gives for a root path, and this test
+    /// holds only what the executor does with the error of a backend that gives one.
+    async fn test_a_root_name_is_invalid_input(blob_store: &impl BlobStoreService) {
+        let environment_id = EnvironmentId::new();
+        blob_store
+            .create_container(environment_id, "container1".to_string())
+            .await
+            .unwrap();
+
+        let container = blob_store
+            .get_container(environment_id, "".to_string())
+            .await
+            .map(drop);
+        let written = blob_store.write_data(environment_id, "", "", &[1]).await;
+        let read = blob_store
+            .get_data(environment_id, "".to_string(), "".to_string(), 0, 0)
+            .await
+            .map(drop);
+        let deleted = blob_store
+            .delete_object(environment_id, "".to_string(), "".to_string())
+            .await;
+        let dot = blob_store.write_data(environment_id, ".", ".", &[1]).await;
+
+        let results = [container, written, read, deleted, dot];
+        assert!(
+            results.iter().all(|result| matches!(
+                result,
+                Err(error @ BlobStoreError::InvalidInput(_))
+                    if classify_blob_store_error(error) == HostFailureKind::Permanent
+            )),
+            "{results:?}"
+        );
+    }
+
     fn in_memory_blob_store() -> impl BlobStoreService {
         let blob_storage = Arc::new(InMemoryBlobStorage::new());
         DefaultBlobStoreService::new(blob_storage)
@@ -1092,6 +1135,12 @@ mod tests {
         let tempdir = TempDir::new().unwrap();
         let blob_store = fs_blob_store(tempdir.path()).await;
         test_a_parent_name_is_invalid_input(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_root_name_is_invalid_input_in_memory() {
+        let blob_store = in_memory_blob_store();
+        test_a_root_name_is_invalid_input(&blob_store).await;
     }
 
     #[test]

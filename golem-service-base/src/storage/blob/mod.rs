@@ -475,8 +475,10 @@ pub struct BlobRangeError {
 /// that breaks a rule gets this error before a backend reads or writes anything, so the name
 /// costs no request and no retry.
 ///
-/// The first group of rules is of the blob path, and each backend applies it
-/// (`normalized_blob_path`, `blob_path_to_string`). The second group is of the object key of
+/// The first group of rules is of the blob path. Each backend applies `NotRelative` and
+/// `ParentDir` (`normalized_blob_path`), a backend that keeps the path as text applies
+/// `NotUtf8` too (`blob_path_to_string`), and the in-memory and the SQLite backends apply
+/// `NoName` (`blob_file_name_to_string`). The second group is of the object key of
 /// the S3 backend, which applies it to the full key: the namespace prefix, the separators and
 /// the name (`S3BlobStorage::key_of`). S3 and MinIO measure the full key. Each rule of the
 /// second group is a rule of S3 or of MinIO, and one is the name that the backend keeps for
@@ -507,6 +509,18 @@ pub enum BlobNameError {
     /// as text, so each of them reads the text of the path.
     #[error("the blob path must be valid UTF-8: {path:?}")]
     NotUtf8 { path: PathBuf },
+    /// The blob path has no name in it, so it is at the root of its namespace
+    /// (`blob_path_is_root`) and names no blob. An empty path has no name in it, and so does a
+    /// path that only has `.` in it. A guest that gives an empty container name and an empty
+    /// object name makes such a path.
+    ///
+    /// The in-memory and the SQLite backends hold a blob by the name of its directory and the
+    /// name of the blob itself (`blob_file_name_to_string`), and a root path gives no such
+    /// name, so each of them gives this error. The filesystem and the S3 backends give
+    /// `Ok(None)` or an error of their own for such a path, and #3911 holds the decision of
+    /// what a backend gives for a root path.
+    #[error("the blob path has no name in it: {path:?}")]
+    NoName { path: PathBuf },
     /// The object key has `length` bytes of UTF-8, which is more than [`MAX_KEY_BYTES`]. S3
     /// rejects such a key.
     #[error(
@@ -646,19 +660,21 @@ pub(crate) fn blob_child_path(directory: &str, name: &str) -> Box<Path> {
 
 /// Gives the text of the last name of the path.
 ///
-/// A path that is not valid UTF-8 gives the same [`BlobNameError`] as `blob_path_to_string`,
-/// which is permanent. A path with no name in it is at the root of its namespace, which each
-/// caller reads before it calls this function, so that error is of the caller and not of the
-/// name.
-pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
+/// A path that is not valid UTF-8 gives the same [`BlobNameError`] as `blob_path_to_string`. A
+/// path with no name in it is at the root of its namespace (`blob_path_is_root`) and gives
+/// [`BlobNameError::NoName`]: a guest can pick two empty names, so the path is of the guest and
+/// so is the error. The two errors are permanent.
+pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, BlobNameError> {
     path.file_name()
-        .ok_or_else(|| anyhow!("Path must have a file name: {path:?}"))
+        .ok_or_else(|| BlobNameError::NoName {
+            path: path.to_path_buf(),
+        })
         .and_then(|name| {
-            name.to_str().map(|s| s.to_string()).ok_or_else(|| {
-                Error::from(BlobNameError::NotUtf8 {
+            name.to_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| BlobNameError::NotUtf8 {
                     path: path.to_path_buf(),
                 })
-            })
         })
 }
 
@@ -749,12 +765,30 @@ mod tests {
         };
 
         assert_eq!(
-            (
-                blob_path_to_string(path),
-                blob_file_name_to_string(path)
-                    .map_err(|error| error.downcast::<BlobNameError>().ok())
-            ),
-            (Err(expected.clone()), Err(Some(expected)))
+            (blob_path_to_string(path), blob_file_name_to_string(path)),
+            (Err(expected.clone()), Err(expected))
+        );
+    }
+
+    /// A guest picks the name of its container and the name of its object, so it can give two
+    /// names that make a path with no name in it. The in-memory and the SQLite backends read
+    /// the last name of the path, and the rule is of the name, so the error is permanent.
+    #[test]
+    fn a_path_with_no_name_in_it_gives_the_name_rule() {
+        let paths = ["", "."];
+
+        let results = paths.map(|path| blob_file_name_to_string(Path::new(path)));
+
+        assert_eq!(
+            results,
+            [
+                Err(BlobNameError::NoName {
+                    path: PathBuf::from("")
+                }),
+                Err(BlobNameError::NoName {
+                    path: PathBuf::from(".")
+                }),
+            ]
         );
     }
 
