@@ -525,7 +525,7 @@ async fn get_set_get_many(
             "test",
             "api",
             "entity",
-            ns,
+            ns.clone(),
             [key1.to_string(), key2.to_string(), key3.to_string()].into(),
         )
         .await
@@ -534,6 +534,29 @@ async fn get_set_get_many(
     assert_eq!(
         result2,
         vec![Some(value1.into()), Some(value2.into()), None]
+    );
+    let repeated = kvs
+        .get_many(
+            "test",
+            "api",
+            "entity",
+            ns,
+            [key2, key3, key1, key2, key3, key1]
+                .map(str::to_string)
+                .into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        repeated,
+        vec![
+            Some(value2.into()),
+            None,
+            Some(value1.into()),
+            Some(value2.into()),
+            None,
+            Some(value1.into())
+        ]
     );
 }
 
@@ -703,6 +726,7 @@ async fn compare_and_set_many_contract(
             ns.clone(),
             "coverage",
             None,
+            &[],
             &[("coverage", b"one"), ("row", b"first")]
         )
         .await
@@ -716,6 +740,7 @@ async fn compare_and_set_many_contract(
             ns.clone(),
             "coverage",
             Some(b"wrong"),
+            &["row"],
             &[
                 ("coverage", b"bad"),
                 ("row", b"bad"),
@@ -746,6 +771,7 @@ async fn compare_and_set_many_contract(
             ns.clone(),
             "coverage",
             Some(b"one"),
+            &[],
             &[("coverage", b"two"), ("row", b"second")]
         )
         .await
@@ -766,6 +792,7 @@ async fn compare_and_set_many_contract(
             ns.clone(),
             "absent-guard",
             None,
+            &["missing-row"],
             &[("other-row", b"value")],
         )
         .await
@@ -785,6 +812,7 @@ async fn compare_and_set_many_contract(
             ns.clone(),
             "empty-guard",
             None,
+            &[],
             &[("empty-guard", b"")],
         )
         .await
@@ -798,6 +826,7 @@ async fn compare_and_set_many_contract(
             ns.clone(),
             "empty-guard",
             None,
+            &["other-row"],
             &[("other-row", b"bad")],
         )
         .await
@@ -808,13 +837,33 @@ async fn compare_and_set_many_contract(
             "test",
             "api",
             "entity",
-            ns,
+            ns.clone(),
             "empty-guard",
             Some(b""),
-            &[("other-row", b"updated")],
+            &["empty-guard", "row", "overlap"],
+            &[("other-row", b"updated"), ("overlap", b"upserted")],
         )
         .await
         .unwrap()
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "empty-guard")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns.clone(), "row")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns, "overlap")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(b"upserted".as_slice())
     );
 }
 
@@ -1120,6 +1169,15 @@ async fn concurrent_compare_and_set_many_has_one_winner(
 ) {
     let kvs = kvs.get_key_value_storage().await;
     let ns = cas_namespace();
+    kvs.set_many(
+        "test",
+        "api",
+        "entity",
+        ns.clone(),
+        &[("stale", b"old"), ("winner", b"old")],
+    )
+    .await
+    .unwrap();
     let barrier = Arc::new(tokio::sync::Barrier::new(16));
     let tasks = (0..16).map(|writer| {
         let kvs = kvs.clone();
@@ -1135,6 +1193,7 @@ async fn concurrent_compare_and_set_many_has_one_winner(
                 ns,
                 "coverage",
                 None,
+                &["stale", "winner"],
                 &[("coverage", &value), ("winner", &value)],
             )
             .await
@@ -1154,9 +1213,13 @@ async fn concurrent_compare_and_set_many_has_one_winner(
         kvs.get("test", "api", "entity", ns.clone(), "coverage")
             .await
             .unwrap(),
-        kvs.get("test", "api", "entity", ns, "winner")
+        kvs.get("test", "api", "entity", ns.clone(), "winner")
             .await
             .unwrap()
+    );
+    assert_eq!(
+        kvs.get("test", "api", "entity", ns, "stale").await.unwrap(),
+        None
     );
 }
 

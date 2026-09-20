@@ -171,7 +171,8 @@ pub trait KeyValueStorage: Debug {
         pairs: &[(&str, &[u8])],
     ) -> Result<(), KeyValueStorageError>;
 
-    /// Atomically compares `key` with `expected` and writes every pair only on a match.
+    /// Atomically compares `key` with `expected`, deletes fields, then writes every pair only on a
+    /// match. Pair writes win when a field is also listed in `deletes`.
     /// `None` requires absence, not an empty value. A mismatch changes nothing.
     /// Redis supports this operation only for namespaces stored as a single hash.
     async fn compare_and_set_many(
@@ -182,6 +183,7 @@ pub trait KeyValueStorage: Debug {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError>;
 
@@ -583,6 +585,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, String> {
         self.storage
@@ -593,6 +596,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 namespace,
                 key,
                 expected,
+                deletes,
                 pairs,
             )
             .await

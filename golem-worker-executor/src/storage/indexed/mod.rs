@@ -136,7 +136,7 @@ pub trait IndexedStorage: Debug + Sync {
         timeout: Duration,
     ) -> Result<u8, IndexedStorageError>;
 
-    /// Checks if a key exists in the storage
+    /// Checks if a key exists, including an empty key retained by `drop_prefix`.
     async fn exists(
         &self,
         svc_name: &'static str,
@@ -212,6 +212,25 @@ pub trait IndexedStorage: Debug + Sync {
         Ok(())
     }
 
+    /// Atomically moves a stopped source index to a previously absent target index. The source
+    /// must contain exactly ids 1..=expected_last_id. Returns false without mutation if the target
+    /// exists. An invalid source remains unchanged.
+    /// An indeterminate result must be reconciled against the target, not blindly retried.
+    async fn move_if_absent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _source_namespace: IndexedStorageNamespace,
+        _source_key: &str,
+        _target_namespace: IndexedStorageNamespace,
+        _target_key: &str,
+        _expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "atomic index moves are unsupported".to_string(),
+        ))
+    }
+
     /// Gets the number of entries in the index of the given key
     async fn length(
         &self,
@@ -221,7 +240,7 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
     ) -> Result<u64, IndexedStorageError>;
 
-    /// Deletes the index of the given key
+    /// Deletes the index and its key existence, allowing the name to be reused.
     async fn delete(
         &self,
         svc_name: &'static str,
@@ -287,6 +306,7 @@ pub trait IndexedStorage: Debug + Sync {
 
     /// Deletes the entry with the closest id to the given id in the index of the given key,
     /// in a way that `last_dropped_id` is greater to the id of the deleted entries.
+    /// The key remains present even when every entry is removed. Missing keys stay missing.
     async fn drop_prefix(
         &self,
         svc_name: &'static str,
@@ -757,6 +777,10 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum IndexedStorageNamespace {
     OpLog {
+        agent_id: AgentId,
+        agent_mode: AgentMode,
+    },
+    StagedOpLog {
         agent_id: AgentId,
         agent_mode: AgentMode,
     },

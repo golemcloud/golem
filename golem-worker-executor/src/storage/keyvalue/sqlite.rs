@@ -208,6 +208,7 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError> {
         for (_, value) in pairs {
@@ -236,6 +237,15 @@ impl KeyValueStorage for SqliteKeyValueStorage {
         if current.map(DBValue::into_bytes).as_deref() != expected {
             tx.rollback().await.map_err(KeyValueStorageError::from)?;
             return Ok(false);
+        }
+        for field_key in deletes {
+            tx.execute(
+                sqlx::query("DELETE FROM kv_storage WHERE key = ? AND namespace = ?;")
+                    .bind(field_key)
+                    .bind(&namespace),
+            )
+            .await
+            .map_err(KeyValueStorageError::from)?;
         }
         for (field_key, field_value) in pairs {
             tx.execute(
@@ -387,14 +397,14 @@ impl KeyValueStorage for SqliteKeyValueStorage {
             .await
             .map_err(KeyValueStorageError::from)?;
 
-        let mut result_map = results
+        let result_map = results
             .into_iter()
             .map(|kv| kv.into_pair())
             .collect::<HashMap<String, Bytes>>();
 
         let values = keys
             .iter()
-            .map(|key| result_map.remove(key))
+            .map(|key| result_map.get(key).cloned())
             .collect::<Vec<Option<Bytes>>>();
 
         Ok(values)

@@ -18,7 +18,7 @@ use crate::golem_agentic::exports::golem::tool::guest::{
     InvocationResult, Tool, ToolError, TypedSchemaValue,
 };
 use crate::golem_agentic::golem::agent::common::Principal;
-use crate::golem_agentic::golem::tool::host::ToolStdoutWriter;
+use crate::golem_agentic::golem::tool::streams::ToolStdoutWriter;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::future::Future;

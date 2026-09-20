@@ -77,16 +77,11 @@
  */
 declare module 'golem:tool/common@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  export class UnderlyingTool {
-    /**
-     * @throws ToolError
-     */
-    invoke(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): Promise<InvocationResult>;
-  }
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type TypeNodeIndex = golemCore200Types.TypeNodeIndex;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
+  export type ToolError = golemCore200Types.ToolError;
   /**
    * Command tree
    */
@@ -426,54 +421,14 @@ declare module 'golem:tool/common@0.1.0' {
     aliases: string[];
     doc: Doc;
     scope: ToolMiddlewareScope;
+    /** Schema of the static configuration supplied for each installation. */
+    parameterSchema: SchemaGraph;
   };
   /**
    * Invocation contract — shared between guest and host.
    */
-  export type CustomToolError = {
-    /** The selected declared error-case name, independent of payload shape. */
-    name: string;
-    /** Unit for a payloadless error; otherwise the declared payload type. */
-    payload: TypedSchemaValue;
-  };
-  export type ToolError =
-  {
-    tag: 'invalid-tool-name'
-    val: string
-  } |
-  {
-    tag: 'invalid-command-path'
-    val: string[]
-  } |
-  {
-    tag: 'invalid-input'
-    val: string
-  } |
-  {
-    tag: 'constraint-violation'
-    val: string
-  } |
-  /**
-   * Returned `invocation-result` does not match the body's
-   * declared `result-spec` (e.g., the returned value's root type
-   * does not match the body's declared result schema; see §6.1
-   * transparency invariant).
-   */
-  {
-    tag: 'invalid-result'
-    val: string
-  } |
-  /**
-   * Tool-defined failure identified by its declared case name. Consumers
-   * preserve unfamiliar names and their typed payload when forwarding.
-   */
-  {
-    tag: 'custom-error'
-    val: CustomToolError
-  };
   export type InvocationResult = {
     result?: TypedSchemaValue;
     stdout?: AsyncIterable<number>;
   };
-  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

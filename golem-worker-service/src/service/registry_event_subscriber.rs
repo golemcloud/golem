@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::custom_api::route_resolver::RouteResolver;
+use crate::mcp::McpCapabilityLookup;
 use crate::service::agent_resolution_cache::AgentResolutionCache;
 use crate::service::auth::AuthService;
 use golem_common::model::agent::RegistryInvalidationEvent;
@@ -26,6 +27,7 @@ pub(crate) struct WorkerServiceRegistryInvalidationHandler {
     agent_resolution_cache: Arc<AgentResolutionCache>,
     route_resolver: Arc<RouteResolver>,
     auth_service: Arc<dyn AuthService>,
+    mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
 }
 
 impl WorkerServiceRegistryInvalidationHandler {
@@ -34,6 +36,7 @@ impl WorkerServiceRegistryInvalidationHandler {
         agent_resolution_cache: Arc<AgentResolutionCache>,
         route_resolver: Arc<RouteResolver>,
         auth_service: Arc<dyn AuthService>,
+        mcp_capability_lookup: Arc<dyn McpCapabilityLookup>,
         shutdown_token: Option<CancellationToken>,
     ) {
         registry_service
@@ -44,6 +47,7 @@ impl WorkerServiceRegistryInvalidationHandler {
                     agent_resolution_cache,
                     route_resolver,
                     auth_service,
+                    mcp_capability_lookup,
                 }),
             )
             .await;
@@ -53,6 +57,17 @@ impl WorkerServiceRegistryInvalidationHandler {
 #[async_trait::async_trait]
 impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
     async fn on_event(&self, event: RegistryInvalidationEvent) {
+        if matches!(
+            event,
+            RegistryInvalidationEvent::CursorExpired { .. }
+                | RegistryInvalidationEvent::DeploymentChanged { .. }
+                | RegistryInvalidationEvent::DomainRegistrationChanged { .. }
+                | RegistryInvalidationEvent::SecuritySchemeChanged { .. }
+                | RegistryInvalidationEvent::ApplicationDeleted { .. }
+                | RegistryInvalidationEvent::EnvironmentDeleted { .. }
+        ) {
+            self.mcp_capability_lookup.invalidate_all().await;
+        }
         match &event {
             RegistryInvalidationEvent::CursorExpired { .. } => {
                 warn!("Registry invalidation cursor expired, flushing all caches");

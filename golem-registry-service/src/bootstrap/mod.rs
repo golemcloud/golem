@@ -484,6 +484,7 @@ impl Services {
             &config.builtin_plugins,
             builtin_plugin_owner_account_id,
             &repos.plugin_repo,
+            &auth_service,
             &application_service,
             &environment_service,
             &component_service,
@@ -497,6 +498,7 @@ impl Services {
 
         crate::services::builtin_tool_provisioner::provision_builtin_tools(
             builtin_tool_owner_account_id,
+            &auth_service,
             &application_service,
             &environment_service,
             &component_service,

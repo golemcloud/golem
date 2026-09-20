@@ -236,6 +236,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError> {
         for (_, value) in pairs {
@@ -250,7 +251,7 @@ impl KeyValueStorage for RedisKeyValueStorage {
         };
         self.redis
             .with(svc_name, api_name)
-            .compare_and_set_many_hash(namespace, key, expected, pairs)
+            .compare_and_set_many_hash(namespace, key, expected, deletes, pairs)
             .await
             .map_err(KeyValueStorageError::from)
     }

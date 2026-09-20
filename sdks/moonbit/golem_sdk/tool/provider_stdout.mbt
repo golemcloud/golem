@@ -1,12 +1,12 @@
 ///|
 fn tool_stream_failure(
   error : @toolCore.ToolStreamError,
-) -> @toolHost.ByteStreamFailure {
+) -> @toolStreams.ByteStreamFailure {
   match error {
-    Cancelled => @toolHost.ByteStreamFailure::Cancelled
-    Abandoned => @toolHost.ByteStreamFailure::Abandoned
-    ResourceExhausted => @toolHost.ByteStreamFailure::ResourceExhausted
-    Failed(message) => @toolHost.ByteStreamFailure::Failed(message)
+    Cancelled => @toolStreams.ByteStreamFailure::Cancelled
+    Abandoned => @toolStreams.ByteStreamFailure::Abandoned
+    ResourceExhausted => @toolStreams.ByteStreamFailure::ResourceExhausted
+    Failed(message) => @toolStreams.ByteStreamFailure::Failed(message)
   }
 }
 
@@ -14,12 +14,12 @@ fn tool_stream_failure(
 priv struct ProviderStdoutState {
   write_callback : async (FixedArray[Byte]) -> Result[
     Unit,
-    @toolHost.StreamWriteError,
+    @toolStreams.StreamWriteError,
   ]
-  finish_callback : async () -> Result[Unit, @toolHost.StreamWriteError]
-  fail_callback : async (@toolHost.ByteStreamFailure) -> Result[
+  finish_callback : async () -> Result[Unit, @toolStreams.StreamWriteError]
+  fail_callback : async (@toolStreams.ByteStreamFailure) -> Result[
     Unit,
-    @toolHost.StreamWriteError,
+    @toolStreams.StreamWriteError,
   ]
   drop_callback : () -> Unit
   mut open : Bool
@@ -40,12 +40,12 @@ pub struct ProviderStdout {
 fn provider_stdout_from_callbacks(
   write_callback : async (FixedArray[Byte]) -> Result[
     Unit,
-    @toolHost.StreamWriteError,
+    @toolStreams.StreamWriteError,
   ],
-  finish_callback : async () -> Result[Unit, @toolHost.StreamWriteError],
-  fail_callback : async (@toolHost.ByteStreamFailure) -> Result[
+  finish_callback : async () -> Result[Unit, @toolStreams.StreamWriteError],
+  fail_callback : async (@toolStreams.ByteStreamFailure) -> Result[
     Unit,
-    @toolHost.StreamWriteError,
+    @toolStreams.StreamWriteError,
   ],
   drop_callback : () -> Unit,
 ) -> ProviderStdout {
@@ -69,7 +69,7 @@ fn provider_stdout_from_callbacks(
       match (state.val.write_callback)(FixedArray::from_array(bytes)) {
         Ok(_) => bytes.length()
         Err(error) => {
-          if error is @toolHost.StreamWriteError::Closed(_) {
+          if error is @toolStreams.StreamWriteError::Closed(_) {
             state.val.open = false
           }
           raise error
@@ -81,14 +81,14 @@ fn provider_stdout_from_callbacks(
         return
       }
       if state.val.busy {
-        raise @toolHost.StreamWriteError::ConcurrentOperation
+        raise @toolStreams.StreamWriteError::ConcurrentOperation
       }
       state.val.begin_operation()
       defer state.val.end_operation()
       match (state.val.finish_callback)() {
         Ok(_) => state.val.open = false
         Err(error) => {
-          if error is @toolHost.StreamWriteError::Closed(_) {
+          if error is @toolStreams.StreamWriteError::Closed(_) {
             state.val.open = false
           }
           raise error
@@ -112,7 +112,7 @@ fn ProviderStdoutState::begin_operation(self : ProviderStdoutState) -> Unit {
 ///|
 fn ProviderStdout::begin_write(self : ProviderStdout) -> Unit raise {
   if self.state.val.busy || self.state.val.closing {
-    raise @toolHost.StreamWriteError::ConcurrentOperation
+    raise @toolStreams.StreamWriteError::ConcurrentOperation
   }
   self.state.val.begin_operation()
 }
@@ -130,7 +130,9 @@ fn ProviderStdoutState::end_operation(self : ProviderStdoutState) -> Unit {
 }
 
 ///|
-pub fn provider_stdout(writer : @toolHost.ToolStdoutWriter) -> ProviderStdout {
+pub fn provider_stdout(
+  writer : @toolStreams.ToolStdoutWriter,
+) -> ProviderStdout {
   provider_stdout_from_callbacks(
     bytes => writer.write(bytes),
     () => writer.finish(),
@@ -202,15 +204,15 @@ pub async fn ProviderStdout::finish(self : ProviderStdout) -> Unit {
     return
   }
   if self.state.val.busy {
-    raise @toolHost.StreamWriteError::ConcurrentOperation
+    raise @toolStreams.StreamWriteError::ConcurrentOperation
   }
   self.state.val.begin_operation()
   defer self.state.val.end_operation()
   match (self.state.val.finish_callback)() {
     Ok(_) => self.state.val.open = false
-    Err(@toolHost.StreamWriteError::Closed(cause)) => {
+    Err(@toolStreams.StreamWriteError::Closed(cause)) => {
       self.state.val.open = false
-      raise @toolHost.StreamWriteError::Closed(cause)
+      raise @toolStreams.StreamWriteError::Closed(cause)
     }
     Err(error) => raise error
   }
@@ -225,15 +227,15 @@ pub async fn ProviderStdout::fail(
     return
   }
   if self.state.val.busy {
-    raise @toolHost.StreamWriteError::ConcurrentOperation
+    raise @toolStreams.StreamWriteError::ConcurrentOperation
   }
   self.state.val.begin_operation()
   defer self.state.val.end_operation()
   match (self.state.val.fail_callback)(tool_stream_failure(reason)) {
     Ok(_) => self.state.val.open = false
-    Err(@toolHost.StreamWriteError::Closed(cause)) => {
+    Err(@toolStreams.StreamWriteError::Closed(cause)) => {
       self.state.val.open = false
-      raise @toolHost.StreamWriteError::Closed(cause)
+      raise @toolStreams.StreamWriteError::Closed(cause)
     }
     Err(error) => raise error
   }
@@ -267,11 +269,8 @@ async fn ProviderStdout::complete(
 #doc(hidden)
 pub async fn invoke_with_stdout(
   stdout : ProviderStdout,
-  invoke : async () -> Result[
-    @toolCommon.InvocationResult,
-    @toolCommon.ToolError,
-  ],
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
+  invoke : async () -> Result[@toolCommon.InvocationResult, @types.ToolError],
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   defer stdout.drop()
   let result = invoke() catch {
     error => {
@@ -300,7 +299,7 @@ pub async fn invoke_with_stdout(
           }
           raise error
         }
-        Err(@toolCommon.ToolError::CustomError(payload)) if error
+        Err(@types.ToolError::CustomError(payload)) if error
           is @async-core.Cancelled::Cancelled => {
           match @toolCore.decode_typed_value(payload.payload, "tool error") {
             Ok(decoded) => @model.drop_owned_capabilities(decoded.value)

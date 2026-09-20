@@ -53,8 +53,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ConnectWorkerRequest, DeactivatePluginRequest, DeactivatePluginResponse, DeleteWorkerRequest,
     DeliverCardTransferRequest, DeliverCardTransferResponse, DurableStreamAttachmentControlRequest,
     DurableStreamAttachmentControlResponse, DurableStreamSegmentReadRequest,
-    DurableStreamSegmentReadResponse, ForkWorkerRequest, ForkWorkerResponse, GetAgentWalletRequest,
-    GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest, GetFileContentsResponse,
+    DurableStreamSegmentReadResponse, ForkStreamSlotRequest, ForkStreamSlotResponse,
+    ForkWorkerRequest, ForkWorkerResponse, GetAgentWalletRequest, GetAgentWalletResponse,
+    GetAgentWalletSuccess, GetFileContentsRequest, GetFileContentsResponse,
     GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
     GetWorkersMetadataResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
@@ -1044,6 +1045,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+        let agent_id = request.agent_id()?;
+        if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
+            self.ensure_worker_belongs_to_this_executor(&agent_id)?;
+            let worker = Worker::get_exact_existing_suspended(
+                self,
+                &OwnedAgentId::new(request.environment_id()?, &agent_id),
+                request.principal(),
+            )
+            .await?;
+            Worker::start_if_needed(worker.clone()).await?;
+            return Ok(worker);
+        }
         self.get_or_create_with_freshness(request, InvocationFreshnessDisposition::MayExist)
             .await
     }
@@ -1076,6 +1089,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     > {
         let agent_id = request.agent_id()?;
         let environment_id = request.environment_id()?;
+        if golem_common::model::agent::OwnerKind::is_reserved_instance_name(&agent_id.agent_id) {
+            self.ensure_worker_belongs_to_this_executor(&agent_id)?;
+            let owner = OwnedAgentId::new(environment_id, &agent_id);
+            if Worker::<Ctx>::get_latest_metadata(self, &owner)
+                .await?
+                .is_none()
+            {
+                return Ok(None);
+            }
+            return Worker::get_exact_existing_suspended_for_response(
+                self,
+                &owner,
+                request.principal(),
+            )
+            .await
+            .map(Some);
+        }
 
         let owned_agent_id = self
             .canonicalize_owned_agent_id(&OwnedAgentId::new(environment_id, &agent_id))
@@ -2063,12 +2093,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
 
-        let (worker, _response_lease) = self
-            .get_or_create_pending_with_freshness(
-                &request,
-                InvocationFreshnessDisposition::MayExist,
-            )
-            .await?;
+        let (worker, _response_lease) =
+            if golem_common::model::agent::OwnerKind::is_reserved_instance_name(
+                &owned_agent_id.agent_id.agent_id,
+            ) {
+                Worker::get_exact_existing_suspended_for_response(
+                    self,
+                    &owned_agent_id,
+                    request.principal(),
+                )
+                .await?
+            } else {
+                self.get_or_create_pending_with_freshness(
+                    &request,
+                    InvocationFreshnessDisposition::MayExist,
+                )
+                .await?
+            };
         worker
             .receive_card_transfer(transfer_id, source_card_id, card)
             .await
@@ -2135,6 +2176,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         Ok(golem::worker::AgentMetadata {
             agent_id: Some(metadata.agent_id.into()),
+            owner_kind: metadata.owner_kind.into(),
             environment_id: Some(metadata.environment_id.into()),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             config: metadata
@@ -3233,6 +3275,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ),
             }
         })))
+    }
+
+    async fn fork_stream_slot(
+        &self,
+        request: Request<ForkStreamSlotRequest>,
+    ) -> ResponseResult<ForkStreamSlotResponse> {
+        let request = request.into_inner();
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| Status::permission_denied("fork stream slot is system-only"))?
+            .try_into()
+            .map_err(Status::permission_denied)?;
+        if auth_ctx != AuthCtx::System {
+            return Err(Status::permission_denied("fork stream slot is system-only"));
+        }
+        Ok(Response::new(
+            self.services
+                .worker_fork_service()
+                .fork_stream_slot(request)
+                .await,
+        ))
     }
 
     async fn process_oplog_entries(

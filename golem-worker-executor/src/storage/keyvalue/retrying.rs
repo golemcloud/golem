@@ -230,6 +230,7 @@ impl KeyValueStorage for RetryingKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError> {
         self.retry("compare_and_set_many", Idempotent, || {
@@ -243,6 +244,7 @@ impl KeyValueStorage for RetryingKeyValueStorage {
                         namespace,
                         key,
                         expected,
+                        deletes,
                         pairs,
                     )
                     .await
@@ -926,6 +928,7 @@ mod tests {
                         ns,
                         "key",
                         None,
+                        &[],
                         &[("key", b"value".as_slice())],
                     )
                     .await

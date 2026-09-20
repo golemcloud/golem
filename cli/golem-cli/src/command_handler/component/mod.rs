@@ -31,13 +31,14 @@ use crate::model::agent::{AgentActionError, AgentUpdateMode};
 use crate::model::app::BuildConfig;
 use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
 use crate::model::app_raw;
+use crate::model::cascade::property::Property;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
     ComponentRevisionSelection, ComponentView, PendingRemoteInitialFile, RemoteToolDeploymentPlan,
     ResolvedManifestComponentsAndTools, SelectedComponents, ToolManifestDeploymentConfig,
-    ToolManifestProvisionConfig, initial_permission_from_manifest_card,
-    initial_permission_recipient_context,
+    ToolManifestProvisionConfig, component_initial_permission_recipient_context,
+    initial_permission_from_manifest_card, initial_permission_recipient_context,
 };
 use crate::model::component::{ComponentGetView, ComponentListView, ComponentManifestTraceView};
 use crate::model::config::{collect_unused_leaf_paths, value_at_path};
@@ -1203,7 +1204,7 @@ impl ComponentCommandHandler {
             .unwrap_or_default();
         validate_tool_binding_references(
             &mut issues,
-            &environment_tool_bindings,
+            environment_tool_bindings.keys(),
             "environments.tools",
             None,
             app.selected_environment_source(),
@@ -1214,7 +1215,7 @@ impl ComponentCommandHandler {
             if let Some(agent) = resolved_agents.agent(agent_name) {
                 validate_tool_binding_references(
                     &mut issues,
-                    agent.tool_bindings(),
+                    agent.tool_bindings().keys(),
                     "agents.tools",
                     Some(agent_name),
                     Some(agent.source()),
@@ -1223,9 +1224,26 @@ impl ComponentCommandHandler {
                 );
             }
         }
-
         let mut used_tools = BTreeSet::new();
         for component_name in app.component_names() {
+            let component = app.component(component_name);
+            validate_tool_binding_references(
+                &mut issues,
+                component.layer_properties().tool_bindings.value().keys(),
+                "components.tools",
+                None,
+                Some(component.source()),
+                &implementations,
+                &ambient_names,
+            );
+            used_tools.extend(
+                app.component(component_name)
+                    .layer_properties()
+                    .tool_bindings
+                    .value()
+                    .keys()
+                    .filter_map(|name| ToolName::try_from(name.as_str()).ok()),
+            );
             for dependency in &app.component(component_name).properties().dependencies {
                 if let ComponentDependency::Tool { tool_name, .. } = dependency {
                     used_tools.insert(tool_name.clone());
@@ -1341,10 +1359,38 @@ impl ComponentCommandHandler {
                     agent_bindings.insert(agent_name.clone(), binding);
                 }
             }
+            let mut component_bindings = BTreeMap::new();
+            for component_name in app.component_names() {
+                let component = app.component(component_name);
+                let Some(state) = component
+                    .layer_properties()
+                    .tool_bindings
+                    .value()
+                    .get(ambient.name.as_str())
+                else {
+                    continue;
+                };
+                if let Some(binding) = resolve_tool_binding_input(
+                    &mut issues,
+                    &ambient.name,
+                    &ambient.definition,
+                    &ambient.owner_account_email,
+                    state,
+                    "components.tools",
+                    None,
+                    Some(component.source()),
+                ) {
+                    component_bindings.insert(component_name.clone(), binding);
+                }
+            }
             diffable_remote_tool_deployments.insert(
                 ambient.name.to_string(),
                 ambient
-                    .to_diffable(agent_components.keys().cloned(), &agent_bindings)
+                    .to_diffable(
+                        agent_components.keys().cloned(),
+                        &agent_bindings,
+                        &component_bindings,
+                    )
                     .into(),
             );
             remote_tool_deployments.insert(
@@ -1357,6 +1403,7 @@ impl ComponentCommandHandler {
                     provision: ambient.provision.clone(),
                     environment_binding: Some(ambient.environment_binding.clone()),
                     agent_bindings,
+                    component_bindings,
                 },
             );
         }
@@ -1421,6 +1468,31 @@ impl ComponentCommandHandler {
                         agent.source(),
                     );
                     agent_bindings.insert(agent_name.clone(), binding);
+                }
+            }
+
+            let mut component_bindings = BTreeMap::new();
+            for component_name in app.component_names() {
+                let component = app.component(component_name);
+                let Some(state) = component
+                    .layer_properties()
+                    .tool_bindings
+                    .value()
+                    .get(tool_name.as_str())
+                else {
+                    continue;
+                };
+                if let Some(binding) = resolve_tool_binding_input(
+                    &mut issues,
+                    tool_name,
+                    definition,
+                    owner,
+                    state,
+                    "components.tools",
+                    None,
+                    Some(component.source()),
+                ) {
+                    component_bindings.insert(component_name.clone(), binding);
                 }
             }
 
@@ -1500,6 +1572,7 @@ impl ComponentCommandHandler {
                     files: provision.properties.files,
                     plugins,
                 },
+                component_bindings,
                 environment_binding,
                 agent_bindings,
             };
@@ -1525,6 +1598,7 @@ impl ComponentCommandHandler {
                     }),
                     provision: provision.clone(),
                     environment_binding: manifest_config.environment_binding.clone(),
+                    component_bindings: manifest_config.component_bindings.clone(),
                     agent_bindings: manifest_config.agent_bindings.clone(),
                 };
                 let bindings = effective_remote_tool_bindings(
@@ -1543,6 +1617,17 @@ impl ComponentCommandHandler {
                         metadata_version: grant.release.metadata_version.clone(),
                         metadata_digest: grant.release.metadata_digest,
                         provision,
+                        component_bindings: manifest_config
+                            .component_bindings
+                            .iter()
+                            .filter_map(|(name, binding)| {
+                                diff::effective_tool_binding(
+                                    manifest_config.environment_binding.as_ref(),
+                                    Some(binding),
+                                )
+                                .map(|(binding, _)| (name.0.clone(), binding))
+                            })
+                            .collect(),
                         bindings,
                     }
                     .into(),
@@ -1816,6 +1901,39 @@ impl ComponentCommandHandler {
 
         Ok(ComponentDeployProperties {
             wasm_path,
+            config_schema: component.config_schema().clone(),
+            component_config: resolve_config_values(
+                component_name,
+                &AgentTypeName("component".to_string()),
+                materialize_config_entries(
+                    &component.config_schema().declarations,
+                    &agent_types,
+                    component.config().as_ref(),
+                )?,
+            )?,
+            component_initial_card: component
+                .initial_card()
+                .map(initial_permission_from_manifest_card)
+                .transpose()
+                .with_context(|| {
+                    format!("Invalid initialCard for component {}", component_name.0)
+                })?,
+            component_env: resolve_env_vars("component", component_name.as_str(), component.env())?,
+            component_files: component.files().clone(),
+            component_plugins: resolve_plugin_parameters(
+                "component",
+                component_name.as_str(),
+                &component
+                    .plugins()
+                    .iter()
+                    .map(|plugin| app_raw::PluginInstallation {
+                        account: plugin.account.clone(),
+                        name: plugin.name.clone(),
+                        version: plugin.version.clone(),
+                        parameters: plugin.parameters.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+            )?,
             agent_types,
             tools,
             tool_middlewares,
@@ -2077,6 +2195,13 @@ impl ComponentCommandHandler {
                     files_by_path,
                     plugins_by_grant_id,
                     environment_binding: manifest_config.environment_binding.clone(),
+                    component_bindings: manifest_config
+                        .component_bindings
+                        .iter()
+                        .map(|(component_name, binding)| {
+                            (component_name.0.clone(), binding.clone())
+                        })
+                        .collect(),
                     agent_bindings: manifest_config
                         .agent_bindings
                         .iter()
@@ -2087,6 +2212,51 @@ impl ComponentCommandHandler {
             );
         }
 
+        let component_file_hashes = ifs_manager
+            .collect_file_hashes(
+                &format!("{}:component", component_name.0),
+                &properties.component_files,
+            )
+            .await?;
+        let component_files_by_path = component_file_hashes
+            .into_iter()
+            .map(|file| {
+                (
+                    file.target.path.to_abs_string(),
+                    diff::AgentFile {
+                        hash: file.hash.into(),
+                        permissions: file.target.permissions,
+                    }
+                    .into(),
+                )
+            })
+            .collect();
+        let component_plugins_by_grant_id = properties
+            .component_plugins
+            .iter()
+            .enumerate()
+            .map(|(idx, plugin)| {
+                let grant = PluginGrantKey::resolve(
+                    &plugin_grants,
+                    plugin.account.as_deref(),
+                    &plugin.name,
+                    &plugin.version,
+                )?
+                .ok_or_else(|| {
+                    anyhow!("Plugin {}/{} is not available", plugin.name, plugin.version)
+                })?;
+                Ok((
+                    grant.id.0,
+                    diff::PluginInstallation {
+                        priority: idx as i32,
+                        name: plugin.name.clone(),
+                        version: plugin.version.clone(),
+                        grant_id: grant.id.0,
+                        parameters: plugin.parameters.clone().into_iter().collect(),
+                    },
+                ))
+            })
+            .collect::<anyhow::Result<_>>()?;
         let middleware_by_name = properties
             .tool_middlewares
             .iter()
@@ -2180,6 +2350,33 @@ impl ComponentCommandHandler {
 
         Ok(diff::Component {
             wasm_hash: component_binary_hash.into(),
+            component_config: diff::ComponentConfig {
+                schema: properties.config_schema.clone(),
+                initial_permissions: {
+                    let context =
+                        component_initial_permission_recipient_context(environment, component_name);
+                    let permissions = crate::model::component::resolve_component_initial_permission(
+                        properties.component_initial_card.clone(),
+                        &properties.component_files,
+                        &context,
+                    );
+                    diff::AgentTypeInitialPermission {
+                        lower_positive: permissions.lower_bound.positive,
+                        lower_negative: permissions.lower_bound.negative,
+                        upper_positive: permissions.upper_bound.positive,
+                        upper_negative: permissions.upper_bound.negative,
+                    }
+                },
+                config: properties
+                    .component_config
+                    .iter()
+                    .map(|entry| (entry.path.join("."), entry.value.clone()))
+                    .collect(),
+                env: properties.component_env.clone(),
+                files_by_path: component_files_by_path,
+                plugins_by_grant_id: component_plugins_by_grant_id,
+            }
+            .into(),
             agent_type_provision_configs,
             tool_deployment_configs,
             tool_middleware_deployment_configs,
@@ -2223,6 +2420,10 @@ impl ComponentCommandHandler {
                 &environment.environment_id.0,
                 &ComponentCreation {
                     component_name: component_name.clone(),
+                    config_schema: component_deploy_properties.config_schema.clone(),
+                    component_provision_config: component_stager
+                        .component_provision_config(None, environment, component_name)
+                        .await?,
                     agent_types,
                     agent_type_provision_configs: component_stager
                         .agent_type_provision_configs(environment, component_name)
@@ -2336,6 +2537,23 @@ impl ComponentCommandHandler {
                 &component.id.0,
                 &ComponentUpdate {
                     current_revision: component.revision,
+                    config_schema: component_stager
+                        .component_config_changed()
+                        .then(|| component_deploy_properties.config_schema.clone()),
+                    component_provision_config: if component_stager.component_config_changed() {
+                        Some(
+                            component_stager
+                                .component_provision_config(
+                                    Some(&changed_files),
+                                    environment,
+                                    &component.name,
+                                )
+                                .await
+                                .map_err(UpdateStagedComponentError::Other)?,
+                        )
+                    } else {
+                        None
+                    },
                     agent_types,
                     agent_type_provision_config_updates: component_stager
                         .agent_type_provision_config_updates(
@@ -2444,16 +2662,16 @@ impl ComponentCommandHandler {
     }
 }
 
-fn validate_tool_binding_references(
+fn validate_tool_binding_references<'a>(
     issues: &mut Vec<ToolValidationIssue>,
-    bindings: &BTreeMap<String, ToolBindingState>,
+    names: impl IntoIterator<Item = &'a String>,
     field_prefix: &str,
     agent_name: Option<&AgentTypeName>,
     source: Option<&std::path::Path>,
     implementations: &BTreeMap<ToolName, Vec<DiscoveredToolImplementation>>,
     ambient_names: &BTreeSet<ToolName>,
 ) {
-    for raw_name in bindings.keys() {
+    for raw_name in names {
         let field_path = format!("{field_prefix}.{raw_name}");
         let path = match agent_name {
             Some(agent_name) => ToolEntityPath::agent(agent_name, field_path),
@@ -3019,8 +3237,73 @@ fn materialize_agent_config_entries(
         return vec![];
     };
 
-    agent_type
-        .config
+    project_local_config_entries(&agent_type.config, config_root)
+}
+
+fn materialize_config_entries(
+    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
+    agent_types: &[AgentTypeSchema],
+    config_root: Option<&serde_json::Value>,
+) -> anyhow::Result<Vec<AgentConfigEntryDto>> {
+    let Some(config_root) = config_root else {
+        return Ok(vec![]);
+    };
+
+    let agent_local_paths = agent_types
+        .iter()
+        .flat_map(|agent| &agent.config)
+        .filter(|declaration| declaration.source == AgentConfigSource::Local)
+        .map(|declaration| &declaration.path)
+        .collect::<Vec<_>>();
+    validate_component_config(config_root, declarations, &agent_local_paths)?;
+
+    Ok(project_local_config_entries(declarations, config_root))
+}
+
+fn validate_component_config(
+    config_root: &serde_json::Value,
+    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
+    agent_local_paths: &[&Vec<String>],
+) -> anyhow::Result<()> {
+    if !config_root.is_object() {
+        bail!("Component config must be an object");
+    }
+    let undeclared = collect_unused_leaf_paths(config_root, |path| {
+        declarations
+            .iter()
+            .any(|declaration| path.starts_with(&declaration.path))
+            || agent_local_paths
+                .iter()
+                .any(|declaration| path.starts_with(declaration))
+    });
+    if !undeclared.is_empty() {
+        bail!(
+            "Component config contains paths with no local declaration: {}",
+            undeclared.iter().map(|path| path.join(".")).join(", ")
+        );
+    };
+
+    let locally_supplied_secrets = declarations
+        .iter()
+        .filter(|declaration| declaration.source == AgentConfigSource::Secret)
+        .filter(|declaration| value_at_path(config_root, &declaration.path).is_some())
+        .filter(|declaration| !agent_local_paths.contains(&&declaration.path))
+        .map(|declaration| declaration.path.join("."))
+        .collect::<Vec<_>>();
+    if !locally_supplied_secrets.is_empty() {
+        bail!(
+            "Component config supplies values for secret declarations: {}",
+            locally_supplied_secrets.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn project_local_config_entries(
+    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
+    config_root: &serde_json::Value,
+) -> Vec<AgentConfigEntryDto> {
+    declarations
         .iter()
         .filter(|decl| decl.source == AgentConfigSource::Local)
         .filter_map(|decl| {
@@ -3060,10 +3343,77 @@ fn collect_unused_agent_config_paths(
 }
 
 #[cfg(test)]
+mod component_config_tests {
+    use super::{
+        materialize_config_entries, project_local_config_entries, validate_component_config,
+    };
+    use golem_common::model::agent::AgentConfigSource;
+    use golem_common::schema::SchemaType;
+    use golem_common::schema::agent::AgentConfigDeclarationSchema;
+    use serde_json::json;
+    use test_r::test;
+
+    fn declaration(source: AgentConfigSource, path: &[&str]) -> AgentConfigDeclarationSchema {
+        AgentConfigDeclarationSchema {
+            source,
+            path: path.iter().map(|segment| segment.to_string()).collect(),
+            value_type: SchemaType::string(),
+        }
+    }
+
+    #[test]
+    fn zero_agent_component_rejects_undeclared_config() {
+        let error =
+            materialize_config_entries(&[], &[], Some(&json!({ "unknown": "value" }))).unwrap_err();
+        assert!(error.to_string().contains("no local declaration"));
+        assert!(error.to_string().contains("unknown"));
+    }
+
+    #[test]
+    fn component_config_requires_object_root() {
+        for root in [json!("invalid"), json!(["invalid"]), json!(null)] {
+            assert!(materialize_config_entries(&[], &[], Some(&root)).is_err());
+        }
+        assert!(
+            materialize_config_entries(&[], &[], None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            materialize_config_entries(&[], &[], Some(&json!({})))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn zero_agent_component_rejects_locally_supplied_secret() {
+        let declarations = vec![declaration(AgentConfigSource::Secret, &["token"])];
+        let error = materialize_config_entries(
+            &declarations,
+            &[],
+            Some(&json!({ "token": "not-a-secret-reference" })),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("secret declarations"));
+        assert!(error.to_string().contains("token"));
+    }
+
+    #[test]
+    fn agent_only_default_is_valid_but_not_projected_to_component_config() {
+        let agent_path = vec!["agent".to_string(), "prompt".to_string()];
+        let root = json!({ "agent": { "prompt": "helpful" } });
+        validate_component_config(&root, &[], &[&agent_path]).unwrap();
+        assert!(project_local_config_entries(&[], &root).is_empty());
+    }
+}
+
+#[cfg(test)]
 mod tool_binding_tests {
     use super::{
         effective_remote_tool_bindings, resolve_config_scope, resolve_secret_scope,
         resolve_tool_binding_input, validate_effective_tool_binding,
+        validate_tool_binding_references,
     };
     use crate::model::app_raw::{
         ManifestConfigKeyScope, ManifestSecretKeyScope, ToolMiddlewareInstallation,
@@ -3087,6 +3437,29 @@ mod tool_binding_tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
     use test_r::test;
+
+    #[test]
+    fn component_tool_references_are_validated_without_agent_bindings() {
+        let names = [
+            "missing".to_string(),
+            "invalid name".to_string(),
+            "middleware".to_string(),
+        ];
+        let mut issues = Vec::new();
+        validate_tool_binding_references(
+            &mut issues,
+            names.iter(),
+            "components.tools",
+            None,
+            Some(Path::new("golem.yaml")),
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+        );
+        assert_eq!(issues.len(), 3);
+        assert_eq!(issues[0].code, ToolValidationCode::UnknownToolReference);
+        assert_eq!(issues[1].code, ToolValidationCode::InvalidName);
+        assert_eq!(issues[2].code, ToolValidationCode::ReservedMiddleware);
+    }
 
     fn keys(values: &[&str]) -> SecretKeyScope {
         SecretKeyScope::Keys(

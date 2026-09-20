@@ -12,6 +12,24 @@ pub fn parse_uuid(String) -> Result[Uuid, String]
 pub fn uuid_to_string(Uuid) -> String
 
 // Errors
+pub(all) suberror ToolError {
+  InvalidToolName(String)
+  InvalidCommandPath(Array[String])
+  InvalidInput(String)
+  ConstraintViolation(String)
+  InvalidResult(String)
+  CustomError(CustomToolError)
+} derive(Eq, @debug.Debug)
+
+pub(all) suberror ToolRpcError {
+  ProtocolError(String)
+  Denied(String)
+  NotFound(String)
+  RemoteInternalError(String)
+  RemoteToolError(ToolError)
+  Cancelled
+  ResourceExhausted(String)
+} derive(Eq, @debug.Debug)
 
 // Types and methods
 pub(all) struct AccountId {
@@ -40,6 +58,11 @@ pub(all) struct CardId {
 
 pub(all) struct ComponentId {
   uuid : Uuid
+} derive(Eq, @debug.Debug)
+
+pub(all) struct CustomToolError {
+  name : String
+  payload : TypedSchemaValue
 } derive(Eq, @debug.Debug)
 
 pub(all) struct Datetime {

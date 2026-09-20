@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::{DropEvent, LiveCallPermit};
+use crate::durable_host::concurrent::{
+    DropEvent, LiveCallPermit, cancel_dropped_durable_input_access, finish_prepared_access_to_live,
+};
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, CommittedProducerStreamEventPayload,
@@ -23,6 +25,7 @@ use crate::durable_host::durable_stream::{
     StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamSegmentSource, StreamStoreError,
     StreamWriteAdmission, StreamWriteContext,
 };
+use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::stream_bus::{LiveStreamEventPayload, LiveStreamReceiveError};
 use crate::durable_host::stream_session::{
@@ -32,6 +35,8 @@ use crate::durable_host::stream_session::{
 };
 use crate::durable_host::stream_transport::{LiveStreamEndpoint, SourceLifecycle};
 use crate::durable_host::suspendable_wait::SuspendableWaitRegistration;
+use crate::durable_host::tail_work::TailActivity;
+use crate::durable_host::{BeginReplayToLive, DurableWorkerCtx, DurableWorkerCtxView};
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::rpc::Rpc;
 use crate::workerctx::WorkerCtx;
@@ -45,36 +50,43 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle,
-    InputStreamHighWater, MAX_NEW_STREAM_HANDLES_PER_VALUE, MAX_PACKED_U8_STREAM_ITEM_SIZE,
-    SessionStreamRole, StreamAttachmentKey, StreamCallerAttemptRecord, StreamCancelReason,
-    StreamCancelRole, StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
+    InputStreamHighWater, LocalStreamReaderId, MAX_NEW_STREAM_HANDLES_PER_VALUE,
+    MAX_PACKED_U8_STREAM_ITEM_SIZE, SessionStreamRole, StreamAttachmentKey, StreamBindingRecord,
+    StreamCallerAttemptRecord, StreamCancelReason, StreamCancelRole,
+    StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
     StreamConsumerItemValueRecord, StreamConsumerTerminal, StreamConsumerTerminalRecord,
-    StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamRegistrationCoordinate,
-    StreamResumeOperation, StreamRootKind, StreamSessionDetachedRecord,
-    StreamSessionInvocationResultRecord, StreamSessionKey, StreamSessionMapping,
-    StreamSessionMappingRecord, StreamSessionMappingUpdateRecord, StreamSessionRecord,
-    StreamSessionResumeAttemptRecord, StreamSlotTombstonedRecord, StreamSourceKind,
-    StreamTopologyActivatedRecord, StreamTopologyPreparedRecord, StreamValuePathStep,
+    StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamOffset, StreamRecordReference,
+    StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamResumeOperation,
+    StreamRootKind, StreamSessionDetachedRecord, StreamSessionInvocationResultRecord,
+    StreamSessionKey, StreamSessionMapping, StreamSessionMappingRecord,
+    StreamSessionMappingUpdateRecord, StreamSessionRecord, StreamSessionResumeAttemptRecord,
+    StreamSlotTombstonedRecord, StreamSourceKind, StreamTopologyActivatedRecord,
+    StreamTopologyPreparedRecord, StreamValuePathStep,
 };
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
+use golem_common::model::entity::OwnerRuntime;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
-use golem_schema::schema::{SchemaValue, SchemaValueStream};
+use golem_schema::schema::{SchemaValue, SchemaValueStream, TypedSchemaValue};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, mpsc};
-use wasmtime::StoreContextMut;
-use wasmtime::component::{Destination, StreamProducer, StreamResult};
+use tokio::sync::{Mutex, mpsc, oneshot};
+use wasmtime::component::{
+    Accessor, AccessorTask, Destination, HasSelf, StreamProducer, StreamResult,
+};
+use wasmtime::{AsContextMut, StoreContextMut};
 
 const PACKED_U8_OUTPUT_FLUSH_DELAY: Duration = Duration::from_millis(50);
 
@@ -113,8 +125,10 @@ pub trait DurableStreamConsumerJournal: Send + Sync {
 pub struct StreamSession {
     pub(crate) producer: Arc<DurableStreamStore>,
     pub(crate) oplog: Arc<dyn Oplog>,
+    pub(crate) session_reference: StreamRegistrationInvocation,
     pub(crate) session_key: StreamSessionKey,
     consumer_invocation: StreamInvocationId,
+    bindings: Arc<RwLock<HashMap<u64, StreamBindingRecord>>>,
     mappings: Arc<RwLock<HashMap<u64, StreamSessionMappingRecord>>>,
     input_schema: Option<Arc<DurableInputSchema>>,
     rpc: Option<Arc<dyn Rpc>>,
@@ -159,6 +173,11 @@ struct PendingOwnedStreamDrain {
     role: SessionStreamRole,
 }
 
+/// An output already registered and drained by this session before result publication.
+pub(crate) struct RegisteredOutputStream {
+    pub transport_stream_id: u64,
+}
+
 /// A stream-bearing value whose references name its binding-local transport mappings.
 #[derive(Debug, PartialEq)]
 pub struct SessionValue {
@@ -167,7 +186,10 @@ pub struct SessionValue {
 }
 
 impl SessionValue {
-    fn from_persisted(result: StreamSessionInvocationResultRecord) -> Result<Self, String> {
+    async fn from_persisted(
+        producer: &DurableStreamStore,
+        result: StreamSessionInvocationResultRecord,
+    ) -> Result<Self, String> {
         let value = ProtoSchemaValue::decode(result.result.as_slice())
             .map_err(|error| format!("invalid persisted durable invocation result: {error}"))?;
         let value = remap_recursive_stream_references(value, |handle_index, _| {
@@ -179,10 +201,11 @@ impl SessionValue {
                 .map(|mapping| mapping.transport_stream_id)
                 .ok_or_else(|| format!("unknown durable result handle index {handle_index}"))
         })?;
-        Ok(Self {
-            value,
-            mappings: result.stream_mappings,
-        })
+        let mappings = producer
+            .materialize_bindings(&result.stream_mappings)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(Self { value, mappings })
     }
 
     /// Encodes this value's mappings when sending it over the invocation transport.
@@ -209,6 +232,7 @@ pub fn durable_stream_mapping_to_proto(
             expected_producer_fingerprint: Some(
                 mapping.handle.expected_producer_fingerprint.0.into(),
             ),
+            producer_generation: mapping.handle.producer_generation.as_u64(),
             source_invocation: Some(StreamInvocationIdentity {
                 callee_environment_id: Some(
                     mapping
@@ -294,6 +318,7 @@ pub fn durable_stream_mapping_from_proto(
                     .ok_or_else(|| "durable stream handle has no producer fingerprint".to_string())?
                     .into(),
             ),
+            producer_generation: OplogIndex::from_u64(handle.producer_generation),
             source_invocation: StreamInvocationId {
                 callee_environment_id: source
                     .callee_environment_id
@@ -358,25 +383,33 @@ impl StreamSession {
     pub fn new(
         producer: Arc<DurableStreamStore>,
         oplog: Arc<dyn Oplog>,
-        session_key: StreamSessionKey,
+        session_reference: StreamRegistrationInvocation,
         mappings: impl IntoIterator<Item = StreamSessionMappingRecord>,
     ) -> Self {
+        let session_key = producer.qualify_session(&session_reference);
         let session_lock = producer.session_lock(&session_key);
         let mappings = mappings
             .into_iter()
             .map(|mapping| (mapping.transport_stream_id, mapping))
             .collect::<HashMap<_, _>>();
+        let bindings = mappings
+            .iter()
+            .map(|(id, mapping)| (*id, StreamBindingRecord::foreign(mapping)))
+            .collect();
         let next_transport_stream_id = mappings
             .keys()
             .copied()
             .max()
             .map(|id| id.saturating_add(1))
             .unwrap_or_default();
+        let attachment_epoch = producer.attachment_epoch_floor();
         Self {
             producer,
             oplog,
+            session_reference,
             consumer_invocation: session_key.clone(),
             session_key,
+            bindings: Arc::new(RwLock::new(bindings)),
             mappings: Arc::new(RwLock::new(mappings)),
             input_schema: None,
             rpc: None,
@@ -385,13 +418,36 @@ impl StreamSession {
             require_root_attachment_before_production: false,
             next_transport_stream_id: Arc::new(AtomicU64::new(next_transport_stream_id)),
             session_lock,
-            attachment_epoch: 1,
+            attachment_epoch,
             attachment_attempt_id: None,
             entity_parent_start_index: None,
             recovered_mappings_through: Arc::new(Mutex::new(OplogIndex::NONE)),
             control_metadata: Arc::new(Mutex::new(SessionControlMetadata::default())),
             response_lease: None,
         }
+    }
+
+    /// Opens session runtime state from persisted owner-relative bindings.
+    pub async fn open(
+        producer: Arc<DurableStreamStore>,
+        oplog: Arc<dyn Oplog>,
+        session_reference: StreamRegistrationInvocation,
+        bindings: impl IntoIterator<Item = StreamBindingRecord>,
+    ) -> Result<Self, String> {
+        let bindings = bindings.into_iter().collect::<Vec<_>>();
+        let mappings = producer
+            .materialize_bindings(&bindings)
+            .await
+            .map_err(|error| error.to_string())?;
+        let session = Self::new(producer, oplog, session_reference, mappings);
+        *session
+            .bindings
+            .write()
+            .expect("durable stream binding lock poisoned") = bindings
+            .into_iter()
+            .map(|binding| (binding.transport_stream_id, binding))
+            .collect();
+        Ok(session)
     }
 
     /// Retains an ephemeral response only for the lifetime of this session runtime.
@@ -508,6 +564,14 @@ impl StreamSession {
             .cloned()
     }
 
+    fn binding(&self, transport_stream_id: u64) -> Option<StreamBindingRecord> {
+        self.bindings
+            .read()
+            .expect("durable stream binding lock poisoned")
+            .get(&transport_stream_id)
+            .cloned()
+    }
+
     fn mapping_for_handle(
         &self,
         handle: &DurableStreamHandle,
@@ -520,6 +584,39 @@ impl StreamSession {
             .find_map(|(_, mapping)| {
                 (&mapping.handle == handle && mapping.role == role).then(|| mapping.clone())
             })
+    }
+
+    fn mapping_for_reference(
+        &self,
+        reference: &StreamRecordReference,
+        role: SessionStreamRole,
+    ) -> Option<StreamSessionMappingRecord> {
+        let bindings = self
+            .bindings
+            .read()
+            .expect("durable stream binding lock poisoned");
+        let mappings = self
+            .mappings
+            .read()
+            .expect("durable stream mapping lock poisoned");
+        bindings.values().find_map(|binding| {
+            (&binding.source == reference && binding.role == role)
+                .then(|| mappings.get(&binding.transport_stream_id).cloned())
+                .flatten()
+        })
+    }
+
+    /// Returns the currently materialized transport mappings in transport-id order.
+    pub fn materialized_mappings(&self) -> Vec<StreamSessionMappingRecord> {
+        let mut mappings = self
+            .mappings
+            .read()
+            .expect("durable stream mapping lock poisoned")
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        mappings.sort_by_key(|mapping| mapping.transport_stream_id);
+        mappings
     }
 
     /// Validates frame epoch, attachment attempt, durable stream ID, and role.
@@ -657,11 +754,11 @@ impl StreamSession {
         {
             return Ok(false);
         }
-        self.append_record(
-            Some(context),
+        self.try_append_record_owned(
+            context,
             StreamSessionRecord::Detached(StreamSessionDetachedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: self.session_key.clone(),
+                session_key: self.session_key.idempotency_key.clone(),
                 attachment_id: golem_common::model::durable_stream::AttachmentId::primary(
                     self.session_key.callee_environment_id,
                     &self.session_key.callee,
@@ -672,7 +769,7 @@ impl StreamSession {
                 epoch,
             }),
         )
-        .await;
+        .await?;
         self.commit_consumer_journal().await?;
         Ok(true)
     }
@@ -754,41 +851,54 @@ impl StreamSession {
         result
     }
 
-    /// Adds a runtime mapping only when its durable stream identity and role agree.
-    fn insert_mapping(&self, mapping: StreamSessionMappingRecord) -> Result<(), String> {
-        let StreamSessionMappingRecord {
-            transport_stream_id,
-            ref handle,
-            role,
-        } = mapping;
+    /// Adds a runtime binding without conflating independent readers of the same source.
+    fn insert_binding_mapping(
+        &self,
+        binding: StreamBindingRecord,
+        mapping: StreamSessionMappingRecord,
+    ) -> Result<(), String> {
+        if binding.transport_stream_id != mapping.transport_stream_id
+            || binding.role != mapping.role
+        {
+            return Err("durable stream binding differs from its runtime mapping".to_string());
+        }
+        let transport_stream_id = mapping.transport_stream_id;
+        let mut bindings = self
+            .bindings
+            .write()
+            .expect("durable stream binding lock poisoned");
         let mut mappings = self
             .mappings
             .write()
             .expect("durable stream mapping lock poisoned");
-        if let Some((existing_transport_stream_id, _)) = mappings
-            .iter()
-            .find(|(_, existing)| &existing.handle == handle && existing.role == role)
-            && *existing_transport_stream_id != transport_stream_id
-        {
-            return Err(format!(
-                "durable stream is already mapped to transport stream id {existing_transport_stream_id}"
-            ));
-        }
-        match mappings.get(&transport_stream_id) {
-            Some(existing) if existing == &mapping => Ok(()),
-            Some(_) => Err(format!(
+        match (
+            bindings.get(&transport_stream_id),
+            mappings.get(&transport_stream_id),
+        ) {
+            (Some(existing_binding), Some(existing_mapping))
+                if existing_binding == &binding && existing_mapping == &mapping =>
+            {
+                Ok(())
+            }
+            (Some(_), _) | (_, Some(_)) => Err(format!(
                 "transport stream id {transport_stream_id} is already mapped to another durable stream"
             )),
-            None => {
+            (None, None) => {
                 self.next_transport_stream_id
                     .fetch_max(transport_stream_id.saturating_add(1), Ordering::AcqRel);
+                bindings.insert(transport_stream_id, binding);
                 mappings.insert(transport_stream_id, mapping);
                 Ok(())
             }
         }
     }
 
+    fn insert_mapping(&self, mapping: StreamSessionMappingRecord) -> Result<(), String> {
+        self.insert_binding_mapping(StreamBindingRecord::foreign(&mapping), mapping)
+    }
+
     /// Commits and indexes a session record through the producer's owned write path.
+    #[cfg(test)]
     async fn append_record(
         &self,
         context: Option<&StreamWriteContext>,
@@ -812,6 +922,17 @@ impl StreamSession {
                     .append_session_record_attributed(Some(&context), attribution, record)
                     .await
             })
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn try_append_record_owned(
+        &self,
+        context: &StreamWriteContext,
+        record: StreamSessionRecord,
+    ) -> Result<(), String> {
+        self.producer
+            .append_session_record_attributed(Some(context), self.entity_parent_start_index, record)
             .await
             .map_err(|error| error.to_string())
     }
@@ -842,15 +963,15 @@ impl StreamSession {
         }
         drop(metadata);
         let attempt_id = AttemptId::fresh();
-        self.append_record(
-            Some(context),
+        self.try_append_record_owned(
+            context,
             StreamSessionRecord::CallerAttempt(StreamCallerAttemptRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: self.session_key.clone(),
+                session_key: self.session_reference.clone(),
                 attempt_id,
             }),
         )
-        .await;
+        .await?;
         self.commit_consumer_journal().await?;
         Ok(attempt_id)
     }
@@ -895,52 +1016,27 @@ impl StreamSession {
 
     async fn refresh_control_metadata(&self) -> Result<(), String> {
         let mut metadata = self.control_metadata.lock().await;
-        if !metadata.is_loaded()
-            && let Some(persisted) = self
-                .producer
-                .persisted_control_metadata(&self.session_key)
-                .await?
-        {
-            *metadata = persisted;
-        }
-        metadata.ensure_valid()?;
-        // This is deliberately the raw horizon, not the last published AgentStatusRecord:
-        // local control records remain visible before and after the append buffer is committed.
-        let horizon = self.oplog.current_oplog_index().await;
-        while metadata.covered_through() < horizon {
-            let count = (horizon.as_u64() - metadata.covered_through().as_u64()).min(1024);
-            for (index, entry) in self
-                .oplog
-                .read_exact(metadata.covered_through().next(), count)
-                .await
-            {
-                if let OplogEntry::StreamSession { record, .. } = entry {
-                    let record = self.download_record(record).await?;
-                    metadata.apply(index, &self.session_key, &record);
-                } else {
-                    metadata.advance_coverage(index);
-                }
-            }
-        }
-        Ok(())
+        self.producer
+            .refresh_control_metadata(&self.session_key, &mut metadata)
+            .await
     }
 
     async fn session_record_at(&self, index: OplogIndex) -> Result<StreamSessionRecord, String> {
-        let OplogEntry::StreamSession { record, .. } = self.oplog.read(index).await else {
-            return Err("durable session metadata points at a non-session record".into());
-        };
-        self.download_record(record).await
+        self.producer
+            .read_session_record(index)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn append_mapping_once(
         &self,
         context: &StreamWriteContext,
-        mapping: StreamSessionMappingRecord,
+        binding: StreamBindingRecord,
     ) -> Result<(), String> {
         if self
             .current_control_metadata()
             .await?
-            .has_explicit_mapping(&mapping)
+            .has_explicit_mapping(&binding)
         {
             return Ok(());
         }
@@ -948,15 +1044,15 @@ impl StreamSession {
             .ensure_session_accepts_new_events(&self.session_key)
             .await
             .map_err(|error| error.to_string())?;
-        self.append_record(
-            Some(context),
+        self.try_append_record_owned(
+            context,
             StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: self.session_key.clone(),
-                mapping,
+                session_key: self.session_reference.clone(),
+                mapping: binding,
             }),
         )
-        .await;
+        .await?;
         Ok(())
     }
 
@@ -997,11 +1093,8 @@ impl StreamSession {
     ) -> Result<(), String> {
         self.validate_forwarded_mapping(&attachment, &mapping)?;
         if self
-            .mapping_for_handle(&mapping.handle, mapping.role)
+            .mapping(mapping.transport_stream_id)
             .is_some_and(|existing| existing != mapping)
-            || self
-                .mapping(mapping.transport_stream_id)
-                .is_some_and(|existing| existing != mapping)
         {
             return Err(
                 "forwarded durable stream mapping conflicts with session topology".to_string(),
@@ -1058,12 +1151,10 @@ impl StreamSession {
             .await
             .map_err(|error| error.to_string())?;
         let session = self.clone();
-        let persisted_mapping = mapping.clone();
+        let binding = StreamBindingRecord::foreign(&mapping);
         admission
             .submit(move |_, context| async move {
-                session
-                    .append_mapping_once(&context, persisted_mapping)
-                    .await
+                session.append_mapping_once(&context, binding).await
             })
             .await?;
         self.commit_consumer_journal().await?;
@@ -1090,20 +1181,21 @@ impl StreamSession {
         let prepared_attempt = status
             .prepared_attempt_id
             .ok_or_else(|| "durable topology has no Prepared session authority".to_string())?;
-        let (attached_epoch, attached_attempt_id, attached) = match (
+        let (attached_epoch, attached_attempt_id) = match (
             status.attachment_epoch,
             status.attachment_attempt_id,
             status.attachment_attached,
         ) {
-            (Some(epoch), Some(attempt), Some(attached)) => (epoch, attempt, attached),
+            (Some(epoch), Some(attempt), Some(_)) => (epoch, attempt),
             _ => {
                 return Err(
                     "durable topology cannot activate before session attachment".to_string()
                 );
             }
         };
-        if !attached
-            || (attached_epoch == 1 && attached_attempt_id != prepared_attempt)
+        let initial_attachment = status.initial_attachment_epoch == Some(attached_epoch)
+            && status.initial_attachment_attempt_id == Some(attached_attempt_id);
+        if (initial_attachment && attached_attempt_id != prepared_attempt)
             || attached_epoch != attachment.epoch
             || AttachmentId::primary(
                 self.session_key.callee_environment_id,
@@ -1112,7 +1204,7 @@ impl StreamSession {
             )
             .map_err(|error| error.to_string())?
                 != attachment.attachment_id
-            || (attached_epoch == 1
+            || (initial_attachment
                 && !matches!(
                     self.oplog
                         .read(
@@ -1134,9 +1226,10 @@ impl StreamSession {
     }
 
     fn has_local_session_authority(&self) -> bool {
-        self.session_key.callee_environment_id == self.producer.environment_id()
-            && self.session_key.callee == *self.producer.agent_id()
-            && self.session_key.callee_fingerprint == self.producer.fingerprint()
+        matches!(
+            self.session_reference,
+            StreamRegistrationInvocation::Local(_)
+        )
     }
 
     fn validate_forwarded_mapping(
@@ -1214,9 +1307,13 @@ impl StreamSession {
             mappings,
         } = metadata.recoverable_mappings_after(*covered);
         drop(metadata);
-        for mapping in mappings {
-            self.validate_recovered_mapping(&mapping).await?;
-            self.insert_mapping(mapping)?;
+        let materialized = self
+            .producer
+            .materialize_bindings(&mappings)
+            .await
+            .map_err(|error| error.to_string())?;
+        for (binding, mapping) in mappings.into_iter().zip(materialized) {
+            self.insert_binding_mapping(binding, mapping)?;
         }
         *covered = horizon;
         Ok(())
@@ -1227,8 +1324,18 @@ impl StreamSession {
         &self,
         mapping: &StreamSessionMappingRecord,
     ) -> Result<bool, String> {
+        if self
+            .mapping(mapping.transport_stream_id)
+            .as_ref()
+            .is_some_and(|known| known != mapping)
+        {
+            return Err("consumer stream differs from its recorded mapping".into());
+        }
         let metadata = self.current_control_metadata().await?;
-        metadata.has_consumer_terminal(mapping)
+        let binding = self
+            .binding(mapping.transport_stream_id)
+            .unwrap_or_else(|| StreamBindingRecord::foreign(mapping));
+        metadata.has_consumer_terminal(&binding)
     }
 
     async fn validate_recovered_mapping(
@@ -1247,14 +1354,18 @@ impl StreamSession {
         }
         {
             let metadata = self.current_control_metadata().await?;
-            if let Some(intent) = metadata.cancellation_intent(mapping.handle.stream_id) {
-                let key = self.attachment_key(&mapping.handle, intent.epoch)?;
+            let source = self
+                .binding(mapping.transport_stream_id)
+                .unwrap_or_else(|| StreamBindingRecord::foreign(mapping))
+                .source;
+            if let Some(intent) = metadata.cancellation_intent(&source) {
+                let key = self.cancellation_attachment_key(&mapping.handle, intent)?;
                 if metadata.has_committed_cancellation(&key, mapping, intent)? {
                     return Ok(());
                 }
             }
         }
-        let attachment = self.attachment_key(&mapping.handle, self.attachment_epoch)?;
+        let attachment = self.attachment_key(&mapping.handle, self.reader_epoch().await?)?;
         if self.topology_state(&attachment, Some(mapping)).await?
             == ConsumerAttachmentStatus::Active
         {
@@ -1264,7 +1375,15 @@ impl StreamSession {
         }
     }
 
-    fn attachment_key(
+    async fn reader_epoch(&self) -> Result<u64, String> {
+        if self.has_local_session_authority() && self.attachment_attempt_id.is_none() {
+            Ok(self.authoritative_attachment_state().await?.epoch)
+        } else {
+            Ok(self.attachment_epoch)
+        }
+    }
+
+    pub(crate) fn attachment_key(
         &self,
         handle: &DurableStreamHandle,
         epoch: u64,
@@ -1287,6 +1406,20 @@ impl StreamSession {
             expected_consumer_fingerprint: self.producer.fingerprint(),
             consumer_invocation: self.consumer_invocation.clone(),
         })
+    }
+
+    fn cancellation_attachment_key(
+        &self,
+        handle: &DurableStreamHandle,
+        intent: &StreamConsumerCancelIntentRecord,
+    ) -> Result<StreamAttachmentKey, String> {
+        let mut key = self.attachment_key(handle, intent.epoch)?;
+        key.consumer_invocation =
+            self.producer
+                .qualify_session(&StreamRegistrationInvocation::Local(
+                    intent.consumer_invocation.clone(),
+                ));
+        Ok(key)
     }
 
     /// Rejects resume cursors that skip or contradict committed consumer progress.
@@ -1334,7 +1467,7 @@ impl StreamSession {
                 );
                 source
                     .read_attached_segment(
-                        &self.attachment_key(&mapping.handle, self.attachment_epoch)?,
+                        &self.attachment_key(&mapping.handle, self.reader_epoch().await?)?,
                         &mapping.handle,
                         Timestamp::now_utc().to_millis(),
                         Some(after),
@@ -1412,11 +1545,8 @@ impl StreamSession {
         let _session_guard = self.session_lock.lock().await;
         self.validate_forwarded_mapping(&attachment, &mapping)?;
         if self
-            .mapping_for_handle(&mapping.handle, mapping.role)
+            .mapping(mapping.transport_stream_id)
             .is_some_and(|existing| existing != mapping)
-            || self
-                .mapping(mapping.transport_stream_id)
-                .is_some_and(|existing| existing != mapping)
         {
             return Err(
                 "forwarded durable stream mapping conflicts with session topology".to_string(),
@@ -1464,10 +1594,11 @@ impl StreamSession {
         &self,
         expected: &StreamSessionMappingRecord,
     ) -> Result<bool, String> {
+        let binding = StreamBindingRecord::foreign(expected);
         Ok(self
             .current_control_metadata()
             .await?
-            .has_persisted_mapping(expected))
+            .has_persisted_mapping(&binding))
     }
 
     async fn ensure_nested_mapping(
@@ -1494,7 +1625,9 @@ impl StreamSession {
         handle: DurableStreamHandle,
         role: SessionStreamRole,
     ) -> Result<StreamSessionMappingRecord, String> {
-        if let Some(mapping) = self.mapping_for_handle(&handle, role) {
+        if let Some(mapping) =
+            self.mapping_for_reference(&StreamRecordReference::Foreign(handle.clone()), role)
+        {
             return Ok(mapping);
         }
         let mapping = StreamSessionMappingRecord {
@@ -1503,16 +1636,17 @@ impl StreamSession {
             role,
         };
         if self.producer.owns_handle_identity(&mapping.handle) {
+            let binding = StreamBindingRecord::foreign(&mapping);
             let session = self.clone();
-            let persisted_mapping = mapping.clone();
+            let persisted_binding = binding.clone();
             admission
                 .submit(move |_, context| async move {
                     session
-                        .append_mapping_once(&context, persisted_mapping)
+                        .append_mapping_once(&context, persisted_binding)
                         .await
                 })
                 .await?;
-            self.insert_mapping(mapping.clone())?;
+            self.insert_binding_mapping(binding, mapping.clone())?;
         } else {
             let rpc = self.rpc.clone().ok_or_else(|| {
                 "foreign durable stream control routing is unavailable".to_string()
@@ -1520,7 +1654,7 @@ impl StreamSession {
             let auth_ctx = self.auth_ctx.clone().ok_or_else(|| {
                 "foreign durable stream consumer authorization is unavailable".to_string()
             })?;
-            let attachment = self.attachment_key(&mapping.handle, self.attachment_epoch)?;
+            let attachment = self.attachment_key(&mapping.handle, self.reader_epoch().await?)?;
             let control = RoutedStreamAttachmentControl::new(rpc, mapping.clone(), auth_ctx);
             self.activate_forwarded_mapping_under_lock(
                 admission,
@@ -1544,7 +1678,9 @@ impl StreamSession {
         if self.producer.owns_handle_identity(&handle) {
             return Err("attached durable stream handle is owned by the consumer".to_string());
         }
-        if let Some(mapping) = self.mapping_for_handle(&handle, role) {
+        if let Some(mapping) =
+            self.mapping_for_reference(&StreamRecordReference::Foreign(handle.clone()), role)
+        {
             return Ok(mapping);
         }
         let mapping = StreamSessionMappingRecord {
@@ -1698,7 +1834,7 @@ impl StreamSession {
                     nested_requests.push(ProducerRegistrationRequest {
                         entity_parent_start_index: self.entity_parent_start_index,
                         coordinate,
-                        source_invocation: self.session_key.clone(),
+                        source_invocation: self.session_reference.clone(),
                         component_revision: input_schema.component_revision,
                         element_schema_fingerprint,
                         source_kind: StreamSourceKind::Nested,
@@ -1801,11 +1937,14 @@ impl StreamSession {
                     handle: handle.clone(),
                     role: SessionStreamRole::Input,
                 };
-                self.insert_mapping(mapping.clone())?;
+                let binding = self
+                    .producer
+                    .local_binding(transport_stream_id, &handle, SessionStreamRole::Input)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                self.insert_binding_mapping(binding.clone(), mapping.clone())?;
                 nested_mappings.push(mapping);
-            }
-            for mapping in &nested_mappings {
-                self.append_mapping_once(context, mapping.clone()).await?;
+                self.append_mapping_once(context, binding).await?;
             }
             let input_schema = self
                 .input_schema
@@ -1924,7 +2063,8 @@ impl StreamSession {
                     return Ok::<_, String>(false);
                 }
                 let epoch = session.authoritative_attachment_state().await?.epoch;
-                let Some(records) = metadata.cancellation_records(epoch, &session.session_key)?
+                let Some(records) =
+                    metadata.cancellation_records(epoch, &session.session_reference)?
                 else {
                     return Ok::<_, String>(false);
                 };
@@ -1960,6 +2100,7 @@ impl StreamSession {
         if !self.has_local_session_authority() {
             return Err("slot deletion requires the session owner".into());
         }
+        self.recover_session_mappings().await?;
         let metadata = self.current_control_metadata().await?;
         if !metadata.is_prepared() {
             return Err("unknown durable stream session".into());
@@ -1970,7 +2111,7 @@ impl StreamSession {
         let mut records = vec![StreamSessionRecord::Tombstoned(
             StreamSlotTombstonedRecord {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
-                session_key: self.session_key.clone(),
+                session_key: self.session_reference.clone(),
                 slot,
                 role: stream
                     .as_ref()
@@ -1978,16 +2119,21 @@ impl StreamSession {
             },
         )];
         if let Some((handle, role)) = stream {
-            if !metadata.has_persisted_handle(&handle, role) {
+            let binding = self
+                .mapping_for_handle(&handle, role)
+                .and_then(|mapping| self.binding(mapping.transport_stream_id))
+                .ok_or_else(|| "deleted slot has no persisted stream mapping".to_string())?;
+            if !metadata.has_persisted_source(&binding.source, role) {
                 return Err("deleted slot has no persisted stream mapping".into());
             }
-            if metadata.cancellation_intent(handle.stream_id).is_none() {
+            if metadata.cancellation_intent(&binding.source).is_none() {
                 let epoch = self.authoritative_attachment_state().await?.epoch;
                 records.push(StreamSessionRecord::ConsumerCancelIntent(
                     StreamConsumerCancelIntentRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
-                        session_key: self.session_key.clone(),
-                        stream_id: handle.stream_id,
+                        session_key: self.session_reference.clone(),
+                        consumer_invocation: self.consumer_invocation.idempotency_key.clone(),
+                        source: binding.source,
                         epoch,
                         role: match role {
                             SessionStreamRole::Input => StreamCancelRole::InputProducer,
@@ -2079,6 +2225,9 @@ impl StreamSession {
         if mapping.role != expected_role {
             return Err("durable stream cancellation role does not match its mapping".to_string());
         }
+        let binding = self
+            .binding(transport_stream_id)
+            .ok_or_else(|| format!("unknown durable input binding {transport_stream_id}"))?;
         let epoch = if self.has_local_session_authority() {
             match self.attachment_attempt_id {
                 // Streams bound to a transport attempt may only cancel while that attempt is
@@ -2093,13 +2242,45 @@ impl StreamSession {
                 None => self.authoritative_attachment_state().await?.epoch,
             }
         } else {
+            let has_intent = self
+                .current_control_metadata()
+                .await?
+                .cancellation_intent(&binding.source)
+                .is_some();
+            if !self.producer.owns_handle_identity(&mapping.handle)
+                && !self.has_journaled_consumer_terminal(&mapping).await?
+                && !has_intent
+            {
+                let attachment = self.attachment_key(&mapping.handle, self.attachment_epoch)?;
+                if self.topology_state(&attachment, Some(&mapping)).await?
+                    != ConsumerAttachmentStatus::Active
+                {
+                    let rpc = self.rpc.clone().ok_or_else(|| {
+                        "foreign durable stream control routing is unavailable".to_string()
+                    })?;
+                    let auth_ctx = self.auth_ctx.clone().ok_or_else(|| {
+                        "foreign durable stream consumer authorization is unavailable".to_string()
+                    })?;
+                    let control =
+                        RoutedStreamAttachmentControl::new(rpc, mapping.clone(), auth_ctx);
+                    self.activate_forwarded_mapping_under_lock(
+                        admission,
+                        attachment,
+                        mapping.clone(),
+                        &control,
+                        Timestamp::now_utc().to_millis(),
+                    )
+                    .await?;
+                }
+            }
             self.validate_recovered_mapping(&mapping).await?;
             self.attachment_epoch
         };
         let intent = StreamConsumerCancelIntentRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: self.session_key.clone(),
-            stream_id: mapping.handle.stream_id,
+            session_key: self.session_reference.clone(),
+            consumer_invocation: self.consumer_invocation.idempotency_key.clone(),
+            source: binding.source.clone(),
             epoch,
             role,
             reason,
@@ -2108,7 +2289,7 @@ impl StreamSession {
         let persisted_intent = self
             .current_control_metadata()
             .await?
-            .cancellation_intent(mapping.handle.stream_id)
+            .cancellation_intent(&binding.source)
             .cloned();
         let intent = match persisted_intent {
             Some(existing) => existing,
@@ -2135,14 +2316,17 @@ impl StreamSession {
         let mut pending = Vec::new();
         for work in metadata.pending_cancellations() {
             let work = work?;
-            if self.producer.owns_handle_identity(&work.mapping.handle) {
-                pending.push(work);
+            if matches!(work.binding.source, StreamRecordReference::Local(_)) {
+                let mapping = self
+                    .producer
+                    .materialize_binding(&work.binding)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                pending.push((mapping, work.intent));
             }
         }
         drop(metadata);
-        for work in pending {
-            let mapping = work.mapping;
-            let intent = work.intent;
+        for (mapping, intent) in pending {
             let session = self.clone();
             self.producer
                 .run_admitted(
@@ -2206,20 +2390,16 @@ impl StreamSession {
         let mut pending = Vec::new();
         for work in metadata.pending_cancellations() {
             let work = work?;
-            let mapping = work.mapping;
-            let intent = work.intent;
-            if self.producer.owns_handle_identity(&mapping.handle) {
+            if matches!(work.binding.source, StreamRecordReference::Local(_)) {
                 continue;
             }
-            let consumer_invocation = if self.has_local_session_authority() {
-                self.session_key.clone()
-            } else {
-                metadata.consumer_invocation(&mapping)?.clone()
-            };
-            let key = self
-                .clone()
-                .with_consumer_invocation(consumer_invocation)
-                .attachment_key(&mapping.handle, intent.epoch)?;
+            let mapping = self
+                .producer
+                .materialize_binding(&work.binding)
+                .await
+                .map_err(|error| error.to_string())?;
+            let intent = work.intent;
+            let key = self.cancellation_attachment_key(&mapping.handle, &intent)?;
             pending.push((key, mapping, intent));
         }
         drop(metadata);
@@ -2291,7 +2471,7 @@ impl StreamSession {
         {
             return Ok(());
         }
-        if self.producer.owns_handle_identity(&mapping.handle) {
+        if matches!(intent.source, StreamRecordReference::Local(_)) {
             let attribution = self.entity_parent_start_index;
             admission
                 .submit(move |owner, context| async move {
@@ -2336,7 +2516,7 @@ impl StreamSession {
             let auth_ctx = self.auth_ctx.clone().ok_or_else(|| {
                 "foreign durable stream cancellation authorization is unavailable".to_string()
             })?;
-            let key = self.attachment_key(&mapping.handle, intent.epoch)?;
+            let key = self.cancellation_attachment_key(&mapping.handle, &intent)?;
             self.producer
                 .remote_until_retired(
                     RoutedStreamAttachmentControl::new(rpc, mapping, auth_ctx).cancel_stream(
@@ -2376,6 +2556,32 @@ impl StreamSession {
             }
         }
         Ok(result)
+    }
+
+    pub(crate) async fn cancel_unbound_rpc_inputs(
+        &self,
+        accepted: &[StreamSessionMappingRecord],
+    ) -> Result<(), String> {
+        let unbound = self
+            .mappings
+            .read()
+            .expect("durable stream mapping lock poisoned")
+            .values()
+            .filter(|mapping| {
+                mapping.role == SessionStreamRole::Input
+                    && !accepted.iter().any(|accepted| {
+                        accepted.role == mapping.role && accepted.handle == mapping.handle
+                    })
+            })
+            .map(|mapping| mapping.handle.clone())
+            .collect::<Vec<_>>();
+        for handle in unbound {
+            self.producer
+                .cancel_unbound_rpc_input(&self.session_key, &handle)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
     /// Replaces input stream handles with consumers backed by this session journal.
@@ -2494,6 +2700,7 @@ impl StreamSession {
         for (transport_stream_id, pending) in pending.into_iter().enumerate() {
             let transport_stream_id = u64::try_from(transport_stream_id)
                 .map_err(|_| "durable input transport stream id overflow".to_string())?;
+            let local = pending.forwarded_handle.is_none();
             let handle = if let Some(handle) = pending.forwarded_handle {
                 handle
             } else {
@@ -2504,7 +2711,7 @@ impl StreamSession {
                         root_kind: StreamRootKind::MethodInput,
                         recursive_value_path: pending.path,
                     },
-                    source_invocation: self.session_key.clone(),
+                    source_invocation: self.session_reference.clone(),
                     component_revision,
                     element_schema_fingerprint: pending.element_schema_fingerprint,
                     source_kind: StreamSourceKind::AgentHostedInput,
@@ -2521,10 +2728,16 @@ impl StreamSession {
                 handle: handle.clone(),
                 role: SessionStreamRole::Input,
             };
-            if self.producer.owns_handle_identity(&handle) {
-                self.append_mapping_once(context, mapping.clone()).await?;
-            }
-            self.insert_mapping(mapping.clone())?;
+            let binding = if local {
+                self.producer
+                    .local_binding(transport_stream_id, &handle, SessionStreamRole::Input)
+                    .await
+                    .map_err(|error| error.to_string())?
+            } else {
+                StreamBindingRecord::foreign(&mapping)
+            };
+            self.append_mapping_once(context, binding.clone()).await?;
+            self.insert_binding_mapping(binding, mapping.clone())?;
             mappings.push(mapping);
             if let Some(endpoint) = pending.endpoint {
                 drains.push(PendingOwnedStreamDrain {
@@ -2686,6 +2899,7 @@ impl StreamSession {
             path: Vec<StreamValuePathStep>,
             endpoint: Option<LiveStreamEndpoint>,
             forwarded_handle: Option<DurableStreamHandle>,
+            registered_transport_id: Option<u64>,
             element_type: SchemaType,
             element_schema_fingerprint: SchemaFingerprintV1,
             cancelled: bool,
@@ -2704,8 +2918,14 @@ impl StreamSession {
                 let element_schema_fingerprint =
                     schema_fingerprint_v1(&graph, element).map_err(|error| error.to_string())?;
                 let forwarded = forwarded_durable_input_reference(stream)?;
+                let registered_transport_id = stream
+                    .with_host_endpoint::<RegisteredOutputStream, _>(|output| {
+                        output.transport_stream_id
+                    })
+                    .ok();
                 let (endpoint, forwarded_handle) = match forwarded {
                     Some(forwarded) => (None, Some(forwarded.take(stream)?.handle)),
+                    None if registered_transport_id.is_some() => (None, None),
                     None => (
                         Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
                         None,
@@ -2732,6 +2952,7 @@ impl StreamSession {
                     path: path.to_vec(),
                     endpoint,
                     forwarded_handle,
+                    registered_transport_id,
                     element_type: element.cloned().unwrap_or_else(SchemaType::u8),
                     element_schema_fingerprint,
                     cancelled: first_result
@@ -2762,7 +2983,7 @@ impl StreamSession {
                     recursive_value_path: pending.path.clone(),
                 },
                 source_kind: StreamSourceKind::InvocationOutput,
-                source_invocation: self.session_key.clone(),
+                source_invocation: self.session_reference.clone(),
                 component_revision,
                 element_schema_fingerprint: pending.element_schema_fingerprint,
                 session_mapping: Some(session_mapping.clone()),
@@ -2773,8 +2994,11 @@ impl StreamSession {
             .iter()
             .filter(|pending| {
                 pending.forwarded_handle.as_ref().is_some_and(|handle| {
-                    self.mapping_for_handle(handle, SessionStreamRole::Output)
-                        .is_none()
+                    self.mapping_for_reference(
+                        &StreamRecordReference::Foreign(handle.clone()),
+                        SessionStreamRole::Output,
+                    )
+                    .is_none()
                 })
             })
             .count();
@@ -2797,8 +3021,9 @@ impl StreamSession {
         let mut request_index = 0usize;
         for pending in &pending {
             let transport_stream_id = if let Some(handle) = &pending.forwarded_handle {
-                if pending.cancelled || existing_intents.contains(&handle.stream_id) {
-                    self.mapping_for_handle(handle, SessionStreamRole::Output)
+                let source = StreamRecordReference::Foreign(handle.clone());
+                if pending.cancelled || existing_intents.contains(&source) {
+                    self.mapping_for_reference(&source, SessionStreamRole::Output)
                         .map(|mapping| Ok(mapping.transport_stream_id))
                         .unwrap_or_else(|| self.allocate_transport_stream_id())?
                 } else {
@@ -2813,12 +3038,39 @@ impl StreamSession {
             } else {
                 let request = &requests[request_index];
                 request_index += 1;
-                let existing_mapping = self
+                if let Some(id) = pending.registered_transport_id {
+                    let handle = self
+                        .producer
+                        .validate_registration(request)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let binding = self
+                        .producer
+                        .local_binding(id, &handle, SessionStreamRole::Output)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    if self.binding(id).as_ref() != Some(&binding) {
+                        return Err(
+                            "registered result output does not match its local session binding"
+                                .into(),
+                        );
+                    }
+                }
+                let existing_handle = self
                     .producer
                     .handle_for_coordinate(&request.coordinate)
                     .await
-                    .map_err(|error| error.to_string())?
-                    .and_then(|handle| self.mapping_for_handle(&handle, SessionStreamRole::Output));
+                    .map_err(|error| error.to_string())?;
+                let existing_mapping = if let Some(handle) = existing_handle {
+                    let binding = self
+                        .producer
+                        .local_binding(0, &handle, SessionStreamRole::Output)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    self.mapping_for_reference(&binding.source, SessionStreamRole::Output)
+                } else {
+                    None
+                };
                 existing_mapping
                     .map(|mapping| mapping.transport_stream_id)
                     .map(Ok)
@@ -2836,10 +3088,10 @@ impl StreamSession {
                     transport_stream_id,
                     cancellation_epoch: cancellation_epoch.filter(|_| {
                         pending.cancelled
-                            && !pending
-                                .forwarded_handle
-                                .as_ref()
-                                .is_some_and(|handle| existing_intents.contains(&handle.stream_id))
+                            && !pending.forwarded_handle.as_ref().is_some_and(|handle| {
+                                existing_intents
+                                    .contains(&StreamRecordReference::Foreign(handle.clone()))
+                            })
                     }),
                     source: match &pending.forwarded_handle {
                         Some(handle) => ProducerOutputSource::Existing(handle.clone()),
@@ -2877,16 +3129,29 @@ impl StreamSession {
         let mut drains = Vec::with_capacity(pending.len());
         let mut owned_handles = owned_handles.into_iter();
         for (pending, transport_stream_id) in pending.into_iter().zip(transport_stream_ids) {
-            let handle = pending.forwarded_handle.unwrap_or_else(|| {
-                owned_handles
-                    .next()
-                    .expect("result registration returned too few durable handles")
-            });
-            self.insert_mapping(StreamSessionMappingRecord {
+            let (handle, local) = match pending.forwarded_handle {
+                Some(handle) => (handle, false),
+                None => (
+                    owned_handles
+                        .next()
+                        .expect("result registration returned too few durable handles"),
+                    true,
+                ),
+            };
+            let mapping = StreamSessionMappingRecord {
                 transport_stream_id,
                 handle: handle.clone(),
                 role: SessionStreamRole::Output,
-            })?;
+            };
+            let binding = if local {
+                self.producer
+                    .local_binding(transport_stream_id, &handle, SessionStreamRole::Output)
+                    .await
+                    .map_err(|error| error.to_string())?
+            } else {
+                StreamBindingRecord::foreign(&mapping)
+            };
+            self.insert_binding_mapping(binding, mapping)?;
             if let Some(endpoint) = pending.endpoint
                 && !pending.cancelled
             {
@@ -3034,8 +3299,11 @@ impl StreamSession {
         let new_mapping_count = by_transport
             .values()
             .filter(|mapping| {
-                self.mapping_for_handle(&mapping.handle, SessionStreamRole::Output)
-                    .is_none()
+                self.mapping_for_reference(
+                    &StreamRecordReference::Foreign(mapping.handle.clone()),
+                    SessionStreamRole::Output,
+                )
+                .is_none()
             })
             .count();
         self.producer
@@ -3057,9 +3325,10 @@ impl StreamSession {
                     .validate_handle(&remote.handle)
                     .await
                     .map_err(|error| error.to_string())?;
-                if let Some(mapping) =
-                    self.mapping_for_handle(&remote.handle, SessionStreamRole::Output)
-                {
+                if let Some(mapping) = self.mapping_for_reference(
+                    &StreamRecordReference::Foreign(remote.handle.clone()),
+                    SessionStreamRole::Output,
+                ) {
                     mapping
                 } else {
                     let mapping = StreamSessionMappingRecord {
@@ -3090,30 +3359,45 @@ impl StreamSession {
         })?;
         let record = StreamSessionInvocationResultRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
-            session_key: self.session_key.clone(),
+            session_key: self.session_reference.clone(),
             result: canonical.encode_to_vec(),
-            output_streams: mappings
-                .iter()
-                .map(|mapping| mapping.handle.clone())
-                .collect(),
-            stream_mappings: mappings.clone(),
+            stream_mappings: mappings.iter().map(StreamBindingRecord::foreign).collect(),
         };
         if let Some(existing) = self.remote_result_record().await? {
             if existing != record {
                 return Err("durable RPC result conflicts with its caller journal".to_string());
             }
         } else {
-            self.append_record(None, StreamSessionRecord::InvocationResult(record))
-                .await;
+            self.producer
+                .append_session_record_attributed(
+                    None,
+                    self.entity_parent_start_index,
+                    StreamSessionRecord::InvocationResult(record),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
             self.commit_consumer_journal().await?;
         }
-        self.decode_initial(
-            canonical,
-            &mappings
-                .iter()
-                .map(|mapping| mapping.handle.clone())
-                .collect::<Vec<_>>(),
-            SessionStreamRole::Output,
+        self.decode_initial(canonical, &mappings, SessionStreamRole::Output)
+            .await
+    }
+
+    /// Drains an output whose normal result-leaf mapping was committed during preparation.
+    pub(crate) async fn drain_registered_output(
+        &self,
+        handle: DurableStreamHandle,
+        endpoint: LiveStreamEndpoint,
+        graph: Arc<SchemaGraph>,
+        element_type: SchemaType,
+    ) -> Result<(), String> {
+        self.drain_materialized_result(
+            vec![PendingOwnedStreamDrain {
+                handle,
+                endpoint,
+                element_type,
+                role: SessionStreamRole::Output,
+            }],
+            graph,
         )
         .await
     }
@@ -3126,7 +3410,12 @@ impl StreamSession {
         };
         let value = ProtoSchemaValue::decode(record.result.as_slice())
             .map_err(|error| format!("invalid durable caller result: {error}"))?;
-        self.decode_initial(value, &record.output_streams, SessionStreamRole::Output)
+        let mappings = self
+            .producer
+            .materialize_bindings(&record.stream_mappings)
+            .await
+            .map_err(|error| error.to_string())?;
+        self.decode_initial(value, &mappings, SessionStreamRole::Output)
             .await
             .map(Some)
     }
@@ -3140,12 +3429,219 @@ impl StreamSession {
         };
         match self.session_record_at(index).await? {
             StreamSessionRecord::InvocationResult(record)
-                if record.session_key == self.session_key =>
+                if record.session_key == self.session_reference =>
             {
                 Ok(Some(record))
             }
             _ => Err("durable result metadata points at a different record".into()),
         }
+    }
+
+    /// Validates committed bytes and terminals without republishing the historical prefix.
+    async fn drain_byte_output(
+        &self,
+        handle: DurableStreamHandle,
+        endpoint: LiveStreamEndpoint,
+    ) -> Result<(), String> {
+        let lifecycle = endpoint.lifecycle();
+        let mut source = endpoint.activate();
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        let registration_id = self
+            .producer
+            .register_source_cancellation(handle.stream_id, cancelled.clone());
+        let _registration = OutputDrainRegistration {
+            producer: self.producer.clone(),
+            stream_id: handle.stream_id,
+            registration_id,
+            lifecycle: lifecycle.clone(),
+        };
+        let high_water = self
+            .producer
+            .input_high_water(handle.stream_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut history = if high_water.is_some() {
+            Some(
+                self.producer
+                    .catch_up(handle.clone(), None)
+                    .await
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        };
+        let result: Result<(), String> = async {
+        let mut pending = None;
+        let mut sequence = 0;
+        loop {
+            let recorded = if let Some(reader) = history.as_mut() {
+                let recorded = reader
+                    .next()
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| "byte output history ended before its high water".to_string())?;
+                if recorded.producer_sequence != sequence {
+                    return Err("byte output history has a non-contiguous sequence".into());
+                }
+                if matches!(
+                    recorded.payload,
+                    CommittedProducerStreamEventPayload::Cancel {
+                        role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
+                        ..
+                    }
+                ) || (sequence == 0 && matches!(
+                    recorded.payload,
+                    CommittedProducerStreamEventPayload::Cancel {
+                        role: StreamCancelRole::InputProducer,
+                        ..
+                    }
+                ))
+                {
+                    return Ok(());
+                }
+                Some(recorded)
+            } else {
+                None
+            };
+            let event = match pending.take() {
+                Some(event) => event,
+                None => tokio::select! {
+                    biased;
+                    _ = cancelled.cancelled() => return Ok(()),
+                    _ = lifecycle.cancelled() => return Ok(()),
+                    received = source.recv() => match received {
+                        Ok(event) => event,
+                        Err(LiveStreamReceiveError::Closed) if lifecycle.is_aborted() => return Ok(()),
+                        Err(error) => return Err(format!("byte output closed without a terminal: {error:?}")),
+                    },
+                },
+            };
+            if event.offset != sequence {
+                return Err("byte output producer sequence diverged".into());
+            }
+            let payload = match event.payload {
+                LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => {
+                    CommittedProducerStreamEventPayload::PackedU8(byte)
+                }
+                LiveStreamEventPayload::Item(_) => {
+                    return Err("byte output contains a non-byte value".into());
+                }
+                LiveStreamEventPayload::End => {
+                    CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+                }
+                LiveStreamEventPayload::Error(error) => CommittedProducerStreamEventPayload::End(
+                    StreamEndResult::ErrorContext(error.into_bytes()),
+                ),
+                LiveStreamEventPayload::ClassifiedError { kind, message } => match kind {
+                    HostFailureKind::Permanent => CommittedProducerStreamEventPayload::Cancel {
+                        role: StreamCancelRole::System,
+                        reason: StreamCancelReason::SourceUnavailable,
+                        details: Some(message),
+                    },
+                    HostFailureKind::Transient => CommittedProducerStreamEventPayload::End(
+                        StreamEndResult::ErrorContext(message.into_bytes()),
+                    ),
+                },
+            };
+            if let Some(recorded) = recorded {
+                if recorded.payload != payload {
+                    return Err("byte output differs from its recorded bytes or terminal".into());
+                }
+                if recorded.is_terminal() {
+                    return Ok(());
+                }
+                if high_water
+                    .as_ref()
+                    .is_some_and(|water| recorded.offset == water.resulting_offset)
+                {
+                    history = None;
+                }
+                sequence += 1;
+                continue;
+            }
+            let terminal = matches!(
+                payload,
+                CommittedProducerStreamEventPayload::End(_)
+                    | CommittedProducerStreamEventPayload::Cancel { .. }
+            );
+            let written = match payload {
+                CommittedProducerStreamEventPayload::PackedU8(byte) => {
+                    let first_sequence = sequence;
+                    let mut bytes = vec![byte];
+                    sequence += 1;
+                    let deadline = tokio::time::Instant::now() + PACKED_U8_OUTPUT_FLUSH_DELAY;
+                    while bytes.len() < MAX_PACKED_U8_STREAM_ITEM_SIZE {
+                        let next = match tokio::time::timeout_at(deadline, source.recv()).await {
+                            Ok(Ok(event)) => event,
+                            Ok(Err(LiveStreamReceiveError::Closed)) | Err(_) => break,
+                            Ok(Err(error)) => return Err(format!("{error:?}")),
+                        };
+                        if next.offset != sequence {
+                            return Err("byte output producer sequence diverged".into());
+                        }
+                        match next.payload {
+                            LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => {
+                                bytes.push(byte);
+                                sequence += 1;
+                            }
+                            payload => {
+                                pending = Some(crate::durable_host::stream_bus::LiveStreamEvent {
+                                    offset: next.offset,
+                                    payload,
+                                });
+                                break;
+                            }
+                        }
+                    }
+                    self.producer
+                        .write_items_with_nested_sources(
+                            None,
+                            handle.stream_id,
+                            first_sequence,
+                            StreamItemsPayload::PackedU8(bytes),
+                            Vec::new(),
+                        )
+                        .await
+                        .map(|_| ())
+                }
+                CommittedProducerStreamEventPayload::End(result) => self
+                    .producer
+                    .end(None, handle.stream_id, sequence, result)
+                    .await
+                    .map(|_| ()),
+                CommittedProducerStreamEventPayload::Cancel { role, reason, details } => self
+                    .producer
+                    .cancel(handle.stream_id, sequence, role, reason, details)
+                    .await
+                    .map(|_| ()),
+                _ => unreachable!("byte output produces only bytes and terminals"),
+            };
+            match written {
+                Err(StreamStoreError::FencedByTerminal(
+                    CommittedProducerStreamEventPayload::Cancel {
+                        role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
+                        ..
+                    },
+                )) => return Ok(()),
+                Err(error) => return Err(error.to_string()),
+                Ok(()) if terminal => return Ok(()),
+                Ok(()) => {}
+            }
+        }
+        }.await;
+        if let Err(error) = &result
+            && history.is_none()
+        {
+            let _ = self
+                .producer
+                .end_open(
+                    None,
+                    handle.stream_id,
+                    StreamEndResult::ErrorContext(error.clone().into_bytes()),
+                )
+                .await;
+        }
+        result
     }
 
     async fn drain_output(
@@ -3160,6 +3656,9 @@ impl StreamSession {
             element_type,
             role,
         } = drain;
+        if matches!(graph.resolve_ref(&element_type), Ok(SchemaType::U8 { .. })) {
+            return self.drain_byte_output(handle, endpoint).await;
+        }
         // Root drains require admission; children are admitted by their committed parent item.
         // A child returned unread to its producer is consumed locally, without an attachment.
         let lifecycle = endpoint.lifecycle();
@@ -3174,12 +3673,24 @@ impl StreamSession {
             registration_id,
             lifecycle: lifecycle.clone(),
         };
+        if self
+            .producer
+            .stream_head(&handle)
+            .await
+            .map_err(|error| error.to_string())?
+            .cancelled
+            && self
+                .producer
+                .input_high_water(handle.stream_id)
+                .await
+                .map_err(|error| error.to_string())?
+                .is_some_and(|water| water.highest_contiguous_sequence == 0)
+        {
+            return Ok(());
+        }
         let mut next_sequence = 0;
-        let mut pending_event = None;
         loop {
-            let received = match pending_event.take() {
-                Some(event) => Ok(event),
-                None => tokio::select! {
+            let received = tokio::select! {
                     biased;
                     _ = source_cancelled.cancelled() => {
                         break;
@@ -3188,7 +3699,6 @@ impl StreamSession {
                         break;
                     },
                     received = source.recv() => received,
-                },
             };
             let event = match received {
                 Ok(event) => event,
@@ -3243,48 +3753,6 @@ impl StreamSession {
                             .await;
                         break;
                     }
-                    let mut packed_u8 =
-                        if matches!(graph.resolve_ref(&element_type), Ok(SchemaType::U8 { .. })) {
-                            match &value {
-                                SchemaValue::U8(byte) => Some(vec![*byte]),
-                                _ => None,
-                            }
-                        } else {
-                            None
-                        };
-                    if let Some(bytes) = packed_u8.as_mut() {
-                        let flush_deadline =
-                            tokio::time::Instant::now() + PACKED_U8_OUTPUT_FLUSH_DELAY;
-                        while bytes.len() < MAX_PACKED_U8_STREAM_ITEM_SIZE {
-                            let next = match tokio::time::timeout_at(flush_deadline, source.recv())
-                                .await
-                            {
-                                Ok(Ok(next)) => next,
-                                Ok(Err(LiveStreamReceiveError::Closed)) | Err(_) => break,
-                                Ok(Err(error)) => return Err(format!("{error:?}")),
-                            };
-                            let expected_sequence = event
-                                .offset
-                                .checked_add(bytes.len() as u64)
-                                .ok_or_else(|| "packed-u8 output sequence overflow".to_string())?;
-                            match next.payload {
-                                LiveStreamEventPayload::Item(SchemaValue::U8(byte))
-                                    if next.offset == expected_sequence =>
-                                {
-                                    bytes.push(byte);
-                                    next_sequence = next.offset.saturating_add(1);
-                                }
-                                payload => {
-                                    pending_event =
-                                        Some(crate::durable_host::stream_bus::LiveStreamEvent {
-                                            offset: next.offset,
-                                            payload,
-                                        });
-                                    break;
-                                }
-                            }
-                        }
-                    }
                     let mut nested_outputs = Vec::new();
                     let value = match encode_recursive_stream_value_with_schema(
                         &value,
@@ -3317,7 +3785,7 @@ impl StreamSession {
                                         parent_producer_sequence: event.offset,
                                         recursive_value_path: path.to_vec(),
                                     },
-                                    source_invocation: self.session_key.clone(),
+                                    source_invocation: self.session_reference.clone(),
                                     component_revision: handle.component_revision,
                                     element_schema_fingerprint,
                                     source_kind: StreamSourceKind::Nested,
@@ -3359,10 +3827,7 @@ impl StreamSession {
                                 })
                         })
                         .collect();
-                    let payload = match packed_u8 {
-                        Some(bytes) => StreamItemsPayload::PackedU8(bytes),
-                        None => StreamItemsPayload::Values(vec![value.encode_to_vec()]),
-                    };
+                    let payload = StreamItemsPayload::Values(vec![value.encode_to_vec()]);
                     match self
                         .producer
                         .write_items_with_nested_sources(
@@ -3410,9 +3875,17 @@ impl StreamSession {
                                                         .into_iter()
                                                         .zip(nested_handles)
                                                     {
+                                                        if output.forwarded_handle.is_some() {
+                                                            continue;
+                                                        }
+                                                        let mut binding = session
+                                                            .producer
+                                                            .local_binding(0, &nested_handle, role)
+                                                            .await
+                                                            .map_err(|error| error.to_string())?;
                                                         let transport_stream_id = session
-                                                            .mapping_for_handle(
-                                                                &nested_handle,
+                                                            .mapping_for_reference(
+                                                                &binding.source,
                                                                 role,
                                                             )
                                                             .map(|mapping| {
@@ -3428,9 +3901,14 @@ impl StreamSession {
                                                             handle: nested_handle.clone(),
                                                             role,
                                                         };
-                                                        session.insert_mapping(mapping.clone())?;
+                                                        binding.transport_stream_id =
+                                                            transport_stream_id;
+                                                        session.insert_binding_mapping(
+                                                            binding.clone(),
+                                                            mapping.clone(),
+                                                        )?;
                                                         session
-                                                            .append_mapping_once(&context, mapping)
+                                                            .append_mapping_once(&context, binding)
                                                             .await?;
                                                         if let Some(endpoint) = output.endpoint {
                                                             nested_tx
@@ -3475,6 +3953,31 @@ impl StreamSession {
                     .await
                     .map(|_| ())
                     .map_err(|error| error.to_string()),
+                LiveStreamEventPayload::ClassifiedError { kind, message } => match kind {
+                    HostFailureKind::Permanent => self
+                        .producer
+                        .cancel(
+                            handle.stream_id,
+                            event.offset,
+                            StreamCancelRole::System,
+                            StreamCancelReason::SourceUnavailable,
+                            Some(message),
+                        )
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| error.to_string()),
+                    HostFailureKind::Transient => self
+                        .producer
+                        .end(
+                            None,
+                            handle.stream_id,
+                            event.offset,
+                            StreamEndResult::ErrorContext(message.into_bytes()),
+                        )
+                        .await
+                        .map(|_| ())
+                        .map_err(|error| error.to_string()),
+                },
             };
             if let Err(error) = result {
                 let _ = self
@@ -3574,7 +4077,9 @@ impl StreamSession {
             return Ok(false);
         };
         match self.session_record_at(index).await? {
-            StreamSessionRecord::Finished(record) if record.session_key == self.session_key => {
+            StreamSessionRecord::Finished(record)
+                if record.session_key == self.session_reference =>
+            {
                 Ok(true)
             }
             _ => Err("committed finished metadata points at a different session record".into()),
@@ -3632,9 +4137,10 @@ impl StreamSession {
     /// Reads the committed invocation result, independently of stream drain progress.
     pub async fn persisted_result(&self) -> Result<Option<SessionValue>, String> {
         if let Some(result) = self.remote_result_record().await? {
-            let value = SessionValue::from_persisted(result)?;
-            for mapping in &value.mappings {
-                self.insert_mapping(mapping.clone())?;
+            let bindings = result.stream_mappings.clone();
+            let value = SessionValue::from_persisted(&self.producer, result).await?;
+            for (binding, mapping) in bindings.into_iter().zip(&value.mappings) {
+                self.insert_binding_mapping(binding, mapping.clone())?;
             }
             return Ok(Some(value));
         }
@@ -3661,7 +4167,9 @@ impl StreamSession {
             return Ok(None);
         };
         match self.session_record_at(index).await? {
-            StreamSessionRecord::Finished(record) if record.session_key == self.session_key => {
+            StreamSessionRecord::Finished(record)
+                if record.session_key == self.session_reference =>
+            {
                 Ok(Some(record.result))
             }
             _ => Err("durable finished metadata points at a different record".into()),
@@ -3688,10 +4196,11 @@ impl StreamSession {
     ) -> Result<(), String> {
         self.recover_session_mappings().await?;
         let root_output_mapping_ids = self.session_root_output_mapping_ids().await?;
-        self.pump_output_streams_from_recovered(
+        self.pump_output_streams_once(
             &HashMap::new(),
             &root_output_mapping_ids,
             &[],
+            &Default::default(),
             responses,
         )
         .await
@@ -3714,17 +4223,18 @@ impl StreamSession {
         known_output_mapping_ids: &[u64],
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
-        self.recover_session_mappings().await?;
-        self.pump_output_streams_from_recovered(
+        self.pump_output_streams_once(
             cursors,
             root_output_mapping_ids,
             known_output_mapping_ids,
+            &Default::default(),
             responses,
         )
         .await
     }
 
-    async fn pump_output_streams_from_recovered(
+    /// Early and result-time pumps for one attachment share `seen`, including nested mappings.
+    pub(crate) async fn pump_output_streams_once(
         &self,
         cursors: &HashMap<
             golem_common::model::durable_stream::StreamId,
@@ -3732,17 +4242,13 @@ impl StreamSession {
         >,
         root_output_mapping_ids: &[u64],
         known_output_mapping_ids: &[u64],
+        seen: &std::sync::Mutex<HashSet<u64>>,
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
-        let mut seen = HashSet::new();
-        self.pump_output_stream_trees(cursors, root_output_mapping_ids, &mut seen, responses)
+        self.recover_session_mappings().await?;
+        self.pump_output_stream_trees(cursors, root_output_mapping_ids, seen, responses)
             .await?;
-        let detached = known_output_mapping_ids
-            .iter()
-            .copied()
-            .filter(|transport_stream_id| !seen.contains(transport_stream_id))
-            .collect::<Vec<_>>();
-        self.pump_output_stream_trees(cursors, &detached, &mut seen, responses)
+        self.pump_output_stream_trees(cursors, known_output_mapping_ids, seen, responses)
             .await
     }
 
@@ -3753,13 +4259,13 @@ impl StreamSession {
             Option<golem_common::model::durable_stream::StreamOffset>,
         >,
         output_mapping_ids: &[u64],
-        seen: &mut HashSet<u64>,
+        seen: &std::sync::Mutex<HashSet<u64>>,
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<(), String> {
         let mut pending = output_mapping_ids
             .iter()
             .copied()
-            .filter(|transport_stream_id| seen.insert(*transport_stream_id))
+            .filter(|transport_stream_id| seen.lock().unwrap().insert(*transport_stream_id))
             .map(|transport_stream_id| {
                 let mapping = self.mapping(transport_stream_id).ok_or_else(|| {
                     format!("unknown durable output stream {transport_stream_id}")
@@ -3781,7 +4287,7 @@ impl StreamSession {
             pending = nested
                 .into_iter()
                 .flatten()
-                .filter(|mapping| seen.insert(mapping.transport_stream_id))
+                .filter(|mapping| seen.lock().unwrap().insert(mapping.transport_stream_id))
                 .collect();
         }
         Ok(())
@@ -3870,7 +4376,7 @@ impl StreamSession {
             terminal_cursor,
         } = if let Some(through) = after {
             self.recover_session_mappings().await?;
-            self.output_mappings_introduced_through(&handle, through)
+            self.output_mappings_introduced_through(transport_stream_id, &handle, through)
                 .await?
         } else {
             OutputReplay {
@@ -3882,7 +4388,14 @@ impl StreamSession {
             return Ok(nested_streams);
         }
         let mut reader = self
-            .stream_reader(handle, after, SessionStreamRole::Output)
+            .stream_reader(
+                StreamSessionMappingRecord {
+                    transport_stream_id,
+                    handle,
+                    role: SessionStreamRole::Output,
+                },
+                after,
+            )
             .await?;
         let mut pending_event = None;
         loop {
@@ -3915,15 +4428,21 @@ impl StreamSession {
                                 })?;
                             let handle_indices = preflight_proto_recursive_stream_value(&value)?;
                             let nested_handles = event.nested_handles.clone();
-                            if nested_handles.len() != handle_indices.len() {
+                            let nested_references = event.nested_references.clone();
+                            if nested_handles.len() != handle_indices.len()
+                                || nested_references.len() != nested_handles.len()
+                            {
                                 return Err(
-                                    "nested output handle count does not match the canonical value"
+                                    "nested output reference count does not match the canonical value"
                                         .to_string(),
                                 );
                             }
                             let mut mappings = Vec::with_capacity(nested_handles.len());
-                            for (position, (handle_index, handle)) in
-                                handle_indices.into_iter().zip(nested_handles).enumerate()
+                            for (position, ((handle_index, handle), reference)) in handle_indices
+                                .into_iter()
+                                .zip(nested_handles)
+                                .zip(nested_references)
+                                .enumerate()
                             {
                                 if handle_index != position as u64 {
                                     return Err(format!(
@@ -3931,7 +4450,7 @@ impl StreamSession {
                                     ));
                                 }
                                 let mapping = match session
-                                    .mapping_for_handle(&handle, SessionStreamRole::Output)
+                                    .mapping_for_reference(&reference, SessionStreamRole::Output)
                                 {
                                     Some(mapping) => mapping,
                                     None => {
@@ -3942,9 +4461,17 @@ impl StreamSession {
                                             handle: handle.clone(),
                                             role: SessionStreamRole::Output,
                                         };
-                                        session.insert_mapping(mapping.clone())?;
+                                        let binding = StreamBindingRecord {
+                                            transport_stream_id,
+                                            source: reference,
+                                            role: SessionStreamRole::Output,
+                                        };
+                                        session.insert_binding_mapping(
+                                            binding.clone(),
+                                            mapping.clone(),
+                                        )?;
                                         session
-                                            .append_mapping_once(&context, mapping.clone())
+                                            .append_mapping_once(&context, binding)
                                             .await?;
                                         mapping
                                     }
@@ -4097,9 +4624,13 @@ impl StreamSession {
 
     async fn output_mappings_introduced_through(
         &self,
+        transport_stream_id: u64,
         handle: &DurableStreamHandle,
         through: golem_common::model::durable_stream::StreamOffset,
     ) -> Result<OutputReplay, String> {
+        let local_binding = self
+            .binding(transport_stream_id)
+            .is_some_and(|binding| matches!(binding.source, StreamRecordReference::Local(_)));
         let mut after = None;
         let mut nested_streams = Vec::new();
         let mut seen = HashSet::new();
@@ -4111,15 +4642,19 @@ impl StreamSession {
                     .map_err(|error| error.to_string())?
             } else {
                 let mapping = self
-                    .mapping_for_handle(handle, SessionStreamRole::Output)
+                    .mapping(transport_stream_id)
                     .ok_or_else(|| "foreign durable stream has no session mapping".to_string())?;
-                let attachment = self.attachment_key(handle, self.attachment_epoch)?;
+                let attachment = self.attachment_key(handle, self.reader_epoch().await?)?;
                 if self.topology_state(&attachment, Some(&mapping)).await?
                     != ConsumerAttachmentStatus::Active
                 {
                     return Err(
                         "foreign durable stream mapping is not topology-activated".to_string()
                     );
+                }
+                if !self.producer.fork_lineage.cuts().is_empty() {
+                    self.activate_foreign_mapping(mapping.clone(), attachment.epoch)
+                        .await?;
                 }
                 let rpc = self.rpc.clone().ok_or_else(|| {
                     "foreign durable stream source routing is unavailable".to_string()
@@ -4153,11 +4688,24 @@ impl StreamSession {
             let terminal_cursor = last.is_terminal();
             let page = events
                 .into_iter()
-                .flat_map(|event| event.nested_handles)
-                .filter(|handle| seen.insert(handle.stream_id))
-                .map(|nested_handle| {
+                .flat_map(|event| {
+                    event
+                        .nested_handles
+                        .into_iter()
+                        .zip(event.nested_references)
+                })
+                .map(|(nested_handle, reference)| {
+                    let reference = if local_binding {
+                        reference
+                    } else {
+                        StreamRecordReference::Foreign(nested_handle.clone())
+                    };
+                    (nested_handle, reference)
+                })
+                .filter(|(_, reference)| seen.insert(reference.clone()))
+                .map(|(nested_handle, reference)| {
                     let mapping = self
-                        .mapping_for_handle(&nested_handle, SessionStreamRole::Output)
+                        .mapping_for_reference(&reference, SessionStreamRole::Output)
                         .ok_or_else(|| {
                             format!(
                                 "durable nested output stream {} has no session mapping",
@@ -4199,15 +4747,15 @@ impl StreamSession {
                     .get(&mapping.handle.stream_id)
                     .copied()
                     .flatten()
-                    .map(|cursor| (mapping.handle.clone(), cursor))
+                    .map(|cursor| (mapping.transport_stream_id, mapping.handle.clone(), cursor))
             })
             .collect::<Vec<_>>();
         let mut terminal = HashSet::new();
-        for (handle, cursor) in candidates {
+        for (transport_stream_id, handle, cursor) in candidates {
             let OutputReplay {
                 terminal_cursor, ..
             } = self
-                .output_mappings_introduced_through(&handle, cursor)
+                .output_mappings_introduced_through(transport_stream_id, &handle, cursor)
                 .await?;
             if terminal_cursor {
                 terminal.insert(handle.stream_id);
@@ -4229,7 +4777,7 @@ impl StreamSession {
     pub async fn decode_initial(
         &self,
         value: ProtoSchemaValue,
-        handles: &[DurableStreamHandle],
+        mappings: &[StreamSessionMappingRecord],
         role: SessionStreamRole,
     ) -> Result<SchemaValue, String> {
         let ids = preflight_proto_recursive_stream_value(&value)?;
@@ -4237,11 +4785,18 @@ impl StreamSession {
         for handle_index in ids {
             let index = usize::try_from(handle_index)
                 .map_err(|_| format!("durable input handle index {handle_index} is too large"))?;
-            let handle = handles
+            let mapping = mappings
                 .get(index)
                 .cloned()
                 .ok_or_else(|| format!("unknown durable input handle index {handle_index}"))?;
-            endpoints.insert(handle_index, self.endpoint(handle, 0, role).await?);
+            if self.mapping(mapping.transport_stream_id).as_ref() != Some(&mapping)
+                || mapping.role != role
+            {
+                return Err(format!(
+                    "durable input mapping {handle_index} does not match its handle"
+                ));
+            }
+            endpoints.insert(handle_index, self.endpoint_for_mapping(mapping, 0).await?);
         }
         decode_recursive_stream_value(value, |handle_index, _| {
             endpoints
@@ -4253,42 +4808,56 @@ impl StreamSession {
         })
     }
 
+    #[cfg(test)]
     async fn endpoint(
         &self,
         handle: DurableStreamHandle,
         consumer_read_ordinal: u64,
         role: SessionStreamRole,
     ) -> Result<DurableInputEndpoint, String> {
-        let history = self.consumer_history(handle.stream_id).await?;
-        let mut reader = if history.terminal {
-            None
-        } else {
-            Some(
-                self.stream_reader(handle.clone(), history.after, role)
-                    .await?,
-            )
-        };
-        record_source_journal_lag(reader.as_mut(), history.after, true).await;
+        let mapping = self
+            .mapping_for_handle(&handle, role)
+            .ok_or_else(|| "durable input endpoint has no session mapping".to_string())?;
+        self.endpoint_for_mapping(mapping, consumer_read_ordinal)
+            .await
+    }
+
+    async fn endpoint_for_mapping(
+        &self,
+        mapping: StreamSessionMappingRecord,
+        consumer_read_ordinal: u64,
+    ) -> Result<DurableInputEndpoint, String> {
+        let metadata = self.current_control_metadata().await?;
+        let binding = self
+            .binding(mapping.transport_stream_id)
+            .unwrap_or_else(|| StreamBindingRecord::foreign(&mapping));
+        let reader_id = metadata.reader_id(&binding)?;
+        drop(metadata);
+        let history = self.consumer_history(reader_id).await?;
         Ok(DurableInputEndpoint {
-            reader,
+            reader: None,
             journal: history.events,
+            nested_mappings: history.nested_mappings,
+            source_after: history.after,
+            source_terminal: history.terminal,
             streams: self.clone(),
-            transport_stream_id: self
-                .mapping_for_handle(&handle, role)
-                .ok_or_else(|| "durable input endpoint has no session mapping".to_string())?
-                .transport_stream_id,
-            handle,
+            transport_stream_id: mapping.transport_stream_id,
+            handle: mapping.handle,
             consumer_read_ordinal,
-            role,
+            role: mapping.role,
+            reader_id,
         })
     }
 
     async fn stream_reader(
         &self,
-        handle: DurableStreamHandle,
+        mapping: StreamSessionMappingRecord,
         after: Option<golem_common::model::durable_stream::StreamOffset>,
-        role: SessionStreamRole,
     ) -> Result<DurableStreamReader, String> {
+        let handle = mapping.handle.clone();
+        let foreign_binding = self
+            .binding(mapping.transport_stream_id)
+            .is_none_or(|binding| matches!(binding.source, StreamRecordReference::Foreign(_)));
         let reader = if self.producer.owns_handle_identity(&handle) {
             DurableStreamReader::Owned {
                 reader: Box::new(
@@ -4299,17 +4868,16 @@ impl StreamSession {
                 ),
                 source: self.producer.clone(),
                 handle: Box::new(handle),
+                foreign_binding,
                 next_journal_lag_sample: Instant::now(),
             }
         } else {
-            let mapping = self
-                .mapping_for_handle(&handle, role)
-                .ok_or_else(|| "foreign durable stream has no session mapping".to_string())?;
-            let attachment = self.attachment_key(&handle, self.attachment_epoch)?;
+            let attachment = self.attachment_key(&handle, self.reader_epoch().await?)?;
             if self.topology_state(&attachment, Some(&mapping)).await?
                 != ConsumerAttachmentStatus::Active
             {
-                return Err("foreign durable stream mapping is not topology-activated".to_string());
+                self.activate_foreign_mapping(mapping.clone(), attachment.epoch)
+                    .await?;
             }
             let rpc = self.rpc.clone().ok_or_else(|| {
                 "foreign durable stream source routing is unavailable".to_string()
@@ -4317,10 +4885,15 @@ impl StreamSession {
             let auth_ctx = self.auth_ctx.clone().ok_or_else(|| {
                 "foreign durable stream consumer authorization is unavailable".to_string()
             })?;
-            let consumer_producer = self
-                .consumer_journal
-                .as_ref()
-                .map(|_| self.producer.clone());
+            let consumer_producer = if self.consumer_journal.is_some() {
+                let binding = self
+                    .binding(mapping.transport_stream_id)
+                    .unwrap_or_else(|| StreamBindingRecord::foreign(&mapping));
+                let reader_id = self.current_control_metadata().await?.reader_id(&binding)?;
+                Some((self.producer.clone(), reader_id))
+            } else {
+                None
+            };
             DurableStreamReader::Attached(Box::new(AttachedDurableCatchUpReader {
                 source: Arc::new(RoutedAttachedStreamSegmentSource::new(
                     rpc,
@@ -4342,29 +4915,40 @@ impl StreamSession {
 
     async fn consumer_history_positions(
         &self,
-        stream_id: golem_common::model::StreamId,
+        reader_id: LocalStreamReaderId,
     ) -> Result<Vec<OplogIndex>, String> {
         let (mut covered, mut positions) = self
             .producer
-            .persisted_consumer_positions(&self.session_key, stream_id)
+            .persisted_consumer_positions(&self.session_key, reader_id)
             .await?
             .unwrap_or((OplogIndex::NONE, Vec::new()));
         let horizon = self.oplog.current_oplog_index().await;
         while covered < horizon {
             let count = (horizon.as_u64() - covered.as_u64()).min(1024);
             for (index, entry) in self.oplog.read_exact(covered.next(), count).await {
+                if self
+                    .producer
+                    .fork_lineage
+                    .deleted_regions()
+                    .is_in_deleted_region(index)
+                {
+                    covered = index;
+                    continue;
+                }
                 if let OplogEntry::StreamSession { record, .. } = entry {
                     let record = self.download_record(record).await?;
                     let matches = match record {
                         StreamSessionRecord::ConsumerItemValue(record) => {
-                            record.session_key == self.session_key && record.stream_id == stream_id
+                            record.session_key == self.session_reference
+                                && record.reader_id == reader_id
                         }
                         StreamSessionRecord::ConsumerTerminal(record) => {
-                            record.session_key == self.session_key && record.stream_id == stream_id
+                            record.session_key == self.session_reference
+                                && record.reader_id == reader_id
                         }
                         StreamSessionRecord::SourceUnavailable(record) => {
-                            record.key.session_key == self.session_key
-                                && record.key.stream_id == stream_id
+                            record.session_key == self.session_reference
+                                && record.reader_id == reader_id
                         }
                         _ => false,
                     };
@@ -4380,20 +4964,47 @@ impl StreamSession {
 
     async fn consumer_history(
         &self,
-        stream_id: golem_common::model::durable_stream::StreamId,
+        reader_id: LocalStreamReaderId,
     ) -> Result<ConsumerHistory, String> {
+        let root_binding = self
+            .current_control_metadata()
+            .await?
+            .reader_binding(reader_id)?
+            .clone();
+        let stream_id = self
+            .producer
+            .materialize_binding(&root_binding)
+            .await
+            .map_err(|error| error.to_string())?
+            .handle
+            .stream_id;
         let mut events = Vec::new();
-        for index in self.consumer_history_positions(stream_id).await? {
+        let mut nested_mappings = HashMap::new();
+        for index in self.consumer_history_positions(reader_id).await? {
             let record = self.session_record_at(index).await?;
             match record {
                 StreamSessionRecord::ConsumerItemValue(record)
-                    if record.session_key == self.session_key && record.stream_id == stream_id =>
+                    if record.session_key == self.session_reference
+                        && record.reader_id == reader_id =>
                 {
-                    for mapping in &record.recursive_mappings {
-                        self.insert_mapping(mapping.clone())?;
+                    let mappings = self
+                        .producer
+                        .materialize_bindings(&record.recursive_mappings)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    for (binding, mapping) in record
+                        .recursive_mappings
+                        .iter()
+                        .cloned()
+                        .zip(mappings.iter().cloned())
+                    {
+                        self.insert_binding_mapping(binding, mapping)?;
+                    }
+                    if !record.recursive_mappings.is_empty() {
+                        nested_mappings.insert(record.source_offset, mappings.clone());
                     }
                     if record.packed_u8 {
-                        if !record.recursive_handles.is_empty() {
+                        if !record.recursive_mappings.is_empty() {
                             return Err(
                                 "packed-u8 consumer journal contains nested stream handles"
                                     .to_string(),
@@ -4423,6 +5034,7 @@ impl StreamSession {
                                     packed_u8_batch_end: Some(batch_end),
                                     terminal_author: None,
                                     nested_handles: Vec::new(),
+                                    nested_references: Vec::new(),
                                     payload: CommittedProducerStreamEventPayload::PackedU8(byte),
                                 },
                             ));
@@ -4436,14 +5048,24 @@ impl StreamSession {
                                 offset: record.source_offset,
                                 packed_u8_batch_end: None,
                                 terminal_author: None,
-                                nested_handles: record.recursive_handles,
+                                nested_references: mappings
+                                    .iter()
+                                    .map(|mapping| {
+                                        StreamRecordReference::Foreign(mapping.handle.clone())
+                                    })
+                                    .collect(),
+                                nested_handles: mappings
+                                    .into_iter()
+                                    .map(|mapping| mapping.handle)
+                                    .collect(),
                                 payload: CommittedProducerStreamEventPayload::Value(record.value),
                             },
                         ));
                     }
                 }
                 StreamSessionRecord::ConsumerTerminal(record)
-                    if record.session_key == self.session_key && record.stream_id == stream_id =>
+                    if record.session_key == self.session_reference
+                        && record.reader_id == reader_id =>
                 {
                     events.push((
                         record.consumer_read_ordinal,
@@ -4454,6 +5076,7 @@ impl StreamSession {
                             packed_u8_batch_end: None,
                             terminal_author: None,
                             nested_handles: Vec::new(),
+                            nested_references: Vec::new(),
                             payload: match record.terminal {
                                 StreamConsumerTerminal::End(result) => {
                                     CommittedProducerStreamEventPayload::End(result)
@@ -4472,8 +5095,8 @@ impl StreamSession {
                     ));
                 }
                 StreamSessionRecord::SourceUnavailable(record)
-                    if record.key.session_key == self.session_key
-                        && record.key.stream_id == stream_id =>
+                    if record.session_key == self.session_reference
+                        && record.reader_id == reader_id =>
                 {
                     events.push((
                         record.consumer_read_ordinal,
@@ -4484,6 +5107,7 @@ impl StreamSession {
                             packed_u8_batch_end: None,
                             terminal_author: None,
                             nested_handles: Vec::new(),
+                            nested_references: Vec::new(),
                             payload: CommittedProducerStreamEventPayload::Cancel {
                                 role: StreamCancelRole::System,
                                 reason: StreamCancelReason::SourceUnavailable,
@@ -4505,6 +5129,7 @@ impl StreamSession {
         let terminal = events.last().is_some_and(|(_, event)| event.is_terminal());
         Ok(ConsumerHistory {
             events: events.into_iter().map(|(_, event)| event).collect(),
+            nested_mappings,
             after,
             terminal,
         })
@@ -4513,6 +5138,7 @@ impl StreamSession {
 
 struct ConsumerHistory {
     events: VecDeque<CommittedProducerStreamEvent>,
+    nested_mappings: HashMap<StreamOffset, Vec<StreamSessionMappingRecord>>,
     after: Option<golem_common::model::durable_stream::StreamOffset>,
     terminal: bool,
 }
@@ -4534,11 +5160,15 @@ impl StreamAttachmentConsumerProbe for StreamSession {
 pub struct DurableInputEndpoint {
     reader: Option<DurableStreamReader>,
     journal: VecDeque<CommittedProducerStreamEvent>,
+    nested_mappings: HashMap<StreamOffset, Vec<StreamSessionMappingRecord>>,
+    source_after: Option<golem_common::model::durable_stream::StreamOffset>,
+    source_terminal: bool,
     streams: StreamSession,
     transport_stream_id: u64,
     handle: DurableStreamHandle,
     consumer_read_ordinal: u64,
     role: SessionStreamRole,
+    reader_id: LocalStreamReaderId,
 }
 
 /// Foreign source and attachment state for a forwarded durable input.
@@ -4633,6 +5263,9 @@ fn validate_forwarded_durable_input_schemas(
                 return Err(mismatch_error.to_string());
             }
             Some(_) => {}
+            None if stream
+                .with_host_endpoint::<RegisteredOutputStream, _>(|_| ())
+                .is_ok() => {}
             None => stream.with_host_endpoint::<LiveStreamEndpoint, _>(|_| ())?,
         }
         Ok(0)
@@ -4645,6 +5278,7 @@ enum DurableStreamReader {
         reader: Box<DurableCatchUpReader>,
         source: Arc<DurableStreamStore>,
         handle: Box<DurableStreamHandle>,
+        foreign_binding: bool,
         next_journal_lag_sample: Instant,
     },
     Attached(Box<AttachedDurableCatchUpReader>),
@@ -4677,10 +5311,25 @@ impl DurableStreamReader {
     }
 
     async fn next(&mut self) -> Result<Option<CommittedProducerStreamEvent>, StreamStoreError> {
-        match self {
-            Self::Owned { reader, .. } => reader.next().await,
-            Self::Attached(reader) => reader.next().await,
-        }
+        let (event, foreign_binding) = match self {
+            Self::Owned {
+                reader,
+                foreign_binding,
+                ..
+            } => (reader.next().await?, *foreign_binding),
+            Self::Attached(reader) => (reader.next().await?, true),
+        };
+        Ok(event.map(|mut event| {
+            if foreign_binding {
+                event.nested_references = event
+                    .nested_handles
+                    .iter()
+                    .cloned()
+                    .map(StreamRecordReference::Foreign)
+                    .collect();
+            }
+            event
+        }))
     }
 }
 
@@ -4717,7 +5366,7 @@ struct AttachedDurableCatchUpReader {
     source: Arc<dyn AttachedStreamSegmentSource>,
     attachment: StreamAttachmentKey,
     handle: DurableStreamHandle,
-    consumer_producer: Option<Arc<DurableStreamStore>>,
+    consumer_producer: Option<(Arc<DurableStreamStore>, LocalStreamReaderId)>,
     after: Option<golem_common::model::durable_stream::StreamOffset>,
     buffered: VecDeque<CommittedProducerStreamEvent>,
     terminal: bool,
@@ -4728,11 +5377,11 @@ impl AttachedDurableCatchUpReader {
     async fn source_unavailable_overlay(
         &self,
     ) -> Result<Option<CommittedProducerStreamEvent>, StreamStoreError> {
-        let Some(producer) = &self.consumer_producer else {
+        let Some((producer, reader_id)) = &self.consumer_producer else {
             return Ok(None);
         };
         let source_offset = producer
-            .consumer_source_unavailable(&self.attachment)
+            .consumer_source_unavailable(&self.attachment, *reader_id)
             .await?;
         Ok(source_offset.map(|offset| CommittedProducerStreamEvent {
             stream_id: self.handle.stream_id,
@@ -4741,6 +5390,7 @@ impl AttachedDurableCatchUpReader {
             packed_u8_batch_end: None,
             terminal_author: None,
             nested_handles: Vec::new(),
+            nested_references: Vec::new(),
             payload: CommittedProducerStreamEventPayload::Cancel {
                 role: StreamCancelRole::System,
                 reason: StreamCancelReason::SourceUnavailable,
@@ -4817,11 +5467,144 @@ impl ReceiveGuard {
 pub struct DurableInputProducer {
     input: DurableInputEndpoint,
     pending: Option<DurableReceiveFuture>,
+    live_admission: Option<oneshot::Receiver<Result<(), WorkerExecutorError>>>,
     pending_drop: Option<BoxFuture<'static, Result<(), String>>>,
     finished: bool,
     dropping: bool,
     drop_event_sink: Option<mpsc::UnboundedSender<DropEvent>>,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+struct DurableInputLiveAdmission<Ctx> {
+    replay_state: ReplayState,
+    activity: TailActivity,
+    result: oneshot::Sender<Result<(), WorkerExecutorError>>,
+    _ctx: PhantomData<fn() -> Ctx>,
+}
+
+impl<Ctx: WorkerCtx> AccessorTask<Ctx> for DurableInputLiveAdmission<Ctx> {
+    async fn run(self, accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
+        let outcome = async {
+            loop {
+                self.replay_state
+                    .await_natural_tail_end(Some(&self.activity))
+                    .await?;
+                let (transition, primary) = accessor.with(|mut access| {
+                    let ctx = access.get().durable_ctx_mut();
+                    (
+                        ctx.prepare_live_continuation_at_replay_tail(
+                            true,
+                            "durable input stream source read".to_string(),
+                        ),
+                        ctx.runtime == OwnerRuntime::Agent,
+                    )
+                });
+                let pending = match transition.await? {
+                    BeginReplayToLive::ReplayResumed => continue,
+                    BeginReplayToLive::Pending(pending) => pending,
+                };
+                finish_prepared_access_to_live(
+                    pending,
+                    primary,
+                    accessor,
+                    DurableWorkerCtxView::durable_ctx_mut,
+                )
+                .await?
+                .require_live()?;
+                return Ok(());
+            }
+        }
+        .await;
+        let _ = self.result.send(outcome);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum DurableInputEvent {
+    Item(SchemaValue),
+    End,
+    Cancelled,
+}
+
+pub(crate) struct DurableInputReceiveAdmission {
+    opens_source: bool,
+    source_wait: bool,
+    ordinal: u64,
+    result: oneshot::Sender<Result<ReceiveGuard, WorkerExecutorError>>,
+}
+
+impl<U: Send + 'static, Ctx: WorkerCtx> AccessorTask<U, HasSelf<DurableWorkerCtx<Ctx>>>
+    for DurableInputReceiveAdmission
+{
+    async fn run(
+        self,
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    ) -> wasmtime::Result<()> {
+        let mut result = self.result;
+        let admit = async {
+            if self.opens_source {
+                loop {
+                    let state = accessor.with(|mut access| {
+                        let ctx = access.get();
+                        if ctx.is_live() {
+                            return Ok(None);
+                        }
+                        if ctx.rejects_live_continuation_at_replay_tail() {
+                            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                                format!("durable input observation {}", self.ordinal),
+                                "end of the recorded consumer journal during completed entity replay",
+                            ));
+                        }
+                        Ok(Some((ctx.state.replay_state.clone(), ctx.tail_work_tracker().activity())))
+                    })?;
+                    let Some((replay, activity)) = state else {
+                        break;
+                    };
+                    replay.await_natural_tail_end(Some(&activity)).await?;
+                    let (transition, primary) = accessor.with(|mut access| {
+                        let ctx = access.get();
+                        (
+                            ctx.prepare_live_continuation_at_replay_tail(
+                                true,
+                                "durable input stream source read".to_string(),
+                            ),
+                            ctx.runtime == OwnerRuntime::Agent,
+                        )
+                    });
+                    match transition.await? {
+                        BeginReplayToLive::ReplayResumed => continue,
+                        BeginReplayToLive::Pending(pending) => {
+                            finish_prepared_access_to_live(
+                                pending,
+                                primary,
+                                accessor,
+                                accessor.getter(),
+                            )
+                            .await?
+                            .require_live()?;
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(accessor.with(|mut access| {
+                let ctx = access.get();
+                ReceiveGuard {
+                    source_wait: self
+                        .source_wait
+                        .then(|| ctx.state.register_passive_suspendable_wait()),
+                    _live_call: LiveCallPermit::new(ctx.state.live_host_call_counter()),
+                }
+            }))
+        };
+        tokio::select! {
+            biased;
+            _ = result.closed() => {},
+            outcome = admit => { let _ = result.send(outcome); }
+        }
+        Ok(())
+    }
 }
 
 /// Deferred cleanup returned when a guest drops an unread durable input.
@@ -4842,6 +5625,19 @@ impl std::fmt::Debug for DroppedDurableInput {
 }
 
 impl DroppedDurableInput {
+    pub(crate) async fn is_recorded(&self) -> Result<bool, String> {
+        let binding = self
+            .streams
+            .binding(self.transport_stream_id)
+            .ok_or_else(|| format!("unknown durable input binding {}", self.transport_stream_id))?;
+        Ok(self
+            .streams
+            .current_control_metadata()
+            .await?
+            .cancellation_intent(&binding.source)
+            .is_some())
+    }
+
     /// Cancels the durable source of a readable stream end the guest dropped without draining.
     ///
     /// The cleanup is best effort: once the session's attachment has been fenced (the invocation
@@ -4882,6 +5678,25 @@ impl DroppedDurableInput {
     }
 }
 
+struct DurableInputDropTask {
+    cancellation: DroppedDurableInput,
+    result: oneshot::Sender<Result<(), String>>,
+}
+
+impl<Ctx: WorkerCtx> AccessorTask<Ctx> for DurableInputDropTask {
+    async fn run(self, accessor: &Accessor<Ctx>) -> wasmtime::Result<()> {
+        let result = cancel_dropped_durable_input_access(
+            accessor,
+            DurableWorkerCtxView::durable_ctx_mut,
+            &self.cancellation,
+        )
+        .await
+        .map_err(|error| error.to_string());
+        let _ = self.result.send(result);
+        Ok(())
+    }
+}
+
 fn durable_stream_cancel_error(
     role: StreamCancelRole,
     reason: StreamCancelReason,
@@ -4918,6 +5733,7 @@ impl DurableInputProducer {
         Self {
             input: endpoint,
             pending: None,
+            live_admission: None,
             pending_drop: None,
             finished: false,
             dropping: false,
@@ -4941,14 +5757,135 @@ impl DurableInputProducer {
     fn begin_receive(&mut self) {
         self.pending = Some(self.input.receive(None));
     }
+
+    fn finish_receive(
+        &mut self,
+        result: Result<DurableInputRead, String>,
+    ) -> anyhow::Result<DurableInputEvent> {
+        self.pending = None;
+        let mut read = result.map_err(anyhow::Error::msg)?;
+        self.input.complete_receive(&mut read);
+        let event = read.event.ok_or_else(|| {
+            anyhow::anyhow!("durable input stream source closed without a terminal event")
+        })?;
+        match event.payload {
+            CommittedProducerStreamEventPayload::Value(bytes) => {
+                let value = ProtoSchemaValue::decode(bytes.as_slice())
+                    .map_err(|error| anyhow::anyhow!("invalid durable stream value: {error}"))?;
+                decode_recursive_stream_value(value, |stream_id, _| {
+                    read.endpoints
+                        .remove(&stream_id)
+                        .map(SchemaValueStream::from_host_endpoint)
+                        .ok_or_else(|| format!("unknown nested stream reference {stream_id}"))
+                })
+                .map(DurableInputEvent::Item)
+                .map_err(anyhow::Error::msg)
+            }
+            CommittedProducerStreamEventPayload::PackedU8(byte) => {
+                Ok(DurableInputEvent::Item(SchemaValue::U8(byte)))
+            }
+            CommittedProducerStreamEventPayload::End(StreamEndResult::Ok) => {
+                self.finished = true;
+                Ok(DurableInputEvent::End)
+            }
+            CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(error)) => Err(
+                anyhow::anyhow!("durable stream ended with error context: {error:?}"),
+            ),
+            CommittedProducerStreamEventPayload::Cancel {
+                role: StreamCancelRole::InputProducer | StreamCancelRole::OutputProducer,
+                ..
+            } => {
+                self.finished = true;
+                Ok(DurableInputEvent::End)
+            }
+            CommittedProducerStreamEventPayload::Cancel {
+                role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
+                ..
+            } => {
+                self.finished = true;
+                Ok(DurableInputEvent::Cancelled)
+            }
+            CommittedProducerStreamEventPayload::Cancel {
+                role: role @ StreamCancelRole::System,
+                reason,
+                details,
+            } => Err(durable_stream_cancel_error(role, reason, details)),
+        }
+    }
+
+    /// Receives a host-side value through the same consumer-journal path used by the guest ABI.
+    pub(crate) async fn receive_value(
+        &mut self,
+        admission: Option<&mpsc::UnboundedSender<DurableInputReceiveAdmission>>,
+    ) -> anyhow::Result<Option<DurableInputEvent>> {
+        if self.finished {
+            return Ok(Some(DurableInputEvent::End));
+        }
+        if self.pending.is_none() {
+            let guard = if let Some(admission) = admission {
+                let (result, response) = oneshot::channel();
+                if admission
+                    .send(DurableInputReceiveAdmission {
+                        opens_source: self.input.opens_source(),
+                        source_wait: self.input.journal.is_empty(),
+                        ordinal: self.input.consumer_read_ordinal,
+                        result,
+                    })
+                    .is_err()
+                {
+                    return Ok(None);
+                }
+                let Ok(result) = response.await else {
+                    return Ok(None);
+                };
+                Some(result?)
+            } else {
+                #[cfg(not(test))]
+                anyhow::bail!("durable projection has no store admission");
+                #[cfg(test)]
+                None
+            };
+            self.pending = Some(self.input.receive(guard));
+        }
+        let result = std::future::poll_fn(|cx| {
+            self.pending
+                .as_mut()
+                .expect("durable receive is missing")
+                .as_mut()
+                .poll(cx)
+        })
+        .await;
+        let result = self.finish_receive(result);
+        if result.is_err() {
+            self.finished = true;
+        }
+        result.map(Some)
+    }
+
+    pub(crate) fn abort_for_teardown(&mut self) {
+        self.finished = true;
+        self.pending = None;
+        self.input.reader = None;
+    }
 }
 
 impl DurableInputEndpoint {
+    fn opens_source(&self) -> bool {
+        self.journal.is_empty() && self.reader.is_none() && !self.source_terminal
+    }
+
     fn receive(&mut self, guard: Option<ReceiveGuard>) -> DurableReceiveFuture {
+        let opens_source = self.opens_source();
         let mut reader = self.reader.take();
         let queued_event = self.journal.pop_front();
+        let recorded_mappings = queued_event
+            .as_ref()
+            .and_then(|event| self.nested_mappings.remove(&event.offset))
+            .unwrap_or_default();
+        let source_after = self.source_after;
         let streams = self.streams.clone();
         let stream_id = self.handle.stream_id;
+        let reader_id = self.reader_id;
         let ordinal = self.consumer_read_ordinal;
         let role = self.role;
         Box::pin(async move {
@@ -4957,11 +5894,24 @@ impl DurableInputEndpoint {
             let event = match queued_event {
                 Some(event) => Some(event),
                 None => {
-                    let result = reader
-                        .as_mut()
-                        .expect("durable input reader is missing")
-                        .next()
-                        .await;
+                    if opens_source {
+                        let mapping = streams
+                            .current_control_metadata()
+                            .await?
+                            .reader_binding(reader_id)?
+                            .clone();
+                        let mapping = streams
+                            .producer
+                            .materialize_binding(&mapping)
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        reader = Some(streams.stream_reader(mapping, source_after).await?);
+                        record_source_journal_lag(reader.as_mut(), source_after, true).await;
+                    }
+                    let result = match reader.as_mut() {
+                        Some(reader) => reader.next().await,
+                        None => Ok(None),
+                    };
                     if let Some(guard) = &mut guard {
                         guard.clear_source_wait();
                     }
@@ -4969,19 +5919,21 @@ impl DurableInputEndpoint {
                 }
             };
             if event.as_ref().is_some_and(|event| {
-                matches!(
-                    &event.payload,
-                    CommittedProducerStreamEventPayload::Cancel {
-                        role: StreamCancelRole::System,
-                        reason: StreamCancelReason::SourceUnavailable,
-                        ..
-                    }
-                )
+                event.terminal_author.is_none()
+                    && matches!(
+                        &event.payload,
+                        CommittedProducerStreamEventPayload::Cancel {
+                            role: StreamCancelRole::System,
+                            reason: StreamCancelReason::SourceUnavailable,
+                            ..
+                        }
+                    )
             }) {
                 journaled = true;
             }
             let mut endpoints = HashMap::new();
             let mut queued_events = VecDeque::<CommittedProducerStreamEvent>::new();
+            let mut nested_mappings = Vec::new();
             if let Some(event) = &event {
                 let record = match &event.payload {
                     CommittedProducerStreamEventPayload::Value(bytes) => {
@@ -4994,7 +5946,6 @@ impl DurableInputEndpoint {
                                     .to_string(),
                             );
                         }
-                        let mut recursive_mappings = Vec::with_capacity(event.nested_handles.len());
                         for (position, (handle_index, handle)) in handle_indices
                             .into_iter()
                             .zip(event.nested_handles.iter().cloned())
@@ -5005,23 +5956,39 @@ impl DurableInputEndpoint {
                                     "invalid canonical nested input handle index {handle_index}"
                                 ));
                             }
-                            let mapping = streams.ensure_nested_mapping(None, handle, role).await?;
-                            endpoints.insert(
-                                handle_index,
-                                streams.endpoint(mapping.handle.clone(), 0, role).await?,
-                            );
-                            recursive_mappings.push(mapping);
+                            let mapping = if journaled {
+                                let mapping = recorded_mappings.get(position).ok_or_else(|| {
+                                    "recorded nested durable input has no reader binding"
+                                        .to_string()
+                                })?;
+                                if mapping.handle != handle || mapping.role != role {
+                                    return Err(
+                                        "recorded nested reader binding differs from its value"
+                                            .into(),
+                                    );
+                                }
+                                mapping.clone()
+                            } else {
+                                StreamSessionMappingRecord {
+                                    transport_stream_id: streams.allocate_transport_stream_id()?,
+                                    handle,
+                                    role,
+                                }
+                            };
+                            nested_mappings.push(mapping);
                         }
                         StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
                             format_version: 1,
-                            session_key: streams.session_key.clone(),
-                            stream_id,
+                            session_key: streams.session_reference.clone(),
+                            reader_id,
                             source_offset: event.offset,
                             consumer_read_ordinal: ordinal,
                             value: bytes.clone(),
                             packed_u8: false,
-                            recursive_handles: event.nested_handles.clone(),
-                            recursive_mappings,
+                            recursive_mappings: nested_mappings
+                                .iter()
+                                .map(StreamBindingRecord::foreign)
+                                .collect(),
                         })
                     }
                     CommittedProducerStreamEventPayload::PackedU8(byte) => {
@@ -5091,21 +6058,20 @@ impl DurableInputEndpoint {
                         }
                         StreamSessionRecord::ConsumerItemValue(StreamConsumerItemValueRecord {
                             format_version: 1,
-                            session_key: streams.session_key.clone(),
-                            stream_id,
+                            session_key: streams.session_reference.clone(),
+                            reader_id,
                             source_offset: event.offset,
                             consumer_read_ordinal: ordinal,
                             value: bytes,
                             packed_u8: true,
-                            recursive_handles: Vec::new(),
                             recursive_mappings: Vec::new(),
                         })
                     }
                     CommittedProducerStreamEventPayload::End(result) => {
                         StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
                             format_version: 1,
-                            session_key: streams.session_key.clone(),
-                            stream_id,
+                            session_key: streams.session_reference.clone(),
+                            reader_id,
                             source_offset: event.offset,
                             consumer_read_ordinal: ordinal,
                             terminal: StreamConsumerTerminal::End(result.clone()),
@@ -5117,8 +6083,8 @@ impl DurableInputEndpoint {
                         details,
                     } => StreamSessionRecord::ConsumerTerminal(StreamConsumerTerminalRecord {
                         format_version: 1,
-                        session_key: streams.session_key.clone(),
-                        stream_id,
+                        session_key: streams.session_reference.clone(),
+                        reader_id,
                         source_offset: event.offset,
                         consumer_read_ordinal: ordinal,
                         terminal: StreamConsumerTerminal::Cancel {
@@ -5129,7 +6095,15 @@ impl DurableInputEndpoint {
                     }),
                 };
                 if !journaled {
-                    streams.append_record(None, record).await;
+                    streams
+                        .producer
+                        .append_session_record_attributed(
+                            None,
+                            streams.entity_parent_start_index,
+                            record,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
                     streams.commit_consumer_journal().await?;
                     let committed_through = queued_events
                         .back()
@@ -5158,6 +6132,13 @@ impl DurableInputEndpoint {
                         "Durable consumer value journal replayed before guest delivery"
                     );
                 }
+            }
+            for (position, mapping) in nested_mappings.into_iter().enumerate() {
+                streams.insert_mapping(mapping.clone())?;
+                endpoints.insert(
+                    position as u64,
+                    streams.endpoint_for_mapping(mapping, 0).await?,
+                );
             }
             Ok(DurableInputRead {
                 reader,
@@ -5201,40 +6182,42 @@ impl Drop for DurableInputProducer {
     }
 }
 
-impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
-    type Item = wire::SchemaValueTree;
-    type Buffer = Option<wire::SchemaValueTree>;
+enum DurableInputItem {
+    Value(SchemaValue),
+    Terminal(StreamResult),
+}
 
-    fn poll_produce<'a>(
-        mut self: Pin<&mut Self>,
+impl DurableInputProducer {
+    fn poll_value<Ctx: WorkerCtx>(
+        &mut self,
         cx: &mut Context<'_>,
-        mut store: StoreContextMut<'a, Ctx>,
-        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        store: &mut StoreContextMut<'_, Ctx>,
         finish: bool,
-    ) -> Poll<wasmtime::Result<StreamResult>> {
+    ) -> Poll<wasmtime::Result<DurableInputItem>> {
         if self.finished {
-            return Poll::Ready(Ok(StreamResult::Dropped));
+            return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
         }
         if finish {
             if !self.dropping {
                 self.dropping = true;
                 self.pending = None;
-                let streams = self.input.streams.clone();
-                let transport_stream_id = self.input.transport_stream_id;
                 let role = match self.input.role {
                     SessionStreamRole::Input => StreamCancelRole::InputConsumer,
                     SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
                 };
+                let (result, receiver) = oneshot::channel();
+                store.as_context_mut().spawn(DurableInputDropTask {
+                    cancellation: DroppedDurableInput {
+                        streams: self.input.streams.clone(),
+                        transport_stream_id: self.input.transport_stream_id,
+                        role,
+                    },
+                    result,
+                });
                 self.pending_drop = Some(Box::pin(async move {
-                    streams
-                        .cancel_stream(
-                            transport_stream_id,
-                            role,
-                            StreamCancelReason::GuestDrop,
-                            Some("guest dropped its durable readable stream end".to_string()),
-                            None,
-                        )
+                    receiver
                         .await
+                        .map_err(|_| "durable input drop task ended without a result".to_string())?
                 }));
             }
             match self
@@ -5252,11 +6235,53 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                     self.finished = true;
                     self.pending_drop = None;
                     self.input.reader = None;
-                    return Poll::Ready(Ok(StreamResult::Cancelled));
+                    return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Cancelled)));
                 }
             }
         }
         if self.pending.is_none() {
+            if self.input.opens_source() && self.live_admission.is_none() {
+                let ctx = store.data().durable_ctx();
+                if !ctx.is_live() {
+                    if ctx.rejects_live_continuation_at_replay_tail() {
+                        self.finished = true;
+                        return Poll::Ready(Err(WorkerExecutorError::unexpected_oplog_entry(
+                            format!(
+                                "durable input observation {}",
+                                self.input.consumer_read_ordinal
+                            ),
+                            "end of the recorded consumer journal during completed entity replay",
+                        )
+                        .into()));
+                    }
+                    let (result, receiver) = oneshot::channel();
+                    let task = DurableInputLiveAdmission::<Ctx> {
+                        replay_state: ctx.state.replay_state.clone(),
+                        activity: ctx.tail_work_tracker().activity(),
+                        result,
+                        _ctx: PhantomData,
+                    };
+                    store.as_context_mut().spawn(task);
+                    self.live_admission = Some(receiver);
+                }
+            }
+            if let Some(admission) = &mut self.live_admission {
+                match Pin::new(admission).poll(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Ok(Ok(()))) => self.live_admission = None,
+                    Poll::Ready(result) => {
+                        self.finished = true;
+                        let error = match result {
+                            Ok(Err(error)) => error,
+                            Err(_) => WorkerExecutorError::runtime(
+                                "durable input live admission ended without a result",
+                            ),
+                            Ok(Ok(())) => unreachable!(),
+                        };
+                        return Poll::Ready(Err(error.into()));
+                    }
+                }
+            }
             let live_call = LiveCallPermit::new(
                 store
                     .data_mut()
@@ -5276,82 +6301,41 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
                 _live_call: live_call,
             })));
         }
-        let mut read = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
+        let receive_result = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
             Poll::Pending => return Poll::Pending,
-            Poll::Ready(Ok(result)) => result,
-            Poll::Ready(Err(error)) => {
+            Poll::Ready(result) => result,
+        };
+        let value = match self.finish_receive(receive_result) {
+            Ok(DurableInputEvent::Item(value)) => value,
+            Ok(DurableInputEvent::End) => {
+                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Dropped)));
+            }
+            Ok(DurableInputEvent::Cancelled) => {
+                return Poll::Ready(Ok(DurableInputItem::Terminal(StreamResult::Cancelled)));
+            }
+            Err(error) => {
                 self.finished = true;
-                return Poll::Ready(Err(wasmtime::Error::msg(error)));
+                return Poll::Ready(Err(wasmtime::Error::from_anyhow(error)));
             }
         };
-        self.pending = None;
-        self.input.complete_receive(&mut read);
-        let Some(event) = read.event else {
-            self.finished = true;
-            return Poll::Ready(Err(wasmtime::Error::msg(
-                "durable input stream source closed without a terminal event",
-            )));
-        };
+        Poll::Ready(Ok(DurableInputItem::Value(value)))
+    }
+}
 
-        let value = match event.payload {
-            CommittedProducerStreamEventPayload::Value(bytes) => {
-                let value = match ProtoSchemaValue::decode(bytes.as_slice()) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        self.finished = true;
-                        return Poll::Ready(Err(wasmtime::Error::msg(format!(
-                            "invalid durable stream value: {error}"
-                        ))));
-                    }
-                };
-                match decode_recursive_stream_value(value, |stream_id, _| {
-                    read.endpoints
-                        .remove(&stream_id)
-                        .map(SchemaValueStream::from_host_endpoint)
-                        .ok_or_else(|| format!("unknown nested stream reference {stream_id}"))
-                }) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        self.finished = true;
-                        return Poll::Ready(Err(wasmtime::Error::msg(error)));
-                    }
-                }
-            }
-            CommittedProducerStreamEventPayload::PackedU8(byte) => SchemaValue::U8(byte),
-            CommittedProducerStreamEventPayload::End(StreamEndResult::Ok) => {
-                self.finished = true;
-                return Poll::Ready(Ok(StreamResult::Dropped));
-            }
-            CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(error)) => {
-                self.finished = true;
-                return Poll::Ready(Err(wasmtime::Error::msg(format!(
-                    "durable stream ended with error context: {error:?}"
-                ))));
-            }
-            CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::InputProducer | StreamCancelRole::OutputProducer,
-                ..
-            } => {
-                self.finished = true;
-                return Poll::Ready(Ok(StreamResult::Dropped));
-            }
-            CommittedProducerStreamEventPayload::Cancel {
-                role: StreamCancelRole::InputConsumer | StreamCancelRole::OutputConsumer,
-                ..
-            } => {
-                self.finished = true;
-                return Poll::Ready(Ok(StreamResult::Cancelled));
-            }
-            CommittedProducerStreamEventPayload::Cancel {
-                role: role @ StreamCancelRole::System,
-                reason,
-                details,
-            } => {
-                self.finished = true;
-                return Poll::Ready(Err(wasmtime::Error::from_anyhow(
-                    durable_stream_cancel_error(role, reason, details),
-                )));
-            }
+impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
+    type Item = wire::SchemaValueTree;
+    type Buffer = Option<wire::SchemaValueTree>;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: StoreContextMut<'a, Ctx>,
+        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        let value = match std::task::ready!(self.poll_value(cx, &mut store, finish))? {
+            DurableInputItem::Value(value) => value,
+            DurableInputItem::Terminal(result) => return Poll::Ready(Ok(result)),
         };
         let encoded = {
             let mut resolver = StoreValueResolver::new(&mut store);
@@ -5372,6 +6356,7 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
         if ty == TypeId::of::<ForwardedDurableInput>()
             && producer.input.forwarded_handle().is_ok()
             && producer.pending.is_none()
+            && producer.live_admission.is_none()
             && producer.pending_drop.is_none()
             && !producer.finished
         {
@@ -5380,6 +6365,36 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             Ok(Box::new(ForwardedDurableInput { handle }))
         } else {
             Err(me)
+        }
+    }
+}
+
+/// Adapts the same durable input journal to native tools' byte-stream ABI.
+pub struct DurableByteInputProducer(pub DurableInputProducer);
+
+impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableByteInputProducer {
+    type Item = u8;
+    type Buffer = bytes::Bytes;
+
+    fn poll_produce<'a>(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: StoreContextMut<'a, Ctx>,
+        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        match std::task::ready!(self.0.poll_value(cx, &mut store, finish))? {
+            DurableInputItem::Value(SchemaValue::U8(byte)) => {
+                destination.set_buffer(bytes::Bytes::copy_from_slice(&[byte]));
+                Poll::Ready(Ok(StreamResult::Completed))
+            }
+            DurableInputItem::Value(_) => {
+                self.0.finished = true;
+                Poll::Ready(Err(wasmtime::Error::msg(
+                    "tool stdin contains a non-byte value",
+                )))
+            }
+            DurableInputItem::Terminal(result) => Poll::Ready(Ok(result)),
         }
     }
 }
@@ -5506,6 +6521,11 @@ pub fn strip_streams(value: SchemaValue) -> SchemaValue {
         }
         other => other,
     }
+}
+
+/// Removes runtime stream resources while preserving a value's pinned schema graph.
+pub(crate) fn strip_typed_streams(value: &TypedSchemaValue) -> TypedSchemaValue {
+    TypedSchemaValue::new(value.graph().clone(), strip_streams(value.value().clone()))
 }
 
 fn discards_input_after_terminal(error: &StreamStoreError, session_key: &StreamSessionKey) -> bool {
