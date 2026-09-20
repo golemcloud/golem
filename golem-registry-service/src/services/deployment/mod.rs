@@ -20,7 +20,6 @@ mod mcp;
 mod read;
 mod route_compilation;
 mod routes;
-pub mod tool_middlewares;
 mod write;
 
 pub use self::deploy_validation_error::DeployValidationError;

@@ -1393,6 +1393,13 @@ remaining local implementation is:
    underlying calls, stdout, cancellation, replay/restart, changed deployment and
    changed upstream schemas. Count effects and verify idempotency keys separately.
 
+The pure compiler and its tests now live in `golem-common::model::tool_middleware::compile`;
+the registry uses that implementation directly. This isolated refactor preserves
+all compiler logic and all 15 tests. Tests pass before and after the move, the
+registry library compile-check passes, Oracle finds no blockers, and the bounded
+bug-finder is clean. Dynamic snapshot inputs and MCP chain construction are not
+implemented by this refactor; step 8 remains open.
+
 - The dependency status changed during implementation: GOL-39 is merged in
   [PR 3842](https://github.com/golemcloud/golem/pull/3842) and is included in the
   latest-main merge for this draft PR. GOL-439 is implementing the chain dispatcher in the

@@ -20,7 +20,6 @@ use crate::repo::model::deployment::{DeployRepoError, DeploymentRevisionCreation
 use crate::services::agent_secret::{AgentSecretError, AgentSecretService};
 use crate::services::component::{ComponentError, ComponentService};
 use crate::services::deployment::deploy_validation_error::format_validation_errors;
-use crate::services::deployment::tool_middlewares::compile_tool_middleware_chains;
 use crate::services::environment::{EnvironmentError, EnvironmentService};
 use crate::services::environment_tool_grant::{
     EnvironmentToolGrantError, EnvironmentToolGrantService,
@@ -51,6 +50,7 @@ use golem_common::model::environment::Environment;
 use golem_common::model::mcp_import::{McpImport, McpImportCredential};
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::RemoteToolDeployment;
+use golem_common::model::tool_middleware::compile::compile_tool_middleware_chains;
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::model::{
     deployment::{Deployment, DeploymentCreation},

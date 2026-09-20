@@ -12,23 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::{ComponentId, ComponentName};
-use golem_common::model::deployment::DeploymentRevision;
-use golem_common::model::tool::{
+use crate::model::agent::AgentTypeName;
+use crate::model::component::{ComponentId, ComponentName};
+use crate::model::deployment::DeploymentRevision;
+use crate::model::tool::{
     CompiledToolBinding, RegisteredTool, ToolBindingInput, ToolBindingOwner, ToolName,
 };
-use golem_common::model::tool_middleware::{
+use crate::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
     ToolMiddlewareInstallation, ToolMiddlewareMergeMode,
 };
-use golem_common::schema::tool::compatibility::{
-    ToolCompatibilityMode, compile_tool_compatibility,
-};
-use golem_common::schema::tool::validation::{validate_tool, validate_tool_middleware};
-use golem_common::schema::tool::{ErrorCase, Tool, ToolMiddlewareScope};
-use golem_common::schema::validation::is_equivalent_cross_graph;
-use golem_common::schema::{SchemaGraph, SchemaType, SchemaTypeDef, TypeId, TypedSchemaValue};
+use crate::schema::tool::compatibility::{ToolCompatibilityMode, compile_tool_compatibility};
+use crate::schema::tool::validation::{validate_tool, validate_tool_middleware};
+use crate::schema::tool::{ErrorCase, Tool, ToolMiddlewareScope};
+use crate::schema::validation::is_equivalent_cross_graph;
+use crate::schema::{SchemaGraph, SchemaType, SchemaTypeDef, TypeId, TypedSchemaValue};
 use golem_schema::schema::render::from_untrusted_json_value;
 use golem_schema::schema::validation::validate_value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -651,7 +649,7 @@ fn rewrite_type_refs(
         }
         SchemaType::Option { inner, .. }
         | SchemaType::Secret {
-            spec: golem_common::schema::SecretSpec { inner, .. },
+            spec: crate::schema::SecretSpec { inner, .. },
             ..
         } => rewrite_type_refs(inner, rewrite)?,
         SchemaType::Result { spec, .. } => {
