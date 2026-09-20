@@ -65,6 +65,61 @@ See the SDK and generator READMEs for the exact monomorphic/universal signatures
 stream lifetime rules, same-package tool-shape limitation, and runtime ownership of placement and
 chain ordering.
 
+## HTTP routers and live files
+
+`golem_moonbit_examples/http_router.mbt` defines three independently named types:
+
+* `Site`: `#derive.http_router` with `#derive.mount("/site")`. Repeated
+  `#derive.static_file("/assets/*", "/preferred/$1")` declarations preserve order;
+  only a missing file falls through to the next mapping, then the handler.
+* `StaticSite`: immutable files without a synthetic handler. Routers may also
+  register only a provider, both roles, or neither role.
+* `FileOwner`: an ordinary durable `#derive.agent` with
+  `#derive.expose_files("/value", "/value.txt")`. Its mount binds the complete
+  constructor identity. GET initializes the owner and reads its current file;
+  the typed PUT endpoint updates that same owner's file.
+
+`#derive.http_handler` and `#derive.openapi_provider` designate ordinary public
+instance methods with arbitrary names. A router has at most one of each, no
+other exported methods, no identity arguments, no snapshots, and ephemeral mode.
+An injected `@config.Config[T]` constructor argument is allowed and is not part of
+its wire identity. Use ordinary generated agent clients for dependencies.
+Routers themselves have no generated ordinary RPC client.
+
+Import `golemcloud/golem_sdk/http` for `HttpRequest`, `HttpResponse`, and
+`HttpHeader`. Bodies are `@schema.AgentStream[Array[Byte]]`, not `Bytes`
+(which uses the binary schema). Request query `None` differs from `Some("")`.
+Headers preserve duplicate entries and raw bytes. Use `UInt16` for response
+status. The example forwards one chunk at a time, stops on `PeerDropped`, and
+uses `on_unstarted_drop` to release the request when a HEAD/bodyless response
+disposes its unstarted producer. Stream EOF or disposal is not proof that the
+whole invocation completed; active host cancellation may terminate Wasm.
+
+The OpenAPI provider returns `String`. `@http.openapi_json(Json)` is an optional
+deterministic serializer: sorted object keys, preserved array/opaque example
+content, valid Unicode/finite numbers, at most 1 MiB UTF-8 and 64 container levels.
+The host owns OpenAPI 3.1 validation, reference checks, namespacing, and merging;
+neither the helper nor provider fetches external references.
+
+After a local deployment, exercise the examples against the local gateway:
+
+```sh
+curl http://localhost:9006/site/assets/message.txt
+curl http://localhost:9006/static/message.txt
+printf 'incremental echo' | curl --data-binary @- http://localhost:9006/site/echo
+curl http://localhost:9006/files/alice/value
+curl -X PUT -H 'content-type: application/json' \
+  --data '{"value":"updated"}' http://localhost:9006/files/alice/value
+curl http://localhost:9006/openapi.json
+```
+
+File sources are absolute public paths with an optional terminal `/*`; subtree
+targets end in `/$1`. Public segments are percent-decoded once, filesystem targets
+are not URI-decoded, and duplicate compiled source/target pairs are rejected.
+The same source with different targets is valid. Provision immutable files with
+read-only manifest entries. Live-file owners must be durable, non-phantom, and
+bind each constructor identity argument exactly once in their mount.
+
 ## Building
 
 Requires [golem-cli](https://github.com/golemcloud/golem/releases), `wasm-tools`, and the MoonBit toolchain.

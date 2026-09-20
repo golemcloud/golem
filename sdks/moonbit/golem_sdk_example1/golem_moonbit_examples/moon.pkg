@@ -1,4 +1,6 @@
 import {
+  "golemcloud/golem_sdk/http",
+  "golemcloud/golem_sdk/filesystem" @fs,
   "golemcloud/golem_sdk/logging",
   "golemcloud/golem_sdk/webhook",
   "golemcloud/golem_sdk/gen",

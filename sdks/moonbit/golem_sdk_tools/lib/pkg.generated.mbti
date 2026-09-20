@@ -8,6 +8,10 @@ import {
 }
 
 // Values
+pub fn compile_http_file_mapping(String, String) -> HttpFileMapping raise AgentParseError
+
+pub fn compile_http_file_mappings(Array[(String, String)]) -> Array[HttpFileMapping] raise AgentParseError
+
 pub fn component_role_marker(ComponentRole) -> String
 
 pub fn component_target_dir(String, String) -> String
@@ -174,6 +178,7 @@ pub(all) struct AgentInfo {
   http_mount : HttpMountInfo?
   config_type : String?
 } derive(@debug.Debug)
+pub fn AgentInfo::is_http_router(Self) -> Bool
 
 pub(all) enum AgentMode {
   Durable
@@ -218,11 +223,21 @@ pub(all) struct FnSignature {
 }
 
 pub(all) struct HttpEndpointInfo {
-  http_method : String
+  http_method : HttpMethodMatcher
   path : String
   headers : Array[(String, String)]
   auth : Bool?
   cors : Array[String]
+} derive(Eq, @debug.Debug)
+
+pub(all) enum HttpFileMapping {
+  Exact(Array[String], String)
+  Subtree(Array[String], String)
+} derive(Eq, @debug.Debug)
+
+pub(all) enum HttpMethodMatcher {
+  Concrete(String)
+  Any
 } derive(Eq, @debug.Debug)
 
 pub(all) struct HttpMountInfo {
@@ -231,6 +246,10 @@ pub(all) struct HttpMountInfo {
   phantom : Bool
   cors : Array[String]
   webhook_suffix : String?
+  router : Bool
+  static_bindings : Array[HttpFileMapping]
+  filesystem_bindings : Array[HttpFileMapping]
+  openapi_provider_method : String?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct MethodInfo {
