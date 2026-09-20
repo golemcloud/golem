@@ -1259,6 +1259,57 @@ fn name_error(error: Error) -> Option<BlobNameError> {
 
 #[test]
 #[tracing::instrument]
+async fn a_path_that_starts_with_a_prefix_of_windows_is_not_relative(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    // `C:` names a drive on Windows and `\\` names a server, so a path that starts with one of
+    // them names a place outside the namespace on that host. The rule reads the text of the
+    // path and not the host, so each backend refuses the path on each operating system.
+    let storage = test.get_blob_storage().await;
+    let label = "a_path_that_starts_with_a_prefix_of_windows_is_not_relative";
+
+    for name in ["C:/escape", "C:\\escape", "C:escape", "\\\\server\\share"] {
+        let path = Path::new(name);
+        let rule = BlobNameError::NotRelative {
+            path: path.to_path_buf(),
+        };
+
+        let written = storage
+            .put_raw(label, "put-raw", namespace.clone(), path, b"payload")
+            .await
+            .err()
+            .and_then(name_error);
+        let created = storage
+            .create_dir(label, "create-dir", namespace.clone(), path)
+            .await
+            .err()
+            .and_then(name_error);
+        let read = storage
+            .get_raw(label, "get-raw", namespace.clone(), path)
+            .await
+            .err()
+            .and_then(name_error);
+
+        assert_eq!(
+            (written, created, read),
+            (Some(rule.clone()), Some(rule.clone()), Some(rule)),
+            "the name {name:?}"
+        );
+    }
+
+    assert_eq!(
+        storage
+            .list_dir(label, "list-root", namespace.clone(), Path::new(""))
+            .await
+            .unwrap(),
+        Vec::<PathBuf>::new(),
+        "a name that breaks a rule left an entry behind"
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn a_name_that_breaks_a_rule_of_the_storage_gives_that_rule(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,

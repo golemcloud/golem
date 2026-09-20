@@ -622,8 +622,14 @@ pub(crate) const DIR_MARKER: &str = "__dir_marker";
 /// the error at once and the executor does not retry.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BlobNameError {
-    /// The blob path is not relative: it is absolute, or it has a root name or a drive prefix
-    /// in it. Such a path does not name a blob below the root of its namespace.
+    /// The blob path is not relative: it is absolute, it has a root name in it, or it starts
+    /// with a prefix of Windows (`blob_path_starts_with_windows_prefix`). Such a path does not
+    /// name a blob below the root of its namespace.
+    ///
+    /// A prefix of Windows names a drive or a server there, and it is a name of the path on
+    /// unix, so the rule that catches it reads the text of the path. One error holds both
+    /// rules because both say the same thing about the path: it does not stay below the root
+    /// of the namespace, wherever the process that holds the storage runs.
     #[error("the blob path must be relative: {path:?}")]
     NotRelative { path: PathBuf },
     /// The blob path has a `..` name in it. Such a name goes up from the name before it, so
@@ -734,20 +740,39 @@ pub(crate) fn check_blob_name(name: &str) -> Result<(), BlobNameError> {
     Ok(())
 }
 
+/// Tells if the text of a path starts with a prefix of Windows: one ASCII letter and a `:`,
+/// which names a drive, or `\\`, which starts the name of a server, of a device or of a
+/// verbatim path.
+///
+/// Windows reads such a prefix as the start of a path that its own root holds, and
+/// `Path::components` gives it there as [`Component::Prefix`]. Unix has no such prefix, so
+/// `Path::components` gives the same text as a name of the path and nothing else refuses it.
+/// The rule reads the text, so the host that runs the process does not change the answer.
+///
+/// The rule reads one letter and a `:` because that is what Windows reads: `C:x` names the
+/// place that the current directory of the drive `C` holds. A `:` after more than one letter,
+/// or somewhere else in the path, is a character of a name.
+pub(crate) fn blob_path_starts_with_windows_prefix(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    text.starts_with(r"\\") || matches!(bytes, [letter, b':', ..] if letter.is_ascii_alphabetic())
+}
+
 /// Gives the one form of a relative blob path, or an error.
 ///
 /// The form holds the names of the path and one separator between two names. A `.` and an extra
 /// separator are not names, so they go away, and a path at the root of a namespace becomes the
 /// empty path. Two paths that name the same blob get the same form. An absolute path, a path
-/// with `..` in it, and a path with a drive letter give a [`BlobNameError`], which is
+/// with `..` in it, and a path with a prefix of Windows give a [`BlobNameError`], which is
 /// permanent.
 ///
 /// The form is then read as text, so a path that is not valid UTF-8 gives
-/// [`BlobNameError::NotUtf8`], and `check_blob_name` gives the rule that the text breaks. The
-/// text is what a backend stores, and the rules read `\` as a separator, which the names of the
-/// path do not (`Path::components` reads `\` as a name on unix). Every backend calls this
-/// function for every path that it gets, so every backend gives the same error for the same
-/// name.
+/// [`BlobNameError::NotUtf8`]. `blob_path_starts_with_windows_prefix` gives
+/// [`BlobNameError::NotRelative`] for a path that Windows holds outside the namespace, and
+/// `check_blob_name` gives the rule that the text breaks. The text is what a backend stores,
+/// and the rules read `\` as a separator, which the names of the path do not
+/// (`Path::components` reads `\` as a name on unix). Every backend calls this function for
+/// every path that it gets, so every backend gives the same error for the same name, on every
+/// host.
 pub(crate) fn normalized_blob_path(path: &Path) -> Result<Cow<'_, Path>, BlobNameError> {
     if path.is_absolute() {
         return Err(BlobNameError::NotRelative {
@@ -793,6 +818,13 @@ pub(crate) fn normalized_blob_path(path: &Path) -> Result<Cow<'_, Path>, BlobNam
     let text = normalized.to_str().ok_or_else(|| BlobNameError::NotUtf8 {
         path: path.to_path_buf(),
     })?;
+    // The rule holds for the one form, so a path whose one form starts with a prefix of
+    // Windows gets the error as well, and the one form of an accepted path is accepted.
+    if blob_path_starts_with_windows_prefix(text) {
+        return Err(BlobNameError::NotRelative {
+            path: path.to_path_buf(),
+        });
+    }
     check_blob_name(text)?;
 
     Ok(normalized)
@@ -957,6 +989,45 @@ mod tests {
                 }),
             ]
         );
+    }
+
+    /// A path that starts with a prefix of Windows names a place outside the namespace on that
+    /// host: `C:` names a drive and `\\` names a server. Windows gives such a prefix as
+    /// `Component::Prefix` and unix gives it as a name of the path, so the rule reads the text
+    /// of the one form and both hosts give the same error for the same path.
+    #[test]
+    fn a_path_that_starts_with_a_prefix_of_windows_is_not_relative() {
+        let paths = [
+            "C:/escape",
+            "C:\\escape",
+            "C:escape",
+            "c:",
+            "\\\\server\\share",
+            "./C:/escape",
+        ];
+
+        let results =
+            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.into_owned()));
+
+        assert_eq!(
+            results,
+            paths.map(|path| Err(BlobNameError::NotRelative {
+                path: PathBuf::from(path)
+            }))
+        );
+    }
+
+    /// The rule reads the prefix as Windows reads it: one letter and a `:` at the start of the
+    /// path. A `:` that is somewhere else, and a name that has more than one letter before the
+    /// `:`, name a blob.
+    #[test]
+    fn a_colon_that_is_not_a_prefix_of_windows_names_a_blob() {
+        let paths = ["note:1", "a/C:/b", "ab:cd", "1:/x"];
+
+        let results =
+            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.into_owned()));
+
+        assert_eq!(results, paths.map(|path| Ok(PathBuf::from(path))));
     }
 
     /// The rules of the text hold for the one form of the path, so a `.` name that the one
