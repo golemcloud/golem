@@ -38,6 +38,7 @@ impl DurableStreamsHandler {
         agent_id: &AgentId,
         session: &str,
         slot: &str,
+        allow_create: bool,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         let key = format!("{}:{agent_id}:{session}:{slot}", route.route.environment_id);
         if let Err(rejection) = self.limiter.check_append(&key) {
@@ -46,6 +47,9 @@ impl DurableStreamsHandler {
         let metadata = self
             .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
             .await?;
+        if metadata.is_none() && !allow_create {
+            return Ok(response(StatusCode::NOT_FOUND));
+        }
         if metadata.as_ref().is_some_and(|m| m.tombstoned) {
             return Ok(response(StatusCode::GONE));
         }

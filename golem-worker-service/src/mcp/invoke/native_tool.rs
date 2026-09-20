@@ -497,6 +497,7 @@ mod tests {
             handle: Some(DurableStreamHandle {
                 format_version: 1,
                 stream_id: Some(uuid(id)),
+                producer_generation: 0,
                 producer_environment_id: environment,
                 producer: agent.clone(),
                 expected_producer_fingerprint: Some(uuid(4)),

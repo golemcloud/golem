@@ -562,6 +562,16 @@ pub trait WorkerClient: Send + Sync {
         ))
     }
 
+    async fn fork_stream_slot(
+        &self,
+        _agent_id: &AgentId,
+        _request: workerexecutor::v1::ForkStreamSlotRequest,
+    ) -> WorkerResult<workerexecutor::v1::fork_stream_slot_response::Result> {
+        Err(WorkerServiceError::Internal(
+            "durable stream forks are not supported by this worker client".to_string(),
+        ))
+    }
+
     async fn append_to_stream_slot(
         &self,
         _agent_id: &AgentId,
@@ -1929,6 +1939,27 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         .await
     }
 
+    async fn fork_stream_slot(
+        &self,
+        agent_id: &AgentId,
+        request: workerexecutor::v1::ForkStreamSlotRequest,
+    ) -> WorkerResult<workerexecutor::v1::fork_stream_slot_response::Result> {
+        self.call_worker_executor(
+            agent_id.clone(),
+            "fork_stream_slot",
+            move |client| Box::pin(client.fork_stream_slot(request.clone())),
+            |response| match response.into_inner().result {
+                Some(workerexecutor::v1::fork_stream_slot_response::Result::Failure(error)) => {
+                    Err(error.into())
+                }
+                Some(result) => Ok(result),
+                None => Err("Empty fork stream slot response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
     async fn invoke_agent(
         &self,
         agent_id: &AgentId,
@@ -1985,6 +2016,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         expected_callee_fingerprint: None,
                         durable_input_mappings: Vec::new(),
                         scope_card: scope_card.clone(),
+                        origin_invocation: None,
                         external_tool: None,
                     };
                     Box::pin(run_one_shot_invocation_session(
@@ -3078,6 +3110,11 @@ mod rejection_mapping_tests {
         unimplemented_unary!(get_oplog, GetOplogRequest, GetOplogResponse);
         unimplemented_unary!(search_oplog, SearchOplogRequest, SearchOplogResponse);
         unimplemented_unary!(fork_worker, ForkWorkerRequest, ForkWorkerResponse);
+        unimplemented_unary!(
+            fork_stream_slot,
+            ForkStreamSlotRequest,
+            ForkStreamSlotResponse
+        );
         unimplemented_unary!(revert_worker, RevertWorkerRequest, RevertWorkerResponse);
         unimplemented_unary!(
             resolve_revert_last_invocations,

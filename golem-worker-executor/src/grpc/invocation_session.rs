@@ -40,8 +40,8 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_common::base_model::durable_stream::{
     MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE, ResumeAttemptDescriptor,
-    StreamCancelReason, StreamCancelRole, StreamItemsPayload, StreamResumeCursor,
-    StreamResumeOperation,
+    StreamCancelReason, StreamCancelRole, StreamItemsPayload, StreamRegistrationInvocation,
+    StreamResumeCursor, StreamResumeOperation,
 };
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
@@ -55,6 +55,7 @@ use golem_common::model::durable_stream::{
     StreamInvocationId, StreamRegistrationCoordinate, StreamRootKind, StreamSessionMapping,
     StreamSourceKind, StreamValuePathStep,
 };
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{ToolInvocationInput, ToolInvocationOutput};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult, IdempotencyKey,
@@ -156,6 +157,7 @@ fn publish_acceptance(
             durable_streams: None,
             prepared: None,
             durable_replayed: false,
+            joined_origin_observer: false,
         })
         .map_err(|_| WorkerExecutorError::runtime("invocation session ended before acceptance"))
 }
@@ -204,6 +206,7 @@ struct AcceptedInvocation {
     durable_streams: Option<StreamSession>,
     prepared: Option<golem_common::model::durable_stream::StreamSessionPreparedRecord>,
     durable_replayed: bool,
+    joined_origin_observer: bool,
 }
 
 struct TransportStreamId(u64);
@@ -649,16 +652,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             durable_streams: Some(streams.clone()),
                             prepared: Some(acceptance.prepared),
                             durable_replayed: acceptance.replayed,
+                            joined_origin_observer: acceptance.joined_origin_observer,
                         })
                         .map_err(|_| {
                             WorkerExecutorError::runtime(
                                 "invocation session ended before durable acceptance",
                             )
                         })?;
-                    streams
-                        .recover_nested_input_mappings()
-                        .await
-                        .map_err(WorkerExecutorError::runtime)?;
+                    if !acceptance.joined_origin_observer {
+                        streams
+                            .recover_nested_input_mappings()
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?;
+                    }
                     worker.await_enqueued_invocation(ik.clone()).await?
                 } else {
                     let (admission_tx, admission_rx) = tokio::sync::oneshot::channel();
@@ -1022,9 +1028,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         };
 
-        let durable_attachment = accepted.durable_streams.clone();
+        // Observation must never run attachment cleanup, even while the original is current.
+        let durable_attachment = accepted
+            .durable_streams
+            .clone()
+            .filter(|_| !accepted.joined_origin_observer);
         let native_tool = start.external_tool.is_some();
-        *response_lease.lock().unwrap() = durable_attachment
+        *response_lease.lock().unwrap() = accepted
+            .durable_streams
             .as_ref()
             .and_then(StreamSession::response_lease);
         until_response_closed(&outward, &forwarder_stopped, async {
@@ -1061,18 +1072,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         attachment_id: accepted
                             .prepared
                             .as_ref()
+                            .filter(|_| !accepted.joined_origin_observer)
                             .map(|prepared| prepared.attempt.attachment_id.0.into()),
                         attempt_id: accepted
                             .prepared
                             .as_ref()
+                            .filter(|_| !accepted.joined_origin_observer)
                             .map(|prepared| prepared.attempt.attempt_id.0.into()),
-                        epoch: accepted.prepared.as_ref().map(|_| 1).unwrap_or_default(),
+                        epoch: accepted.durable_streams.as_ref()
+                            .filter(|_| !accepted.joined_origin_observer)
+                            .map(StreamSession::attachment_epoch).unwrap_or_default(),
                         stream_mappings: accepted
-                            .prepared
+                            .durable_streams
                             .as_ref()
-                            .map(|prepared| {
-                                prepared
-                                    .stream_mappings
+                            .map(|streams| {
+                                streams
+                                    .materialized_mappings()
                                     .iter()
                                     .map(|mapping| {
                                         durable_stream_mapping_to_proto(
@@ -1091,6 +1106,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .as_ref()
                             .map(|prepared| prepared.attempt.expected_callee_fingerprint.0.into()),
                         method_name: start.method_name.clone(),
+                        joined_origin_observer: accepted.joined_origin_observer,
                         tool_name: start.external_tool.as_ref().map(|tool| tool.tool_name.clone()),
                         command_path: start.external_tool.as_ref().map(|tool| tool.command_path.clone()).unwrap_or_default(),
                     },
@@ -1104,6 +1120,86 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         tokio::select! {
             _ = acceptance_forwarded => {}
             _ = responses.closed() => return,
+        }
+        if accepted.joined_origin_observer {
+            let streams = accepted.durable_streams.as_ref().expect("durable observer");
+            // No controls, pumps, finalization, or detach are permitted on this path.
+            let observe = async {
+                let mut completed = early_output;
+                let result = loop {
+                    if let Some(result) = streams.persisted_result().await.map_err(WorkerExecutorError::runtime)? {
+                        break result;
+                    }
+                    if let Some(outcome) = streams.persisted_finished().await.map_err(WorkerExecutorError::runtime)? {
+                        // A result can be committed between the two reads. Its handles must
+                        // precede the terminal even when the invocation subsequently failed.
+                        if let Some(result) = streams.persisted_result().await.map_err(WorkerExecutorError::runtime)? {
+                            break result;
+                        }
+                        outcome.map_err(|details| WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned()))?;
+                        return Err(WorkerExecutorError::runtime("session finished successfully without a persisted result"));
+                    }
+                    if let Some(output) = completed.take() {
+                        if let Some(result) = streams.persisted_result().await.map_err(WorkerExecutorError::runtime)? {
+                            break result;
+                        }
+                        output?;
+                        return Err(WorkerExecutorError::runtime("invocation finished without a persisted result"));
+                    }
+                    tokio::select! {
+                        result = streams.wait_persisted_result() => { result.map_err(WorkerExecutorError::runtime)?; },
+                        outcome = streams.wait_persisted_finished() => { outcome.map_err(WorkerExecutorError::runtime)?.ok(); },
+                        output = &mut invocation => completed = Some(output),
+                    }
+                };
+                let new_stream_mappings = result.proto_mappings();
+                if responses.send(InvocationResponse {
+                    response: Some(invocation_response::Response::Result(InvocationSessionResult {
+                        result: Some(invocation_session_result::Result::MethodResult(result.value)),
+                        component_revision: accepted.component_revision.map(|revision| revision.get()),
+                        agent_id: start.agent_id.clone(),
+                        idempotency_key: start.idempotency_key.clone(),
+                        agent_fingerprint: start.expected_callee_fingerprint,
+                        new_stream_mappings,
+                        ..Default::default()
+                    })),
+                }).await.is_err() {
+                    return Ok::<_, WorkerExecutorError>(());
+                }
+                let outcome = streams.wait_persisted_finished().await
+                    .map_err(WorkerExecutorError::runtime)?;
+                match outcome {
+                    Ok(()) => {
+                        let _ = responses.send(InvocationResponse {
+                            response: Some(invocation_response::Response::Finished(InvocationSessionCompletion {
+                                outcome: Some(invocation_session_completion::Outcome::Success(golem::common::Empty {})),
+                            })),
+                        }).await;
+                    }
+                    Err(details) => send_worker_failure(&responses,
+                        WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned())).await,
+                }
+                Ok(())
+            };
+            let reject_controls = async {
+                let next = match early_inbound.take() {
+                    Some(request) => request,
+                    None => inbound.message().await,
+                };
+                match next {
+                    Ok(None) => std::future::pending::<()>().await,
+                    Ok(Some(_)) | Err(_) => {
+                        send_protocol_failure(&responses, "an invocation observer cannot send stream controls".into()).await;
+                    }
+                }
+            };
+            tokio::select! {
+                result = observe => if let Err(error) = result {
+                    send_worker_failure(&responses, error).await;
+                },
+                () = reject_controls => {},
+            }
+            return;
         }
         if accepted.durable_replayed
             && let Some(streams) = &accepted.durable_streams
@@ -1821,6 +1917,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 .0
                                 .into(),
                         ),
+                        joined_origin_observer: false,
                         method_name: match &acceptance.prepared.attempt.invocation.target {
                             PersistedInvocationTarget::AgentMethod { method_name } => Some(method_name.clone()),
                             PersistedInvocationTarget::ExternalTool { .. } => None,
@@ -2291,7 +2388,9 @@ pub(crate) fn build_durable_streaming_request(
                             recursive_value_path: path.to_vec(),
                         },
                         source_kind: StreamSourceKind::ExternalInlineInput,
-                        source_invocation: session_key.clone(),
+                        source_invocation: StreamRegistrationInvocation::Local(
+                            session_key.idempotency_key.clone(),
+                        ),
                         component_revision,
                         element_schema_fingerprint,
                         session_mapping: Some(session_mapping.clone()),
@@ -2353,6 +2452,40 @@ pub(crate) fn build_durable_streaming_request(
         ));
     }
 
+    if let Some(origin) = &request.origin_invocation {
+        let invalid = || WorkerExecutorError::invalid_request("invalid executor RPC origin");
+        let _: EnvironmentId = origin
+            .callee_environment_id
+            .ok_or_else(invalid)?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let _: AgentId = origin
+            .callee
+            .clone()
+            .ok_or_else(invalid)?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        let fingerprint: uuid::Uuid = origin.callee_fingerprint.ok_or_else(invalid)?.into();
+        let principal = request.principal.clone().ok_or_else(invalid)?;
+        let principal =
+            Principal::try_from(principal).map_err(WorkerExecutorError::invalid_request)?;
+        let parent: AgentId = request
+            .context
+            .as_ref()
+            .and_then(|context| context.parent.clone())
+            .ok_or_else(invalid)?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if fingerprint.is_nil()
+            || origin
+                .idempotency_key
+                .as_ref()
+                .is_none_or(|key| key.value.is_empty())
+            || !matches!(principal, Principal::Agent(agent) if agent.agent_id == parent)
+        {
+            return Err(invalid());
+        }
+    }
     // Outputs declared before execution use their normal result-leaf coordinates.
     if has_stdout {
         let early_output = ToolInvocationOutput {
@@ -2386,7 +2519,9 @@ pub(crate) fn build_durable_streaming_request(
                             recursive_value_path: path.to_vec(),
                         },
                         source_kind: StreamSourceKind::InvocationOutput,
-                        source_invocation: session_key.clone(),
+                        source_invocation: StreamRegistrationInvocation::Local(
+                            session_key.idempotency_key.clone(),
+                        ),
                         component_revision,
                         element_schema_fingerprint: schema_fingerprint_v1(
                             early_output.graph(),
@@ -3255,7 +3390,9 @@ mod freshness_tests {
         AgentMode, AgentTypeName, InvocationFreshnessDisposition, Principal,
     };
     use golem_common::model::invocation_context::InvocationContextStack;
-    use golem_common::model::{AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey};
+    use golem_common::model::{
+        AgentFingerprint, AgentId, AgentInvocation, IdempotencyKey, OplogIndex,
+    };
     use golem_common::schema::SchemaValue;
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
@@ -3654,6 +3791,7 @@ mod freshness_tests {
                 producer_environment_id: environment_id,
                 producer: callee.clone(),
                 expected_producer_fingerprint: callee_fingerprint,
+                producer_generation: OplogIndex::NONE,
                 source_invocation: StreamInvocationId {
                     callee_environment_id: environment_id,
                     callee,
@@ -3723,6 +3861,307 @@ mod freshness_tests {
                 _ => unreachable!(),
             }
             assert_ne!(descriptor(&changed), original, "execution field {change}");
+        }
+    }
+
+    #[test]
+    fn durable_rpc_origin_is_persisted_and_requires_an_agent_caller() {
+        let (mut request, metadata, invocation) = builder_fixture();
+        let caller: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
+        request.principal = Some(
+            Principal::Agent(golem_common::model::agent::AgentPrincipal {
+                agent_id: caller.clone(),
+            })
+            .into(),
+        );
+        request.context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+            parent: Some(caller.into()),
+            ..Default::default()
+        });
+        let origin = golem_api_grpc::proto::golem::worker::StreamInvocationIdentity {
+            callee_environment_id: request.environment_id,
+            callee: request.agent_id.clone(),
+            callee_fingerprint: Some(uuid::Uuid::from_u128(91).into()),
+            idempotency_key: Some(IdempotencyKey::new("authoring-invocation".into()).into()),
+        };
+        request.origin_invocation = Some(origin.clone());
+        let build = |request: &InvocationStart| {
+            let (accepted, _) = tokio::sync::oneshot::channel();
+            build_durable_streaming_request(
+                request,
+                &metadata,
+                ComponentRevision::INITIAL,
+                AgentFingerprint(uuid::Uuid::from_u128(3)),
+                invocation.clone(),
+                1,
+                accepted,
+                8,
+            )
+        };
+        let persisted = build(&request).unwrap().attempt.invocation;
+        let (bytes, _): (Vec<u8>, Option<Vec<(String, String)>>) =
+            golem_common::serialization::deserialize(&persisted.execution_config).unwrap();
+        assert_eq!(
+            InvocationStart::decode(bytes.as_slice())
+                .unwrap()
+                .origin_invocation,
+            Some(origin)
+        );
+        let mut other = request.clone();
+        other.origin_invocation.as_mut().unwrap().idempotency_key =
+            Some(IdempotencyKey::new("different-invocation".into()).into());
+        assert_ne!(build(&other).unwrap().attempt.invocation, persisted);
+        for mutation in 0..9 {
+            let mut invalid = request.clone();
+            match mutation {
+                0 => invalid.principal = None,
+                1 => invalid.principal = Some(Principal::anonymous().into()),
+                2 => invalid.context.as_mut().unwrap().parent = None,
+                3 => {
+                    invalid
+                        .origin_invocation
+                        .as_mut()
+                        .unwrap()
+                        .callee_environment_id = None
+                }
+                4 => invalid.origin_invocation.as_mut().unwrap().callee = None,
+                5 => {
+                    invalid
+                        .origin_invocation
+                        .as_mut()
+                        .unwrap()
+                        .callee_fingerprint = None
+                }
+                6 => {
+                    invalid
+                        .origin_invocation
+                        .as_mut()
+                        .unwrap()
+                        .callee_fingerprint = Some(uuid::Uuid::nil().into())
+                }
+                7 => invalid.origin_invocation.as_mut().unwrap().idempotency_key = None,
+                8 => invalid
+                    .context
+                    .as_mut()
+                    .unwrap()
+                    .parent
+                    .as_mut()
+                    .unwrap()
+                    .name
+                    .push_str("-different"),
+                _ => unreachable!(),
+            }
+            assert!(
+                build(&invalid).is_err(),
+                "invalid origin mutation {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn same_origin_stream_join_preserves_execution_and_authority_checks() {
+        use crate::worker::same_origin_stream_invocation;
+        use golem_common::model::card::{
+            AgentPermissionMonomorphizationContext, CardId, PolymorphicCard, StoredCard,
+            agent_delegation_surface_from_wallet, agent_effective_surface_from_wallet,
+            default_agent_initial_permission_grants, recipient::RecipientPattern,
+        };
+        use golem_service_base::model::auth::AuthCtx;
+
+        let authority_for = |name: &str| {
+            let context = AgentPermissionMonomorphizationContext {
+                account: golem_common::model::account::AccountEmail::new("owner@example.com"),
+                application: "application".parse().unwrap(),
+                environment: "environment".parse().unwrap(),
+                component: golem_common::model::component::ComponentName("component".into()),
+                agent_name: name.into(),
+                owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
+                    golem_common::model::agent::AgentTypeName("Agent".into()),
+                ),
+            };
+            let card = StoredCard::Polymorphic(PolymorphicCard {
+                card_id: CardId(uuid::Uuid::from_u128(100)),
+                parent_ids: vec![],
+                lower_positive: default_agent_initial_permission_grants(RecipientPattern::Any),
+                lower_negative: vec![],
+                upper_positive: vec![],
+                upper_negative: vec![],
+                created_at: chrono::Utc::now(),
+                expires_at: None,
+                system_card: true,
+            });
+            AuthCtx::agent_with_permission_surfaces(
+                golem_common::model::account::AccountId(uuid::Uuid::from_u128(101)),
+                context.account.clone(),
+                agent_effective_surface_from_wallet(&context, [&card]),
+                agent_delegation_surface_from_wallet(&context, [&card]),
+            )
+        };
+        let (mut request, metadata, invocation) = builder_fixture();
+        let caller: AgentId = request.agent_id.clone().unwrap().try_into().unwrap();
+        request.principal = Some(
+            Principal::Agent(golem_common::model::agent::AgentPrincipal {
+                agent_id: caller.clone(),
+            })
+            .into(),
+        );
+        request.auth_ctx = Some(authority_for(&caller.agent_id).into());
+        request.context = Some(golem_api_grpc::proto::golem::worker::InvocationContext {
+            parent: Some(caller.into()),
+            ..Default::default()
+        });
+        request.origin_invocation = Some(
+            golem_api_grpc::proto::golem::worker::StreamInvocationIdentity {
+                callee_environment_id: request.environment_id,
+                callee: request.agent_id.clone(),
+                callee_fingerprint: Some(uuid::Uuid::from_u128(91).into()),
+                idempotency_key: Some(IdempotencyKey::new("authoring-invocation".into()).into()),
+            },
+        );
+        request.durable_input_mappings = [
+            (101, SchemaType::u64()),
+            (7, SchemaType::string()),
+            (55, SchemaType::bool()),
+        ]
+        .into_iter()
+        .map(|(id, ty)| {
+            durable_stream_mapping_to_proto(
+                &foreign_mapping(
+                    id,
+                    schema_fingerprint_v1(&SchemaGraph::empty(), Some(&ty)).unwrap(),
+                    &request,
+                ),
+                None,
+            )
+        })
+        .collect();
+        let build = |request: &InvocationStart| {
+            let (accepted, _) = tokio::sync::oneshot::channel();
+            let mut built = build_durable_streaming_request(
+                request,
+                &metadata,
+                ComponentRevision::INITIAL,
+                AgentFingerprint(uuid::Uuid::from_u128(3)),
+                invocation.clone(),
+                1,
+                accepted,
+                8,
+            )
+            .unwrap();
+            built.attempt.invocation.stream_handles = built
+                .foreign_mappings
+                .iter()
+                .map(|mapping| mapping.handle.clone())
+                .collect();
+            built.attempt
+        };
+        let original = build(&request);
+        let mut fork = request.clone();
+        let mut parent = fork.context.as_ref().unwrap().parent.clone().unwrap();
+        parent.name.push_str("-fork");
+        fork.context.as_mut().unwrap().parent = Some(parent.clone());
+        fork.auth_ctx = Some(authority_for(&parent.name).into());
+        fork.principal = Some(
+            Principal::Agent(golem_common::model::agent::AgentPrincipal {
+                agent_id: parent.clone().try_into().unwrap(),
+            })
+            .into(),
+        );
+        fork.attempt_id = Some(uuid::Uuid::new_v4().into());
+        for mapping in &mut fork.durable_input_mappings {
+            let handle = mapping.handle.as_mut().unwrap();
+            handle.producer = Some(parent.clone());
+            handle.expected_producer_fingerprint = Some(uuid::Uuid::from_u128(92).into());
+            handle.stream_id = Some(uuid::Uuid::new_v4().into());
+        }
+        let fork_attempt = build(&fork);
+        assert_ne!(original, fork_attempt);
+        assert!(same_origin_stream_invocation(&original, &fork_attempt));
+        assert!(same_origin_stream_invocation(&fork_attempt, &original));
+        assert!(same_origin_stream_invocation(&original, &original));
+        for change in 0..4 {
+            let mut changed = fork.clone();
+            let AuthCtx::Agent(mut authority) = authority_for(&parent.name) else {
+                unreachable!()
+            };
+            match change {
+                0 => {
+                    authority.account_id =
+                        golem_common::model::account::AccountId(uuid::Uuid::from_u128(102))
+                }
+                1 => {
+                    authority.effective_surface.lower[0].positive.pop();
+                }
+                2 => {
+                    authority.delegation_surface.as_mut().unwrap().cards[0]
+                        .lower_positive
+                        .pop();
+                }
+                3 => {
+                    authority.effective_surface.source_card_ids.clear();
+                }
+                _ => unreachable!(),
+            }
+            changed.auth_ctx = Some(AuthCtx::Agent(authority).into());
+            assert!(
+                !same_origin_stream_invocation(&original, &build(&changed)),
+                "changed authority field {change}"
+            );
+        }
+        for change in 0..7 {
+            let mut changed = fork.clone();
+            match change {
+                0 => changed.origin_invocation = None,
+                1 => {
+                    changed.origin_invocation.as_mut().unwrap().idempotency_key =
+                        Some(IdempotencyKey::new("other".into()).into())
+                }
+                2 => {
+                    changed
+                        .context
+                        .as_mut()
+                        .unwrap()
+                        .env
+                        .insert("changed".into(), "value".into());
+                }
+                3 => changed.config.push(Default::default()),
+                4 => changed.scope_card = Some(Default::default()),
+                5 => changed.auth_ctx = None,
+                6 => {
+                    changed
+                        .origin_invocation
+                        .as_mut()
+                        .unwrap()
+                        .callee_fingerprint = Some(uuid::Uuid::from_u128(93).into())
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                !same_origin_stream_invocation(&original, &build(&changed)),
+                "changed execution field {change}"
+            );
+        }
+        for change in 0..4 {
+            let mut changed = fork_attempt.clone();
+            match change {
+                0 => changed.invocation.invocation_value.push(1),
+                1 => {
+                    changed.invocation.stream_handles.pop();
+                }
+                2 => {
+                    changed.invocation.stream_handles[0].element_schema_fingerprint =
+                        changed.invocation.stream_handles[1].element_schema_fingerprint
+                }
+                3 => {
+                    changed.invocation.target_component_revision =
+                        ComponentRevision::INITIAL.next().unwrap()
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                !same_origin_stream_invocation(&original, &changed),
+                "changed descriptor field {change}"
+            );
         }
     }
 

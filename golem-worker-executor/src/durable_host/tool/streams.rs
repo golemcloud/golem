@@ -24,7 +24,9 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::durable_stream::{SessionStreamRole, StreamSessionKey};
+use golem_common::model::durable_stream::{
+    SessionStreamRole, StreamRegistrationInvocation, StreamSessionKey,
+};
 use golem_common::model::entity::EntityInvocationScope;
 use golem_common::model::oplog::payload::HostResponseEntityInvocation;
 use golem_common::schema::TypedSchemaValue;
@@ -85,7 +87,7 @@ pub(super) async fn session<Ctx: WorkerCtx>(
     Ok(StreamSession::new(
         worker.durable_stream_producer().await?,
         worker.oplog(),
-        key,
+        StreamRegistrationInvocation::Local(key.idempotency_key),
         [],
     )
     .with_consumer_invocation(consumer)
@@ -105,13 +107,12 @@ pub(super) async fn materialize_input(
         .materialize_agent_input(input.value(), input.graph(), &input.graph().root, revision)
         .await
         .map_err(WorkerExecutorError::runtime)?;
-    let handles = materialized
-        .mappings
-        .into_iter()
-        .map(|mapping| mapping.handle)
-        .collect::<Vec<_>>();
     let value = streams
-        .decode_initial(materialized.value, &handles, SessionStreamRole::Input)
+        .decode_initial(
+            materialized.value,
+            &materialized.mappings,
+            SessionStreamRole::Input,
+        )
         .await
         .map_err(WorkerExecutorError::runtime)?;
     Ok(TypedSchemaValue::new(input.graph().clone(), value))

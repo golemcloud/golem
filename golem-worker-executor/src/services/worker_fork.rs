@@ -12,15 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod admission;
+pub(crate) mod export;
+pub mod lineage;
+mod payload;
+pub(crate) mod publication;
+pub mod stream_cut;
+
 use super::agent_webhooks::AgentWebhooksService;
 use super::environment_state::EnvironmentStateService;
 use super::file_loader::FileLoader;
 use super::{HasAgentWebhooksService, HasEnvironmentStateService};
+use crate::durable_host::durable_stream::{DurableStreamStore, StreamStoreError};
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::metrics::workers::record_worker_call;
+use crate::model::ExecutionStatus;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogServiceOps};
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -40,31 +49,32 @@ use crate::services::{HasRdbmsService, HasWorkerForkService, rdbms};
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    ForkStreamSlotRequest, ForkStreamSlotResponse,
+};
 use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::base_model::regions::DeletedRegionsBuilder;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
+use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::host_functions::GolemApiFork;
-use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestNoInput, HostResponse,
-    HostResponseGolemApiFork, OplogEntry, OplogIndex, OplogIndexRange,
-};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogIndexRange};
 use golem_common::model::{AgentFingerprint, AgentMetadata, Timestamp};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
+use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::runtime::Handle;
 use uuid::Uuid;
 use wasmtime_wasi_http::HttpConnectionPool;
 
-mod payload;
-
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
+    async fn fork_stream_slot(&self, request: ForkStreamSlotRequest) -> ForkStreamSlotResponse;
     // TODO: this should be restricted to targets within the same component
     async fn fork(
         &self,
@@ -483,12 +493,14 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let owned_target_agent_id = OwnedAgentId::new(environment_id, target_agent_id);
 
-        let target_metadata = self.worker_service.get(&owned_target_agent_id).await?;
-
-        // We allow forking only if the target worker does not exist
-        if target_metadata.is_some() {
+        if source_agent_id == target_agent_id {
             return Err(WorkerExecutorError::worker_already_exists(
                 target_agent_id.clone(),
+            ));
+        }
+        if source_agent_id.component_id != target_agent_id.component_id {
+            return Err(WorkerExecutorError::invalid_request(
+                "Source and target must belong to the same component",
             ));
         }
 
@@ -521,14 +533,23 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         source_agent_id: &OwnedAgentId,
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
-    ) -> Result<(Arc<dyn Oplog>, OwnedAgentId, Uuid), WorkerExecutorError> {
+        source_fingerprint: AgentFingerprint,
+        stage_id: Uuid,
+        request_hash: [u8; 32],
+        selected: Option<(
+            golem_common::model::durable_stream::StreamId,
+            Option<golem_common::model::durable_stream::StreamOffset>,
+        )>,
+        max_copied_bytes: Option<u64>,
+        export: Option<&export::Candidate>,
+    ) -> Result<(Arc<dyn Oplog>, u64), WorkerExecutorError> {
         record_worker_call("fork");
 
         tracing::debug!(
             "Copying source oplog of worker {fork_account_id}/{source_agent_id} to {target_agent_id} up to index {oplog_index_cut_off}"
         );
 
-        let _source_lifecycle = self
+        let mut source_lifecycle = self
             .oplog_service
             .lock_lifecycle(&source_agent_id.agent_id)
             .await;
@@ -551,9 +572,18 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .ok_or_else(|| {
                 WorkerExecutorError::worker_not_found(owned_source_agent_id.agent_id())
             })?;
-
         let initial_source_worker_metadata = source.initial_worker_metadata;
+        if initial_source_worker_metadata.fingerprint != source_fingerprint {
+            return Err(WorkerExecutorError::invalid_request(
+                "Fork source was recreated",
+            ));
+        }
         let agent_mode = initial_source_worker_metadata.agent_mode;
+        if agent_mode != AgentMode::Durable {
+            return Err(WorkerExecutorError::invalid_request(
+                "Only durable agents can be forked",
+            ));
+        }
         let source_status = calculate_last_known_status_with_checkpoint(
             self,
             &owned_source_agent_id,
@@ -565,6 +595,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_source_agent_id.agent_id()))?;
 
         let instance_id = Uuid::new_v4();
+        let source_oplog_metadata = initial_source_worker_metadata.clone();
 
         // Use the source worker's `created_by` (the component owner) rather
         // than `fork_account_id` (the fork caller). This ensures the forked
@@ -588,6 +619,30 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             agent_mode,
         };
 
+        let source_oplog = self
+            .oplog_service
+            .open(
+                &mut source_lifecycle,
+                &owned_source_agent_id,
+                agent_mode,
+                None,
+                source_oplog_metadata,
+                read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(
+                    arc_swap::ArcSwap::from_pointee(source_status),
+                )),
+                read_only_lock::std::ReadOnlyLock::new(Arc::new(std::sync::RwLock::new(
+                    ExecutionStatus::Suspended {
+                        agent_mode,
+                        timestamp: Timestamp::now_utc(),
+                    },
+                ))),
+            )
+            .await;
+        let source_oplog = Ctx::wrap_oplog(
+            owned_source_agent_id.clone(),
+            source_oplog,
+            self.extra_deps.clone(),
+        );
         let read_source = |index| {
             let source = &owned_source_agent_id;
             async move {
@@ -599,27 +654,32 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             }
         };
 
-        // The fork copies the source oplog up to and including `oplog_index_cut_off`; no paired
-        // durable construct may span that cut. A durable call whose `Start` is copied but whose
-        // terminal is not would replay in the forked worker as an incomplete call, and an atomic
-        // region or remote transaction cut in half would lose its outcome. Reject such cut points
-        // instead of silently degrading to incomplete-call recovery semantics.
-        let source_oplog_end = self
+        // Copy the inclusive prefix. Ordinary calls recover from that prefix, even if their
+        // terminal or delivery marker is absent. Atomic and transaction outcomes remain paired.
+        let committed_end = self
             .oplog_service
             .get_last_index(&owned_source_agent_id, agent_mode)
             .await;
-        let source_skipped_regions = source_status.skipped_regions;
-        if let Some(stream_index) = crate::worker::cut_point::find_stream_history_in_range(
-            read_source,
-            OplogIndex::INITIAL,
-            oplog_index_cut_off,
+        // Debug playback exposes only its target prefix, even when storage contains later entries.
+        let readable_end = committed_end.min(source_oplog.current_oplog_index().await);
+        let source_oplog_end = export.map_or(readable_end, |candidate| candidate.horizon);
+        if source_oplog_end > readable_end {
+            return Err(WorkerExecutorError::invalid_request(
+                "Fork source horizon is unavailable",
+            ));
+        }
+        if oplog_index_cut_off > source_oplog_end {
+            return Err(WorkerExecutorError::invalid_request(
+                "Fork cut exceeds committed source history",
+            ));
+        }
+        let source_skipped_regions = crate::worker::status::skipped_regions_at(
+            self,
+            &owned_source_agent_id,
+            source_oplog_end,
         )
         .await
-        {
-            return Err(WorkerExecutorError::invalid_request(format!(
-                "Cannot fork worker at oplog index {oplog_index_cut_off}: copied durable stream history exists at oplog index {stream_index}"
-            )));
-        }
+        .map_err(WorkerExecutorError::runtime)?;
         if let Some(spanning) = crate::worker::cut_point::find_construct_spanning_cut_point(
             read_source,
             oplog_index_cut_off,
@@ -633,7 +693,29 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             )));
         }
 
+        let mut fork_cut = DurableStreamStore::prepare_fork_cut(
+            source_oplog.as_ref(),
+            (&owned_source_agent_id, source_fingerprint),
+            (&owned_target_agent_id, AgentFingerprint(instance_id)),
+            source_oplog_end,
+            oplog_index_cut_off,
+            selected,
+            request_hash,
+            false,
+        )
+        .await
+        .map_err(|error| match error {
+            StreamStoreError::InvalidOffset(_) | StreamStoreError::UnknownStream(_) => {
+                WorkerExecutorError::invalid_request(error.to_string())
+            }
+            _ => WorkerExecutorError::runtime(error.to_string()),
+        })?;
+        fork_cut.export = export.map(|candidate| candidate.export.clone());
+
         let initial_oplog_entry = read_source(OplogIndex::INITIAL).await;
+        let initial_size = golem_common::serialization::serialize(&initial_oplog_entry)
+            .map_err(WorkerExecutorError::runtime)?
+            .len() as u64;
 
         // Update the oplog initial entry with the new worker
         let target_initial_oplog_entry =
@@ -641,7 +723,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 WorkerExecutorError::unknown("Failed to update worker id in oplog entry"),
             )?;
 
-        let stage_id = Uuid::new_v4();
         let new_oplog = self
             .oplog_service
             .create_staged(
@@ -656,12 +737,13 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let oplog_range = OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);
 
-        // Track pending invocations and updates while copying, so we can cancel
-        // any that remain unmatched. This prevents the forked worker from inheriting
-        // and re-executing pending work from the source worker.
-        let mut pending_invocation_keys: Vec<IdempotencyKey> = Vec::new();
+        // Track unmatched work so the fork can cancel unrelated queued invocations and
+        // updates. Export forks retain their selected invocation and its constructor.
+        let mut pending_invocation_keys: Vec<(IdempotencyKey, OplogIndex)> = Vec::new();
         let mut pending_update_revisions: Vec<ComponentRevision> = Vec::new();
         let mut deleted_regions_builder = DeletedRegionsBuilder::new();
+        let mut copied_bytes = initial_size;
+        let external_payload_bytes = Arc::new(AtomicU64::new(0));
 
         for oplog_index in oplog_range {
             let mut entry = rewrite_forked_oplog_entry(
@@ -669,12 +751,23 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 &owned_source_agent_id.agent_id,
                 &owned_target_agent_id.agent_id,
             );
-            payload::copy_entry_payloads(&mut entry, |payload_id, md5_hash| async {
-                let bytes = self
-                    .oplog_service
-                    .download_raw_payload(&owned_source_agent_id, agent_mode, payload_id, md5_hash)
-                    .await?;
-                new_oplog.upload_raw_payload(bytes).await
+            copied_bytes = copied_bytes.saturating_add(
+                golem_common::serialization::serialize(&entry)
+                    .map_err(WorkerExecutorError::runtime)?
+                    .len() as u64,
+            );
+            payload::copy_entry_payloads(&mut entry, |payload_id, md5_hash| {
+                let new_oplog = &new_oplog;
+                let source = &owned_source_agent_id;
+                let external_payload_bytes = external_payload_bytes.clone();
+                async move {
+                    let bytes = self
+                        .oplog_service
+                        .download_raw_payload(source, agent_mode, payload_id, md5_hash)
+                        .await?;
+                    external_payload_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                    new_oplog.upload_raw_payload(bytes).await
+                }
             })
             .await
             .map_err(|error| {
@@ -682,6 +775,33 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     "Failed copying fork payload at oplog index {oplog_index}: {error}"
                 ))
             })?;
+            let counted_bytes =
+                copied_bytes.saturating_add(external_payload_bytes.load(Ordering::Relaxed));
+            if max_copied_bytes.is_some_and(|limit| counted_bytes > limit) {
+                return Err(WorkerExecutorError::invalid_request(format!(
+                    "fork copied bytes {counted_bytes} exceed limit"
+                )));
+            }
+            // The append-time session fold needs a decoded value even when its durable bytes
+            // remain external. Read the new target reference, never trust the source's cache.
+            if let OplogEntry::StreamSession { record, .. } = &mut entry
+                && matches!(
+                    record,
+                    golem_common::model::oplog::OplogPayload::External { cached: None, .. }
+                )
+            {
+                let value = new_oplog
+                    .download_payload(record.clone())
+                    .await
+                    .map_err(|error| {
+                        WorkerExecutorError::runtime(format!(
+                            "Failed hydrating fork session at oplog index {oplog_index}: {error}"
+                        ))
+                    })?;
+                if let golem_common::model::oplog::OplogPayload::External { cached, .. } = record {
+                    *cached = Some(Arc::new(value));
+                }
+            }
             new_oplog.add(entry.clone()).await;
 
             if let OplogEntry::Revert { dropped_region, .. } = &entry {
@@ -694,17 +814,17 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 OplogEntry::PendingAgentInvocation {
                     idempotency_key, ..
                 } => {
-                    pending_invocation_keys.push(idempotency_key.clone());
+                    pending_invocation_keys.push((idempotency_key.clone(), oplog_index));
                 }
                 OplogEntry::AgentInvocationStarted {
                     idempotency_key, ..
                 } => {
-                    pending_invocation_keys.retain(|key| key != idempotency_key);
+                    pending_invocation_keys.retain(|(key, _)| key != idempotency_key);
                 }
                 OplogEntry::CancelPendingInvocation {
                     idempotency_key, ..
                 } => {
-                    pending_invocation_keys.retain(|key| key != idempotency_key);
+                    pending_invocation_keys.retain(|(key, _)| key != idempotency_key);
                 }
                 _ => {}
             }
@@ -731,10 +851,38 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             }
         }
 
-        // Append cancellation entries for any remaining pending invocations and updates
+        // The marker precedes every target-authored cancellation or synthetic result.
         let now = Timestamp::now_utc();
+        let record = new_oplog
+            .upload_payload(&StreamSessionRecord::ForkCut(fork_cut.clone()))
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        new_oplog
+            .add(OplogEntry::StreamSession {
+                timestamp: now,
+                entity_parent_start_index: None,
+                record,
+            })
+            .await;
 
-        for idempotency_key in pending_invocation_keys {
+        for (idempotency_key, pending_index) in pending_invocation_keys {
+            if let Some(candidate) = export {
+                if idempotency_key.value == candidate.export.session {
+                    continue;
+                }
+                if let OplogEntry::PendingAgentInvocation { payload, .. } =
+                    read_source(pending_index).await
+                    && matches!(
+                        self.oplog_service
+                            .download_payload(&owned_source_agent_id, agent_mode, payload)
+                            .await
+                            .map_err(WorkerExecutorError::runtime)?,
+                        golem_common::model::AgentInvocationPayload::AgentInitialization { .. }
+                    )
+                {
+                    continue;
+                }
+            }
             tracing::debug!("Cancelling pending invocation {idempotency_key} in forked worker");
             new_oplog
                 .add(OplogEntry::CancelPendingInvocation {
@@ -757,46 +905,159 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 .await;
         }
 
-        Ok((new_oplog, owned_target_agent_id, stage_id))
+        if let Some(candidate) = export
+            && (candidate.initial.is_some() || candidate.export.closed)
+        {
+            let selected = fork_cut.selected_stream_id.ok_or_else(|| {
+                WorkerExecutorError::runtime("Fork selected input registration is missing")
+            })?;
+            let producer = DurableStreamStore::load(
+                new_oplog.clone(),
+                environment_id,
+                target_agent_id.clone(),
+                AgentFingerprint(instance_id),
+                None,
+            )
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            let mapping = producer
+                .materialize_binding(&golem_common::model::durable_stream::StreamBindingRecord {
+                    transport_stream_id: 0,
+                    source: golem_common::model::durable_stream::StreamRecordReference::Local(
+                        selected,
+                    ),
+                    role: golem_common::model::durable_stream::SessionStreamRole::Input,
+                })
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            let result = producer
+                .append_external_input(
+                    None,
+                    &mapping.handle.source_invocation,
+                    mapping.handle.stream_id,
+                    candidate.initial.clone(),
+                    candidate.export.closed,
+                    None,
+                )
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            if !matches!(
+                result,
+                crate::durable_host::durable_stream::ExternalAppendOutcome::Accepted(_)
+            ) {
+                return Err(WorkerExecutorError::runtime(
+                    "Fork initial input was not accepted",
+                ));
+            }
+        }
+        drop(source_oplog);
+        drop(source_lifecycle);
+        Ok((
+            new_oplog,
+            copied_bytes.saturating_add(external_payload_bytes.load(Ordering::Relaxed)),
+        ))
     }
 
-    async fn publish_fork_stage(
+    async fn perform_fork(
         &self,
-        oplog: Arc<dyn Oplog>,
-        target: &OwnedAgentId,
-        stage_id: Uuid,
+        fork_account_id: AccountId,
+        source: &OwnedAgentId,
+        target_agent_id: &AgentId,
+        cut: OplogIndex,
+        guest_result: Option<(Option<OplogIndex>, Uuid)>,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError> {
-        oplog.commit(CommitLevel::Always).await;
-        let last = oplog.current_oplog_index().await;
-        drop(oplog);
-
-        let target_lifecycle = self.oplog_service.lock_lifecycle(&target.agent_id).await;
-        let result = self
-            .oplog_service
-            .publish_staged(target, AgentMode::Durable, stage_id, last)
+        self.validate_worker_forking(
+            source.environment_id,
+            &source.agent_id,
+            target_agent_id,
+            cut,
+        )
+        .await?;
+        let source_metadata = self
+            .worker_service
+            .get(source)
+            .await?
+            .ok_or_else(|| WorkerExecutorError::worker_not_found(source.agent_id.clone()))?
+            .initial_worker_metadata;
+        let hash =
+            publication::request_hash(source, source_metadata.fingerprint, cut, None, guest_result)
+                .map_err(WorkerExecutorError::runtime)?;
+        let target = OwnedAgentId::new(source.environment_id, target_agent_id);
+        if !publication::existing_fork(self.oplog_service.as_ref(), &target, cut, hash).await? {
+            let stage_id = Uuid::new_v4();
+            let result = async {
+                let (oplog, _) = self
+                    .copy_source_oplog(
+                        fork_account_id,
+                        source,
+                        target_agent_id,
+                        cut,
+                        source_metadata.fingerprint,
+                        stage_id,
+                        hash,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await?;
+                if let Some((scope, phantom)) = guest_result {
+                    publication::write_guest_result(oplog.as_ref(), scope, phantom).await?;
+                }
+                oplog.commit(CommitLevel::Always).await;
+                let last = oplog.current_oplog_index().await;
+                drop(oplog);
+                let target_lifecycle = self.oplog_service.lock_lifecycle(&target.agent_id).await;
+                let publication = self
+                    .oplog_service
+                    .publish_staged(&target, AgentMode::Durable, stage_id, last)
+                    .await;
+                let result = match publication {
+                    Ok(true) => Ok(()),
+                    outcome => {
+                        if publication::existing_fork(
+                            self.oplog_service.as_ref(),
+                            &target,
+                            cut,
+                            hash,
+                        )
+                        .await?
+                        {
+                            Ok(())
+                        } else {
+                            Err(WorkerExecutorError::runtime(outcome.err().unwrap_or_else(
+                                || "Fork publication lost its target before reconciliation".into(),
+                            )))
+                        }
+                    }
+                };
+                drop(target_lifecycle);
+                result
+            }
             .await;
-        drop(target_lifecycle);
-
-        let cleanup = self
-            .oplog_service
-            .discard_staged(target, AgentMode::Durable, stage_id)
-            .await;
-        if let Err(error) = cleanup {
-            tracing::warn!(
-                agent_id = %target,
-                stage_id = %stage_id,
-                error = %error,
-                "Failed to discard hidden fork stage"
-            );
+            // Each attempt has its own writer. Cleanup must never remove the winner's payloads.
+            let cleanup = self
+                .oplog_service
+                .discard_staged(&target, AgentMode::Durable, stage_id)
+                .await;
+            if let Err(error) = cleanup {
+                tracing::warn!(
+                    agent_id = %target,
+                    stage_id = %stage_id,
+                    error = %error,
+                    "Failed to discard hidden fork stage"
+                );
+            }
+            result?;
         }
-
-        match result {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(WorkerExecutorError::worker_already_exists(
-                target.agent_id.clone(),
-            )),
-            Err(error) => Err(WorkerExecutorError::runtime(error)),
-        }
+        // Resume can fail after publication, so retries reconcile the immutable marker and
+        // retry this operation without replacing the fork or appending a second synthetic result.
+        self.worker_proxy
+            .resume(target_agent_id, true, auth_ctx)
+            .await
+            .map_err(|error| {
+                WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), error.into())
+            })
     }
 
     pub fn update_agent_id(
@@ -904,6 +1165,10 @@ fn rewrite_forked_oplog_entry(
 
 #[async_trait]
 impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
+    async fn fork_stream_slot(&self, request: ForkStreamSlotRequest) -> ForkStreamSlotResponse {
+        export::fork(self, request).await
+    }
+
     async fn fork(
         &self,
         fork_account_id: AccountId,
@@ -912,29 +1177,15 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         oplog_index_cut_off: OplogIndex,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError> {
-        let (new_oplog, target, stage_id) = self
-            .copy_source_oplog(
-                fork_account_id,
-                source_agent_id,
-                target_agent_id,
-                oplog_index_cut_off,
-            )
-            .await?;
-        self.publish_fork_stage(new_oplog, &target, stage_id)
-            .await?;
-
-        // We go through worker proxy to resume the worker
-        // as we need to make sure as it may live in another worker executor,
-        // depending on sharding.
-        // This will replay until the fork point in the forked worker
-        self.worker_proxy
-            .resume(target_agent_id, true, auth_ctx)
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), err.into())
-            })?;
-
-        Ok(())
+        self.perform_fork(
+            fork_account_id,
+            source_agent_id,
+            target_agent_id,
+            oplog_index_cut_off,
+            None,
+            auth_ctx,
+        )
+        .await
     }
 
     async fn fork_and_write_fork_result(
@@ -947,85 +1198,15 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
         forked_phantom_id: Uuid,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerExecutorError> {
-        let (new_oplog, target, stage_id) = self
-            .copy_source_oplog(
-                fork_account_id,
-                source_agent_id,
-                target_agent_id,
-                oplog_index_cut_off,
-            )
-            .await?;
-
-        // The source worker's `fork` call writes a `Start`/`End` pair persisting
-        // `ForkResult::Original`; here we write an alternative pair carrying `ForkResult::Forked`
-        // into the new oplog so the forked worker replays it and returns `ForkResult::Forked`.
-        // If the copied cutoff is the source call's outer `WriteRemote` scope `Start`, complete
-        // that scope after the synthetic child call so the forked worker can replay the same shape
-        // as the source call. This is a synthetic write into another worker's oplog, not an
-        // in-context host call, so it uses the atomic-pair primitive directly (no `DurableCallSession`);
-        // atomicity matters because a split `Start`/`End` would corrupt the forked worker's replay.
-        let request = HostRequest::NoInput(HostRequestNoInput {});
-        let response = HostResponse::GolemApiFork(HostResponseGolemApiFork {
-            forked_phantom_id,
-            result: Ok(golem_common::model::ForkResult::Forked),
-        });
-        let request_payload = new_oplog.upload_payload(&request).await.map_err(|err| {
-            WorkerExecutorError::runtime(format!(
-                "failed to serialize and store durable function invocation: {err}"
-            ))
-        })?;
-        let response_payload = new_oplog.upload_payload(&response).await.map_err(|err| {
-            WorkerExecutorError::runtime(format!(
-                "failed to serialize and store durable function invocation: {err}"
-            ))
-        })?;
-        let now = Timestamp::now_utc();
-        new_oplog
-            .add_pair(
-                OplogEntry::Start {
-                    timestamp: now,
-                    parent_start_index: copied_scope_start,
-                    function_name: GolemApiFork::HOST_FUNCTION_NAME,
-                    invocation_id: None,
-                    observational_owner: None,
-                    request: Some(request_payload),
-                    durable_function_type: DurableFunctionType::WriteRemote,
-                },
-                Box::new(move |start_index| OplogEntry::End {
-                    timestamp: now,
-                    start_index,
-                    response: Some(response_payload),
-                    forced_commit: false,
-                }),
-            )
-            .await;
-
-        if let Some(scope_start) = copied_scope_start {
-            new_oplog
-                .add(OplogEntry::End {
-                    timestamp: now,
-                    start_index: scope_start,
-                    response: None,
-                    forced_commit: true,
-                })
-                .await;
-        }
-
-        self.publish_fork_stage(new_oplog, &target, stage_id)
-            .await?;
-
-        // We go through worker proxy to resume the worker
-        // as we need to make sure as it may live in another worker executor,
-        // depending on sharding.
-        // This will replay until the fork point in the forked worker
-        self.worker_proxy
-            .resume(target_agent_id, true, auth_ctx)
-            .await
-            .map_err(|err| {
-                WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), err.into())
-            })?;
-
-        Ok(())
+        self.perform_fork(
+            fork_account_id,
+            source_agent_id,
+            target_agent_id,
+            oplog_index_cut_off,
+            Some((copied_scope_start, forked_phantom_id)),
+            auth_ctx,
+        )
+        .await
     }
 }
 

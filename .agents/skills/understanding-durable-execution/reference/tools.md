@@ -224,6 +224,13 @@ Owner failure selection is a runtime teardown boundary, like executor loss: unfi
 calls remain incomplete rather than applying guest cancellation or non-cancellable-drop policies.
 This also prevents a pending producer from recording a false EOF while its Store is discarded.
 
+Typed stream projection requests read admission from its owning Store before receiving durable
+items. Recorded observations replay from the consumer journal; opening a source waits for the
+Store's replay-to-live transition and is forbidden during completed entity replay. Admission
+retains the ordinary live-call and passive-wait guards. Losing the Store aborts the resident
+projection during admission, source reads, or publication without recording a terminal or guest
+cancellation; actual admission errors remain distinct from teardown.
+
 ### Tests
 
 `tests/tool_streaming.rs::{concurrent_tool_attempt_identity_survives_reordered_admission_and_replay,

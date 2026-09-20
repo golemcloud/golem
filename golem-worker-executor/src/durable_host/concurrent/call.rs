@@ -527,7 +527,7 @@ where
     Ok(outcome)
 }
 
-async fn finish_prepared_access_to_live<T, D, Ctx>(
+pub(crate) async fn finish_prepared_access_to_live<T, D, Ctx>(
     pending: PendingReplayToLive,
     primary_runtime: bool,
     store: &Accessor<T, D>,

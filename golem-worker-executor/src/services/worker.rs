@@ -27,7 +27,7 @@ use crate::storage::keyvalue::{
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use crate::worker::status::fold_invocation_result_entries;
 use async_trait::async_trait;
-use golem_common::base_model::durable_stream::{StreamId, StreamSessionKey};
+use golem_common::base_model::durable_stream::StreamSessionKey;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
@@ -373,7 +373,7 @@ pub trait WorkerService: Send + Sync {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _key: &StreamSessionKey,
-        _stream: StreamId,
+        _reader: golem_common::model::durable_stream::LocalStreamReaderId,
         _page: u64,
     ) -> Result<Vec<OplogIndex>, String> {
         Err("durable stream consumer index is unavailable".into())
@@ -1094,11 +1094,11 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         key: &StreamSessionKey,
-        stream: StreamId,
+        reader: golem_common::model::durable_stream::LocalStreamReaderId,
         page: u64,
     ) -> Result<Vec<OplogIndex>, String> {
         self.stream_session_index
-            .read_consumer_page(owned_agent_id, key, stream, page)
+            .read_consumer_page(owned_agent_id, key, reader, page)
             .await
     }
 
@@ -1211,6 +1211,10 @@ impl WorkerService for DefaultWorkerService {
                         total_linear_memory_size: initial_total_linear_memory_size,
                         active_plugins: initial_active_plugins,
                         invocation_results: self.config.invocation_results.membership(),
+                        export_fork_admissions: golem_common::model::ExportForkAdmissions {
+                            owner_fingerprint: Some(AgentFingerprint(instance_id)),
+                            ..Default::default()
+                        },
                         agent_mode,
                         ..AgentStatusRecord::default()
                     },
@@ -1438,6 +1442,7 @@ impl WorkerService for DefaultWorkerService {
                     namespace.clone(),
                     &field,
                     current.as_deref(),
+                    &[],
                     &[(field.as_str(), encoded.as_slice())],
                 )
                 .await
@@ -2978,8 +2983,8 @@ mod tests {
     #[test]
     fn tracks_idle_worker_with_pending_caller_side_stream_cancellation() {
         use golem_common::model::durable_stream::{
-            StreamCancelReason, StreamCancelRole, StreamConsumerCancelIntentRecord,
-            StreamInvocationId,
+            LocalStreamId, StreamCancelReason, StreamCancelRole, StreamConsumerCancelIntentRecord,
+            StreamInvocationId, StreamRecordReference,
         };
 
         let mut status = AgentStatusRecord::default();
@@ -2987,16 +2992,20 @@ mod tests {
             .pending_durable_stream_cancellations
             .insert(StreamConsumerCancelIntentRecord {
                 format_version: 1,
-                session_key: StreamInvocationId {
-                    callee_environment_id: EnvironmentId::new(),
-                    callee: AgentId {
-                        component_id: ComponentId::new(),
-                        agent_id: "remote".into(),
-                    },
-                    callee_fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
-                    idempotency_key: IdempotencyKey::new("caller-side".into()),
-                },
-                stream_id: StreamId(uuid::Uuid::new_v4()),
+                session_key:
+                    golem_common::model::durable_stream::StreamRegistrationInvocation::Remote(
+                        StreamInvocationId {
+                            callee_environment_id: EnvironmentId::new(),
+                            callee: AgentId {
+                                component_id: ComponentId::new(),
+                                agent_id: "remote".into(),
+                            },
+                            callee_fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
+                            idempotency_key: IdempotencyKey::new("caller-side".into()),
+                        },
+                    ),
+                consumer_invocation: IdempotencyKey::new("consumer".into()),
+                source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
                 epoch: 1,
                 role: StreamCancelRole::OutputConsumer,
                 reason: StreamCancelReason::Cancelled,

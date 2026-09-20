@@ -15,7 +15,8 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::DropEvent;
 use crate::durable_host::durable_session::{
-    DurableInputEndpoint, DurableInputEvent, DurableInputProducer, ForwardedDurableInput,
+    DurableInputEndpoint, DurableInputEvent, DurableInputProducer, DurableInputReceiveAdmission,
+    ForwardedDurableInput,
 };
 use crate::durable_host::stream_transport::{
     LiveInputProducer, LiveStreamEndpoint, output_stream_pair, relay_stream_pair,
@@ -43,7 +44,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use wasmtime::StoreContextMut;
-use wasmtime::component::{Accessor, HasData, Resource, StreamReader};
+use wasmtime::component::{Accessor, AccessorTask, HasData, HasSelf, Resource, StreamReader};
 
 /// Returns whether a schema value contains a stream at any nesting depth.
 pub fn contains_stream(value: &SchemaValue) -> bool {
@@ -74,18 +75,50 @@ pub(crate) struct ExecutorProjectionStreams {
     pub(crate) capacity: usize,
     pub(crate) runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     pub(crate) drop_event_sink: mpsc::UnboundedSender<DropEvent>,
+    pub(crate) durable_receives: Option<mpsc::UnboundedSender<DurableInputReceiveAdmission>>,
+}
+
+struct ProjectionReceiveDispatcher(mpsc::UnboundedReceiver<DurableInputReceiveAdmission>);
+
+impl<U: Send + 'static, Ctx: WorkerCtx> AccessorTask<U, HasSelf<DurableWorkerCtx<Ctx>>>
+    for ProjectionReceiveDispatcher
+{
+    async fn run(
+        mut self,
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    ) -> wasmtime::Result<()> {
+        while let Some(request) = self.0.recv().await {
+            accessor.spawn(request);
+        }
+        Ok(())
+    }
 }
 
 impl ExecutorProjectionStreams {
-    pub(crate) fn new<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> Self {
-        Self {
-            capacity: ctx.live_stream_event_capacity(),
-            runtime_teardown: ctx.stream_runtime_teardown_probe(),
-            drop_event_sink: ctx
-                .state
-                .dropped_call_event_sender()
-                .expect("dropped-call event sender is always available"),
+    async fn store_closed(&self) {
+        match &self.durable_receives {
+            Some(sender) => sender.closed().await,
+            None => std::future::pending().await,
         }
+    }
+
+    pub(crate) fn new<U: Send + 'static, Ctx: WorkerCtx>(
+        accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+    ) -> Self {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        accessor.spawn(ProjectionReceiveDispatcher(receiver));
+        accessor.with(|mut access| {
+            let ctx = access.get();
+            Self {
+                capacity: ctx.live_stream_event_capacity(),
+                runtime_teardown: ctx.stream_runtime_teardown_probe(),
+                drop_event_sink: ctx
+                    .state
+                    .dropped_call_event_sender()
+                    .expect("dropped-call event sender is always available"),
+                durable_receives: Some(sender),
+            }
+        })
     }
 
     #[cfg(test)]
@@ -95,6 +128,7 @@ impl ExecutorProjectionStreams {
             capacity,
             runtime_teardown: Arc::new(|| false),
             drop_event_sink,
+            durable_receives: None,
         }
     }
 }
@@ -126,12 +160,17 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                 loop {
                     let event = tokio::select! {
                         biased;
+                        _ = item_context.store_closed() => {
+                            source.abort_for_teardown();
+                            target_lifecycle.abort();
+                            return;
+                        },
                         _ = target_lifecycle.cancelled() => return,
-                        event = source.receive_value() => event,
+                        event = source.receive_value(item_context.durable_receives.as_ref()) => event,
                     };
                     let (publication, terminal): (Pin<Box<dyn Future<Output = _> + Send>>, bool) =
                         match event {
-                            Ok(DurableInputEvent::Item(value)) => {
+                            Ok(Some(DurableInputEvent::Item(value))) => {
                                 let mut context = item_context.clone();
                                 match apply_projection(&item_plan, value, &mut context) {
                                     Ok(value) => (Box::pin(publisher.publish_item(value)), false),
@@ -144,8 +183,15 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                                     ),
                                 }
                             }
-                            Ok(DurableInputEvent::End) => (Box::pin(publisher.publish_end()), true),
-                            Ok(DurableInputEvent::Cancelled) => {
+                            Ok(Some(DurableInputEvent::End)) => {
+                                (Box::pin(publisher.publish_end()), true)
+                            }
+                            Ok(None) => {
+                                source.abort_for_teardown();
+                                target_lifecycle.abort();
+                                return;
+                            }
+                            Ok(Some(DurableInputEvent::Cancelled)) => {
                                 target_lifecycle.abort();
                                 return;
                             }
@@ -156,6 +202,11 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                         };
                     tokio::select! {
                         biased;
+                        _ = item_context.store_closed() => {
+                            source.abort_for_teardown();
+                            target_lifecycle.abort();
+                            return;
+                        },
                         _ = target_lifecycle.cancelled() => return,
                         result = publication => {
                             if result.is_err() { target_lifecycle.abort(); return; }

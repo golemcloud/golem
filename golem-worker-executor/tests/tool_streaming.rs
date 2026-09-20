@@ -7838,10 +7838,13 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
             }
             Some(invocation_response::Response::InputAck(_)) => {}
             Some(invocation_response::Response::Finished(completion)) => {
-                assert!(matches!(
-                    completion.outcome,
-                    Some(invocation_session_completion::Outcome::Success(_))
-                ));
+                assert!(
+                    matches!(
+                        &completion.outcome,
+                        Some(invocation_session_completion::Outcome::Success(_))
+                    ),
+                    "native external-tool session failed: {completion:?}"
+                );
                 finished = true;
             }
             other => anyhow::bail!("unexpected native session response: {other:?}"),
@@ -7869,6 +7872,77 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         },
     )
     .await?;
+    let (completed_sender, completed_receiver) = tokio::sync::mpsc::channel(1);
+    completed_sender
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
+                idempotency_key: accepted.idempotency_key.clone(),
+                agent_id: accepted.agent_id.clone(),
+                environment_id: accepted.environment_id,
+                attachment_id: accepted.attachment_id,
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                expected_callee_fingerprint: accepted.callee_fingerprint,
+                expected_epoch: accepted.epoch,
+                operation: ResumeOperation::Resume as i32,
+                cursors: Vec::new(),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                principal: Some(
+                    Principal::GolemUser(GolemUserPrincipal {
+                        account_id: context.account_id,
+                    })
+                    .into(),
+                ),
+            })),
+        })
+        .await?;
+    let mut completed = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(completed_receiver))
+        .await?
+        .into_inner();
+    let response = completed
+        .message()
+        .await?
+        .expect("completed session acceptance");
+    let Some(invocation_response::Response::Accepted(reopened)) = response.response else {
+        anyhow::bail!("completed session resume failed: {response:?}");
+    };
+    assert_eq!(reopened.stream_mappings.len(), 2);
+    for original in &accepted.stream_mappings {
+        let mapping = reopened
+            .stream_mappings
+            .iter()
+            .find(|mapping| mapping.transport_stream_id == original.transport_stream_id)
+            .expect("same binding after result publication and restart");
+        assert_eq!(mapping.handle, original.handle);
+        assert_eq!(mapping.role, original.role);
+    }
+    let mut completed_result = false;
+    let mut completed_finished = false;
+    while let Some(response) = completed.message().await? {
+        match response.response {
+            Some(invocation_response::Response::Result(result)) => {
+                assert!(matches!(
+                    result.result,
+                    Some(invocation_session_result::Result::ToolResult(_))
+                ));
+                completed_result = true;
+            }
+            Some(invocation_response::Response::Finished(completion)) => {
+                assert!(matches!(
+                    completion.outcome,
+                    Some(invocation_session_completion::Outcome::Success(_))
+                ));
+                completed_finished = true;
+            }
+            Some(invocation_response::Response::OutputItem(_))
+            | Some(invocation_response::Response::OutputEnd(_)) => {}
+            other => anyhow::bail!("unexpected completed session response: {other:?}"),
+        }
+    }
+    assert!(completed_result && completed_finished);
+    drop(completed_sender);
     let after: String = executor
         .invoke_and_await_agent(
             &caller_component,

@@ -2569,6 +2569,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         Ok(outcome)
     }
 
+    pub(crate) fn rejects_live_continuation_at_replay_tail(&self) -> bool {
+        let mode = self.entity_invocation_scope().map(|scope| scope.mode());
+        mode == Some(InvocationExecutionMode::ReplayingCompleted)
+            || (mode != Some(InvocationExecutionMode::ReplayingIncomplete)
+                && self.runtime != OwnerRuntime::Agent)
+    }
+
     pub(crate) fn prepare_live_continuation_at_replay_tail(
         &self,
         replay_ended: bool,
@@ -2578,9 +2585,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let mode = self.entity_invocation_scope().map(|scope| scope.mode());
         let replaying_incomplete_entity =
             mode == Some(InvocationExecutionMode::ReplayingIncomplete);
-        let primary_replay_tail = self.runtime == OwnerRuntime::Agent && replay_ended;
-        let rejected = mode == Some(InvocationExecutionMode::ReplayingCompleted)
-            || (!replaying_incomplete_entity && !primary_replay_tail);
+        let rejected = self.rejects_live_continuation_at_replay_tail()
+            || (!replaying_incomplete_entity && !replay_ended);
         let replay_state = self.state.replay_state.clone();
         let public_state = self.public_state.clone();
         let linear_memory = self.linear_memory.clone();
@@ -5965,6 +5971,21 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .data_mut()
                             .durable_ctx_mut()
                             .primary_invocation_start_index = Some(oplog_index);
+                        // An invocation retained only through its start has no recorded body.
+                        // Publish live before pure guest code or logging runs, without waiting
+                        // for a durable host call to observe the exhausted replay cursor.
+                        if store.as_context().data().durable_ctx().state.replay_state.is_live()
+                            && let Err(error) = store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .switch_to_live()
+                                .await
+                        {
+                            store.as_context_mut().data_mut().durable_ctx_mut()
+                                .clear_invocation_scope_card().await;
+                            break Err(error);
+                        }
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,

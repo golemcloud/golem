@@ -53,8 +53,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ConnectWorkerRequest, DeactivatePluginRequest, DeactivatePluginResponse, DeleteWorkerRequest,
     DeliverCardTransferRequest, DeliverCardTransferResponse, DurableStreamAttachmentControlRequest,
     DurableStreamAttachmentControlResponse, DurableStreamSegmentReadRequest,
-    DurableStreamSegmentReadResponse, ForkWorkerRequest, ForkWorkerResponse, GetAgentWalletRequest,
-    GetAgentWalletResponse, GetAgentWalletSuccess, GetFileContentsRequest, GetFileContentsResponse,
+    DurableStreamSegmentReadResponse, ForkStreamSlotRequest, ForkStreamSlotResponse,
+    ForkWorkerRequest, ForkWorkerResponse, GetAgentWalletRequest, GetAgentWalletResponse,
+    GetAgentWalletSuccess, GetFileContentsRequest, GetFileContentsResponse,
     GetFileSystemNodeRequest, GetFileSystemNodeResponse, GetOplogRequest, GetOplogResponse,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
     GetWorkersMetadataResponse, ProcessOplogEntriesRequest, ProcessOplogEntriesResponse,
@@ -3272,6 +3273,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ),
             }
         })))
+    }
+
+    async fn fork_stream_slot(
+        &self,
+        request: Request<ForkStreamSlotRequest>,
+    ) -> ResponseResult<ForkStreamSlotResponse> {
+        let request = request.into_inner();
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| Status::permission_denied("fork stream slot is system-only"))?
+            .try_into()
+            .map_err(Status::permission_denied)?;
+        if auth_ctx != AuthCtx::System {
+            return Err(Status::permission_denied("fork stream slot is system-only"));
+        }
+        Ok(Response::new(
+            self.services
+                .worker_fork_service()
+                .fork_stream_slot(request)
+                .await,
+        ))
     }
 
     async fn process_oplog_entries(

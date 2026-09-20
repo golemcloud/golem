@@ -14,6 +14,7 @@
 
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
+use crate::base_model::regions::OplogRegion;
 use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
 use golem_schema::schema::{
     FromSchema as FromSchemaTrait, FromSchemaError, IntoSchema as IntoSchemaTrait, SchemaBuilder,
@@ -340,6 +341,7 @@ pub struct DurableStreamHandle {
     pub producer_environment_id: EnvironmentId,
     pub producer: AgentId,
     pub expected_producer_fingerprint: AgentFingerprint,
+    pub producer_generation: OplogIndex,
     pub source_invocation: StreamInvocationId,
     pub component_revision: ComponentRevision,
     pub element_schema_fingerprint: SchemaFingerprintV1,
@@ -427,16 +429,110 @@ pub struct StreamSessionMapping {
     pub role: SessionStreamRole,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StreamRegistrationInvocation {
+    Local(IdempotencyKey),
+    Remote(StreamInvocationId),
+}
+
+impl StreamRegistrationInvocation {
+    pub fn idempotency_key(&self) -> &IdempotencyKey {
+        match self {
+            Self::Local(idempotency_key) => idempotency_key,
+            Self::Remote(invocation) => &invocation.idempotency_key,
+        }
+    }
+
+    pub fn qualify(
+        &self,
+        owner_environment_id: EnvironmentId,
+        owner: &AgentId,
+        owner_fingerprint: AgentFingerprint,
+    ) -> StreamSessionKey {
+        match self {
+            Self::Local(idempotency_key) => StreamSessionKey {
+                callee_environment_id: owner_environment_id,
+                callee: owner.clone(),
+                callee_fingerprint: owner_fingerprint,
+                idempotency_key: idempotency_key.clone(),
+            },
+            Self::Remote(invocation) => invocation.clone(),
+        }
+    }
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    IntoSchema,
+    FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(transparent))]
+pub struct LocalStreamId(pub OplogIndex);
+
+/// One reader introduced by a binding table in this agent's oplog.
+#[derive(
+    Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct LocalStreamReaderId {
+    pub introducing_oplog_index: OplogIndex,
+    pub binding_slot: u32,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[allow(clippy::large_enum_variant)]
+pub enum StreamRecordReference {
+    Local(LocalStreamId),
+    Foreign(DurableStreamHandle),
+}
+
+impl StreamRecordReference {
+    pub fn has_supported_format(&self) -> bool {
+        match self {
+            Self::Local(id) => id.0.is_defined(),
+            Self::Foreign(handle) => handle.format_version == DURABLE_STREAM_FORMAT_VERSION,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StreamRegistrationRecordCoordinate {
+    Root {
+        invocation: StreamRegistrationInvocation,
+        root_kind: StreamRootKind,
+        recursive_value_path: Vec<StreamValuePathStep>,
+    },
+    Nested {
+        parent_stream: StreamRecordReference,
+        parent_producer_sequence: u64,
+        recursive_value_path: Vec<StreamValuePathStep>,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamRegisteredRecord {
     pub format_version: u8,
-    pub coordinate: StreamRegistrationCoordinate,
-    pub registration_oplog_index: OplogIndex,
-    pub handle: DurableStreamHandle,
+    pub coordinate: StreamRegistrationRecordCoordinate,
+    pub source_invocation: StreamRegistrationInvocation,
+    pub component_revision: ComponentRevision,
+    pub element_schema_fingerprint: SchemaFingerprintV1,
     pub source_kind: StreamSourceKind,
-    pub session_mapping: Option<StreamSessionMapping>,
+    pub session_role: Option<SessionStreamRole>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -444,11 +540,10 @@ pub struct StreamRegisteredRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamItemsRecord {
     pub format_version: u8,
-    pub stream_id: StreamId,
-    pub producer_fingerprint: AgentFingerprint,
+    pub stream_id: LocalStreamId,
     pub first_sequence: u64,
-    pub nested_stream_ids: Vec<StreamId>,
-    pub newly_registered_stream_ids: Vec<StreamId>,
+    pub nested_stream_ids: Vec<StreamRecordReference>,
+    pub newly_registered_stream_ids: Vec<LocalStreamId>,
     pub payload: StreamItemsPayload,
     pub offsets: Vec<StreamOffset>,
 }
@@ -475,8 +570,7 @@ impl StreamItemsPayload {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamEndRecord {
     pub format_version: u8,
-    pub stream_id: StreamId,
-    pub producer_fingerprint: AgentFingerprint,
+    pub stream_id: LocalStreamId,
     pub sequence: u64,
     pub offset: StreamOffset,
     pub authored_by: StreamTerminalAuthor,
@@ -504,8 +598,7 @@ pub enum StreamEndResult {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamCancelRecord {
     pub format_version: u8,
-    pub stream_id: StreamId,
-    pub producer_fingerprint: AgentFingerprint,
+    pub stream_id: LocalStreamId,
     pub sequence: u64,
     pub offset: StreamOffset,
     pub authored_by: StreamTerminalAuthor,
@@ -589,8 +682,30 @@ pub struct StartAttemptDescriptor {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionPreparedRecord {
     pub format_version: u8,
+    pub session_key: IdempotencyKey,
     pub attempt: StartAttemptDescriptor,
-    pub stream_mappings: Vec<StreamSessionMappingRecord>,
+    pub stream_mappings: Vec<StreamBindingRecord>,
+}
+
+/// Owner-relative source bound to a transport slot in an oplog record.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamBindingRecord {
+    pub transport_stream_id: u64,
+    pub source: StreamRecordReference,
+    pub role: SessionStreamRole,
+}
+
+impl StreamBindingRecord {
+    /// A received mapping remains foreign even when its handle names the oplog owner.
+    pub fn foreign(mapping: &StreamSessionMappingRecord) -> Self {
+        Self {
+            transport_stream_id: mapping.transport_stream_id,
+            source: StreamRecordReference::Foreign(mapping.handle.clone()),
+            role: mapping.role,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -608,8 +723,8 @@ pub struct StreamSessionMappingRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionMappingUpdateRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKey,
-    pub mapping: StreamSessionMappingRecord,
+    pub session_key: StreamRegistrationInvocation,
+    pub mapping: StreamBindingRecord,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
@@ -773,6 +888,7 @@ pub enum StreamAttachmentControlOperation {
     },
     SourceUnavailable {
         key: StreamAttachmentKey,
+        reader_id: LocalStreamReaderId,
         source_offset: StreamOffset,
         consumer_read_ordinal: u64,
     },
@@ -854,7 +970,8 @@ pub struct StreamConsumerDeletingRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSourceUnavailableRecord {
     pub format_version: u8,
-    pub key: StreamAttachmentKey,
+    pub session_key: StreamRegistrationInvocation,
+    pub reader_id: LocalStreamReaderId,
     pub source_offset: StreamOffset,
     pub consumer_read_ordinal: u64,
 }
@@ -884,7 +1001,7 @@ pub struct StreamTopologyActivatedRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionAttachedRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKey,
+    pub session_key: IdempotencyKey,
     pub attachment_id: AttachmentId,
     pub attempt_id: AttemptId,
     pub epoch: u64,
@@ -927,6 +1044,7 @@ pub struct ResumeAttemptDescriptor {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionResumeAttemptRecord {
     pub format_version: u8,
+    pub session_key: IdempotencyKey,
     pub attempt: ResumeAttemptDescriptor,
     pub accepted_epoch: u64,
 }
@@ -936,7 +1054,7 @@ pub struct StreamSessionResumeAttemptRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionDetachedRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKey,
+    pub session_key: IdempotencyKey,
     pub attachment_id: AttachmentId,
     pub owner_attempt_id: AttemptId,
     pub epoch: u64,
@@ -991,14 +1109,13 @@ pub enum ExternalProducerId {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamConsumerItemValueRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKey,
-    pub stream_id: StreamId,
+    pub session_key: StreamRegistrationInvocation,
+    pub reader_id: LocalStreamReaderId,
     pub source_offset: StreamOffset,
     pub consumer_read_ordinal: u64,
     pub value: Vec<u8>,
     pub packed_u8: bool,
-    pub recursive_handles: Vec<DurableStreamHandle>,
-    pub recursive_mappings: Vec<StreamSessionMappingRecord>,
+    pub recursive_mappings: Vec<StreamBindingRecord>,
 }
 
 impl StreamConsumerItemValueRecord {
@@ -1027,8 +1144,8 @@ impl StreamConsumerItemValueRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamConsumerTerminalRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKey,
-    pub stream_id: StreamId,
+    pub session_key: StreamRegistrationInvocation,
+    pub reader_id: LocalStreamReaderId,
     pub source_offset: StreamOffset,
     pub consumer_read_ordinal: u64,
     pub terminal: StreamConsumerTerminal,
@@ -1039,8 +1156,10 @@ pub struct StreamConsumerTerminalRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamConsumerCancelIntentRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKey,
-    pub stream_id: StreamId,
+    pub session_key: StreamRegistrationInvocation,
+    /// The consumer's invocation, relative to the oplog owner.
+    pub consumer_invocation: IdempotencyKey,
+    pub source: StreamRecordReference,
     pub epoch: u64,
     pub role: StreamCancelRole,
     pub reason: StreamCancelReason,
@@ -1071,10 +1190,9 @@ pub enum StreamConsumerTerminal {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionInvocationResultRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKey,
+    pub session_key: StreamRegistrationInvocation,
     pub result: Vec<u8>,
-    pub output_streams: Vec<DurableStreamHandle>,
-    pub stream_mappings: Vec<StreamSessionMappingRecord>,
+    pub stream_mappings: Vec<StreamBindingRecord>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1082,7 +1200,7 @@ pub struct StreamSessionInvocationResultRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionFinishedRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKey,
+    pub session_key: StreamRegistrationInvocation,
     pub result: Result<(), Vec<u8>>,
 }
 
@@ -1091,7 +1209,7 @@ pub struct StreamSessionFinishedRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSlotTombstonedRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKey,
+    pub session_key: StreamRegistrationInvocation,
     pub slot: String,
     pub role: SessionStreamRole,
 }
@@ -1101,7 +1219,7 @@ pub struct StreamSlotTombstonedRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamSessionCancelRequestedRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKey,
+    pub session_key: StreamRegistrationInvocation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1109,8 +1227,72 @@ pub struct StreamSessionCancelRequestedRecord {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct StreamCallerAttemptRecord {
     pub format_version: u8,
-    pub session_key: StreamSessionKey,
+    pub session_key: StreamRegistrationInvocation,
     pub attempt_id: AttemptId,
+}
+
+/// A cut of the owner-local journal, with optional sub-item clipping and an HTTP creation receipt.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamForkCutRecord {
+    pub format_version: u8,
+    /// Hash of the creation request, including the requested source generation and cut.
+    pub request_hash: Vec<u8>,
+    /// Binds the creation receipt to its target incarnation, not to a copied ancestor's receipt.
+    pub creation_fingerprint: AgentFingerprint,
+    pub export: Option<StreamExportFork>,
+    pub cut_index: OplogIndex,
+    /// Present only for a self-revert marker. The marker follows the physical `Revert` entry
+    /// immediately after this deleted region.
+    pub revert: Option<OplogRegion>,
+    /// Minimum epoch for attachments issued by the continuation. A self-revert advances
+    /// beyond epochs issued in the discarded history; a new agent starts at one.
+    pub epoch_floor: u64,
+    pub selected_stream_id: Option<LocalStreamId>,
+    pub retained_through: Option<StreamOffset>,
+}
+
+/// Immutable public creation configuration, distinct from the resolved physical cut.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct StreamExportFork {
+    pub source: AgentId,
+    pub source_environment_id: EnvironmentId,
+    pub source_fingerprint: AgentFingerprint,
+    pub source_path: String,
+    pub session: String,
+    pub slot: String,
+    pub expected_method: String,
+    pub requested_offset: Option<StreamOffset>,
+    pub anchor: Option<StreamOffset>,
+    pub sub_offset: u64,
+    pub content_type: String,
+    pub initial_content_hash: Vec<u8>,
+    pub closed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct StreamExportForkCandidate {
+    pub export: StreamExportFork,
+    pub horizon: OplogIndex,
+    pub cut: OplogIndex,
+    pub selected: StreamId,
+    pub retained_through: Option<StreamOffset>,
+    pub initial: Option<StreamItemsPayload>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamExportForkAdmittedRecord {
+    pub format_version: u8,
+    pub target: AgentId,
+    pub request_hash: Vec<u8>,
+    pub candidate: StreamExportForkCandidate,
+    pub updated_millis: u64,
+    pub credit_millis: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -1142,9 +1324,31 @@ pub enum StreamSessionRecord {
     Finished(StreamSessionFinishedRecord),
     Tombstoned(StreamSlotTombstonedRecord),
     CancelRequested(StreamSessionCancelRequestedRecord),
+    ExportForkAdmitted(StreamExportForkAdmittedRecord),
+    ForkCut(StreamForkCutRecord),
 }
 
 impl StreamSessionRecord {
+    /// Identifies records that can change this owner's callee-side session lifecycle.
+    pub fn local_session_key(&self) -> Option<&IdempotencyKey> {
+        let reference = match self {
+            Self::Prepared(record) => return Some(&record.session_key),
+            Self::Attached(record) => return Some(&record.session_key),
+            Self::ResumeAttempt(record) => return Some(&record.session_key),
+            Self::Detached(record) => return Some(&record.session_key),
+            Self::InvocationResult(record) => &record.session_key,
+            Self::Finished(record) => &record.session_key,
+            Self::Tombstoned(record) => &record.session_key,
+            Self::CancelRequested(record) => &record.session_key,
+            Self::ConsumerCancelApplied(record) => &record.intent.session_key,
+            _ => return None,
+        };
+        match reference {
+            StreamRegistrationInvocation::Local(key) => Some(key),
+            StreamRegistrationInvocation::Remote(_) => None,
+        }
+    }
+
     pub fn format_version(&self) -> u8 {
         match self {
             Self::CallerAttempt(record) => record.format_version,
@@ -1173,6 +1377,8 @@ impl StreamSessionRecord {
             Self::Finished(record) => record.format_version,
             Self::Tombstoned(record) => record.format_version,
             Self::CancelRequested(record) => record.format_version,
+            Self::ExportForkAdmitted(record) => record.format_version,
+            Self::ForkCut(record) => record.format_version,
         }
     }
 
@@ -1213,9 +1419,10 @@ impl StreamSessionRecord {
                 let unique_mappings = record
                     .stream_mappings
                     .iter()
-                    .map(|mapping| (mapping.handle.clone(), mapping.role))
+                    .map(|mapping| (&mapping.source, mapping.role))
                     .collect::<HashSet<_>>();
                 supported_attempt(&record.attempt)
+                    && record.session_key == record.attempt.session_key.idempotency_key
                     && record
                         .attempt
                         .invocation
@@ -1228,15 +1435,24 @@ impl StreamSessionRecord {
                     && record
                         .stream_mappings
                         .iter()
-                        .all(|mapping| supported_handle(&mapping.handle))
+                        .all(|mapping| mapping.source.has_supported_format())
                     && record
                         .stream_mappings
                         .iter()
                         .filter(|mapping| mapping.role == SessionStreamRole::Input)
-                        .map(|mapping| &mapping.handle)
-                        .eq(record.attempt.invocation.stream_handles.iter())
+                        .count()
+                        == record.attempt.invocation.stream_handles.len()
+                    && record
+                        .stream_mappings
+                        .iter()
+                        .filter(|mapping| mapping.role == SessionStreamRole::Input)
+                        .zip(&record.attempt.invocation.stream_handles)
+                        .all(|(binding, original)| match &binding.source {
+                            StreamRecordReference::Local(_) => true,
+                            StreamRecordReference::Foreign(handle) => handle == original,
+                        })
             }
-            Self::Mapping(record) => supported_handle(&record.mapping.handle),
+            Self::Mapping(record) => record.mapping.source.has_supported_format(),
             Self::AttachmentPrepared(record) => {
                 record.key.is_well_formed()
                     && record.lease_expires_at_millis > record.prepared_at_millis
@@ -1254,8 +1470,7 @@ impl StreamSessionRecord {
             Self::CascadeOutbox(record) => record.key.is_well_formed(),
             Self::ConsumerDeleting(record) => !record.consumer_fingerprint.0.is_nil(),
             Self::SourceUnavailable(record) => {
-                record.key.is_well_formed()
-                    && StreamOffset::from_bytes(record.source_offset.0).is_ok()
+                StreamOffset::from_bytes(record.source_offset.0).is_ok()
             }
             Self::TopologyPrepared(record) => {
                 record.attachment.is_well_formed()
@@ -1284,38 +1499,34 @@ impl StreamSessionRecord {
                 let unique_mappings = record
                     .recursive_mappings
                     .iter()
-                    .map(|mapping| (mapping.handle.clone(), mapping.role))
+                    .map(|mapping| (&mapping.source, mapping.role))
                     .collect::<HashSet<_>>();
                 StreamOffset::from_bytes(record.source_offset.0).is_ok()
                     && record.value.len() <= MAX_DURABLE_STREAM_ITEM_SIZE
-                    && record.recursive_handles.len() <= MAX_NEW_STREAM_HANDLES_PER_VALUE
-                    && record.recursive_handles.iter().all(supported_handle)
-                    && record.recursive_mappings.len() == record.recursive_handles.len()
+                    && record.recursive_mappings.len() <= MAX_NEW_STREAM_HANDLES_PER_VALUE
                     && record.recursive_mappings.len() == unique_transport_ids.len()
                     && record.recursive_mappings.len() == unique_mappings.len()
                     && record
                         .recursive_mappings
                         .iter()
-                        .all(|mapping| supported_handle(&mapping.handle))
-                    && record
-                        .recursive_mappings
-                        .iter()
-                        .map(|mapping| &mapping.handle)
-                        .eq(record.recursive_handles.iter())
+                        .all(|mapping| mapping.source.has_supported_format())
                     && if record.packed_u8 {
                         !record.value.is_empty()
                             && record
                                 .source_offset_at(record.value.len().saturating_sub(1))
                                 .is_some()
-                            && record.recursive_handles.is_empty()
+                            && record.recursive_mappings.is_empty()
                     } else {
                         true
                     }
             }
-            Self::ConsumerCancelIntent(record) => record.epoch > 0,
+            Self::ConsumerCancelIntent(record) => {
+                record.epoch > 0 && record.source.has_supported_format()
+            }
             Self::ConsumerCancelApplied(record) => {
                 record.intent.format_version == DURABLE_STREAM_FORMAT_VERSION
                     && record.intent.epoch > 0
+                    && record.intent.source.has_supported_format()
             }
             Self::ConsumerTerminal(record) => {
                 StreamOffset::from_bytes(record.source_offset.0).is_ok()
@@ -1329,21 +1540,15 @@ impl StreamSessionRecord {
                 let unique_mappings = record
                     .stream_mappings
                     .iter()
-                    .map(|mapping| (mapping.handle.clone(), mapping.role))
+                    .map(|mapping| (&mapping.source, mapping.role))
                     .collect::<HashSet<_>>();
                 record.stream_mappings.len() <= MAX_NEW_STREAM_HANDLES_PER_VALUE
                     && record.stream_mappings.len() == unique_transport_ids.len()
                     && record.stream_mappings.len() == unique_mappings.len()
-                    && record.output_streams.iter().all(supported_handle)
                     && record.stream_mappings.iter().all(|mapping| {
                         mapping.role == SessionStreamRole::Output
-                            && supported_handle(&mapping.handle)
+                            && mapping.source.has_supported_format()
                     })
-                    && record
-                        .stream_mappings
-                        .iter()
-                        .map(|mapping| &mapping.handle)
-                        .eq(record.output_streams.iter())
             }
             Self::CallerAttempt(record) => {
                 record.attempt_id.0.get_version() == Some(uuid::Version::Random)
@@ -1354,12 +1559,6 @@ impl StreamSessionRecord {
                     && record.attempt_id.0.get_version() == Some(uuid::Version::Random)
                     && !record.attempt_id.0.is_nil()
                     && record.pending_invocation_oplog_index.is_defined()
-                    && AttachmentId::primary(
-                        record.session_key.callee_environment_id,
-                        &record.session_key.callee,
-                        &record.session_key.idempotency_key,
-                    )
-                    .is_ok_and(|attachment_id| attachment_id == record.attachment_id)
             }
             Self::ResumeAttempt(record) => {
                 let attempt = &record.attempt;
@@ -1369,6 +1568,7 @@ impl StreamSessionRecord {
                     .map(|cursor| cursor.stream_id)
                     .collect::<HashSet<_>>();
                 record.accepted_epoch == attempt.expected_epoch.checked_add(1).unwrap_or_default()
+                    && record.session_key == attempt.session_key.idempotency_key
                     && attempt.format_version == DURABLE_STREAM_FORMAT_VERSION
                     && attempt.expected_epoch > 0
                     && attempt.attempt_id.0.get_version() == Some(uuid::Version::Random)
@@ -1393,16 +1593,38 @@ impl StreamSessionRecord {
                 record.epoch > 0
                     && record.owner_attempt_id.0.get_version() == Some(uuid::Version::Random)
                     && !record.owner_attempt_id.0.is_nil()
-                    && AttachmentId::primary(
-                        record.session_key.callee_environment_id,
-                        &record.session_key.callee,
-                        &record.session_key.idempotency_key,
-                    )
-                    .is_ok_and(|attachment_id| attachment_id == record.attachment_id)
             }
             Self::Finished(_) => true,
             Self::Tombstoned(record) => !record.slot.is_empty(),
             Self::CancelRequested(_) => true,
+            Self::ExportForkAdmitted(record) => {
+                record.request_hash.len() == 32
+                    && record.candidate.selected.0.get_version().is_some()
+                    && !record.candidate.selected.0.is_nil()
+                    && record.candidate.cut > OplogIndex::NONE
+                    && record.candidate.cut <= record.candidate.horizon
+            }
+            Self::ForkCut(record) => {
+                let valid_revert = record.revert.as_ref().is_none_or(|region| {
+                    record.cut_index.as_u64().checked_add(1) == Some(region.start.as_u64())
+                        && region.start <= region.end
+                        && record.selected_stream_id.is_none()
+                        && record.retained_through.is_none()
+                });
+                record.request_hash.len() == 32
+                    && record.epoch_floor > 0
+                    && record.cut_index > OplogIndex::NONE
+                    && valid_revert
+                    && record
+                        .selected_stream_id
+                        .is_none_or(|id| id.0.is_defined() && id.0 <= record.cut_index)
+                    && record.retained_through.is_none_or(|offset| {
+                        record.selected_stream_id.is_some()
+                            && StreamOffset::from_bytes(offset.0).is_ok()
+                            && offset.producer_oplog_index() > OplogIndex::NONE
+                            && offset.producer_oplog_index() <= record.cut_index
+                    })
+            }
         }
     }
 }
@@ -1421,11 +1643,11 @@ fn topology_mapping_matches(
 #[cfg(test)]
 mod tests {
     use super::{
-        AttachmentId, AttemptId, DurableStreamHandle, PersistedInvocationTarget,
-        PersistedStreamInvocationDescriptor, SessionStreamRole, StartAttemptDescriptor,
-        StreamAttachmentKey, StreamConsumerItemValueRecord, StreamId, StreamInvocationId,
-        StreamOffset, StreamOffsetError, StreamSessionMappingRecord, StreamSessionPreparedRecord,
-        StreamSessionRecord,
+        AttachmentId, AttemptId, DurableStreamHandle, LocalStreamReaderId,
+        PersistedInvocationTarget, PersistedStreamInvocationDescriptor, SessionStreamRole,
+        StartAttemptDescriptor, StreamAttachmentKey, StreamBindingRecord,
+        StreamConsumerItemValueRecord, StreamId, StreamInvocationId, StreamOffset,
+        StreamOffsetError, StreamRecordReference, StreamSessionPreparedRecord, StreamSessionRecord,
     };
     use crate::base_model::component::{ComponentId, ComponentRevision};
     use crate::base_model::environment::EnvironmentId;
@@ -1574,13 +1796,15 @@ mod tests {
         };
         let mut record = StreamConsumerItemValueRecord {
             format_version: 1,
-            session_key,
-            stream_id: StreamId(Uuid::from_u128(4)),
+            session_key: super::StreamRegistrationInvocation::Remote(session_key),
+            reader_id: LocalStreamReaderId {
+                introducing_oplog_index: OplogIndex::from_u64(4),
+                binding_slot: 0,
+            },
             source_offset: StreamOffset::new(OplogIndex::from_u64(5), 7),
             consumer_read_ordinal: 0,
             value: vec![10, 11, 12],
             packed_u8: true,
-            recursive_handles: Vec::new(),
             recursive_mappings: Vec::new(),
         };
 
@@ -1693,12 +1917,14 @@ mod tests {
             producer_environment_id: environment_id,
             producer: agent_id.clone(),
             expected_producer_fingerprint: fingerprint,
+            producer_generation: OplogIndex::NONE,
             source_invocation: session_key.clone(),
             component_revision: ComponentRevision::new(1).unwrap(),
             element_schema_fingerprint: SchemaFingerprintV1([0; 32]),
         };
         let record = StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
+            session_key: session_key.idempotency_key.clone(),
             attempt: StartAttemptDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),
@@ -1748,6 +1974,7 @@ mod tests {
         let handle = |id| DurableStreamHandle {
             format_version: 1,
             stream_id: StreamId(Uuid::from_u128(id)),
+            producer_generation: OplogIndex::NONE,
             producer_environment_id: environment_id,
             producer: agent_id.clone(),
             expected_producer_fingerprint: fingerprint,
@@ -1760,6 +1987,7 @@ mod tests {
         let argument = handle(6);
         let mut prepared = StreamSessionPreparedRecord {
             format_version: 1,
+            session_key: session_key.idempotency_key.clone(),
             attempt: StartAttemptDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),
@@ -1783,19 +2011,19 @@ mod tests {
                 live_join_buffer_events: 1,
             },
             stream_mappings: vec![
-                StreamSessionMappingRecord {
+                StreamBindingRecord {
                     transport_stream_id: 10,
-                    handle: stdin,
+                    source: StreamRecordReference::Foreign(stdin),
                     role: SessionStreamRole::Input,
                 },
-                StreamSessionMappingRecord {
+                StreamBindingRecord {
                     transport_stream_id: 11,
-                    handle: stdout,
+                    source: StreamRecordReference::Foreign(stdout),
                     role: SessionStreamRole::Output,
                 },
-                StreamSessionMappingRecord {
+                StreamBindingRecord {
                     transport_stream_id: 12,
-                    handle: argument,
+                    source: StreamRecordReference::Foreign(argument),
                     role: SessionStreamRole::Input,
                 },
             ],

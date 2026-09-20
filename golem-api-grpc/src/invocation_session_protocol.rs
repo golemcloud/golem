@@ -90,6 +90,7 @@ pub struct InvocationSessionState {
     accepted_revision: Option<u64>,
     accepted_epoch: Option<u64>,
     resume: bool,
+    joined_origin_observer: bool,
     resume_cursors: HashMap<(u64, u64), Option<[u8; 24]>>,
     resume_agent_id: Option<AgentId>,
     resume_environment_id: Option<crate::proto::golem::common::EnvironmentId>,
@@ -114,6 +115,7 @@ impl Default for InvocationSessionState {
             accepted_revision: None,
             accepted_epoch: None,
             resume: false,
+            joined_origin_observer: false,
             resume_cursors: HashMap::new(),
             resume_agent_id: None,
             resume_environment_id: None,
@@ -219,6 +221,15 @@ impl InvocationSessionState {
             .response
             .as_ref()
             .ok_or_else(|| "invocation response has no payload".to_string())?;
+        if self.joined_origin_observer
+            && !matches!(
+                response,
+                invocation_response::Response::Result(_)
+                    | invocation_response::Response::Finished(_)
+            )
+        {
+            return Err("an invocation observer cannot receive attachment or stream frames".into());
+        }
 
         match (self.phase, response) {
             (
@@ -435,6 +446,9 @@ impl InvocationSessionState {
         message: RequestMessage<'_>,
         accept_terminal_output_cancellation: bool,
     ) -> Result<(), String> {
+        if self.joined_origin_observer {
+            return Err("an invocation observer cannot send stream controls".into());
+        }
         match (self.phase, message) {
             (
                 SessionPhase::Initial,
@@ -647,6 +661,14 @@ impl InvocationSessionState {
         if agent_id.name.is_empty() {
             return Err("invocation acceptance has an empty agent name".to_string());
         }
+        if accepted.joined_origin_observer
+            && (self.resume
+                || accepted.attachment_id.is_some()
+                || accepted.attempt_id.is_some()
+                || accepted.epoch != 0)
+        {
+            return Err("an invocation observer cannot acquire an attachment".into());
+        }
         if !self.resume {
             match (&self.expected_tool, &accepted.tool_name) {
                 (None, None) => {
@@ -823,7 +845,8 @@ impl InvocationSessionState {
             self.phase = SessionPhase::Active;
             return Ok(());
         }
-        let durable_acceptance = !self.inputs.is_empty()
+        let durable_acceptance = accepted.joined_origin_observer
+            || !self.inputs.is_empty()
             || accepted.attachment_id.is_some()
             || accepted.attempt_id.is_some()
             || accepted.epoch != 0
@@ -831,13 +854,15 @@ impl InvocationSessionState {
             || accepted.environment_id.is_some()
             || accepted.callee_fingerprint.is_some();
         if durable_acceptance {
-            required_uuid(
-                &accepted.attachment_id,
-                "invocation acceptance attachment ID",
-            )?;
-            required_uuid(&accepted.attempt_id, "invocation acceptance attempt ID")?;
-            if accepted.epoch == 0 {
-                return Err("invocation acceptance epoch must be positive".to_string());
+            if !accepted.joined_origin_observer {
+                required_uuid(
+                    &accepted.attachment_id,
+                    "invocation acceptance attachment ID",
+                )?;
+                required_uuid(&accepted.attempt_id, "invocation acceptance attempt ID")?;
+                if accepted.epoch == 0 {
+                    return Err("invocation acceptance epoch must be positive".to_string());
+                }
             }
             required_uuid(
                 &accepted
@@ -923,6 +948,7 @@ impl InvocationSessionState {
         self.accepted_agent_id = Some(agent_id.clone());
         self.accepted_revision = accepted.component_revision;
         self.accepted_epoch = durable_acceptance.then_some(accepted.epoch);
+        self.joined_origin_observer = accepted.joined_origin_observer;
         self.phase = SessionPhase::Active;
         Ok(())
     }
@@ -969,7 +995,9 @@ impl InvocationSessionState {
             &discovered,
             StreamMappingRole::Output,
         )?;
-        self.accept_output_stream_mappings(bindings)?;
+        if !self.joined_origin_observer {
+            self.accept_output_stream_mappings(bindings)?;
+        }
         self.has_result = true;
         Ok(())
     }
@@ -1503,6 +1531,10 @@ impl InvocationSessionState {
             }
             Some(invocation_session_completion::Outcome::Success(_)) => {}
             None => return Err("invocation completion has no outcome".to_string()),
+        }
+        if self.joined_origin_observer {
+            self.phase = SessionPhase::Complete;
+            return Ok(());
         }
         let unterminated_inputs = self
             .inputs
@@ -2114,9 +2146,9 @@ mod tests {
     use crate::proto::golem::component::ComponentId;
     use crate::proto::golem::schema::{RecordValue, SchemaValueStreamReference};
     use crate::proto::golem::worker::{
-        InputStreamHighWater, InvocationFailure, InvocationRejected, InvocationStart,
-        OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeAttach, StreamCursor,
-        StreamInvocationIdentity,
+        AttachmentRevoked, InputStreamHighWater, InvocationFailure, InvocationRejected,
+        InvocationStart, OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeAttach,
+        StreamCursor, StreamInvocationIdentity,
     };
     use prost::Message;
     use test_r::test;
@@ -2269,6 +2301,81 @@ mod tests {
         acceptance
     }
 
+    #[test]
+    fn joined_origin_observer_has_no_in_band_stream_obligations_or_control() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_trusted_request(&trusted_start(record(vec![stream(7)])))
+            .unwrap();
+        let mut acceptance = accepted_with_inputs(&[7]);
+        let Some(invocation_response::Response::Accepted(accepted)) = acceptance.response.as_mut()
+        else {
+            unreachable!()
+        };
+        accepted.joined_origin_observer = true;
+        accepted.attachment_id = None;
+        accepted.attempt_id = None;
+        accepted.epoch = 0;
+        state.validate_response(&acceptance).unwrap();
+        assert!(state.validate_response(&success()).is_err());
+        assert!(
+            state
+                .validate_trusted_request(&trusted_request(invocation_request::Request::InputEnd(
+                    InputStreamEnd {
+                        transport_stream_id: 7,
+                        ..Default::default()
+                    }
+                )))
+                .is_err()
+        );
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::AttachmentRevoked(
+                    AttachmentRevoked {
+                        details: String::new()
+                    }
+                )))
+                .is_err()
+        );
+        state
+            .validate_response(&result(record(vec![stream(9)])))
+            .unwrap();
+        assert!(
+            state
+                .validate_response(&result(record(vec![stream(10)])))
+                .is_err()
+        );
+        state.validate_response(&success()).unwrap();
+        assert!(state.validate_response(&success()).is_err());
+    }
+
+    #[test]
+    fn joined_origin_observer_cannot_acquire_attachment_or_skip_mapping_validation() {
+        for invalid in [0, 1, 2, 3] {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_trusted_request(&trusted_start(record(vec![stream(7)])))
+                .unwrap();
+            let mut acceptance = accepted_with_inputs(&[7]);
+            let Some(invocation_response::Response::Accepted(accepted)) =
+                acceptance.response.as_mut()
+            else {
+                unreachable!()
+            };
+            accepted.joined_origin_observer = true;
+            accepted.attachment_id = None;
+            accepted.attempt_id = None;
+            accepted.epoch = 0;
+            match invalid {
+                0 => accepted.attachment_id = Some(uuid(1)),
+                1 => accepted.epoch = 1,
+                2 => accepted.stream_mappings.clear(),
+                _ => accepted.callee_fingerprint = None,
+            }
+            assert!(state.validate_response(&acceptance).is_err());
+        }
+    }
+
     fn resume_attach(cursors: Vec<StreamCursor>) -> PublicInvocationRequest {
         public_request(public_invocation_request::Request::ResumeAttach(
             ResumeAttach {
@@ -2327,6 +2434,7 @@ mod tests {
                 }),
                 producer: Some(agent_id()),
                 expected_producer_fingerprint: Some(uuid(4)),
+                producer_generation: 0,
                 source_invocation: Some(StreamInvocationIdentity {
                     callee_environment_id: Some(EnvironmentId {
                         value: Some(uuid(3)),
