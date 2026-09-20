@@ -42,6 +42,7 @@ import scala.scalajs.js.JSConverters._
 private[autowire] object AgentRequestBuilder {
 
   def fromMetadata(metadata: AgentMetadata, mode: String): AgentTypeEncoderV2.AgentRequest = {
+    HttpAgentValidation.checked(metadata.copy(mode = Some(mode)))
     // Validate HTTP mount against constructor params — runs lazily when the
     // agent-type is first accessed, so errors surface as AgentError to the host.
     HttpValidation.validateHttpMountFromMetadata(metadata)

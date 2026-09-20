@@ -101,7 +101,24 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
         )
       },
       test("low-level metadata preserves router kind, ordered mappings, provider, and any method") {
-        val method   = MethodMetadata("route", None, None, None, InputMetadata.empty, OutputMetadata.Unit)
+        val method = MethodMetadata(
+          "route",
+          None,
+          None,
+          None,
+          InputMetadata(
+            List(
+              golem.runtime.ParameterMetadata(
+                "request",
+                golem.runtime.FieldSource.UserSupplied,
+                golem.runtime.http.HttpRequest.intoSchema.graph
+              )
+            )
+          ),
+          OutputMetadata.Single(golem.runtime.http.HttpResponse.intoSchema.graph)
+        )
+        val provider =
+          MethodMetadata("provider-text", None, None, None, InputMetadata.empty, OutputMetadata.Single(graphOf[String]))
         val metadata = AgentMetadata(
           "low-level-router",
           AgentTypeKind.HttpRouter,
@@ -120,7 +137,7 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
             FileMapping.Subtree(List("assets"), "/srv/assets"),
             FileMapping.Exact(List("favicon.ico"), "/srv/favicon.ico")
           ),
-          filesystemBindings = List(FileMapping.Exact(List("data"), "/var/data.json")),
+          filesystemBindings = Nil,
           openapiProviderMethod = Some("provider-text")
         )
         val endpoint = HttpEndpointDetails(
@@ -131,27 +148,39 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
           None,
           None
         )
-        val customAny = endpoint.copy(httpMethod = HttpMethod.Custom("ANY"))
-        val lowLevel  = metadata.copy(
-          methods = List(method.copy(httpEndpoints = List(endpoint, customAny))),
+        val lowLevel = metadata.copy(
+          methods = List(method.copy(httpEndpoints = List(endpoint)), provider),
           httpMount = Some(mount)
         )
-        val encoded      = AgentTypeEncoderV2.encode(AgentRequestBuilder.fromMetadata(lowLevel, "durable"))
+        val encoded      = AgentTypeEncoderV2.encode(AgentRequestBuilder.fromMetadata(lowLevel, "ephemeral"))
         val raw          = encoded.asInstanceOf[js.Dynamic]
         val encodedMount = raw.selectDynamic("httpMount").asInstanceOf[js.Dynamic]
         val static       = encodedMount.selectDynamic("staticBindings").asInstanceOf[js.Array[js.Dynamic]]
         val filesystem   = encodedMount.selectDynamic("filesystemBindings").asInstanceOf[js.Array[js.Dynamic]]
         val methods      = raw.selectDynamic("methods").asInstanceOf[js.Array[js.Dynamic]]
         val endpoints    = methods(0).selectDynamic("httpEndpoint").asInstanceOf[js.Array[js.Dynamic]]
+        val regular      = lowLevel.copy(
+          kind = AgentTypeKind.Regular,
+          methods = List(method.copy(httpEndpoints = List(endpoint.copy(httpMethod = HttpMethod.Custom("ANY"))))),
+          httpMount = Some(mount.copy(staticBindings = Nil, openapiProviderMethod = None))
+        )
+        val custom = AgentTypeEncoderV2
+          .encode(AgentRequestBuilder.fromMetadata(regular, "durable"))
+          .asInstanceOf[js.Dynamic]
+          .selectDynamic("methods")
+          .asInstanceOf[js.Array[js.Dynamic]](0)
+          .selectDynamic("httpEndpoint")
+          .asInstanceOf[js.Array[js.Dynamic]](0)
+          .selectDynamic("httpMethod")
         assertTrue(
           encoded.kind == "http-router",
           static(0).selectDynamic("tag").asInstanceOf[String] == "subtree",
           static(1).selectDynamic("tag").asInstanceOf[String] == "exact",
-          filesystem(0).selectDynamic("tag").asInstanceOf[String] == "exact",
+          filesystem.isEmpty,
           encodedMount.selectDynamic("openapiProviderMethod").asInstanceOf[String] == "provider-text",
           endpoints(0).selectDynamic("httpMethod").selectDynamic("tag").asInstanceOf[String] == "any",
-          endpoints(1).selectDynamic("httpMethod").selectDynamic("tag").asInstanceOf[String] == "custom",
-          endpoints(1).selectDynamic("httpMethod").selectDynamic("val").asInstanceOf[String] == "ANY"
+          custom.selectDynamic("tag").asInstanceOf[String] == "custom",
+          custom.selectDynamic("val").asInstanceOf[String] == "ANY"
         )
       },
       test("constructor input-schema uses parameters + per-field source/index") {
