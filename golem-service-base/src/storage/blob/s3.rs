@@ -264,9 +264,13 @@ impl S3BlobStorage {
     /// `prefix_has_objects` send a key of this function with a `/` at its end as a prefix,
     /// and `delete_dir` sends the keys of the response of a listing, which are the keys of
     /// objects that the bucket holds.
-    fn key_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> Result<String, Error> {
+    fn key_of(
+        &self,
+        namespace: &BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<String, BlobNameError> {
         let key = blob_path_to_string(&self.prefix_of(namespace).join(path))?;
-        Ok(Self::checked_key(key)?)
+        Self::checked_key(key)
     }
 
     /// Gives the key of the object that records the directory at `key`, or a
