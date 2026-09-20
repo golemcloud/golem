@@ -32,4 +32,5 @@ mod client_generation;
 mod compile_errors;
 mod config_schema_impl;
 mod helpers;
+pub(crate) mod http_router;
 mod multimodal_derivation;

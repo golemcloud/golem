@@ -1,54 +1,5 @@
-use golem_rust::agentic::{
-    AgentStream, EnrichedAgentMethod, EnrichedParameterSchema, ExtendedAgentConstructor,
-    ExtendedAgentType, spawn_local,
-};
-use golem_rust::golem_agentic::golem::agent::common::{
-    AgentMode, AgentTypeKind, AuthDetails, CorsOptions, ExactFileMapping, FileMapping,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, PathSegment, Snapshotting,
-    SubtreeFileMapping,
-};
-use golem_rust::{
-    FromSchema, IntoSchema, agent_definition, agent_implementation, description, endpoint,
-};
-
-#[derive(IntoSchema, FromSchema)]
-pub struct Header {
-    pub name: String,
-    pub value: Vec<u8>,
-}
-
-#[derive(IntoSchema, FromSchema)]
-pub struct HttpRequest {
-    pub method: String,
-    pub scheme: String,
-    pub authority: String,
-    pub path: String,
-    pub query: Option<String>,
-    pub headers: Vec<Header>,
-    pub body: AgentStream<Vec<u8>>,
-}
-
-#[derive(IntoSchema, FromSchema)]
-pub struct HttpResponse {
-    pub status: u16,
-    pub headers: Vec<Header>,
-    pub body: AgentStream<Vec<u8>>,
-}
-
-#[agent_definition(
-    kind = "http-router",
-    ephemeral,
-    mount = "/raw",
-    auth = false,
-    cors = ["https://allowed.test"],
-    snapshotting = "disabled",
-)]
-#[description("Raw streaming HTTP router test fixture")]
-pub trait RawHttpRouter {
-    fn new() -> Self;
-    #[endpoint(any = "/")]
-    async fn route(&self, request: HttpRequest) -> HttpResponse;
-}
+use golem_rust::agentic::{AgentStream, Config, Header, HttpRequest, HttpResponse, HttpRouter, spawn_local};
+use golem_rust::http_router;
 
 struct RawHttpRouterImpl;
 
@@ -85,113 +36,23 @@ fn failing_stream(
     output
 }
 
-#[agent_definition(kind = "http-router", ephemeral, snapshotting = "disabled")]
-pub trait StaticHttpRouter {
-    fn new() -> Self;
-    #[endpoint(any = "/")]
-    async fn route(&self, request: HttpRequest) -> HttpResponse;
-    fn describe(&self) -> String;
-}
-
 struct StaticHttpRouterImpl;
 
-#[agent_implementation]
-impl StaticHttpRouter for StaticHttpRouterImpl {
-    fn __register_agent_type() {
-        use golem_rust::agentic::{AgentTypeName, register_agent_type};
-        let agent_type = ExtendedAgentType {
-            type_name: "StaticHttpRouter".to_string(),
-            kind: AgentTypeKind::HttpRouter,
-            description: "Immutable files with a raw handler fallback".to_string(),
-            source_language: "rust".to_string(),
-            constructor: ExtendedAgentConstructor {
-                name: None,
-                description: String::new(),
-                prompt_hint: None,
-                input_schema: vec![],
-            },
-            methods: vec![
-                EnrichedAgentMethod {
-                    name: "route".to_string(),
-                    description: String::new(),
-                    http_endpoint: vec![HttpEndpointDetails {
-                        http_method: HttpMethod::Any,
-                        path_suffix: vec![],
-                        header_vars: vec![],
-                        query_vars: vec![],
-                        auth_details: None,
-                        cors_options: CorsOptions {
-                            allowed_patterns: vec![],
-                        },
-                    }],
-                    prompt_hint: None,
-                    input_schema: vec![(
-                        "request".to_string(),
-                        EnrichedParameterSchema::Value(
-                            golem_rust::schema::try_into_schema_graph::<HttpRequest>()
-                                .expect("request schema"),
-                        ),
-                    )],
-                    output_schema: vec![(
-                        "result".to_string(),
-                        golem_rust::schema::try_into_schema_graph::<HttpResponse>()
-                            .expect("response schema"),
-                    )],
-                    read_only: None,
-                },
-                EnrichedAgentMethod {
-                    name: "describe".to_string(),
-                    description: String::new(),
-                    http_endpoint: vec![],
-                    prompt_hint: None,
-                    input_schema: vec![],
-                    output_schema: vec![(
-                        "result".to_string(),
-                        golem_rust::schema::try_into_schema_graph::<String>()
-                            .expect("document schema"),
-                    )],
-                    read_only: None,
-                },
-            ],
-            dependencies: vec![],
-            mode: AgentMode::Ephemeral,
-            http_mount: Some(HttpMountDetails {
-                path_prefix: vec![PathSegment::Literal("raw".to_string())],
-                auth_details: Some(AuthDetails { required: false }),
-                phantom_agent: false,
-                cors_options: CorsOptions {
-                    allowed_patterns: vec!["https://allowed.test".to_string()],
-                },
-                webhook_suffix: vec![],
-                static_bindings: vec![
-                    FileMapping::Exact(ExactFileMapping {
-                        public_path: vec!["favicon".to_string()],
-                        file_path: "/assets/asset.txt".to_string(),
-                    }),
-                    FileMapping::Subtree(SubtreeFileMapping {
-                        public_prefix: vec!["static".to_string()],
-                        filesystem_root: "/assets".to_string(),
-                    }),
-                ],
-                filesystem_bindings: vec![],
-                openapi_provider_method: Some("describe".to_string()),
-            }),
-            snapshotting: Snapshotting::Disabled,
-            config: vec![],
-            sorted_method_indices: vec![],
-        };
-        register_agent_type(AgentTypeName(agent_type.type_name.clone()), agent_type);
-    }
+#[http_router(name = "StaticHttpRouter", mount = "/raw", auth = false,
+    cors = ["https://allowed.test"],
+    static_files = [("/favicon", "/assets/asset.txt"), ("/static/*", "/assets/$1")])]
+impl HttpRouter for StaticHttpRouterImpl {
+    type Config = ();
 
-    fn new() -> Self {
+    fn new(_: Config<()>) -> Self {
         Self
     }
 
-    async fn route(&self, request: HttpRequest) -> HttpResponse {
-        RawHttpRouterImpl.route(request).await
+    async fn handle(&self, request: HttpRequest) -> HttpResponse {
+        RawHttpRouterImpl.handle(request).await
     }
 
-    fn describe(&self) -> String {
+    async fn openapi(&self) -> String {
         use golem_rust::agentic::{get_agent_id, get_principal};
         use golem_rust::golem_agentic::golem::agent::common::Principal;
         assert!(matches!(get_principal(), Some(Principal::Anonymous)));
@@ -211,13 +72,15 @@ impl StaticHttpRouter for StaticHttpRouterImpl {
     }
 }
 
-#[agent_implementation]
-impl RawHttpRouter for RawHttpRouterImpl {
-    fn new() -> Self {
+#[http_router(name = "RawHttpRouter", mount = "/raw", auth = false, cors = ["https://allowed.test"])]
+impl HttpRouter for RawHttpRouterImpl {
+    type Config = ();
+
+    fn new(_: Config<()>) -> Self {
         Self
     }
 
-    async fn route(&self, request: HttpRequest) -> HttpResponse {
+    async fn handle(&self, request: HttpRequest) -> HttpResponse {
         let mut headers = vec![
             header("x-echo-method", request.method.as_bytes()),
             header("x-echo-path", request.path.as_bytes()),

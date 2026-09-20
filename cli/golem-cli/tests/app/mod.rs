@@ -26,6 +26,7 @@ mod moonbit_guest_streams;
 mod moonbit_tool_middleware;
 mod plugins;
 mod remote_releases;
+mod rust_http_router;
 mod rust_streams;
 mod scala_guest_streams;
 mod scala_tool_middleware;

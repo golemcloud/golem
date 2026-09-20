@@ -2249,7 +2249,10 @@ mod tests {
         fn new() -> Self;
 
         #[endpoint(any = "/")]
-        fn route(&self, request: String) -> String;
+        fn route(
+            &self,
+            request: golem_rust::agentic::HttpRequest,
+        ) -> golem_rust::agentic::HttpResponse;
     }
 
     struct HttpRouterAgentImpl;
@@ -2260,8 +2263,15 @@ mod tests {
             Self
         }
 
-        fn route(&self, request: String) -> String {
-            request
+        fn route(
+            &self,
+            request: golem_rust::agentic::HttpRequest,
+        ) -> golem_rust::agentic::HttpResponse {
+            golem_rust::agentic::HttpResponse {
+                status: 200,
+                headers: request.headers,
+                body: request.body,
+            }
         }
     }
 

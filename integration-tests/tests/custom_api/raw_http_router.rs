@@ -471,7 +471,7 @@ async fn raw_router_disconnect_stops_private_execution(
                         PublicOplogEntry::AgentInvocationStarted(started)
                             if matches!(&started.invocation,
                                 PublicAgentInvocation::AgentMethodInvocation(method)
-                                    if method.method_name == "route"))
+                                    if method.method_name == "handle"))
                     }) {
                         break 'discover anyhow::Ok(agent_id);
                     }
