@@ -54,6 +54,7 @@ cache_ttl = "5m"
 
 [durable_stream]
 abandoned_prepare_after = "5m"
+external_batch_max_size = "8388608 B"
 lease_ttl = "1m"
 reconciliation_batch_size = 256
 reconciliation_interval = "30s"
@@ -494,6 +495,7 @@ without_time = false
 #
 # [durable_stream]
 # abandoned_prepare_after = "5m"
+# external_batch_max_size = "8388608 B"
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
@@ -907,6 +909,7 @@ without_time = false
 #
 # [durable_stream]
 # abandoned_prepare_after = "5m"
+# external_batch_max_size = "8388608 B"
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"

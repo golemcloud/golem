@@ -1,0 +1,18 @@
+manifestVersion: 1.6.0
+app: external-durable-streams
+
+includes:
+- ../golem-test-components-common.yaml
+
+components:
+  golem-it:external-durable-streams:
+    dir: "."
+    templates: rust, rust-test-component
+
+environments:
+  local:
+    server: local
+    componentPresets: debug
+  cloud:
+    server: cloud
+    componentPresets: release

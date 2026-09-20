@@ -585,6 +585,19 @@ stream. Snapshot calls retain their own settled suspension boundary.
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.
 
+External Durable Streams use reader/writer resources in `durable_host/external_durable_stream/`,
+not a new native stream source or session journal. Serialized `ReadLocal` constructors record
+immutable descriptors and pinned secrets; replay validates and restores those descriptors.
+Content-based resource identities survive snapshot initialization and exclude diagnostic secret
+resolution timestamps, not pinned revisions. Resources own no cursor or producer progress.
+Finite async reads record a complete payload/checkpoint as `ReadRemote`; appends record the
+resource ID and immutable sequence/body/close as `WriteRemote`. SDKs own pending buffers,
+producer progress and durable retry timers. Methods use exact request claims and the existing
+cancellable completion-delivery boundary; dropping a resource only deletes its table entry.
+Completed replay performs no HTTP or secret fetch. Golem forks retain external URLs and producer
+identities; they do not issue DS-level forks. See `reference/streams.md` for protocol, auth and
+memory boundaries.
+
 ## Tool invocations and entity bodies
 
 `durable_host/tool/mod.rs` implements `golem:tool/host@0.1.0`. Tool bodies (sidecars, middleware)

@@ -52,7 +52,7 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::durable_host::schema_value_stream::CoreTypesHost;
 
-fn secret_entry<'a, Ctx: WorkerCtx>(
+pub(super) fn secret_entry<'a, Ctx: WorkerCtx>(
     ctx: &'a mut DurableWorkerCtx<Ctx>,
     secret: &Resource<SecretHandleRep>,
 ) -> anyhow::Result<&'a SecretEntry> {
@@ -123,7 +123,7 @@ fn validate_expected_type(
     }
 }
 
-fn validate_secret_value(
+pub(super) fn validate_secret_value(
     secret: &AgentSecret,
     value: &SchemaValue,
 ) -> Result<(), SecretRevealError> {
@@ -133,7 +133,7 @@ fn validate_secret_value(
         .map_err(|_| SecretRevealError::Internal("stored secret value is invalid".to_string()))
 }
 
-fn canonical_config_key(
+pub(super) fn canonical_config_key(
     entry: &SecretEntry,
 ) -> Result<CanonicalAgentSecretPath, SecretRevealError> {
     entry
@@ -167,11 +167,13 @@ fn canonical_secret_resource_segments(
     Ok(segments.join("."))
 }
 
-fn canonical_secret_resource(entry: &SecretEntry) -> Result<String, SecretRevealError> {
+pub(super) fn canonical_secret_resource(entry: &SecretEntry) -> Result<String, SecretRevealError> {
     canonical_secret_resource_segments(entry.config_key.as_deref())
 }
 
-fn environment_owner<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> EnvironmentOwnerPattern {
+pub(super) fn environment_owner<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+) -> EnvironmentOwnerPattern {
     let component = ctx.owner_component_metadata();
     EnvironmentOwnerPattern::Environment {
         account: component.account_email.clone(),
