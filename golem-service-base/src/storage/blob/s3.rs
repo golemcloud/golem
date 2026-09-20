@@ -65,13 +65,15 @@ const RANGE_NOT_SATISFIABLE: u16 = 416;
 
 /// The name of the object that records a directory, because S3 has no directories.
 ///
-/// [`BlobNameError::Reserved`] in the parent module keeps the name for this object.
-pub(crate) const DIR_MARKER: &str = "__dir_marker";
+/// [`BlobNameError::Reserved`] in the parent module keeps the name for this object, and this
+/// backend gives that error with this name in it.
+const DIR_MARKER: &str = "__dir_marker";
 
 /// The largest number of bytes of UTF-8 that S3 accepts in an object key.
 ///
-/// [`BlobNameError::TooLong`] in the parent module holds the rule.
-pub(crate) const MAX_KEY_BYTES: usize = 1024;
+/// [`BlobNameError::TooLong`] in the parent module holds the rule, and this backend gives that
+/// error with this limit in it.
+const MAX_KEY_BYTES: usize = 1024;
 
 #[derive(Debug)]
 pub struct S3BlobStorage {
@@ -310,7 +312,7 @@ impl S3BlobStorage {
             });
         }
         if key.rsplit('/').next() == Some(DIR_MARKER) {
-            return Err(BlobNameError::Reserved);
+            return Err(BlobNameError::Reserved { marker: DIR_MARKER });
         }
         Self::checked_length(key)
     }
@@ -318,7 +320,10 @@ impl S3BlobStorage {
     /// Gives the key when it has at most [`MAX_KEY_BYTES`] bytes of UTF-8.
     fn checked_length(key: String) -> Result<String, BlobNameError> {
         if key.len() > MAX_KEY_BYTES {
-            return Err(BlobNameError::TooLong { length: key.len() });
+            return Err(BlobNameError::TooLong {
+                length: key.len(),
+                max: MAX_KEY_BYTES,
+            });
         }
         Ok(key)
     }

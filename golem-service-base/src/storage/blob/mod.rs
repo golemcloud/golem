@@ -33,8 +33,6 @@ pub mod memory;
 pub mod s3;
 pub mod sqlite;
 
-use s3::{DIR_MARKER, MAX_KEY_BYTES};
-
 #[async_trait]
 pub trait BlobStorage: Debug + Send + Sync {
     async fn get_raw(
@@ -521,13 +519,12 @@ pub enum BlobNameError {
     /// what a backend gives for a root path.
     #[error("the blob path has no name in it: {path:?}")]
     NoName { path: PathBuf },
-    /// The object key has `length` bytes of UTF-8, which is more than [`MAX_KEY_BYTES`]. S3
-    /// rejects such a key.
+    /// The object key has `length` bytes of UTF-8, which is more than `max`, the largest
+    /// number of bytes that S3 accepts in an object key. S3 rejects such a key.
     #[error(
-        "the object key of the blob name has {length} bytes of UTF-8, and S3 accepts at most {max}; the key holds the namespace prefix before the name",
-        max = MAX_KEY_BYTES
+        "the object key of the blob name has {length} bytes of UTF-8, and S3 accepts at most {max}; the key holds the namespace prefix before the name"
     )]
-    TooLong { length: usize },
+    TooLong { length: usize, max: usize },
     /// The object key has a NUL byte. MinIO rejects such a key.
     #[error("the blob name has a NUL byte")]
     NulByte,
@@ -538,9 +535,9 @@ pub enum BlobNameError {
         "the blob name has the segment {segment:?}, which is `.` or `..` without the whitespace around it; `\\` is a separator like `/`"
     )]
     DotSegment { segment: String },
-    /// The last segment of the object key is [`DIR_MARKER`], the name of the object that the
-    /// S3 backend writes to record a directory. The blob listing leaves that name out, so a
-    /// blob with that name would stay out of a snapshot.
+    /// The last segment of the object key is `marker`, the name of the object that the S3
+    /// backend writes to record a directory. The blob listing leaves that name out, so a blob
+    /// with that name would stay out of a snapshot.
     ///
     /// The rule applies to a directory name too, and a collision is the reason. `create_dir`
     /// of `x/__dir_marker` writes its marker object at the key `x/__dir_marker/__dir_marker`,
@@ -550,10 +547,9 @@ pub enum BlobNameError {
     /// object of `x`. The rule keeps that one key for the backend, so the collision cannot
     /// happen.
     #[error(
-        "the last segment of the blob name is {marker}, which the S3 backend keeps for the object that records a directory",
-        marker = DIR_MARKER
+        "the last segment of the blob name is {marker}, which the S3 backend keeps for the object that records a directory"
     )]
-    Reserved,
+    Reserved { marker: &'static str },
 }
 
 /// Gives the bytes from `start` to `end` of `blob`, which holds the full blob. Both offsets are

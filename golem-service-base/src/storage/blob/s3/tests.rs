@@ -1107,8 +1107,13 @@ async fn put_raw_rejects_a_name_that_breaks_a_rule_without_a_request() {
                 Err(Some(BlobNameError::DotSegment {
                     segment: "..".to_string()
                 })),
-                Err(Some(BlobNameError::Reserved)),
-                Err(Some(BlobNameError::TooLong { length: 1025 })),
+                Err(Some(BlobNameError::Reserved {
+                    marker: "__dir_marker"
+                })),
+                Err(Some(BlobNameError::TooLong {
+                    length: 1025,
+                    max: 1024
+                })),
             ],
             0
         )
@@ -1134,7 +1139,10 @@ async fn the_key_limit_counts_bytes_of_utf8_and_not_characters() {
     assert_eq!(
         (multi_byte, single_byte, sent(&requests).len()),
         (
-            Err(Some(BlobNameError::TooLong { length: 1237 })),
+            Err(Some(BlobNameError::TooLong {
+                length: 1237,
+                max: 1024
+            })),
             Ok(()),
             1
         )
@@ -1175,7 +1183,10 @@ async fn the_key_limit_counts_the_namespace_prefix() {
         ),
         (
             Ok(()),
-            Err(Some(BlobNameError::TooLong { length: 1025 })),
+            Err(Some(BlobNameError::TooLong {
+                length: 1025,
+                max: 1024
+            })),
             vec![true]
         )
     );
@@ -1211,8 +1222,12 @@ async fn a_name_that_ends_with_the_marker_is_rejected_and_the_error_names_it() {
         (
             true,
             true,
-            Some(BlobNameError::Reserved),
-            Some(BlobNameError::Reserved),
+            Some(BlobNameError::Reserved {
+                marker: "__dir_marker"
+            }),
+            Some(BlobNameError::Reserved {
+                marker: "__dir_marker"
+            }),
             0
         )
     );
@@ -1368,7 +1383,10 @@ async fn create_dir_rejects_a_directory_whose_marker_does_not_fit_the_key_limit(
         (written, created, sent(&requests).len()),
         (
             Ok(()),
-            Err(Some(BlobNameError::TooLong { length: 1037 })),
+            Err(Some(BlobNameError::TooLong {
+                length: 1037,
+                max: 1024
+            })),
             1
         )
     );
@@ -1558,9 +1576,15 @@ async fn the_reserved_rule_keeps_the_marker_object_of_a_directory_free() {
         ),
         (
             Ok(ExistsResult::Directory),
-            Err(Some(BlobNameError::Reserved)),
-            Err(Some(BlobNameError::Reserved)),
-            Err(Some(BlobNameError::Reserved)),
+            Err(Some(BlobNameError::Reserved {
+                marker: "__dir_marker"
+            })),
+            Err(Some(BlobNameError::Reserved {
+                marker: "__dir_marker"
+            })),
+            Err(Some(BlobNameError::Reserved {
+                marker: "__dir_marker"
+            })),
             vec![
                 (
                     "PUT".to_string(),
