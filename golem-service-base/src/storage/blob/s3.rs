@@ -15,8 +15,8 @@
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
-    blob_path_is_root, blob_path_to_string, blob_range, normalized_blob_path,
+    BlobMetadata, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult,
+    ListedBlob, blob_path_is_root, blob_path_to_string, blob_range, normalized_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -64,63 +64,14 @@ const HTTP_OK: u16 = 200;
 const RANGE_NOT_SATISFIABLE: u16 = 416;
 
 /// The name of the object that records a directory, because S3 has no directories.
-const DIR_MARKER: &str = "__dir_marker";
+///
+/// [`BlobNameError::Reserved`] in the parent module keeps the name for this object.
+pub(crate) const DIR_MARKER: &str = "__dir_marker";
 
 /// The largest number of bytes of UTF-8 that S3 accepts in an object key.
-const MAX_KEY_BYTES: usize = 1024;
-
-/// The error of a blob name that the S3 backend does not send as an object key.
 ///
-/// The backend applies the rules to the full object key: the namespace prefix, the separators
-/// and the name (`S3BlobStorage::key_of`). S3 and MinIO measure the full key. Each rule is a
-/// rule of S3 or of MinIO, and one is the name that the backend keeps for its own object. A
-/// name that breaks a rule gets this error before the backend builds a request, so the name
-/// costs no request and no retry.
-///
-/// The error is permanent. `blob_store_error` in
-/// `golem_worker_executor::services::blob_store` maps it to `BlobStoreError::InvalidInput`,
-/// and `classify_blob_store_error` in `golem_worker_executor::durable_host::blobstore` makes
-/// that permanent, so the guest gets the error at once and the executor does not retry.
-///
-/// `normalized_blob_path` in the parent module holds the neighbouring rules: an absolute
-/// path, a `..` name, a `.` name, and an extra separator. The rules here are what that leaves
-/// open.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum BlobNameError {
-    /// The object key has `length` bytes of UTF-8, which is more than [`MAX_KEY_BYTES`]. S3
-    /// rejects such a key.
-    #[error(
-        "the object key of the blob name has {length} bytes of UTF-8, and S3 accepts at most {max}; the key holds the namespace prefix before the name",
-        max = MAX_KEY_BYTES
-    )]
-    TooLong { length: usize },
-    /// The object key has a NUL byte. MinIO rejects such a key.
-    #[error("the blob name has a NUL byte")]
-    NulByte,
-    /// The object key has a segment that is `.` or `..` without the whitespace around it.
-    /// MinIO rejects such a key, and reads `\` as a separator like `/`. `segment` is the
-    /// segment with its whitespace.
-    #[error(
-        "the blob name has the segment {segment:?}, which is `.` or `..` without the whitespace around it; `\\` is a separator like `/`"
-    )]
-    DotSegment { segment: String },
-    /// The last segment of the object key is [`DIR_MARKER`], the name of the object that the
-    /// backend writes to record a directory. The blob listing leaves that name out, so a blob
-    /// with that name would stay out of a snapshot.
-    ///
-    /// The rule applies to a directory name too, and a collision is the reason. `create_dir`
-    /// of `x/__dir_marker` writes its marker object at the key `x/__dir_marker/__dir_marker`,
-    /// while `exists` of `x/__dir_marker` sends a HEAD for the key `x/__dir_marker`, which is
-    /// the marker object of the directory `x`. `exists` would give `File` for a directory
-    /// that the guest had just made, and `get_metadata` would give the size of the marker
-    /// object of `x`. The rule keeps that one key for the backend, so the collision cannot
-    /// happen.
-    #[error(
-        "the last segment of the blob name is {marker}, which the S3 backend keeps for the object that records a directory",
-        marker = DIR_MARKER
-    )]
-    Reserved,
-}
+/// [`BlobNameError::TooLong`] in the parent module holds the rule.
+pub(crate) const MAX_KEY_BYTES: usize = 1024;
 
 #[derive(Debug)]
 pub struct S3BlobStorage {

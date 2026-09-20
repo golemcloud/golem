@@ -172,6 +172,11 @@ pub struct DefaultBlobStoreService {
 /// [`BlobStoreError::TransientBackend`], which is transient, so the executor retries the
 /// operation. Each method of [`DefaultBlobStoreService`] maps its errors with this function,
 /// so an error of the input is permanent at each of them.
+///
+/// [`BlobNameError`] has one downcast here and one rule: each of its variants is a name that
+/// the guest chose and that the storage cannot use, so each of them is permanent, whichever
+/// backend gives it. The path rules are in it too, so a `..` name and an absolute name are
+/// permanent like a name that S3 does not accept as an object key.
 fn blob_store_error(err: anyhow::Error) -> BlobStoreError {
     if let Some(range) = err.downcast_ref::<BlobRangeError>() {
         BlobStoreError::InvalidInput(range.to_string())
@@ -635,21 +640,67 @@ mod tests {
         }
     }
 
+    /// `blob_store_error` has one downcast for `BlobNameError`, so each rule of a name is
+    /// permanent, and the rules of the path are in it with the rules of the object key of S3.
+    ///
+    /// The filesystem backend gives the two errors of the path, so the test reads the real
+    /// rules and breaks if the type of their error changes. It also gives an error of the
+    /// backend: a write that the filesystem cannot do. The NUL byte is a rule of the S3
+    /// backend, and only a scripted transport gives it here, so the test builds that error.
     #[test]
-    fn blob_store_error_makes_an_error_of_the_input_permanent_and_another_error_transient() {
-        let errors = [
+    async fn blob_store_error_makes_an_error_of_the_input_permanent_and_a_backend_error_transient()
+    {
+        let tempdir = TempDir::new().unwrap();
+        let storage = FileSystemBlobStorage::new(tempdir.path()).await.unwrap();
+        let namespace = BlobStorageNamespace::CustomStorage {
+            environment_id: EnvironmentId::new(),
+        };
+        let put = |path: &'static str| {
+            let namespace = namespace.clone();
+            let storage = &storage;
+            async move {
+                storage
+                    .put_raw("test", "put-raw", namespace, Path::new(path), &[1])
+                    .await
+            }
+        };
+
+        // A blob at `file` makes `file/blob` a path that the filesystem cannot write, because
+        // the parent of the blob is a file and not a directory.
+        put("file").await.unwrap();
+        let backend = blob_store_error(put("file/blob").await.unwrap_err());
+        let names = [
+            put("../escape").await.unwrap_err(),
+            put("/escape").await.unwrap_err(),
             BlobNameError::NulByte.into(),
             BlobRangeError { start: 3, end: 2 }.into(),
-            anyhow::anyhow!("Blob path cannot contain parent traversal"),
         ]
         .map(blob_store_error);
 
         assert_eq!(
-            errors
+            names
                 .iter()
                 .map(|error| (error.to_string(), classify_blob_store_error(error)))
                 .collect::<Vec<_>>(),
             vec![
+                (
+                    format!(
+                        "Invalid input: {}",
+                        BlobNameError::ParentDir {
+                            path: PathBuf::from("../escape")
+                        }
+                    ),
+                    HostFailureKind::Permanent
+                ),
+                (
+                    format!(
+                        "Invalid input: {}",
+                        BlobNameError::NotRelative {
+                            path: PathBuf::from("/escape")
+                        }
+                    ),
+                    HostFailureKind::Permanent
+                ),
                 (
                     format!("Invalid input: {}", BlobNameError::NulByte),
                     HostFailureKind::Permanent
@@ -658,11 +709,15 @@ mod tests {
                     format!("Invalid input: {}", BlobRangeError { start: 3, end: 2 }),
                     HostFailureKind::Permanent
                 ),
-                (
-                    "Backend error: Blob path cannot contain parent traversal".to_string(),
-                    HostFailureKind::Transient
-                ),
             ]
+        );
+        assert_eq!(
+            (
+                matches!(backend, BlobStoreError::TransientBackend(_)),
+                classify_blob_store_error(&backend)
+            ),
+            (true, HostFailureKind::Transient),
+            "{backend:?}"
         );
     }
 
@@ -925,6 +980,45 @@ mod tests {
         );
     }
 
+    /// A guest picks the name of a container and the name of an object, and a `..` in a name
+    /// makes a path that goes above the root of its namespace. Each backend rejects such a
+    /// path, and the guest gets a permanent error, so the executor does not retry a name that
+    /// can never work.
+    async fn test_a_parent_name_is_invalid_input(blob_store: &impl BlobStoreService) {
+        let environment_id = EnvironmentId::new();
+        blob_store
+            .create_container(environment_id, "container1".to_string())
+            .await
+            .unwrap();
+
+        let written = blob_store
+            .write_data(environment_id, "container1", "../../escape", &[1])
+            .await;
+        let read = blob_store
+            .get_data(
+                environment_id,
+                "container1".to_string(),
+                "../../escape".to_string(),
+                0,
+                0,
+            )
+            .await
+            .map(drop);
+        let container = blob_store
+            .create_container(environment_id, "../escape".to_string())
+            .await;
+
+        let results = [written, read, container];
+        assert!(
+            results.iter().all(|result| matches!(
+                result,
+                Err(error @ BlobStoreError::InvalidInput(_))
+                    if classify_blob_store_error(error) == HostFailureKind::Permanent
+            )),
+            "{results:?}"
+        );
+    }
+
     fn in_memory_blob_store() -> impl BlobStoreService {
         let blob_storage = Arc::new(InMemoryBlobStorage::new());
         DefaultBlobStoreService::new(blob_storage)
@@ -985,6 +1079,19 @@ mod tests {
         let tempdir = TempDir::new().unwrap();
         let blob_store = fs_blob_store(tempdir.path()).await;
         test_container_list_copy_move_list(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_parent_name_is_invalid_input_in_memory() {
+        let blob_store = in_memory_blob_store();
+        test_a_parent_name_is_invalid_input(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_parent_name_is_invalid_input_local() {
+        let tempdir = TempDir::new().unwrap();
+        let blob_store = fs_blob_store(tempdir.path()).await;
+        test_a_parent_name_is_invalid_input(&blob_store).await;
     }
 
     #[test]

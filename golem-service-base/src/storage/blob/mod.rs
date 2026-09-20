@@ -33,7 +33,7 @@ pub mod memory;
 pub mod s3;
 pub mod sqlite;
 
-pub use s3::BlobNameError;
+use s3::{DIR_MARKER, MAX_KEY_BYTES};
 
 #[async_trait]
 pub trait BlobStorage: Debug + Send + Sync {
@@ -468,6 +468,80 @@ pub struct BlobRangeError {
     pub end: u64,
 }
 
+/// The error of a blob name that the storage cannot use.
+///
+/// A guest picks the name of a container and the name of an object, and
+/// `golem_worker_executor::services::blob_store` makes the path of the blob of the two. A name
+/// that breaks a rule gets this error before a backend reads or writes anything, so the name
+/// costs no request and no retry.
+///
+/// The first group of rules is of the blob path, and each backend applies it
+/// (`normalized_blob_path`, `blob_path_to_string`). The second group is of the object key of
+/// the S3 backend, which applies it to the full key: the namespace prefix, the separators and
+/// the name (`S3BlobStorage::key_of`). S3 and MinIO measure the full key. Each rule of the
+/// second group is a rule of S3 or of MinIO, and one is the name that the backend keeps for
+/// its own object.
+///
+/// The error is permanent, whichever rule it names and whichever backend gives it.
+/// `blob_store_error` in `golem_worker_executor::services::blob_store` maps it to
+/// `BlobStoreError::InvalidInput`, and `classify_blob_store_error` in
+/// `golem_worker_executor::durable_host::blobstore` makes that permanent, so the guest gets
+/// the error at once and the executor does not retry.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BlobNameError {
+    /// The blob path is not relative: it is absolute, or it has a root name or a drive prefix
+    /// in it. Such a path does not name a blob below the root of its namespace.
+    #[error("the blob path must be relative: {path:?}")]
+    NotRelative { path: PathBuf },
+    /// The blob path has a `..` name in it. Such a name goes up from the name before it, so
+    /// the path can name a blob above the root of its namespace. A `..` name is a name of the
+    /// path, which is `std::path::Component::ParentDir`.
+    ///
+    /// [`BlobNameError::DotSegment`] holds the neighbouring rule of the S3 backend, which
+    /// reads an object key as MinIO reads it: at `\` as well as at `/`, and without the
+    /// whitespace around a segment. A segment that is not a `..` name of the path, for example
+    /// `" .. "`, gets that error and not this one.
+    #[error("the blob path has a `..` name in it: {path:?}")]
+    ParentDir { path: PathBuf },
+    /// The blob path is not valid UTF-8. The in-memory, SQLite and S3 backends keep the path
+    /// as text, so each of them reads the text of the path.
+    #[error("the blob path must be valid UTF-8: {path:?}")]
+    NotUtf8 { path: PathBuf },
+    /// The object key has `length` bytes of UTF-8, which is more than [`MAX_KEY_BYTES`]. S3
+    /// rejects such a key.
+    #[error(
+        "the object key of the blob name has {length} bytes of UTF-8, and S3 accepts at most {max}; the key holds the namespace prefix before the name",
+        max = MAX_KEY_BYTES
+    )]
+    TooLong { length: usize },
+    /// The object key has a NUL byte. MinIO rejects such a key.
+    #[error("the blob name has a NUL byte")]
+    NulByte,
+    /// The object key has a segment that is `.` or `..` without the whitespace around it.
+    /// MinIO rejects such a key, and reads `\` as a separator like `/`. `segment` is the
+    /// segment with its whitespace.
+    #[error(
+        "the blob name has the segment {segment:?}, which is `.` or `..` without the whitespace around it; `\\` is a separator like `/`"
+    )]
+    DotSegment { segment: String },
+    /// The last segment of the object key is [`DIR_MARKER`], the name of the object that the
+    /// S3 backend writes to record a directory. The blob listing leaves that name out, so a
+    /// blob with that name would stay out of a snapshot.
+    ///
+    /// The rule applies to a directory name too, and a collision is the reason. `create_dir`
+    /// of `x/__dir_marker` writes its marker object at the key `x/__dir_marker/__dir_marker`,
+    /// while `exists` of `x/__dir_marker` sends a HEAD for the key `x/__dir_marker`, which is
+    /// the marker object of the directory `x`. `exists` would give `File` for a directory
+    /// that the guest had just made, and `get_metadata` would give the size of the marker
+    /// object of `x`. The rule keeps that one key for the backend, so the collision cannot
+    /// happen.
+    #[error(
+        "the last segment of the blob name is {marker}, which the S3 backend keeps for the object that records a directory",
+        marker = DIR_MARKER
+    )]
+    Reserved,
+}
+
 /// Gives the bytes from `start` to `end` of `blob`, which holds the full blob. Both offsets are
 /// inclusive.
 ///
@@ -487,10 +561,13 @@ pub(crate) fn blob_range(blob: &[u8], start: u64, end: u64) -> Result<&[u8], Blo
 /// The form holds the names of the path and one separator between two names. A `.` and an extra
 /// separator are not names, so they go away, and a path at the root of a namespace becomes the
 /// empty path. Two paths that name the same blob get the same form. An absolute path, a path
-/// with `..` in it, and a path with a drive letter are errors.
-pub(crate) fn normalized_blob_path(path: &Path) -> Result<Cow<'_, Path>, Error> {
+/// with `..` in it, and a path with a drive letter give a [`BlobNameError`], which is
+/// permanent.
+pub(crate) fn normalized_blob_path(path: &Path) -> Result<Cow<'_, Path>, BlobNameError> {
     if path.is_absolute() {
-        return Err(anyhow!("Blob path must be relative: {path:?}"));
+        return Err(BlobNameError::NotRelative {
+            path: path.to_path_buf(),
+        });
     }
 
     let mut names_length = 0usize;
@@ -503,12 +580,14 @@ pub(crate) fn normalized_blob_path(path: &Path) -> Result<Cow<'_, Path>, Error> 
             }
             Component::CurDir => {}
             Component::ParentDir => {
-                return Err(anyhow!(
-                    "Blob path cannot contain parent traversal: {path:?}"
-                ));
+                return Err(BlobNameError::ParentDir {
+                    path: path.to_path_buf(),
+                });
             }
             Component::RootDir | Component::Prefix(_) => {
-                return Err(anyhow!("Blob path must be relative: {path:?}"));
+                return Err(BlobNameError::NotRelative {
+                    path: path.to_path_buf(),
+                });
             }
         }
     }
@@ -536,13 +615,16 @@ pub(crate) fn blob_path_is_root(path: &Path) -> bool {
         .any(|component| matches!(component, Component::Normal(_)))
 }
 
-pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, Error> {
+/// Gives the text of the path, or a [`BlobNameError`], which is permanent.
+pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, BlobNameError> {
     path.to_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
+        .ok_or_else(|| BlobNameError::NotUtf8 {
+            path: path.to_path_buf(),
+        })
 }
 
-pub(crate) fn blob_parent_to_string(path: &Path) -> Result<String, Error> {
+pub(crate) fn blob_parent_to_string(path: &Path) -> Result<String, BlobNameError> {
     match path.parent() {
         Some(parent) => blob_path_to_string(parent),
         None => Ok(String::new()),
@@ -562,20 +644,32 @@ pub(crate) fn blob_child_path(directory: &str, name: &str) -> Box<Path> {
     PathBuf::from(path).into_boxed_path()
 }
 
+/// Gives the text of the last name of the path.
+///
+/// A path that is not valid UTF-8 gives the same [`BlobNameError`] as `blob_path_to_string`,
+/// which is permanent. A path with no name in it is at the root of its namespace, which each
+/// caller reads before it calls this function, so that error is of the caller and not of the
+/// name.
 pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
     path.file_name()
         .ok_or_else(|| anyhow!("Path must have a file name: {path:?}"))
         .and_then(|name| {
-            name.to_str()
-                .map(|s| s.to_string())
-                .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
+            name.to_str().map(|s| s.to_string()).ok_or_else(|| {
+                Error::from(BlobNameError::NotUtf8 {
+                    path: path.to_path_buf(),
+                })
+            })
         })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BlobRangeError, blob_range};
+    use super::{
+        BlobNameError, BlobRangeError, blob_file_name_to_string, blob_path_to_string, blob_range,
+        normalized_blob_path,
+    };
     use pretty_assertions::assert_eq;
+    use std::path::{Path, PathBuf};
     use test_r::test;
 
     #[test]
@@ -612,5 +706,60 @@ mod tests {
             blob_range(b"", 0, 0),
             Err(BlobRangeError { start: 0, end: 0 })
         );
+    }
+
+    #[test]
+    fn normalized_blob_path_gives_the_one_form_or_the_rule_that_the_name_breaks() {
+        let paths = ["", ".", "a", "./a//b/", "/escape", "../escape", "a/../b"];
+
+        let results =
+            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.into_owned()));
+
+        assert_eq!(
+            results,
+            [
+                Ok(PathBuf::from("")),
+                Ok(PathBuf::from("")),
+                Ok(PathBuf::from("a")),
+                Ok(PathBuf::from("a/b")),
+                Err(BlobNameError::NotRelative {
+                    path: PathBuf::from("/escape")
+                }),
+                Err(BlobNameError::ParentDir {
+                    path: PathBuf::from("../escape")
+                }),
+                Err(BlobNameError::ParentDir {
+                    path: PathBuf::from("a/../b")
+                }),
+            ]
+        );
+    }
+
+    /// The guest gives its names as text, so only a path of another source can break this
+    /// rule. Each function that reads the text of a path gives the one error for it.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_not_utf8_gives_the_utf8_rule() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = Path::new(OsStr::from_bytes(b"a/\xff"));
+        let expected = BlobNameError::NotUtf8 {
+            path: path.to_path_buf(),
+        };
+
+        assert_eq!(
+            (
+                blob_path_to_string(path),
+                blob_file_name_to_string(path)
+                    .map_err(|error| error.downcast::<BlobNameError>().ok())
+            ),
+            (Err(expected.clone()), Err(Some(expected)))
+        );
+    }
+
+    #[test]
+    fn blob_path_to_string_gives_the_text_of_the_path() {
+        assert_eq!(blob_path_to_string(Path::new("a/b")), Ok("a/b".to_string()));
     }
 }
