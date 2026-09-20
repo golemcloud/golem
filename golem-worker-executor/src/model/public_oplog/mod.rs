@@ -21,7 +21,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::oplog::OplogServiceOps;
 use async_trait::async_trait;
-use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, AgentTypeName, OwnerKind, ParsedAgentId};
 use golem_common::model::component::{ComponentRevision, InstalledPlugin};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationRequest,
@@ -50,18 +50,19 @@ use golem_common::model::oplog::public_oplog_entry::{
 use golem_common::model::oplog::types::encode_span_data;
 use golem_common::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, FallibleResultParameters, HostRequest,
-    HostRequestGolemRpcInvoke, HostRequestGolemRpcScheduledInvocation, HostResponse,
-    HostResponseEntityInvocation, JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters,
-    MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
+    AgentMethodInvocationParameters, ExternalToolInvocationParameters,
+    ExternalToolResultParameters, FallibleResultParameters, HostRequest, HostRequestGolemRpcInvoke,
+    HostRequestGolemRpcScheduledInvocation, HostResponse, HostResponseEntityInvocation,
+    JsonSnapshotData, LoadSnapshotParameters, ManualUpdateParameters, MultipartPartData,
+    MultipartSnapshotData, MultipartSnapshotPart, OplogEntry, OplogIndex,
     PluginInstallationDescription, ProcessOplogEntriesParameters,
     ProcessOplogEntriesResultParameters, PublicAgentEntity, PublicAgentEntityKind,
     PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute, PublicEntityCallMode,
     PublicEntityInvocation, PublicEntityInvocationContext, PublicEntityInvocationOperation,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicSnapshotData,
-    PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
-    RawSnapshotData, SaveSnapshotResultParameters, SnapshotBasedUpdateParameters,
-    UpdateDescription,
+    PublicExternalToolResult, PublicOplogEntry, PublicOplogEntryAttribution,
+    PublicOplogEntryWithIndex, PublicSnapshotData, PublicToolInvocationOperation,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, RawSnapshotData,
+    SaveSnapshotResultParameters, SnapshotBasedUpdateParameters, UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
@@ -501,7 +502,7 @@ fn public_entity_invocation(
         EntityCallMode::Asynchronous => PublicEntityCallMode::Asynchronous,
         EntityCallMode::FireAndForget => PublicEntityCallMode::FireAndForget,
     };
-    let operation = request.operation.map(|operation| match operation {
+    let operation = Some(match request.operation {
         EntityInvocationDescriptor::Tool(tool) => {
             PublicEntityInvocationOperation::Tool(PublicToolInvocationOperation {
                 command_path: tool.command_path,
@@ -723,10 +724,19 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
     ) -> Result<Self, String> {
+        // Creation validates this naming invariant against the persisted kind. Rendering plugin
+        // descriptions needs no authority or status reconstruction; Create uses its own kind below.
+        let owner_kind = if OwnerKind::is_reserved_instance_name(&owned_agent_id.agent_id.agent_id)
+        {
+            OwnerKind::EphemeralExternalTool
+        } else {
+            OwnerKind::ComponentAgent
+        };
         match value {
             OplogEntry::Create {
                 timestamp,
                 agent_id,
+                owner_kind,
                 agent_mode,
                 component_revision,
                 env,
@@ -748,8 +758,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let initial_plugins = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let initial_plugins = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .unwrap_or_default()
                     .iter()
                     .filter(|&p| initial_active_plugins.contains(&p.environment_plugin_grant_id))
@@ -760,7 +771,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let local_agent_config = local_agent_config
                     .into_iter()
                     .map(|lac| {
-                        let typed = lac.enrich_with_type(&metadata.metadata, agent_type_name)?;
+                        let typed =
+                            lac.enrich_with_type(&metadata.metadata, owner_kind, agent_type_name)?;
                         Ok::<_, String>(PublicTypedAgentConfigEntry {
                             path: typed.path,
                             value: typed.value,
@@ -771,6 +783,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 Ok(PublicOplogEntry::Create(CreateParams {
                     timestamp,
                     agent_id,
+                    owner_kind,
                     agent_mode,
                     component_revision,
                     env: env.into_iter().collect(),
@@ -1174,8 +1187,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let plugin_installation = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .and_then(|plugins| {
                         plugins
                             .iter()
@@ -1202,8 +1216,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let plugin_installation = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .and_then(|plugins| {
                         plugins
                             .iter()
@@ -1355,8 +1370,9 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                let plugin_installation = agent_type_name
-                    .and_then(|t| metadata.metadata.agent_type_plugins(t))
+                let plugin_installation = metadata
+                    .metadata
+                    .owner_plugins(owner_kind, agent_type_name)
                     .and_then(|plugins| {
                         plugins
                             .iter()
@@ -1852,6 +1868,27 @@ async fn agent_invocation_to_public(
                 },
             ))
         }
+        AgentInvocation::ExternalTool {
+            idempotency_key,
+            tool_name,
+            command_path,
+            input,
+            invocation_context,
+            ..
+        } => {
+            let span_data = invocation_context.to_oplog_data();
+            Ok(PublicAgentInvocation::ExternalTool(
+                ExternalToolInvocationParameters {
+                    idempotency_key,
+                    tool_name: tool_name.into_inner(),
+                    command_path,
+                    input: *input,
+                    trace_id: invocation_context.trace_id.clone(),
+                    trace_states: invocation_context.trace_states.clone(),
+                    invocation_context: encode_span_data(&span_data),
+                },
+            ))
+        }
         AgentInvocation::ManualUpdate { target_revision } => Ok(
             PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }),
         ),
@@ -1921,6 +1958,14 @@ async fn agent_invocation_result_to_public(
                 AgentInvocationOutputParameters { output },
             ))
         }
+        AgentInvocationResult::ExternalTool { result } => Ok(
+            PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters {
+                result: match result {
+                    Ok(result) => PublicExternalToolResult::Success(result),
+                    Err(error) => PublicExternalToolResult::Failure(error),
+                },
+            }),
+        ),
         AgentInvocationResult::ManualUpdate => {
             Ok(PublicAgentInvocationResult::ManualUpdate(Empty {}))
         }

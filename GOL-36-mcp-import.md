@@ -1732,6 +1732,33 @@ public-oplog and config acceptance closes this step; middleware remains step 8.
   The provisional whole-envelope transport bounds and separate projection budgets
   remain a final-review item, as previously agreed.
 
+### Latest-main middleware integration — validation in progress
+
+- The merge now includes GOL-439's pinned root/descendant plans and generic native
+  dispatch, plus component-baseline bindings and owner-relative stream records.
+  This supersedes the earlier dependency-waiting status; dynamic MCP universal
+  middleware construction and combined step 8/10 acceptance are still outstanding.
+- Shared activation contracts retain MCP projection data in `golem-common` rather
+  than duplicate executor-local types. Oracle found and verified corrections for
+  lost dynamic invocation fallback, component-baseline discovery, and matching a
+  middleware-presented name instead of the binding's lookup name.
+- MCP migrations are now 041/042 in both databases, after main's 039/040.
+  Diff model version 11 preserves main's historical version-10 fingerprint.
+  The new fingerprint passes with golden-file updates disabled; 85 common
+  entity/payload/fingerprint tests and 62 registry MCP/OAuth tests pass locally.
+- The first focused executor unit run passed 45/46. The cache-invalidation test
+  used a bounded yield loop; it now deterministically polls the pending writer.
+  The resumed-stream regression now checks epoch validation at main's explicit
+  validation boundary rather than expecting mapping materialization to validate
+  transport authority. The fresh focused executor run passes all 47 tests.
+- Both service binaries and the CLI build. OpenAPI and documentation regeneration
+  succeeds using a fresh disposable SQLite database; existing local data is kept.
+  Scoped formatting passes, and the rendered merged discovery section was inspected.
+- The first bug-finder attempt could not complete its compilation. Run 2 uses the
+  freshly built tests and returns clean; Oracle's follow-up finds no blockers in
+  the three corrected paths. Fresh integration fixtures and combined acceptance
+  remain in progress. No green CI or completed step 8/10 is claimed yet.
+
 ## Review and decision history
 
 - Oracle reviewed the initial plan, then conditionally approved a corrected plan.

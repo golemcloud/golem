@@ -434,10 +434,31 @@ impl ApiDeploymentCommandHandler {
                 )
             })
             .collect();
+        let tools = deployable_mcp_deployment
+            .tools
+            .iter()
+            .map(|(k, v)| {
+                Ok((
+                    k.clone(),
+                    golem_common::model::mcp_deployment::McpDeploymentToolOptions {
+                        owner_component: v.owner_component.clone(),
+                        security_scheme: v
+                            .security_scheme
+                            .as_ref()
+                            .map(|s| s.parse())
+                            .transpose()
+                            .map_err(anyhow::Error::msg)?,
+                        include: v.include.clone(),
+                        exclude: v.exclude.clone(),
+                    },
+                ))
+            })
+            .collect::<anyhow::Result<_>>()?;
 
         let mcp_creation = golem_common::model::mcp_deployment::McpDeploymentCreation {
             domain: domain.clone(),
             agents,
+            tools,
         };
 
         let create = async || {
@@ -525,6 +546,10 @@ impl ApiDeploymentCommandHandler {
             diff::DiffForHashOf::HashDiff { .. } => true,
             diff::DiffForHashOf::ValueDiff { diff } => !diff.agents_changes.is_empty(),
         };
+        let tools_changed = match diff {
+            diff::DiffForHashOf::HashDiff { .. } => true,
+            diff::DiffForHashOf::ValueDiff { diff } => !diff.tools_changes.is_empty(),
+        };
 
         let deployment = self
             .ctx
@@ -537,6 +562,11 @@ impl ApiDeploymentCommandHandler {
                     current_revision: update.current_revision,
                     agents: if agents_changed {
                         update.agents.clone()
+                    } else {
+                        None
+                    },
+                    tools: if tools_changed {
+                        update.tools.clone()
                     } else {
                         None
                     },

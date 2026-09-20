@@ -92,6 +92,7 @@ fn default_tool_deployment_configs(
                         files: BTreeMap::new(),
                     },
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 },
             ))
@@ -120,6 +121,7 @@ fn default_tool_deployment_config_updates(
                         file_permission_updates: BTreeMap::new(),
                     }),
                     environment_binding: OptionalFieldUpdate::NoChange,
+                    component_bindings: None,
                     agent_bindings: None,
                 },
             ))
@@ -324,6 +326,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &environment_id.0,
                 &ComponentCreation {
                     component_name,
+                    config_schema: Default::default(),
+                    component_provision_config: Default::default(),
                     agent_types,
                     agent_type_provision_configs,
                     tool_deployment_configs,
@@ -421,6 +425,8 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                 &component_id.0,
                 &ComponentUpdate {
                     current_revision: previous_revision,
+                    config_schema: None,
+                    component_provision_config: None,
                     agent_types: updated_wasm
                         .as_ref()
                         .map(|(_wasm, metadata)| metadata.agent_types.clone()),

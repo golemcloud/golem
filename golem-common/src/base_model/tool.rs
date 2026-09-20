@@ -22,6 +22,11 @@ use crate::base_model::validate_lower_kebab_case_identifier;
 use crate::model::agent::AgentTypeName;
 use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
+#[cfg(feature = "full")]
+use crate::model::entity::{
+    EntityActivation, EntityActivationPolicy, EntityInvocationPlan, EntityInvocationPlanLayer,
+    ExecutableTarget, FilesystemCapability, ToolMiddlewareName,
+};
 use crate::model::tool_release::{ToolReleaseId, ToolReleaseReference};
 use crate::schema::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -258,6 +263,9 @@ pub struct ToolDeploymentMetadata {
     pub environment_binding: Option<ToolBindingInput>,
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
+    pub component_bindings: BTreeMap<ComponentName, ToolBindingInput>,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
     pub agent_bindings: BTreeMap<AgentTypeName, ToolBindingInput>,
 }
 
@@ -275,6 +283,9 @@ pub struct RemoteToolDeployment {
     pub release: ToolReleaseReference,
     pub provision: ToolProvisionConfig,
     pub environment_binding: Option<ToolBindingInput>,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub component_bindings: BTreeMap<ComponentName, ToolBindingInput>,
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub agent_bindings: BTreeMap<AgentTypeName, ToolBindingInput>,
@@ -352,6 +363,10 @@ pub struct RegisteredTool {
     pub release_id: Option<ToolReleaseId>,
     pub definition: Tool,
     pub provision: ToolProvisionConfig,
+    #[serde(default)]
+    #[cfg_attr(feature = "full", desert(default))]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub component_bindings: BTreeMap<ComponentName, ToolBindingInput>,
     pub source: ToolSource,
     pub owner_account_id: AccountId,
     pub owner_account_email: AccountEmail,
@@ -362,19 +377,15 @@ pub struct RegisteredTool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct CompiledToolBinding {
     pub deployment_revision: DeploymentRevision,
     #[serde(default)]
     #[cfg_attr(feature = "full", desert(default))]
     pub release_id: Option<ToolReleaseId>,
-    pub agent_type_name: AgentTypeName,
+    pub owner: ToolBindingOwner,
     pub tool_name: ToolName,
     pub version: String,
     pub metadata_version: String,
@@ -389,9 +400,342 @@ pub struct CompiledToolBinding {
     pub secret_keys_revealable: SecretKeyScope,
     #[serde(default)]
     #[cfg_attr(feature = "full", desert(default))]
-    #[cfg_attr(feature = "full", oai(default))]
     pub filesystem_access: ToolFilesystemAccess,
     pub source: ToolSource,
+}
+
+/// The exact registration and binding accepted for a tool invocation.
+///
+/// Persisting this value with the invocation pins execution and replay to the accepted
+/// deployment rather than resolving whichever deployment happens to be current later.
+#[cfg(feature = "full")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, desert_rust::BinaryCodec)]
+#[desert(evolution())]
+#[serde(rename_all = "camelCase")]
+pub struct ToolActivationSnapshot {
+    pub registered_tool: RegisteredTool,
+    pub binding: CompiledToolBinding,
+    pub filesystem: FilesystemCapability,
+    pub middleware_chain: Option<crate::model::tool_middleware::CompiledToolMiddlewareChain>,
+    pub mcp_import: Option<Box<crate::model::entity::McpImportActivation>>,
+}
+
+#[cfg(feature = "full")]
+#[derive(Clone, Debug, PartialEq)]
+pub enum ToolDispatchTarget {
+    Component(EntityActivation),
+    Host {
+        host_tool_id: HostToolId,
+        implementation_version: String,
+        deployment_revision: DeploymentRevision,
+        provision: ToolProvisionConfig,
+        binding: Box<CompiledToolBinding>,
+        filesystem: FilesystemCapability,
+        mcp_import: Option<Box<crate::model::entity::McpImportActivation>>,
+    },
+}
+
+#[cfg(feature = "full")]
+impl ToolActivationSnapshot {
+    pub fn registered_tool(&self) -> &RegisteredTool {
+        &self.registered_tool
+    }
+
+    pub fn binding(&self) -> &CompiledToolBinding {
+        &self.binding
+    }
+
+    pub fn filesystem(&self) -> FilesystemCapability {
+        self.filesystem
+    }
+
+    pub fn middleware_chain(
+        &self,
+    ) -> Option<&crate::model::tool_middleware::CompiledToolMiddlewareChain> {
+        self.middleware_chain.as_ref()
+    }
+
+    pub fn effective_definition(&self) -> &Tool {
+        self.middleware_chain
+            .as_ref()
+            .map(|chain| &chain.effective_definition)
+            .unwrap_or(&self.registered_tool.definition)
+    }
+
+    /// Materializes the deployment-selected chain into the durable invocation plan.
+    pub fn runtime_plan(&self) -> Result<EntityInvocationPlan, String> {
+        let mut layers = Vec::new();
+        if let Some(chain) = &self.middleware_chain {
+            for occurrence in &chain.occurrences {
+                let crate::model::tool_middleware::ToolMiddlewareSource::Component {
+                    component_id,
+                    component_revision,
+                    ..
+                } = &occurrence.middleware.source;
+                let filesystem =
+                    filesystem_capability(occurrence.filesystem_access, &occurrence.provision)?;
+                let activation = EntityActivation::new(
+                    ExecutableTarget::new(*component_id, *component_revision),
+                    occurrence.middleware.deployment_revision,
+                    EntityActivationPolicy::ToolMiddleware {
+                        middleware_name: ToolMiddlewareName::try_from(
+                            occurrence.middleware.definition.name.as_str(),
+                        )?,
+                        provision: occurrence.provision.clone(),
+                        config_keys_readable: occurrence.config_keys_readable.clone(),
+                        secret_keys_readable: occurrence.secret_keys_readable.clone(),
+                        secret_keys_revealable: occurrence.secret_keys_revealable.clone(),
+                        filesystem_access: occurrence.filesystem_access,
+                    },
+                    filesystem,
+                )?;
+                layers.push(EntityInvocationPlanLayer::Middleware {
+                    activation,
+                    parameters: occurrence.parameters.clone(),
+                    expected_definition: occurrence.expected_definition.clone(),
+                    presented_definition: occurrence.presented_definition.clone(),
+                    next_effective_definition: occurrence.next_effective_definition.clone(),
+                    compatibility: occurrence.compatibility.clone(),
+                });
+            }
+        }
+        let policy = EntityActivationPolicy::Tool {
+            provision: self.registered_tool.provision.clone(),
+            binding: Box::new(self.binding.clone()),
+            mcp_import: self.mcp_import.clone(),
+        };
+        let leaf = match &self.registered_tool.source {
+            ToolSource::Component {
+                component_id,
+                component_revision,
+                ..
+            } => EntityActivation::new(
+                ExecutableTarget::new(*component_id, *component_revision),
+                self.registered_tool.deployment_revision,
+                policy,
+                self.filesystem,
+            ),
+            ToolSource::Host {
+                host_tool_id,
+                implementation_version,
+            } => EntityActivation::new_host(
+                host_tool_id.clone(),
+                implementation_version.clone(),
+                self.registered_tool.deployment_revision,
+                policy,
+                self.filesystem,
+            ),
+        }?;
+        layers.push(EntityInvocationPlanLayer::Tool { activation: leaf });
+        EntityInvocationPlan::new(layers)
+    }
+
+    pub fn into_dispatch_target(self) -> Result<ToolDispatchTarget, String> {
+        match self.registered_tool.source {
+            ToolSource::Component {
+                component_id,
+                component_revision,
+                ..
+            } => EntityActivation::new(
+                ExecutableTarget::new(component_id, component_revision),
+                self.registered_tool.deployment_revision,
+                EntityActivationPolicy::Tool {
+                    provision: self.registered_tool.provision,
+                    binding: Box::new(self.binding),
+                    mcp_import: self.mcp_import,
+                },
+                self.filesystem,
+            )
+            .map(ToolDispatchTarget::Component),
+            ToolSource::Host {
+                host_tool_id,
+                implementation_version,
+            } => Ok(ToolDispatchTarget::Host {
+                host_tool_id,
+                implementation_version,
+                deployment_revision: self.registered_tool.deployment_revision,
+                provision: self.registered_tool.provision,
+                binding: Box::new(self.binding),
+                filesystem: self.filesystem,
+                mcp_import: self.mcp_import,
+            }),
+        }
+    }
+}
+
+#[cfg(feature = "full")]
+fn filesystem_capability(
+    access: ToolFilesystemAccess,
+    provision: &ToolProvisionConfig,
+) -> Result<FilesystemCapability, String> {
+    match (access, provision.files.is_empty()) {
+        (ToolFilesystemAccess::Allowed, _) | (ToolFilesystemAccess::Unset, false) => {
+            Ok(FilesystemCapability::Capable)
+        }
+        (ToolFilesystemAccess::Denied, false) => {
+            Err("filesystem-denied middleware cannot provision files".to_string())
+        }
+        (ToolFilesystemAccess::Denied | ToolFilesystemAccess::Unset, true) => {
+            Ok(FilesystemCapability::Incapable)
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "type", content = "value")]
+pub enum SerializableToolError {
+    InvalidToolName(String),
+    InvalidCommandPath(Vec<String>),
+    InvalidInput(String),
+    ConstraintViolation(String),
+    InvalidResult(String),
+    CustomError(Box<SerializableCustomToolError>),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct SerializableCustomToolError {
+    pub name: String,
+    pub payload: crate::schema::TypedSchemaValue,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "type", content = "value")]
+pub enum SerializableToolRpcError {
+    ProtocolError(String),
+    Denied(String),
+    NotFound(String),
+    RemoteInternalError(String),
+    RemoteToolError(Box<SerializableToolError>),
+    Cancelled,
+    ResourceExhausted(String),
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct SerializableToolInvocationResult {
+    pub result: Option<Box<crate::schema::TypedSchemaValue>>,
+}
+
+/// Internal invocation value lowered onto the ordinary durable-stream transport.
+#[derive(Clone, Debug, golem_schema_derive::FromSchema)]
+pub struct ToolInvocationInput {
+    pub arguments: crate::schema::TypedSchemaValue,
+    pub stdin: Option<golem_schema::schema::SchemaValueStream>,
+}
+
+/// Internal result value. The stdout handle can be registered before the outcome is ready.
+#[derive(Clone, Debug, golem_schema_derive::FromSchema)]
+pub struct ToolInvocationOutput {
+    pub outcome: Result<SerializableToolInvocationResult, SerializableToolRpcError>,
+    pub stdout: Option<golem_schema::schema::SchemaValueStream>,
+}
+
+impl crate::schema::conversion::IntoSchema for ToolInvocationInput {
+    fn type_id() -> crate::schema::TypeId {
+        crate::schema::TypeId::new("golem.internal.ToolInvocationInput")
+    }
+
+    fn register_in(builder: &mut crate::schema::SchemaBuilder) -> crate::schema::SchemaType {
+        use crate::schema::{NamedFieldType, SchemaType, TypedSchemaValue};
+        SchemaType::record(vec![
+            NamedFieldType {
+                name: "arguments".into(),
+                body: TypedSchemaValue::register_in(builder),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "stdin".into(),
+                body: SchemaType::option(SchemaType::stream(Some(SchemaType::u8()))),
+                metadata: Default::default(),
+            },
+        ])
+    }
+
+    fn to_value(&self) -> crate::schema::SchemaValue {
+        crate::schema::SchemaValue::Record {
+            fields: vec![self.arguments.to_value(), self.stdin.to_value()],
+        }
+    }
+}
+
+impl crate::schema::conversion::IntoSchema for ToolInvocationOutput {
+    fn type_id() -> crate::schema::TypeId {
+        crate::schema::TypeId::new("golem.internal.ToolInvocationOutput")
+    }
+
+    fn register_in(builder: &mut crate::schema::SchemaBuilder) -> crate::schema::SchemaType {
+        use crate::schema::{NamedFieldType, SchemaType};
+        SchemaType::record(vec![
+            NamedFieldType { name: "outcome".into(), body: Result::<SerializableToolInvocationResult, SerializableToolRpcError>::register_in(builder), metadata: Default::default() },
+            NamedFieldType { name: "stdout".into(), body: SchemaType::option(SchemaType::stream(Some(SchemaType::u8()))), metadata: Default::default() },
+        ])
+    }
+
+    fn to_value(&self) -> crate::schema::SchemaValue {
+        crate::schema::SchemaValue::Record {
+            fields: vec![self.outcome.to_value(), self.stdout.to_value()],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ToolBindingOwner {
+    AgentType { agent_type_name: AgentTypeName },
+    ComponentBaseline { component_id: ComponentId },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -431,14 +775,14 @@ impl From<RegisteredTool> for DeployedRegisteredTool {
 pub struct ToolDeploymentState {
     pub deployment_revision: DeploymentRevision,
     pub registered_tools: BTreeMap<ToolName, RegisteredTool>,
-    pub agent_tool_bindings: BTreeMap<AgentTypeName, BTreeMap<ToolName, CompiledToolBinding>>,
+    pub tool_bindings: BTreeMap<ToolBindingOwner, BTreeMap<ToolName, CompiledToolBinding>>,
     pub mcp_imports: Vec<crate::base_model::mcp_import::McpImport>,
     pub registered_tool_middlewares: BTreeMap<
         crate::model::tool_middleware::ToolMiddlewareName,
         crate::model::tool_middleware::RegisteredToolMiddleware,
     >,
     pub tool_middleware_chains: BTreeMap<
-        AgentTypeName,
+        ToolBindingOwner,
         BTreeMap<ToolName, crate::model::tool_middleware::CompiledToolMiddlewareChain>,
     >,
 }

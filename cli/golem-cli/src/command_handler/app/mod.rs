@@ -1533,8 +1533,15 @@ impl AppCommandHandler {
                     .iter()
                     .map(|(k, v)| (k.0.clone(), v.to_diffable()))
                     .collect();
-                diffable_local_mcp_deployments
-                    .insert(domain.0.clone(), diff::McpDeployment { agents }.into());
+                let tools = mcp_deployment
+                    .tools
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_diffable()))
+                    .collect();
+                diffable_local_mcp_deployments.insert(
+                    domain.0.clone(),
+                    diff::McpDeployment { agents, tools }.into(),
+                );
             }
             diffable_local_mcp_deployments
         };
@@ -2936,6 +2943,26 @@ impl AppCommandHandler {
                             )
                         })
                         .collect();
+                    let tools = mcp_deployment
+                        .tools
+                        .iter()
+                        .map(|(k, v)| {
+                            Ok((
+                                k.clone(),
+                                golem_common::model::mcp_deployment::McpDeploymentToolOptions {
+                                    owner_component: v.owner_component.clone(),
+                                    security_scheme: v
+                                        .security_scheme
+                                        .as_ref()
+                                        .map(|s| s.parse())
+                                        .transpose()
+                                        .map_err(anyhow::Error::msg)?,
+                                    include: v.include.clone(),
+                                    exclude: v.exclude.clone(),
+                                },
+                            ))
+                        })
+                        .collect::<anyhow::Result<_>>()?;
 
                     mcp_deployment_handler
                         .update_staged_mcp_deployment(
@@ -2945,6 +2972,7 @@ impl AppCommandHandler {
                                     .staged_mcp_deployment_identity(&domain)
                                     .revision,
                                 agents: Some(agents),
+                                tools: Some(tools),
                             },
                             mcp_deployment_diff,
                         )

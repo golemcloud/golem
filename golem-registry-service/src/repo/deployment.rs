@@ -176,7 +176,9 @@ pub trait DeploymentRepo: Send + Sync {
         environment_id: Uuid,
     ) -> RepoResult<Option<ToolDeploymentStateRecord>>;
 
-    async fn get_latest_tool_deployment_state_by_component_revision(
+    /// Use the active deployment when it contains this component revision; otherwise
+    /// use the latest deployment containing it for owners still running an older revision.
+    async fn get_active_tool_deployment_state_by_component_revision(
         &self,
         environment_id: &Uuid,
         component_id: &Uuid,
@@ -516,14 +518,14 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             .await
     }
 
-    async fn get_latest_tool_deployment_state_by_component_revision(
+    async fn get_active_tool_deployment_state_by_component_revision(
         &self,
         environment_id: &Uuid,
         component_id: &Uuid,
         component_revision_id: i64,
     ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
         self.repo
-            .get_latest_tool_deployment_state_by_component_revision(
+            .get_active_tool_deployment_state_by_component_revision(
                 environment_id,
                 component_id,
                 component_revision_id,
@@ -1473,6 +1475,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.owner_account_email,
                         r.tool_definition,
                         r.tool_provision_config,
+                        r.component_bindings,
                         r.metadata_version,
                         r.metadata_digest,
                         r.published,
@@ -1511,6 +1514,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.owner_account_email,
                         r.tool_definition,
                         r.tool_provision_config,
+                        r.component_bindings,
                         r.metadata_version,
                         r.metadata_digest,
                         r.published,
@@ -1544,11 +1548,11 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .with_ro("list_deployment_agent_tool_bindings")
             .fetch_all_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT environment_id, deployment_revision_id, agent_type_name,
+                    SELECT environment_id, deployment_revision_id, binding_owner,
                            tool_name, compiled_binding
-                    FROM deployment_agent_tool_bindings
+                    FROM deployment_tool_bindings
                     WHERE environment_id = $1 AND deployment_revision_id = $2
-                    ORDER BY agent_type_name, tool_name
+                    ORDER BY binding_owner, tool_name
                 "#})
                 .bind(environment_id)
                 .bind(deployment_revision_id),
@@ -1641,14 +1645,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .await
     }
 
-    async fn get_latest_tool_deployment_state_by_component_revision(
+    async fn get_active_tool_deployment_state_by_component_revision(
         &self,
         environment_id: &Uuid,
         component_id: &Uuid,
         component_revision_id: i64,
     ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
         let row = self
-            .with_ro("get_latest_tool_deployment_revision_by_component_revision")
+            .with_ro("get_active_tool_deployment_revision_by_component_revision")
             .fetch_optional(
                 sqlx::query(indoc! { r#"
                     SELECT deployment_revision_id
@@ -1656,7 +1660,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     WHERE environment_id = $1
                         AND component_id = $2
                         AND component_revision_id = $3
-                    ORDER BY deployment_revision_id DESC
+                    ORDER BY CASE WHEN deployment_revision_id = (
+                        SELECT cdr.deployment_revision_id
+                        FROM current_deployments cd
+                        JOIN current_deployment_revisions cdr
+                            ON cdr.environment_id = cd.environment_id
+                            AND cdr.revision_id = cd.current_revision_id
+                        WHERE cd.environment_id = $1
+                    ) THEN 0 ELSE 1 END, deployment_revision_id DESC
                     LIMIT 1
                 "#})
                 .bind(environment_id)
@@ -2564,9 +2575,10 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                      component_id, component_revision_id, component_name,
                      host_tool_id, implementation_version,
                      owner_account_id, owner_account_email,
-                     tool_definition, tool_provision_config, metadata_version, metadata_digest,
+                     tool_definition, tool_provision_config, component_bindings,
+                     metadata_version, metadata_digest,
                      published, deployment_hash)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
             "#})
             .bind(registered_tool.environment_id)
             .bind(registered_tool.deployment_revision_id)
@@ -2582,6 +2594,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
             .bind(&registered_tool.owner_account_email)
             .bind(&registered_tool.tool_definition)
             .bind(&registered_tool.tool_provision_config)
+            .bind(&registered_tool.component_bindings)
             .bind(&registered_tool.metadata_version)
             .bind(registered_tool.metadata_digest)
             .bind(registered_tool.published)
@@ -2598,14 +2611,14 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
     ) -> RepoResult<()> {
         tx.execute(
             sqlx::query(indoc! { r#"
-                INSERT INTO deployment_agent_tool_bindings
-                    (environment_id, deployment_revision_id, agent_type_name,
+                INSERT INTO deployment_tool_bindings
+                    (environment_id, deployment_revision_id, binding_owner,
                      tool_name, compiled_binding)
                 VALUES ($1, $2, $3, $4, $5)
             "#})
             .bind(agent_tool_binding.environment_id)
             .bind(agent_tool_binding.deployment_revision_id)
-            .bind(&agent_tool_binding.agent_type_name)
+            .bind(&agent_tool_binding.binding_owner)
             .bind(&agent_tool_binding.tool_name)
             .bind(&agent_tool_binding.compiled_binding),
         )

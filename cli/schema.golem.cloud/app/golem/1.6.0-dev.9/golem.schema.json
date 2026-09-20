@@ -231,6 +231,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "templates": {
           "$ref": "#/definitions/lenientTokenList"
         },
@@ -272,6 +278,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
         },
         "config": {},
         "initialCard": {
@@ -330,6 +339,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "templates": {
           "$ref": "#/definitions/lenientTokenList"
         },
@@ -375,6 +390,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
         },
         "config": {},
         "initialCard": {
@@ -432,6 +450,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
+        },
         "config": {},
         "initialCard": {
           "$ref": "#/definitions/initialCard"
@@ -534,6 +561,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
+        },
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "config": {},
         "initialCard": {
           "$ref": "#/definitions/initialCard"
@@ -1172,6 +1208,12 @@
           "additionalProperties": {
             "$ref": "#/definitions/mcpDeploymentAgentOptions"
           }
+        },
+        "tools": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/mcpDeploymentToolOptions"
+          }
         }
       },
       "oneOf": [
@@ -1185,6 +1227,10 @@
             "subdomain"
           ]
         }
+      ],
+      "anyOf": [
+        { "required": ["agents"], "properties": { "agents": { "minProperties": 1 } } },
+        { "required": ["tools"], "properties": { "tools": { "minProperties": 1 } } }
       ]
     },
     "mcpDeploymentAgentOptions": {
@@ -1195,6 +1241,18 @@
           "type": "string"
         }
       }
+    },
+    "mcpDeploymentToolOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerComponent"],
+      "properties": {
+        "ownerComponent": { "type": "string" },
+        "securityScheme": { "type": "string" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } }
+      },
+      "not": { "required": ["include", "exclude"] }
     },
     "localServer": {
       "type": "object",
@@ -2692,6 +2750,26 @@
         },
         "name": {
           "type": "string"
+        }
+      }
+    },
+    "componentConfigSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "type": "object" },
+        "declarations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "path", "value_type"],
+            "properties": {
+              "source": { "enum": ["Local", "Secret"] },
+              "path": { "type": "array", "items": { "type": "string" } },
+              "value_type": { "type": "object" }
+            }
+          }
         }
       }
     },

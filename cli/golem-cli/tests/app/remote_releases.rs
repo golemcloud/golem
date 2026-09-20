@@ -167,6 +167,7 @@ fn publisher_tool_config() -> ToolDeploymentConfigCreation {
             files: BTreeMap::new(),
         },
         environment_binding: None,
+        component_bindings: BTreeMap::new(),
         agent_bindings: BTreeMap::new(),
     }
 }
@@ -177,6 +178,7 @@ fn remote_release_middleware(version: &str) -> ToolMiddleware {
         version: version.to_string(),
         aliases: Vec::new(),
         doc: Doc::default(),
+        parameter_schema: SchemaGraph::empty(),
         scope: ToolMiddlewareScope::Universal,
     }
 }
@@ -222,6 +224,8 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
         .create_component(
             &publisher_environment.id.0,
             &ComponentCreation {
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 component_name: ComponentName::try_from("publisher-tools:search")
                     .map_err(anyhow::Error::msg)?,
                 agent_types: Vec::new(),
@@ -596,6 +600,8 @@ async fn remote_middleware_release_is_pinned_across_accounts(
         .create_component(
             &publisher_environment.id.0,
             &ComponentCreation {
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 component_name: ComponentName::try_from("publisher-middleware:audit")
                     .map_err(anyhow::Error::msg)?,
                 agent_types: Vec::new(),
@@ -777,6 +783,8 @@ environments:
             &publisher_component.id.0,
             &ComponentUpdate {
                 current_revision: publisher_component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
                 tools: None,

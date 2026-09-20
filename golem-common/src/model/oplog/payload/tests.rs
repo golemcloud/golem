@@ -19,6 +19,7 @@ use crate::model::Timestamp;
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
+use crate::model::durable_stream::StreamInvocationId;
 use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, SpanId};
@@ -49,7 +50,8 @@ use crate::model::oplog::{
     HostRequestEntityInvocation, HostRequestFileSystemPath,
     HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemApiOplogEnrich,
     HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
-    HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke, HostRequestKVCacheKey,
+    HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke,
+    HostRequestGolemToolResponseSecretHoldAdmission, HostRequestKVCacheKey,
     HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
     HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
@@ -58,15 +60,15 @@ use crate::model::oplog::{
     HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
     HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcScheduledInvocationCompat,
-    HostResponseGolemToolInvokeResult, HostResponseGolemToolTool, HostResponseGolemToolTools,
-    HostResponseGolemToolUnitOrFailure, HostResponseKVDelete, HostResponseKVGet,
-    HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
-    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
-    HostResponseP3FileSystemWriteAdmission, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
-    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
-    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsConnect,
-    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseGolemToolInvokeResult, HostResponseGolemToolResponseSecretHoldAdmission,
+    HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
+    HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
+    HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
+    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
+    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
+    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
+    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
+    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
     HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
@@ -136,7 +138,7 @@ fn card_transfer_has_a_distinct_host_function_name() {
 }
 
 #[test]
-fn rpc_durable_request_captures_scope_card_payload_deterministically() {
+fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_deterministically() {
     let scope_card = ScopeCard {
         scope_card_id: CardId(uuid::Uuid::from_u128(1)),
         root_card_ids: vec![CardId(uuid::Uuid::from_u128(2))],
@@ -155,6 +157,15 @@ fn rpc_durable_request_captures_scope_card_payload_deterministically() {
         input: SchemaValue::Tuple {
             elements: Vec::new(),
         },
+        logical_streaming_origin: Some(StreamInvocationId {
+            callee_environment_id: EnvironmentId::new(),
+            callee: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "original-caller".to_string(),
+            },
+            callee_fingerprint: AgentFingerprint(uuid::Uuid::from_u128(3)),
+            idempotency_key: IdempotencyKey::new("source-invocation".to_string()),
+        }),
         remote_agent_type: None,
         remote_agent_parameters: None,
         scope_card: Some(scope_card),
@@ -483,6 +494,9 @@ fn entity_invocation_host_payload_pair_roundtrips() {
         HostRequestEntityInvocation {
             metadata: vec![1, 2, 3],
             input: empty_value(),
+            stream_session_idempotency_key: IdempotencyKey::new(
+                "entity-stream-session".to_string(),
+            ),
         },
         HostResponseEntityInvocation {
             result: Ok(empty_value()),
@@ -1065,6 +1079,23 @@ fn durable_rpc_activation_payload_pair_roundtrips() {
 }
 
 #[test]
+fn tool_response_secret_hold_admission_payload_pair_roundtrips() {
+    let value = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),
+        SchemaValue::Tuple {
+            elements: Vec::new(),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolResponseSecretHoldAdmission>(
+        HostRequestGolemToolResponseSecretHoldAdmission {
+            value,
+            targets: Vec::new(),
+        },
+        HostResponseGolemToolResponseSecretHoldAdmission { admitted: false },
+    );
+}
+
+#[test]
 fn prepared_revert_payload_pair_roundtrips() {
     let agent_id = AgentId {
         component_id: ComponentId::new(),
@@ -1298,7 +1329,9 @@ fn tool_invocation_host_payload_pairs_roundtrip() {
     };
     let response = HostResponseGolemToolInvokeResult {
         result: Ok(SerializableToolInvocationResult {
-            result: Some("match".to_string().into_typed_schema_value().unwrap()),
+            result: Some(Box::new(
+                "match".to_string().into_typed_schema_value().unwrap(),
+            )),
         }),
     };
 

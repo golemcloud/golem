@@ -37,7 +37,8 @@ use golem_common::schema::multimodal::is_multimodal_schema_type;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::unstructured::{binary_body_restrictions, text_body_restrictions};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CompiledOutputSchema, PathSegment, QueryOrHeaderType, RequestBodySchema,
+    AgentRouteMode, CallAgentBehaviour, CompiledOutputSchema, PathSegment, QueryOrHeaderType,
+    RequestBodySchema,
 };
 
 /// Schema-model view of an entire set of compiled routes, ready for the
@@ -66,6 +67,15 @@ pub struct CallAgentRouteSchema {
     pub query_params: Vec<NamedParamSchema>,
     pub header_params: Vec<NamedParamSchema>,
     pub response: ResponseModel,
+    pub stream_slots: Option<Vec<StreamSlotSchema>>,
+}
+
+/// A public slot's message schema, independent of ordinary REST response policy.
+pub struct StreamSlotSchema {
+    pub name: String,
+    pub writable: bool,
+    pub binary: bool,
+    pub element: SchemaType,
 }
 
 /// A path parameter, with its inline scalar/enum schema.
@@ -224,14 +234,91 @@ fn lower_call_agent(
         .map(|(name, qoht)| lower_named_param(name, qoht))
         .collect::<Result<Vec<_>, String>>()?;
 
-    let response = lower_response(&inner.expected_agent_response, graphs)?;
+    let (response, stream_slots) = if inner.route_mode == AgentRouteMode::DurableStreams {
+        graphs.push(inner.method_input.graph.clone());
+        graphs.push(inner.expected_agent_response.graph.clone());
+        (ResponseModel::Unit, Some(lower_stream_slots(inner)?))
+    } else {
+        (
+            lower_response(&inner.expected_agent_response, graphs)?,
+            None,
+        )
+    };
 
     Ok(CallAgentRouteSchema {
         path_params,
         query_params,
         header_params,
         response,
+        stream_slots,
     })
+}
+
+fn lower_stream_slots(inner: &CallAgentBehaviour) -> Result<Vec<StreamSlotSchema>, String> {
+    use golem_common::schema::FieldSource;
+
+    fn stream_element(graph: &SchemaGraph, ty: &SchemaType) -> Result<Option<SchemaType>, String> {
+        match graph.resolve_ref(ty).map_err(|e| e.to_string())? {
+            SchemaType::Stream {
+                inner: Some(element),
+                ..
+            } => Ok(Some((**element).clone())),
+            SchemaType::Stream { inner: None, .. } => {
+                Err("public stream has no element schema".into())
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn slot(
+        graph: &SchemaGraph,
+        name: &str,
+        writable: bool,
+        element: SchemaType,
+        stream: bool,
+    ) -> Result<StreamSlotSchema, String> {
+        let binary = stream
+            && matches!(
+                graph.resolve_ref(&element).map_err(|e| e.to_string())?,
+                SchemaType::U8 { .. }
+            );
+        Ok(StreamSlotSchema {
+            name: name.into(),
+            writable,
+            binary,
+            element,
+        })
+    }
+
+    let mut slots = Vec::new();
+    let graph = &inner.method_input.graph;
+    for field in inner.method_input.input_schema.fields() {
+        if matches!(field.source, FieldSource::UserSupplied)
+            && let Some(element) = stream_element(graph, &field.schema)?
+        {
+            slots.push(slot(graph, &field.name, true, element, true)?);
+        }
+    }
+    let graph = &inner.expected_agent_response.graph;
+    if let OutputSchema::Single(output) = &inner.expected_agent_response.output_schema {
+        if let Some(element) = stream_element(graph, output)? {
+            slots.push(slot(graph, "$result", false, element, true)?);
+        } else if golem_common::schema::agent::contains_stream_in_graph(graph, output) {
+            let SchemaType::Record { fields, .. } =
+                graph.resolve_ref(output).map_err(|e| e.to_string())?
+            else {
+                return Err("public output streams must be direct record fields".into());
+            };
+            for field in fields {
+                let element = stream_element(graph, &field.body)?
+                    .ok_or("public output record field is not a stream")?;
+                slots.push(slot(graph, &field.name, false, element, true)?);
+            }
+        } else {
+            slots.push(slot(graph, "$result", false, (**output).clone(), false)?);
+        }
+    }
+    Ok(slots)
 }
 
 fn lower_named_param(

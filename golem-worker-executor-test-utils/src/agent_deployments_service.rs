@@ -22,7 +22,7 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::mcp_import::McpImportSource;
 use golem_common::model::retry_policy::NamedRetryPolicy;
-use golem_common::model::tool::{ToolDeploymentState, ToolName};
+use golem_common::model::tool::{ToolBindingOwner, ToolDeploymentState, ToolName};
 use golem_common::schema::tool::DiscoveredTool;
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -459,7 +459,7 @@ impl EnvironmentStateService for TestEnvironmentStateService {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        agent_type: &AgentTypeName,
+        owner: &ToolBindingOwner,
         tool_name: &ToolName,
     ) -> Result<ToolActivationOutcome, ToolDiscoveryError> {
         self.tool_activation_lookups.write().unwrap().push((
@@ -471,7 +471,7 @@ impl EnvironmentStateService for TestEnvironmentStateService {
         let deployment = deployments
             .get(&(environment_id, component_id, component_revision))
             .map(|deployment| &deployment.state);
-        get_tool_activation_from_deployment(deployment, agent_type, tool_name)
+        get_tool_activation_from_deployment(deployment, owner, tool_name)
     }
 
     async fn get_accessible_tools(
@@ -479,7 +479,7 @@ impl EnvironmentStateService for TestEnvironmentStateService {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        agent_type: &AgentTypeName,
+        owner: &ToolBindingOwner,
     ) -> Result<Vec<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         self.accessible_tools_calls.fetch_add(1, Ordering::SeqCst);
         let snapshot = self
@@ -488,7 +488,7 @@ impl EnvironmentStateService for TestEnvironmentStateService {
             .unwrap()
             .get(&(environment_id, component_id, component_revision))
             .map(|deployment| deployment.discovery.clone());
-        get_accessible_tools_from_snapshot(snapshot.as_deref(), agent_type)
+        get_accessible_tools_from_snapshot(snapshot.as_deref(), owner)
     }
 
     async fn get_accessible_tool(
@@ -496,7 +496,7 @@ impl EnvironmentStateService for TestEnvironmentStateService {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
-        agent_type: &AgentTypeName,
+        owner: &ToolBindingOwner,
         tool_name: &ToolName,
     ) -> Result<Option<Arc<DiscoveredTool>>, ToolDiscoveryError> {
         self.accessible_tool_calls.fetch_add(1, Ordering::SeqCst);
@@ -506,6 +506,6 @@ impl EnvironmentStateService for TestEnvironmentStateService {
             .unwrap()
             .get(&(environment_id, component_id, component_revision))
             .map(|deployment| deployment.discovery.clone());
-        get_accessible_tool_from_snapshot(snapshot.as_deref(), agent_type, tool_name)
+        get_accessible_tool_from_snapshot(snapshot.as_deref(), owner, tool_name)
     }
 }

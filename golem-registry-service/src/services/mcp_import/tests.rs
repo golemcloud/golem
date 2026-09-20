@@ -599,7 +599,7 @@ async fn deployment_without_oauth_consent_succeeds_with_discovery_warning() {
         target.remote_tools.insert(
             ambient.name.to_string(),
             ambient
-                .to_diffable(std::iter::empty(), &Default::default())
+                .to_diffable(std::iter::empty(), &Default::default(), &Default::default())
                 .into(),
         );
     }
@@ -2058,6 +2058,7 @@ async fn native_wins_without_fetch_and_distinct_effective_surfaces_do_not_share_
         owner_account_email: agent.account_email.clone(),
         metadata_version: "1".into(),
         metadata_digest: golem_common::model::diff::Hash::empty(),
+        component_bindings: Default::default(),
     };
     state
         .registered_tools

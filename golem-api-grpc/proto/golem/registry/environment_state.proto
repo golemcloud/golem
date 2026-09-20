@@ -54,11 +54,12 @@ message RegisteredTool {
   optional golem.common.UUID tool_release_id = 8;
   golem.common.Hash metadata_digest = 9;
   ToolSource tagged_source = 10;
+  map<string, golem.component.ToolBindingInput> component_bindings = 11;
 }
 
 message CompiledToolBinding {
   uint64 deployment_revision = 1;
-  string agent_type_name = 2;
+  reserved 2;
   string tool_name = 3;
   string version = 4;
   golem.common.AccountId account_id = 5;
@@ -72,7 +73,11 @@ message CompiledToolBinding {
   optional golem.common.UUID tool_release_id = 13;
   golem.common.Hash metadata_digest = 14;
   ToolSource tagged_source = 15;
-  golem.component.ConfigKeyScope config_keys_readable = 16;
+  oneof owner {
+    string agent_type_name = 16;
+    golem.component.ComponentId component_baseline_id = 17;
+  }
+  golem.component.ConfigKeyScope config_keys_readable = 18;
 }
 
 enum ToolFilesystemAccess {
@@ -84,7 +89,7 @@ enum ToolFilesystemAccess {
 message ToolDeploymentState {
   uint64 deployment_revision = 1;
   repeated RegisteredTool registered_tools = 2;
-  repeated CompiledToolBinding agent_tool_bindings = 3;
+  repeated CompiledToolBinding tool_bindings = 3;
   // BinaryCodec snapshots preserve the complete pinned middleware descriptor, executable source,
   // per-occurrence policy, compatibility projection, and occurrence order.
   repeated bytes registered_tool_middlewares = 4;

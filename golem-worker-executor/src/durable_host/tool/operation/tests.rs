@@ -14,8 +14,8 @@ use golem_common::model::entity::{
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{
-    CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
-    ToolSource,
+    CompiledToolBinding, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
 use test_r::{test, timeout};
@@ -40,7 +40,11 @@ fn activation(filesystem: FilesystemCapability) -> Arc<EntityActivation> {
                     deployment_revision,
                     release_id: None,
                     metadata_digest: Default::default(),
-                    agent_type_name: golem_common::model::agent::AgentTypeName("Agent".to_string()),
+                    owner: ToolBindingOwner::AgentType {
+                        agent_type_name: golem_common::model::agent::AgentTypeName(
+                            "Agent".to_string(),
+                        ),
+                    },
                     tool_name,
                     version: "1".to_string(),
                     metadata_version: "1".to_string(),
@@ -184,6 +188,7 @@ fn tool_execution(
 ) -> Arc<ToolExecution> {
     Arc::new(ToolExecution {
         parent,
+        invocation: operation.invocation_id().unwrap(),
         start: OplogIndex::from_u64(start),
         filesystem: FilesystemCapability::Capable,
         operation,
@@ -1248,10 +1253,11 @@ async fn cancellation_drops_a_queued_lane_ticket_without_starting_the_body() {
     operation.resolve_cancel(true).await;
     assert_eq!(operation.owns_lane_value_if_active(), Some(false));
     assert_eq!(lane.holder(), Some(parent()));
-    assert!(
-        lane.await_invocations(&parent(), [OwnerInvocationId::Entity(invocation_id)])
-            .is_err()
-    );
+    assert_eq!(lane.metadata().active_invocation_count, 1);
+    lane.await_invocations(&parent(), [OwnerInvocationId::Entity(invocation_id)])
+        .unwrap()
+        .wait()
+        .await;
     primary.complete();
 }
 
@@ -1451,10 +1457,11 @@ async fn cancellation_drains_a_blocked_in_flight_lane_acquisition() {
     operation.resolve_cancel(true).await;
     assert!(!acquiring.await.unwrap().unwrap());
     assert_eq!(operation.owns_lane_value_if_active(), Some(false));
-    assert!(
-        lane.await_invocations(&parent(), [OwnerInvocationId::Entity(invocation_id)])
-            .is_err()
-    );
+    assert_eq!(lane.metadata().active_invocation_count, 1);
+    lane.await_invocations(&parent(), [OwnerInvocationId::Entity(invocation_id)])
+        .unwrap()
+        .wait()
+        .await;
     assert_eq!(lane.holder(), Some(parent()));
     primary.complete();
 }
@@ -1619,11 +1626,13 @@ fn completed_future_observation_is_repeatable_without_an_active_cohort() {
     for _ in 0..2 {
         assert!(matches!(
             execution.get_plan(),
-            FutureToolInvokeGet::Ready(response)
-                if matches!(
-                    *response,
-                    Err(golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled)
-                )
+            FutureToolInvokeGet::Active(_)
+        ));
+        assert!(matches!(
+            execution.result_snapshot(),
+            Some(Ok(Err(
+                golem_common::model::oplog::payload::types::SerializableToolRpcError::Cancelled
+            )))
         ));
     }
     assert!(capable_result_await_cohort(&[execution.get_plan()], &parent()).is_none());

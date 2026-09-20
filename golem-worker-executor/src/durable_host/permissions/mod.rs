@@ -49,7 +49,7 @@ use golem_common::base_model::oplog::QueuedCardEventTransfer;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::owner::AccountOwnerPattern;
-use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::card::recipient::{RecipientOwnerContext, RecipientPattern};
 use golem_common::model::card::{
     AgentCardHolder, AgentPermissionMonomorphizationContext, Card, CardAlgebraError, CardClass,
     CardHolder, CardId, CardManagedBy, CardManagedByRuntimeDerived, CardParseError,
@@ -766,15 +766,10 @@ async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
     handles: &[Resource<PermissionCardHandleRep>],
     invocation_key: &IdempotencyKey,
 ) -> Result<Vec<ScopeDerivationParent>, permissions_types::PermissionError> {
-    let Some(agent_id) = ctx.state.agent_id.as_ref() else {
-        return Err(permissions_types::PermissionError::NotPermitted(
-            "derive-scope is only available to an agent".to_string(),
-        ));
-    };
-    let context = super::agent_monomorphization_context(
-        ctx.owner_component_metadata(),
+    let context = super::owner_monomorphization_context(
+        &ctx.state.component_metadata,
         &ctx.owned_agent_id,
-        agent_id,
+        &ctx.state.owner_context,
     );
 
     let mut parents = Vec::with_capacity(handles.len());
@@ -1197,12 +1192,22 @@ fn ensure_install_permission_in_surface(
 }
 
 fn agent_recipient_pattern(context: &AgentPermissionMonomorphizationContext) -> RecipientPattern {
-    RecipientPattern::Agent {
-        account: context.account.clone(),
-        application: context.application.clone(),
-        environment: context.environment.clone(),
-        component: context.component.clone(),
-        agent_type: context.agent_type.clone(),
+    match &context.owner {
+        RecipientOwnerContext::AgentType(agent_type) => RecipientPattern::Agent {
+            account: context.account.clone(),
+            application: context.application.clone(),
+            environment: context.environment.clone(),
+            component: context.component.clone(),
+            agent_type: agent_type.clone(),
+        },
+        RecipientOwnerContext::ComponentExternalToolOwner => {
+            RecipientPattern::ComponentExternalToolOwner {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: context.component.clone(),
+            }
+        }
     }
 }
 
@@ -1277,7 +1282,7 @@ async fn resolve_install_target_context<Ctx: WorkerCtx>(
             environment: component.environment_name,
             component: component.component_name,
             agent_name: target.agent_id,
-            agent_type,
+            owner: RecipientOwnerContext::AgentType(agent_type),
         },
     })
 }
@@ -2554,15 +2559,10 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                 .with_agent_authority_at_boundary(|ctx| {
                     ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
                     let wallet = ctx.agent_wallet_cards_snapshot();
-                    let Some(agent_id) = ctx.state.agent_id.as_ref() else {
-                        return Err(permissions_types::PermissionError::NotPermitted(
-                            "derive-from-wallet is only available to an agent".to_string(),
-                        ));
-                    };
-                    let context = super::agent_monomorphization_context(
-                        ctx.owner_component_metadata(),
+                    let context = super::owner_monomorphization_context(
+                        &ctx.state.component_metadata,
                         &ctx.owned_agent_id,
-                        agent_id,
+                        &ctx.state.owner_context,
                     );
                     Ok::<_, permissions_types::PermissionError>((wallet, context))
                 })
@@ -3466,7 +3466,7 @@ mod tests {
             environment: EnvironmentName::try_from("prod").unwrap(),
             component: ComponentName("cart-svc".to_string()),
             agent_name: "cart-1".to_string(),
-            agent_type: AgentTypeName("CartAgent".to_string()),
+            owner: RecipientOwnerContext::AgentType(AgentTypeName("CartAgent".to_string())),
         }
     }
 

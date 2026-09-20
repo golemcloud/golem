@@ -39,13 +39,14 @@ use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::RegisteredAgentTypeImplementer;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType};
 use golem_common::model::agent_secret::AgentSecretId;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::deployment::{
     CurrentDeployment, CurrentDeploymentRevision, Deployment, DeploymentPlan, DeploymentRevision,
     DeploymentSummary, DeploymentVersion,
 };
 use golem_common::model::diff::{self, Hash, Hashable};
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::http_api_deployment::HttpApiDeployment;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::mcp_deployment::McpDeployment;
@@ -72,6 +73,7 @@ use golem_service_base::repo::Blob;
 use golem_service_base::repo::RepoError;
 use heck::ToKebabCase;
 use sqlx::FromRow;
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -696,6 +698,7 @@ pub struct DeploymentRegisteredToolRecord {
     pub owner_account_email: String,
     pub tool_definition: Blob<Tool>,
     pub tool_provision_config: Blob<ToolProvisionConfig>,
+    pub component_bindings: Blob<BTreeMap<ComponentName, ToolBindingInput>>,
     pub metadata_version: String,
     pub metadata_digest: Option<SqlBlake3Hash>,
     pub published: bool,
@@ -760,6 +763,7 @@ impl DeploymentRegisteredToolRecord {
             owner_account_email: registered_tool.owner_account_email.into_inner(),
             tool_definition: Blob::new(registered_tool.definition),
             tool_provision_config: Blob::new(registered_tool.provision),
+            component_bindings: Blob::new(registered_tool.component_bindings),
             metadata_version: registered_tool.metadata_version,
             metadata_digest: Some(registered_tool.metadata_digest.into()),
             published,
@@ -827,6 +831,7 @@ impl TryFrom<DeploymentRegisteredToolRecord> for RegisteredTool {
                 .map(golem_common::model::tool_release::ToolReleaseId),
             definition,
             provision: value.tool_provision_config.into_value(),
+            component_bindings: value.component_bindings.into_value(),
             source,
             owner_account_id: value.owner_account_id.into(),
             owner_account_email: AccountEmail::new(value.owner_account_email),
@@ -840,7 +845,7 @@ impl TryFrom<DeploymentRegisteredToolRecord> for RegisteredTool {
 pub struct DeploymentAgentToolBindingRecord {
     pub environment_id: Uuid,
     pub deployment_revision_id: i64,
-    pub agent_type_name: String,
+    pub binding_owner: String,
     pub tool_name: String,
     pub compiled_binding: Blob<CompiledToolBinding>,
 }
@@ -850,7 +855,14 @@ impl DeploymentAgentToolBindingRecord {
         Self {
             environment_id: environment_id.0,
             deployment_revision_id: binding.deployment_revision.into(),
-            agent_type_name: binding.agent_type_name.0.clone(),
+            binding_owner: match &binding.owner {
+                golem_common::model::tool::ToolBindingOwner::AgentType { agent_type_name } => {
+                    format!("agent:{agent_type_name}")
+                }
+                golem_common::model::tool::ToolBindingOwner::ComponentBaseline { component_id } => {
+                    format!("component:{component_id}")
+                }
+            },
             tool_name: binding.tool_name.to_string(),
             compiled_binding: Blob::new(binding),
         }
@@ -961,7 +973,7 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
                 Ok((name, registered))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>, DeployRepoError>>()?;
-        let mut agent_tool_bindings = std::collections::BTreeMap::new();
+        let mut tool_bindings = std::collections::BTreeMap::new();
         for record in value.agent_tool_bindings {
             if record.deployment_revision_id != value.deployment_revision_id {
                 return Err(DeployRepoError::InternalError(anyhow!(
@@ -972,7 +984,14 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
             }
             let mut binding = record.compiled_binding.into_value();
             if binding.deployment_revision != deployment_revision
-                || binding.agent_type_name.0 != record.agent_type_name
+                || match &binding.owner {
+                    golem_common::model::tool::ToolBindingOwner::AgentType { agent_type_name } => {
+                        format!("agent:{agent_type_name}")
+                    }
+                    golem_common::model::tool::ToolBindingOwner::ComponentBaseline {
+                        component_id,
+                    } => format!("component:{component_id}"),
+                } != record.binding_owner
                 || binding.tool_name.as_str() != record.tool_name
             {
                 return Err(DeployRepoError::InternalError(anyhow!(
@@ -1010,15 +1029,15 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
                     binding.tool_name
                 )));
             }
-            agent_tool_bindings
-                .entry(binding.agent_type_name.clone())
+            tool_bindings
+                .entry(binding.owner.clone())
                 .or_insert_with(std::collections::BTreeMap::new)
                 .insert(binding.tool_name.clone(), binding);
         }
         Ok(Self {
             deployment_revision,
             registered_tools,
-            agent_tool_bindings,
+            tool_bindings,
             mcp_imports: value.mcp_imports.into_iter().enumerate().map(|(index, record)| {
                 if record.deployment_revision_id != value.deployment_revision_id
                     || record.import_index != index as i64
@@ -1054,7 +1073,7 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
                     let mut result = std::collections::BTreeMap::new();
                     for chain in snapshot.compiled_chains.into_value() {
                         result
-                            .entry(chain.agent_type_name.clone())
+                            .entry(chain.owner.clone())
                             .or_insert_with(std::collections::BTreeMap::new)
                             .insert(chain.tool_name.clone(), chain);
                     }
@@ -1214,6 +1233,10 @@ impl DeploymentRevisionCreationRecord {
         let remote_tools = diff::remote_tool_deployments(
             registered_tools.clone(),
             agent_tool_bindings.clone(),
+            &components
+                .iter()
+                .map(|component| (component.id, component.component_name.clone()))
+                .collect(),
             &published_tool_names,
         )?;
         let registered_tools = registered_tools
@@ -1403,6 +1426,9 @@ pub struct CompiledMcpData {
     #[desert(default)]
     pub security_scheme_name: Option<SecuritySchemeName>,
     pub registered_agent_types: Vec<RegisteredAgentTypeSchema>,
+    pub application_name: ApplicationName,
+    pub environment_name: EnvironmentName,
+    pub tools: Vec<golem_service_base::mcp::CompiledMcpToolExport>,
 }
 
 #[derive(FromRow)]
@@ -1426,6 +1452,9 @@ impl DeploymentCompiledMcpRecord {
             mcp_data: Blob::new(CompiledMcpData {
                 security_scheme_name: compiled_mcp.security_scheme_name.clone(),
                 registered_agent_types: compiled_mcp.registered_agent_types,
+                application_name: compiled_mcp.application_name,
+                environment_name: compiled_mcp.environment_name,
+                tools: compiled_mcp.tools,
             }),
         }
     }
@@ -1441,11 +1470,14 @@ impl TryFrom<DeploymentCompiledMcpRecord> for CompiledMcp {
             account_id: AccountId(value.account_id),
             account_email: AccountEmail::new(value.account_email),
             environment_id: EnvironmentId(value.environment_id),
+            application_name: mcp_data.application_name,
+            environment_name: mcp_data.environment_name,
             deployment_revision: value.deployment_revision_id.try_into()?,
             domain: Domain(value.domain),
             security_scheme_name: mcp_data.security_scheme_name,
             security_scheme: None, // Will be resolved at runtime
             registered_agent_types: mcp_data.registered_agent_types,
+            tools: mcp_data.tools,
         })
     }
 }

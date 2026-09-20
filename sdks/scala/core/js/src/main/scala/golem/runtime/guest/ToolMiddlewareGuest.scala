@@ -20,7 +20,14 @@ import golem.host.js.PrincipalConverter
 import golem.host.js.schema.JsTypedSchemaValue
 import golem.host.js.tool._
 import golem.host.{SchemaWireInterop, ToolWireInterop}
-import golem.runtime.tool.{JsMiddlewareInputStream, JsMiddlewareOutputStream, ToolMiddlewareRegistry}
+import golem.runtime.tool.{
+  JsMiddlewareInputStream,
+  JsMiddlewareOutputStream,
+  JsToolInputStream,
+  JsToolOutputStream,
+  ToolMiddlewareRegistry
+}
+import golem.runtime.tool.host.ToolHostApi
 import golem.schema.wire.SchemaWire
 import golem.tool._
 import golem.tool.wire.WitToolError
@@ -62,16 +69,18 @@ object ToolMiddlewareGuest {
     middlewareName: String,
     toolName: String,
     toolMetadata: JsTool,
+    parameters: JsTypedSchemaValue,
     commandPath: js.Array[String],
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[JsWasiInputStream],
+    stdout: js.UndefOr[ToolHostApi.RawToolStdoutWriter],
     principal: js.Dynamic,
     wrapped: JsUnderlyingTool
   ): js.Promise[JsInvocationResult] =
     ToolMiddlewareRegistry.getInvoker(middlewareName) match {
       case None          => rejectToolError(ToolInvokeError.InvalidToolName(middlewareName))
       case Some(invoker) =>
-        decodeInvocation(toolMetadata, input, stdin, principal, wrapped) match {
+        decodeInvocation(toolMetadata, parameters, input, stdin, principal, wrapped) match {
           case Left(error)    => rejectToolError(error)
           case Right(decoded) =>
             val invocation = invoker match {
@@ -83,6 +92,7 @@ object ToolMiddlewareGuest {
                   toolName,
                   commandPath.toList,
                   decoded.input,
+                  decoded.parameters,
                   decoded.stdin,
                   decoded.principal,
                   validateFinalStdout
@@ -93,6 +103,7 @@ object ToolMiddlewareGuest {
                   decoded.wrapped,
                   toolName,
                   decoded.toolMetadata,
+                  decoded.parameters,
                   commandPath.toList,
                   decoded.input,
                   decoded.stdin,
@@ -101,11 +112,13 @@ object ToolMiddlewareGuest {
                 )
             }
             FutureInterop.toPromise(
-              invocation.map {
-                case Right(result) => resultToJs(result)
+              invocation.flatMap {
+                case Right(result) => forwardStdout(result, stdout)
                 case Left(error)   =>
-                  throw js.JavaScriptException(
-                    ToolWireInterop.toolErrorToJs(ToolInvokeError.toWire(error))
+                  Future.failed(
+                    js.JavaScriptException(
+                      ToolWireInterop.toolErrorToJs(ToolInvokeError.toWire(error))
+                    )
                   )
               }
             )
@@ -114,6 +127,7 @@ object ToolMiddlewareGuest {
 
   private final case class DecodedInvocation(
     toolMetadata: golem.tool.wire.WitTool,
+    parameters: golem.schema.TypedSchemaValue,
     input: golem.schema.TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle],
     principal: golem.Principal,
@@ -122,6 +136,7 @@ object ToolMiddlewareGuest {
 
   private def decodeInvocation(
     toolMetadata: JsTool,
+    parameters: JsTypedSchemaValue,
     input: JsTypedSchemaValue,
     stdin: js.UndefOr[JsWasiInputStream],
     principal: js.Dynamic,
@@ -131,6 +146,7 @@ object ToolMiddlewareGuest {
       Right(
         DecodedInvocation(
           ToolWireInterop.toolFromJs(toolMetadata),
+          SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(parameters)),
           SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(input)),
           stdin.toOption.map(new JsMiddlewareInputStream(_)),
           PrincipalConverter.fromJs(principal),
@@ -152,8 +168,27 @@ object ToolMiddlewareGuest {
         commandPath: List[String],
         input: golem.schema.TypedSchemaValue,
         stdin: Option[ToolMiddlewareInputHandle]
-      ): Future[Either[ToolInvokeError[golem.schema.TypedSchemaValue], ToolMiddlewareResult]] = {
-        val call =
+      ): Future[Either[ToolInvokeError[golem.schema.TypedSchemaValue], ToolMiddlewareResult]] =
+        start(commandPath, input, stdin).admission.flatMap { admission =>
+          admission.result.map {
+            case Right(value)                                     => Right(value.copy(stdout = admission.stdout))
+            case Left(ToolUnderlyingError.Tool(error))            => Left(error)
+            case Left(ToolUnderlyingError.ProtocolError(message)) => Left(ToolInvokeError.ProtocolError(message))
+            case Left(ToolUnderlyingError.Denied(message))        => Left(ToolInvokeError.Denied(message))
+            case Left(ToolUnderlyingError.InternalError(message)) => Left(ToolInvokeError.InternalError(message))
+            case Left(ToolUnderlyingError.Cancelled)              =>
+              Left(ToolInvokeError.Cancelled)
+            case Left(ToolUnderlyingError.ResourceExhausted(message)) =>
+              Left(ToolInvokeError.ResourceExhausted(message))
+          }
+        }
+
+      override def start(
+        commandPath: List[String],
+        input: golem.schema.TypedSchemaValue,
+        stdin: Option[ToolMiddlewareInputHandle]
+      ): ToolUnderlyingInvocation[golem.schema.TypedSchemaValue, ToolMiddlewareResult] = {
+        val admission =
           try {
             val jsStdin = stdin.map {
               case stream: JsMiddlewareInputStream => stream.underlying
@@ -162,26 +197,145 @@ object ToolMiddlewareGuest {
                   s"unexpected non-JS tool stdin stream: ${other.getClass.getName}"
                 )
             }.orUndefined
-            FutureInterop.fromPromise(
-              wrapped.invoke(
-                commandPath.toJSArray,
-                SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(input)),
-                jsStdin
+            FutureInterop
+              .fromPromise(
+                wrapped.invoke(
+                  commandPath.toJSArray,
+                  SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(input)),
+                  jsStdin
+                )
               )
-            )
+              .flatMap { started =>
+                var observing                  = false
+                var settled                    = false
+                var dropRequested              = false
+                var disposed                   = false
+                def disposeWhenSettled(): Unit =
+                  if ((!observing || settled) && dropRequested && !disposed) {
+                    disposed = true
+                    try disposeUnderlyingObserver(started._1)
+                    catch { case _: Throwable => () }
+                  }
+                def terminal
+                  : Future[Either[ToolUnderlyingError[golem.schema.TypedSchemaValue], ToolMiddlewareResult]] = {
+                  if (disposed)
+                    return Future.successful(
+                      Left(ToolUnderlyingError.ProtocolError("underlying invocation observer was dropped"))
+                    )
+                  observing = true
+                  FutureInterop
+                    .fromPromise(started._1.get())
+                    .map { value =>
+                      Right(
+                        ToolMiddlewareResult(
+                          value.toOption.map(v => SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(v))),
+                          None
+                        )
+                      )
+                    }
+                    .recoverWith { case error @ js.JavaScriptException(value) =>
+                      decodeUnderlyingError(value) match {
+                        case Some(declared) => Future.successful(Left(declared))
+                        case None           => Future.failed(error)
+                      }
+                    }
+                    .transform { outcome =>
+                      settled = true
+                      disposeWhenSettled()
+                      outcome
+                    }
+                }
+                Future.successful(
+                  ToolUnderlyingAdmission(
+                    started._2.toOption.map(new JsMiddlewareOutputStream(_)),
+                    () => terminal,
+                    () => if (!settled && !disposed) started._1.cancel(),
+                    () => {
+                      dropRequested = true
+                      disposeWhenSettled()
+                    }
+                  )
+                )
+              }
           } catch {
             case error: Throwable => Future.failed(error)
           }
-        call
-          .map(result => Right(resultFromJs(result)))
-          .recoverWith { case error @ js.JavaScriptException(value) =>
-            decodeToolError(value) match {
-              case Some(declared) => Future.successful(Left(declared))
-              case None           => Future.failed(error)
-            }
-          }
+        ToolUnderlyingInvocation(admission)
       }
     }
+
+  private def decodeUnderlyingError(value: Any): Option[ToolUnderlyingError[golem.schema.TypedSchemaValue]] =
+    try
+      value.asInstanceOf[js.Dynamic].tag.asInstanceOf[String] match {
+        case "tool-error"     => decodeToolError(value.asInstanceOf[js.Dynamic].`val`).map(ToolUnderlyingError.Tool(_))
+        case "protocol-error" =>
+          Some(ToolUnderlyingError.ProtocolError(value.asInstanceOf[js.Dynamic].`val`.asInstanceOf[String]))
+        case "denied"         => Some(ToolUnderlyingError.Denied(value.asInstanceOf[js.Dynamic].`val`.asInstanceOf[String]))
+        case "internal-error" =>
+          Some(ToolUnderlyingError.InternalError(value.asInstanceOf[js.Dynamic].`val`.asInstanceOf[String]))
+        case "cancelled"          => Some(ToolUnderlyingError.Cancelled)
+        case "resource-exhausted" =>
+          Some(ToolUnderlyingError.ResourceExhausted(value.asInstanceOf[js.Dynamic].`val`.asInstanceOf[String]))
+        case _ => None
+      }
+    catch { case _: Throwable => None }
+
+  private def disposeUnderlyingObserver(observer: JsUnderlyingInvokeResult): Unit = {
+    val symbol  = js.Dynamic.global.Symbol.selectDynamic("dispose")
+    val release = js.Dynamic.global.Reflect.applyDynamic("get")(observer, symbol)
+    release.applyDynamic("call")(observer)
+    ()
+  }
+
+  private def forwardStdout(
+    result: ToolMiddlewareResult,
+    supplied: js.UndefOr[ToolHostApi.RawToolStdoutWriter]
+  ): Future[JsInvocationResult] = supplied.toOption match {
+    case None         => Future.successful(resultToJs(result))
+    case Some(writer) =>
+      result.stdout match {
+        case None =>
+          new JsToolOutputStream(writer).finish().flatMap {
+            case Right(_) =>
+              Future.successful(
+                JsInvocationResult(
+                  result.result.map(v => SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(v))).orUndefined,
+                  js.undefined
+                )
+              )
+            case Left(error) => Future.failed(new IllegalStateException(s"middleware stdout finish failed: $error"))
+          }
+        case Some(stream: JsMiddlewareOutputStream) =>
+          val source               = new JsToolInputStream(stream.underlying.asInstanceOf[ToolHostApi.RawByteStream])
+          val target               = new JsToolOutputStream(writer)
+          def loop(): Future[Unit] = source.read().flatMap {
+            case Right(Some(bytes)) =>
+              target.write(bytes).flatMap {
+                case Right(_)    => loop()
+                case Left(error) => Future.failed(new IllegalStateException(s"middleware stdout write failed: $error"))
+              }
+            case Right(None) =>
+              target.finish().flatMap {
+                case Right(_)    => Future.successful(())
+                case Left(error) => Future.failed(new IllegalStateException(s"middleware stdout finish failed: $error"))
+              }
+            case Left(failure) =>
+              target.fail(failure).flatMap {
+                case Right(_)    => Future.successful(())
+                case Left(error) =>
+                  Future.failed(new IllegalStateException(s"middleware stdout failure forwarding failed: $error"))
+              }
+          }
+          loop().map(_ =>
+            JsInvocationResult(
+              result.result.map(v => SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(v))).orUndefined,
+              js.undefined
+            )
+          )
+        case Some(other) =>
+          Future.failed(new IllegalStateException(s"unexpected middleware stdout: ${other.getClass.getName}"))
+      }
+  }
 
   private def decodeToolError(value: Any): Option[ToolInvokeError[golem.schema.TypedSchemaValue]] =
     try {
@@ -226,14 +380,16 @@ object ToolMiddlewareGuest {
     js.Dynamic.literal(
       discoverToolMiddlewares = js.Any.fromFunction0(() => discoverToolMiddlewares()),
       getToolMiddleware = js.Any.fromFunction1((name: String) => getToolMiddleware(name)),
-      invokeToolMiddleware = js.Any.fromFunction8(
+      invokeToolMiddleware = js.Any.fromFunction10(
         (
           middlewareName: String,
           toolName: String,
           toolMetadata: JsTool,
+          parameters: JsTypedSchemaValue,
           commandPath: js.Array[String],
           input: JsTypedSchemaValue,
           stdin: js.UndefOr[JsWasiInputStream],
+          stdout: js.UndefOr[ToolHostApi.RawToolStdoutWriter],
           principal: js.Dynamic,
           wrapped: JsUnderlyingTool
         ) =>
@@ -241,9 +397,11 @@ object ToolMiddlewareGuest {
             middlewareName,
             toolName,
             toolMetadata,
+            parameters,
             commandPath,
             input,
             stdin,
+            stdout,
             principal,
             wrapped
           )

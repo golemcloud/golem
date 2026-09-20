@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { RpcError } from 'golem:tool/host@0.1.0';
+import type { ToolRpcError } from 'golem:core/types@2.0.0';
 import { createToolClientTransport, isRpcError } from './bridge/tool';
 import {
   createToolClient,
@@ -31,7 +31,7 @@ export interface ToolClientOptions {
 }
 
 export type ToolCallErrorCause<Errors> =
-  | { readonly tag: 'rpc'; readonly error: RpcError }
+  | { readonly tag: 'rpc'; readonly error: ToolRpcError }
   | { readonly tag: 'tool'; readonly error: Errors }
   | {
       readonly tag: 'unknown-error';
@@ -72,7 +72,7 @@ function mapToolClientFailure(
 
 function mapToolRpcError(
   body: ToolClientFailureContext['body'],
-  error: RpcError,
+  error: ToolRpcError,
   callName: string,
 ): ToolCallError<unknown> {
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error') {

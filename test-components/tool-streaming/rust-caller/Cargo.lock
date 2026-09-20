@@ -520,6 +520,7 @@ dependencies = [
  "futures-concurrency",
  "golem-rust",
  "streaming-tool-guest-client",
+ "typed-output-stream-tool-guest-client",
 ]
 
 [[package]]
@@ -1169,6 +1170,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
 dependencies = [
  "winnow",
+]
+
+[[package]]
+name = "typed-output-stream-tool-guest-client"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "golem-rust",
+ "serde",
+ "uuid",
 ]
 
 [[package]]

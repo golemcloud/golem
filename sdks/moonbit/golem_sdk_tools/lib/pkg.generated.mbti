@@ -427,6 +427,7 @@ pub(all) struct ToolMiddlewareInfo {
   version : String
   aliases : Array[String]
   description : String
+  parameter_type : ParamType?
   scope : ToolMiddlewareScopeInfo
 } derive(Eq, @debug.Debug)
 

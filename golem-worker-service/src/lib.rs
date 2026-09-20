@@ -91,12 +91,14 @@ impl WorkerService {
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
+        let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
+                mcp_capability_lookup,
                 None,
             )
             .await;
@@ -133,12 +135,14 @@ impl WorkerService {
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
+        let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
+                mcp_capability_lookup,
                 None,
             )
             .await;

@@ -214,6 +214,13 @@ impl MultiSqliteIndexedStorage {
                 let mode = super::agent_mode_prefix(*agent_mode);
                 format!("{mode}-oplog-{}.db", self.agent_id_hash(agent_id).await)
             }
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!("{mode}-oplog-{}.db", self.agent_id_hash(agent_id).await)
+            }
             IndexedStorageNamespace::CompressedOpLog {
                 agent_id,
                 agent_mode,
@@ -428,6 +435,37 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         self.storage_by_namespace(namespace)
             .await?
             .append_many(svc_name, api_name, entity_name, namespace, key, pairs)
+            .await
+    }
+
+    async fn move_if_absent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        let source_db = self.namespace_to_db(&source_namespace).await;
+        let target_db = self.namespace_to_db(&target_namespace).await;
+        if source_db != target_db {
+            return Err(IndexedStorageError::Other(
+                "multi-SQLite cannot atomically move indexes across databases".to_string(),
+            ));
+        }
+        self.storage_by_db_name(target_db)
+            .await?
+            .move_if_absent(
+                svc_name,
+                api_name,
+                source_namespace,
+                source_key,
+                target_namespace,
+                target_key,
+                expected_last_id,
+            )
             .await
     }
 

@@ -166,6 +166,11 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
         DeployValidationError::McpImportSecuritySchemeNotFound { .. } => {
             api::error_code::deployment_validation::MCP_UNKNOWN_SECURITY_SCHEME
         }
+        DeployValidationError::McpDeploymentEmpty { .. }
+        | DeployValidationError::McpDeploymentInvalidTool { .. }
+        | DeployValidationError::McpDeploymentToolNameCollision { .. } => {
+            api::error_code::deployment_validation::MCP_INVALID_TOOL
+        }
         DeployValidationError::SecurityOverrideDisabled => {
             api::error_code::deployment_validation::SECURITY_OVERRIDE_DISABLED
         }
@@ -580,6 +585,18 @@ impl From<ComponentError> for ApiError {
                 code: api::error_code::COMPONENT_PROCESSING_ERROR.to_string(),
                 cause: None,
             })),
+            ComponentError::InvalidComponentConfig(_) => Self::BadRequest(Json(ErrorsBody {
+                errors: vec![error],
+                code: api::error_code::COMPONENT_PROCESSING_ERROR.to_string(),
+                cause: None,
+            })),
+            ComponentError::InvalidComponentInitialPermissionCard { .. } => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    code: api::error_code::COMPONENT_PROCESSING_ERROR.to_string(),
+                    cause: None,
+                }))
+            }
             ComponentError::AgentFileNotFoundInArchive { .. } => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],

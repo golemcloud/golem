@@ -18,6 +18,7 @@ use golem_common::base_model::oplog::{
 };
 use golem_common::model::card::CardId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::oplog::payload::types::{SerializableToolError, SerializableToolRpcError};
 use golem_common::model::oplog::public_oplog_entry::{
     ActivatePluginParams, AgentInvocationFinishedParams, AgentInvocationStartedParams,
     BeginAtomicRegionParams, BeginRemoteTransactionParams, CancelPendingInvocationParams,
@@ -30,8 +31,8 @@ use golem_common::model::oplog::public_oplog_entry::{
     OplogProcessorCheckpointParams, PendingAgentInvocationParams, PendingUpdateParams,
     PluginInstallationDescription, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, PublicAgentInvocation, PublicAgentInvocationResult,
-    PublicAttributeValue, PublicDurableFunctionType, PublicSpanData, RecoverySucceededParams,
-    RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
+    PublicAttributeValue, PublicDurableFunctionType, PublicExternalToolResult, PublicSpanData,
+    RecoverySucceededParams, RemoveRetryPolicyParams, RestartParams, ResumedParams, RevertParams,
     RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
     SnapshotParams, StartParams, StartSpanParams, StreamCancelParams, StreamEndParams,
     StreamItemsParams, StreamRegisteredParams, StreamSessionParams, StringAttributeValue,
@@ -75,6 +76,44 @@ fn encode_untyped_schema_value(value: SchemaValue) -> Result<wire::SchemaValueTr
 
 fn decode_untyped_schema_value(value: wire::SchemaValueTree) -> Result<SchemaValue, String> {
     decode_value(&value).map_err(|e| e.to_string())
+}
+
+fn encode_tool_error(error: SerializableToolError) -> Result<wire::ToolError, String> {
+    Ok(match error {
+        SerializableToolError::InvalidToolName(error) => wire::ToolError::InvalidToolName(error),
+        SerializableToolError::InvalidCommandPath(path) => {
+            wire::ToolError::InvalidCommandPath(path)
+        }
+        SerializableToolError::InvalidInput(error) => wire::ToolError::InvalidInput(error),
+        SerializableToolError::ConstraintViolation(error) => {
+            wire::ToolError::ConstraintViolation(error)
+        }
+        SerializableToolError::InvalidResult(error) => wire::ToolError::InvalidResult(error),
+        SerializableToolError::CustomError(error) => {
+            wire::ToolError::CustomError(wire::CustomToolError {
+                name: error.name,
+                payload: encode_public_typed_schema_value(error.payload)?,
+            })
+        }
+    })
+}
+
+fn encode_tool_rpc_error(error: SerializableToolRpcError) -> Result<oplog::ToolRpcError, String> {
+    Ok(match error {
+        SerializableToolRpcError::ProtocolError(error) => oplog::ToolRpcError::ProtocolError(error),
+        SerializableToolRpcError::Denied(error) => oplog::ToolRpcError::Denied(error),
+        SerializableToolRpcError::NotFound(error) => oplog::ToolRpcError::NotFound(error),
+        SerializableToolRpcError::RemoteInternalError(error) => {
+            oplog::ToolRpcError::RemoteInternalError(error)
+        }
+        SerializableToolRpcError::RemoteToolError(error) => {
+            oplog::ToolRpcError::RemoteToolError(encode_tool_error(*error)?)
+        }
+        SerializableToolRpcError::Cancelled => oplog::ToolRpcError::Cancelled,
+        SerializableToolRpcError::ResourceExhausted(error) => {
+            oplog::ToolRpcError::ResourceExhausted(error)
+        }
+    })
 }
 
 fn card_id_to_wit(card_id: CardId) -> oplog::CardId {
@@ -232,6 +271,7 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
             PublicOplogEntry::Create(CreateParams {
                 timestamp,
                 agent_id,
+                owner_kind,
                 agent_mode,
                 component_revision,
                 env,
@@ -247,6 +287,14 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: agent_id.into(),
+                owner_kind: match owner_kind {
+                    golem_common::model::agent::OwnerKind::ComponentAgent => {
+                        oplog::OwnerKind::ComponentAgent
+                    }
+                    golem_common::model::agent::OwnerKind::EphemeralExternalTool => {
+                        oplog::OwnerKind::EphemeralExternalTool
+                    }
+                },
                 agent_mode: match agent_mode {
                     golem_common::model::agent::AgentMode::Durable => oplog::AgentMode::Durable,
                     golem_common::model::agent::AgentMode::Ephemeral => oplog::AgentMode::Ephemeral,
@@ -842,6 +890,21 @@ impl TryFrom<PublicAgentInvocation> for oplog::AgentInvocation {
                         .collect(),
                 })
             }
+            PublicAgentInvocation::ExternalTool(params) => {
+                Self::ExternalTool(oplog::ExternalToolInvocationParameters {
+                    idempotency_key: params.idempotency_key.value,
+                    tool_name: params.tool_name,
+                    command_path: params.command_path,
+                    input: encode_public_typed_schema_value(params.input)?,
+                    trace_id: params.trace_id.to_string(),
+                    trace_states: params.trace_states,
+                    invocation_context: params
+                        .invocation_context
+                        .into_iter()
+                        .map(|inner| inner.into_iter().map(|span| span.into()).collect())
+                        .collect(),
+                })
+            }
             PublicAgentInvocation::SaveSnapshot(_) => Self::SaveSnapshot,
             PublicAgentInvocation::LoadSnapshot(params) => {
                 let (data, mime_type) = match params.snapshot {
@@ -887,6 +950,18 @@ impl TryFrom<PublicAgentInvocationResult> for oplog::AgentInvocationResult {
             }) => Self::AgentMethod(oplog::AgentInvocationOutputParameters {
                 output: encode_public_typed_schema_value(output)?,
             }),
+            PublicAgentInvocationResult::ExternalTool(params) => {
+                let result = match params.result {
+                    PublicExternalToolResult::Success(result) => Ok(oplog::ToolInvocationResult {
+                        result: result
+                            .result
+                            .map(|value| encode_public_typed_schema_value(*value))
+                            .transpose()?,
+                    }),
+                    PublicExternalToolResult::Failure(error) => Err(encode_tool_rpc_error(error)?),
+                };
+                Self::ExternalTool(oplog::ExternalToolResultParameters { result })
+            }
             PublicAgentInvocationResult::ManualUpdate(Empty {}) => Self::ManualUpdate,
             PublicAgentInvocationResult::LoadSnapshot(FallibleResultParameters { error }) => {
                 Self::LoadSnapshot(oplog::FallibleResultParameters { error })
@@ -1146,6 +1221,10 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             oplog::OplogEntry::Create(params) => Ok(Self::Create {
                 timestamp: timestamp_from_datetime(params.timestamp),
                 agent_id: golem_common::model::AgentId::from(params.agent_id),
+                owner_kind: match params.owner_kind {
+                    oplog::OwnerKind::ComponentAgent => golem_common::model::agent::OwnerKind::ComponentAgent,
+                    oplog::OwnerKind::EphemeralExternalTool => golem_common::model::agent::OwnerKind::EphemeralExternalTool,
+                },
                 agent_mode: match params.agent_mode {
                     oplog::AgentMode::Durable => golem_common::model::agent::AgentMode::Durable,
                     oplog::AgentMode::Ephemeral => golem_common::model::agent::AgentMode::Ephemeral,
@@ -1917,6 +1996,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
             M::Create {
                 timestamp,
                 agent_id,
+                owner_kind,
                 agent_mode,
                 component_revision,
                 env,
@@ -1932,6 +2012,14 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
             } => Ok(Self::Create(oplog::RawCreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: agent_id.into(),
+                owner_kind: match owner_kind {
+                    golem_common::model::agent::OwnerKind::ComponentAgent => {
+                        oplog::OwnerKind::ComponentAgent
+                    }
+                    golem_common::model::agent::OwnerKind::EphemeralExternalTool => {
+                        oplog::OwnerKind::EphemeralExternalTool
+                    }
+                },
                 agent_mode: match agent_mode {
                     golem_common::model::agent::AgentMode::Durable => oplog::AgentMode::Durable,
                     golem_common::model::agent::AgentMode::Ephemeral => oplog::AgentMode::Ephemeral,

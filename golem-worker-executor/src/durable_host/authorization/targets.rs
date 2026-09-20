@@ -297,15 +297,16 @@ pub fn agent_worker_target(
 pub fn tool_target(
     owner: ToolOwnerPattern,
     command_path: &[&str],
-    args: &[&str],
+    args: Vec<ToolArgPattern>,
 ) -> Result<PermissionTarget, TargetError> {
-    let invocation =
-        ToolInvocationPattern::from_command_and_args(command_path, args).map_err(|value| {
+    let mut invocation =
+        ToolInvocationPattern::from_command_and_args(command_path, &[]).map_err(|value| {
             TargetError::InvalidResource {
                 class: "tool",
                 value,
             }
         })?;
+    invocation.args = args;
     Ok(PermissionTarget::Tool(ClassPermissionTarget {
         verb: Some(ToolVerb::Invoke),
         owner,
@@ -920,7 +921,12 @@ mod tests {
         let target = tool_target(
             tool("search"),
             &["documents", "find"],
-            &["--query=two words", "literal value", "-iv"],
+            ToolInvocationPattern::from_command_and_args(
+                &[],
+                &["--query=two words", "literal value", "-iv"],
+            )
+            .unwrap()
+            .args,
         )
         .unwrap();
 
@@ -944,8 +950,15 @@ mod tests {
                 ]
         ));
 
-        assert!(tool_target(tool("root"), &[], &["argument"]).is_ok());
-        assert!(tool_target(tool("bad"), &["not.valid"], &[]).is_err());
+        assert!(
+            tool_target(
+                tool("root"),
+                &[],
+                vec![ToolArgPattern::Positional(ToolValuePattern::Star)]
+            )
+            .is_ok()
+        );
+        assert!(tool_target(tool("bad"), &["not.valid"], vec![]).is_err());
     }
     #[test]
     fn paths_are_canonical_and_cannot_escape() {

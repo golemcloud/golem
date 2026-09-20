@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use golem_common::model::agent::AgentTypeName;
+use golem_common::model::component::ComponentName;
+use golem_common::model::tool::ToolName;
 use std::collections::BTreeMap;
 
 use crate::model::cli_output::StructuredOutput;
@@ -25,6 +27,26 @@ use std::fmt::{Debug, Formatter};
 #[derive(Clone, Debug)]
 pub struct McpDeploymentDeployProperties {
     pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
+    pub tools: BTreeMap<ToolName, McpDeploymentToolOptions>,
+}
+
+#[derive(Clone, Debug)]
+pub struct McpDeploymentToolOptions {
+    pub owner_component: ComponentName,
+    pub security_scheme: Option<String>,
+    pub include: Option<Vec<String>>,
+    pub exclude: Option<Vec<String>>,
+}
+
+impl McpDeploymentToolOptions {
+    pub fn to_diffable(&self) -> golem_common::model::diff::McpDeploymentToolOptions {
+        golem_common::model::diff::McpDeploymentToolOptions {
+            owner_component: self.owner_component.0.clone(),
+            security_scheme: self.security_scheme.clone(),
+            include: self.include.clone(),
+            exclude: self.exclude.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

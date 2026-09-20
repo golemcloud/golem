@@ -1,0 +1,35 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/interface/golem/tool/underlying"
+
+import {
+  "golemcloud/golem_sdk/async-core",
+  "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/golem/tool/streams",
+  "moonbitlang/core/debug",
+}
+
+// Values
+
+// Errors
+pub(all) suberror UnderlyingError {
+  ToolError(@types.ToolError)
+  ProtocolError(String)
+  Denied(String)
+  InternalError(String)
+  Cancelled
+  ResourceExhausted(String)
+} derive(Eq, @debug.Debug)
+
+// Types and methods
+pub(all) struct UnderlyingInvokeResult(Int) derive(Eq, @debug.Debug)
+pub fn UnderlyingInvokeResult::cancel(Self) -> Unit
+pub fn UnderlyingInvokeResult::drop(Self) -> Unit
+pub async fn UnderlyingInvokeResult::get(Self) -> Result[@types.TypedSchemaValue?, UnderlyingError]
+
+pub(all) struct UnderlyingTool(Int) derive(Eq, @debug.Debug)
+pub fn UnderlyingTool::drop(Self) -> Unit
+pub async fn UnderlyingTool::invoke(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?) -> (UnderlyingInvokeResult, @async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]?)
+
+// Type aliases
+
+// Traits

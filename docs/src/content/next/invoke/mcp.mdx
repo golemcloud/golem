@@ -23,6 +23,66 @@ mcp:
 
 After `golem app deploy`, the MCP server is available at `http://mcp-demo.localhost:9007/mcp` using the streamable HTTP protocol.
 
+## Exporting native tools
+
+Native Golem tools can be exported without deploying an agent. A complete tools-only application declares the implementation, binds it to an owner component, and selects commands for the MCP deployment:
+
+```yaml
+app: mcp-tools-demo
+
+environments:
+  local:
+    server: local
+
+components:
+  my-app:file-tools:
+    componentWasm: build/file-tools.wasm
+
+  my-app:tool-owner:
+    componentWasm: build/tool-owner.wasm
+    tools:
+      file-tools: {}
+
+tools:
+  file-tools:
+    component: my-app:file-tools
+
+mcp:
+  deployments:
+    local:
+      - subdomain: mcp-demo
+        tools:
+          file-tools:
+            ownerComponent: my-app:tool-owner
+            include:
+              - read-file
+              - list **
+```
+
+The top-level declaration provisions the `file-tools` implementation. The `components.my-app:tool-owner.tools` binding authorizes each fresh owner to invoke it; an agent-only binding is insufficient. Component bindings also become defaults for real agents exported by that component, where agent bindings and presets can narrow or remove them. Use a separate component with no agents as the owner when those defaults are not wanted. The implementation component and owner component may be different, as above.
+
+Finally, `mcp.deployments.local[].tools.file-tools` exports the selected executable commands. The deployment must contain at least one agent or tool. All security scheme references in it must agree; that scheme protects the whole domain.
+
+For a remote release, put its exact `release` reference in the top-level declaration instead of `component`. The target environment must have a grant for that release. An application deployment plans and automatically reconciles grants derived from its remote declarations when the deploy actor has permission; separately managed grants are not removed.
+
+Each call creates a fresh **ephemeral owner** using that component's configuration, permissions, files, and tool bindings. It instantiates the deployed component, including its core initializers, but does not select an agent type or call an agent constructor. Tool and middleware bodies run through native invocation queueing and permission checks. Accepted execution is not restarted after owner loss, including interruption during core initialization. To invoke a tool on an existing real agent, use the native REST API or `golem tool invoke --agent`, not MCP.
+
+### Commands and schemas
+
+Only commands with bodies become MCP tools; a parent with its own body is exported alongside its executable descendants. Names are lowercase, hyphens become underscores, and path segments are joined with underscores: `file-tools read-file` becomes `file_tools_read_file`. Aliases produce additional tools that invoke the same canonical command. Name collisions fail deployment.
+
+Use either `include` or `exclude`, never both. Patterns are space-separated command paths without the tool prefix: `*` matches one segment and `**` matches any depth. Selecting a canonical command includes its aliases; excluding it also removes its aliases.
+
+Inputs use the human-readable JSON shapes advertised by `tools/list`, including defaults and repeated collections. Constraints are enforced before invocation and by native tool dispatch. Host-managed capabilities and nested typed streams cannot be exported. Standard annotations become `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint`; these hints do not change permissions or execution semantics.
+
+### Finite stdin and stdout
+
+MCP buffers each byte stream, with a **16 MiB limit per direction**. Declared stdin becomes an `_stdin` string argument, required only when the tool requires stdin. It contains UTF-8 text when every declared MIME type is textual, or base64 otherwise. Stdout is drained while stdin is being sent, and becomes text, image, audio, or an embedded resource according to its declared MIME type. Structured results are returned as `structuredContent` matching the advertised output schema, with a `value` wrapper when needed to produce a root object.
+
+Invalid parameters, constraint violations, and invalid results produce JSON-RPC `-32602` errors. Tool execution and custom errors produce `isError: true`. MCP does not expose native formatter selection, exit-code semantics, repetition modes, the alias graph, or middleware composition; middleware still runs normally.
+
+Listings and calls are tied to a deployment definition. After a deployment changes, an existing session may receive a tool-list-changed notification and must list tools again before calling. Each MCP call has a fresh native idempotency key; repeating a JSON-RPC request ID is not a durable execution retry.
+
 ## Automatic Mapping
 
 Agent methods are automatically mapped to MCP entities based on the agent type and method signature:

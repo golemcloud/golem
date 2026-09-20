@@ -372,6 +372,9 @@ impl DeploymentWriteService {
                 }),
                 provision: ambient.provision,
                 environment_binding: Some(ambient.environment_binding),
+                component_bindings: requested
+                    .map(|deployment| deployment.component_bindings.clone())
+                    .unwrap_or_default(),
                 agent_bindings: requested
                     .map(|deployment| deployment.agent_bindings.clone())
                     .unwrap_or_default(),
@@ -448,13 +451,6 @@ impl DeploymentWriteService {
             }
         }
 
-        let compiled_mcps = deployment_context.compile_mcp_deployments(
-            account_id,
-            next_deployment_revision,
-            &security_schemes_map,
-            &mut errors,
-        );
-
         let mut compiled_tools = deployment_context.compile_tools_with_remote(
             next_deployment_revision,
             &remote_tools,
@@ -477,6 +473,11 @@ impl DeploymentWriteService {
             &data.universal_tool_middlewares,
             &environment_tool_bindings,
             &agent_tool_binding_inputs,
+            &deployment_context
+                .components
+                .values()
+                .map(|component| (component.id, component.component_name.clone()))
+                .collect(),
             deployment_context.environment.tool_compatibility_mode,
         );
         for diagnostic in compiled_middleware.errors {
@@ -504,6 +505,15 @@ impl DeploymentWriteService {
                 },
             ));
         }
+
+        let compiled_mcps = deployment_context.compile_mcp_deployments(
+            account_id,
+            next_deployment_revision,
+            &security_schemes_map,
+            &compiled_tools,
+            &compiled_middleware.chains,
+            &mut errors,
+        );
 
         let registered_tools_by_name = compiled_tools
             .registered_tools
