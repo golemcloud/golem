@@ -1301,7 +1301,7 @@ async fn streaming_output_resume_restores_exact_cursors(
         executor.shutdown_and_wait_for_invocation_loops().await?;
     }
     drop(requests);
-    drop(responses);
+    let resident_response_lease = (!restart_executor).then_some(responses);
     let executor = if restart_executor {
         drop(executor);
         start_with_overrides(deps, &context, overrides).await?
@@ -1373,6 +1373,7 @@ async fn streaming_output_resume_restores_exact_cursors(
         .invoke_agent_session(ReceiverStream::new(receiver))
         .await?
         .into_inner();
+    drop(resident_response_lease);
     let mut mapped_outputs = 0;
     let mut output_items = 0;
     let mut output_ends = 0;

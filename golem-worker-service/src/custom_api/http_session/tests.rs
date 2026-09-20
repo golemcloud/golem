@@ -1225,12 +1225,31 @@ fn body_bytes_are_absent_from_session_trace_logs() {
     }
     let logs = Arc::new(std::sync::Mutex::new(Vec::new()));
     let writer = logs.clone();
+    // tracing-core's singleton-dispatch optimization uses the registering thread's
+    // subscriber. A second dispatch prevents concurrent unsubscribed tests from
+    // caching shared callsites as disabled for this capture subscriber.
+    let _callsite_registry_anchor = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::level_filters::LevelFilter::OFF)
+            .with_writer(std::io::sink)
+            .finish(),
+    );
     let subscriber = tracing_subscriber::fmt()
         .without_time()
         .with_max_level(tracing::Level::TRACE)
         .with_writer(move || LogWriter(writer.clone()))
         .finish();
     let _subscriber = tracing::subscriber::set_default(subscriber);
+    fn shared_callsite_probe() {
+        tracing::debug!("shared callsite probe");
+    }
+    std::thread::spawn(shared_callsite_probe).join().unwrap();
+    shared_callsite_probe();
+    assert!(
+        String::from_utf8(logs.lock().unwrap().clone())
+            .unwrap()
+            .contains("shared callsite probe")
+    );
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

@@ -297,81 +297,77 @@ async fn mounted_live_stream_completion_and_disconnect_release_mutation(
         .user
         .get_latest_component_revision(&context.component_id)
         .await?;
-    for http2 in [false, true] {
-        for disconnect in [false, true] {
-            let name = format!("large-{http2}-{disconnect}");
-            let domain = context.host_header.to_str()?;
-            let address = ([127, 0, 0, 1], context.base_url.port().unwrap()).into();
-            let builder = reqwest::Client::builder()
-                .no_proxy()
-                .resolve(domain, address)
-                .timeout(Duration::from_secs(60));
-            let client = if http2 {
-                builder
-                    .http2_prior_knowledge()
-                    .http2_initial_stream_window_size(64 * 1024)
-            } else {
-                builder.http1_only()
-            }
+    for disconnect in [false, true] {
+        let name = format!("large-{disconnect}");
+        let domain = context.host_header.to_str()?;
+        let address = ([127, 0, 0, 1], context.base_url.port().unwrap()).into();
+        // HTTP/1.1 can buffer the entire response in the transport before the mutation is
+        // admitted, so an unread client body does not prove that the server read is active.
+        // The small HTTP/2 stream window provides deterministic transport backpressure.
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .resolve(domain, address)
+            .timeout(Duration::from_secs(60))
+            .http2_prior_knowledge()
+            .http2_initial_stream_window_size(64 * 1024)
             .build()?;
-            let url = reqwest::Url::parse(&format!("http://{domain}/files/{name}/large.bin"))?;
-            let mut response = client.get(url.clone()).send().await?;
-            assert_eq!(response.status(), StatusCode::OK);
-            assert_eq!(
-                response.headers()["content-length"],
-                (32 * 1024 * 1024).to_string()
-            );
-            let first = response.chunk().await?.unwrap();
-            for (i, byte) in first.iter().enumerate() {
-                assert_eq!(*byte, (i % 251) as u8);
-            }
-            let parsed = agent_id!("LiveFiles", name.as_str());
-            let mut mutation = Box::pin(context.user.invoke_and_await_agent(
-                &component,
-                &parsed,
-                "replace",
-                data_value!("/public/large.bin", b"after".to_vec()),
-            ));
-            tokio::select! {
-                result = &mut mutation => panic!("mutation passed an active file read: {result:?}"),
-                admitted = tokio::time::timeout(Duration::from_secs(10), async {
-                    loop {
-                        let oplog = context.user.get_oplog(&agent(&context, &name), OplogIndex::INITIAL).await?;
-                        if oplog.iter().any(|entry| matches!(&entry.entry,
-                            PublicOplogEntry::PendingAgentInvocation(pending)
-                                if matches!(pending.invocation, PublicAgentInvocation::AgentMethodInvocation(_)))) {
-                            break anyhow::Ok(());
-                        }
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
-                }) => admitted??,
-            }
-            assert!(
-                tokio::time::timeout(Duration::from_millis(200), &mut mutation)
-                    .await
-                    .is_err()
-            );
-            if disconnect {
-                drop(response);
-            } else {
-                let mut offset = first.len();
-                while let Some(chunk) = response.chunk().await? {
-                    for (i, byte) in chunk.iter().enumerate() {
-                        assert_eq!(*byte, ((offset + i) % 251) as u8);
-                    }
-                    offset += chunk.len();
-                }
-                assert_eq!(offset, 32 * 1024 * 1024);
-            }
-            assert!(
-                tokio::time::timeout(Duration::from_secs(20), mutation)
-                    .await??
-                    .into_typed::<bool>()?
-            );
-            let response = client.get(url).send().await?;
-            assert_eq!(response.bytes().await?, b"after".as_slice());
-            assert_eq!(effects(&context, &name).await?, (1, 1));
+        let url = reqwest::Url::parse(&format!("http://{domain}/files/{name}/large.bin"))?;
+        let mut response = client.get(url.clone()).send().await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-length"],
+            (32 * 1024 * 1024).to_string()
+        );
+        let first = response.chunk().await?.unwrap();
+        for (i, byte) in first.iter().enumerate() {
+            assert_eq!(*byte, (i % 251) as u8);
         }
+        let parsed = agent_id!("LiveFiles", name.as_str());
+        let mut mutation = Box::pin(context.user.invoke_and_await_agent(
+            &component,
+            &parsed,
+            "replace",
+            data_value!("/public/large.bin", b"after".to_vec()),
+        ));
+        tokio::select! {
+            result = &mut mutation => panic!("mutation passed an active file read: {result:?}"),
+            admitted = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let oplog = context.user.get_oplog(&agent(&context, &name), OplogIndex::INITIAL).await?;
+                    if oplog.iter().any(|entry| matches!(&entry.entry,
+                        PublicOplogEntry::PendingAgentInvocation(pending)
+                            if matches!(pending.invocation, PublicAgentInvocation::AgentMethodInvocation(_)))) {
+                        break anyhow::Ok(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }) => admitted??,
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), &mut mutation)
+                .await
+                .is_err()
+        );
+        if disconnect {
+            drop(response);
+        } else {
+            let mut offset = first.len();
+            while let Some(chunk) = response.chunk().await? {
+                for (i, byte) in chunk.iter().enumerate() {
+                    assert_eq!(*byte, ((offset + i) % 251) as u8);
+                }
+                offset += chunk.len();
+            }
+            assert_eq!(offset, 32 * 1024 * 1024);
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_secs(20), mutation)
+                .await??
+                .into_typed::<bool>()?
+        );
+        let response = client.get(url).send().await?;
+        assert_eq!(response.bytes().await?, b"after".as_slice());
+        assert_eq!(effects(&context, &name).await?, (1, 1));
     }
     Ok(())
 }
