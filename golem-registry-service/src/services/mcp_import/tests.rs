@@ -13,6 +13,8 @@ use golem_common::model::card::{
 };
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::model::mcp_import::{McpImportAuthInput, McpImportDeployment};
+use golem_common::model::tool::ToolBindingInput;
+use golem_common::model::tool_middleware::{CompiledToolMiddlewareChain, RegisteredToolMiddleware};
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService, RegistryServiceError,
 };
@@ -274,6 +276,11 @@ impl Fixture {
         for revision in [1_i64, 2] {
             pool.with_rw("mcp-resolver-test", "seed").execute(sqlx::query("INSERT INTO deployment_revisions (environment_id,revision_id,version,hash,created_at,created_by) VALUES ($1,$2,$3,$4,$5,$6)")
                 .bind(env.id.0).bind(revision).bind(format!("v{revision}")).bind(vec![0_u8;32]).bind(SqlDateTime::now()).bind(root.id.0)).await.unwrap();
+            pool.with_rw("mcp-resolver-test", "seed").execute(sqlx::query("INSERT INTO deployment_tool_middleware_snapshots (environment_id,deployment_revision_id,registered_middlewares,compiled_chains,compatibility_mode) VALUES ($1,$2,$3,$4,$5)")
+                .bind(env.id.0).bind(revision).bind(Blob::new(Vec::<RegisteredToolMiddleware>::new())).bind(Blob::new(Vec::<CompiledToolMiddlewareChain>::new())).bind("strict-equality")).await.unwrap();
+            let binding = ToolBindingInput::default();
+            pool.with_rw("mcp-resolver-test", "seed").execute(sqlx::query("INSERT INTO deployment_tool_middleware_bindings (environment_id,deployment_revision_id,scope,agent_type_name,tool_name,merge_mode,has_installations,config_keys_readable,secret_keys_readable,secret_keys_revealable) VALUES ($1,$2,'universal','',$3,NULL,true,$4,$5,$6)")
+                .bind(env.id.0).bind(revision).bind("").bind(Blob::new(binding.config_keys_readable)).bind(Blob::new(binding.secret_keys_readable)).bind(Blob::new(binding.secret_keys_revealable))).await.unwrap();
         }
         let recipient = RecipientPattern::Account {
             account: root.email.clone(),
@@ -578,6 +585,16 @@ async fn deployment_without_oauth_consent_succeeds_with_discovery_warning() {
     db.execute(sqlx::query("DELETE FROM deployment_mcp_imports"))
         .await
         .unwrap();
+    db.execute(sqlx::query(
+        "DELETE FROM deployment_tool_middleware_bindings",
+    ))
+    .await
+    .unwrap();
+    db.execute(sqlx::query(
+        "DELETE FROM deployment_tool_middleware_snapshots",
+    ))
+    .await
+    .unwrap();
     db.execute(sqlx::query("DELETE FROM deployment_revisions"))
         .await
         .unwrap();
@@ -673,6 +690,16 @@ async fn preview_before_deployment_paginates_merges_and_does_not_cache() {
     db.execute(sqlx::query("DELETE FROM deployment_mcp_imports"))
         .await
         .unwrap();
+    db.execute(sqlx::query(
+        "DELETE FROM deployment_tool_middleware_bindings",
+    ))
+    .await
+    .unwrap();
+    db.execute(sqlx::query(
+        "DELETE FROM deployment_tool_middleware_snapshots",
+    ))
+    .await
+    .unwrap();
     db.execute(sqlx::query("DELETE FROM deployment_revisions"))
         .await
         .unwrap();

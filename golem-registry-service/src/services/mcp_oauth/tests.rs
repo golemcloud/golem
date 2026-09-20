@@ -21,6 +21,8 @@ use golem_common::model::card::{
     PortPattern,
 };
 use golem_common::model::mcp_import::{McpImportAuthInput, McpImportDeployment};
+use golem_common::model::tool::ToolBindingInput;
+use golem_common::model::tool_middleware::{CompiledToolMiddlewareChain, RegisteredToolMiddleware};
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{self, PoolApi};
 use golem_service_base::migration::{Migrations, MigrationsDir};
@@ -76,6 +78,9 @@ impl Fixture {
         db.execute(sqlx::query("INSERT INTO security_scheme_revisions (security_scheme_id,revision_id,provider_type,client_id,client_secret,redirect_url,scopes,custom_provider_name,custom_issuer_url,created_at,created_by,deleted) VALUES ($1,1,'custom','client','private-secret','\"https://callback.example/complete\"','[\"tools\"]','provider','https://issuer.example',$2,$3,false)").bind(scheme).bind(now.clone()).bind(owner.0)).await.unwrap();
         for revision in [1_i64, 2] {
             db.execute(sqlx::query("INSERT INTO deployment_revisions (environment_id,revision_id,version,hash,created_at,created_by) VALUES ($1,$2,$3,$4,$5,$6)").bind(env).bind(revision).bind(format!("v{revision}")).bind(vec![0_u8;32]).bind(now.clone()).bind(owner.0)).await.unwrap();
+            db.execute(sqlx::query("INSERT INTO deployment_tool_middleware_snapshots (environment_id,deployment_revision_id,registered_middlewares,compiled_chains,compatibility_mode) VALUES ($1,$2,$3,$4,$5)").bind(env).bind(revision).bind(Blob::new(Vec::<RegisteredToolMiddleware>::new())).bind(Blob::new(Vec::<CompiledToolMiddlewareChain>::new())).bind("strict-equality")).await.unwrap();
+            let binding = ToolBindingInput::default();
+            db.execute(sqlx::query("INSERT INTO deployment_tool_middleware_bindings (environment_id,deployment_revision_id,scope,agent_type_name,tool_name,merge_mode,has_installations,config_keys_readable,secret_keys_readable,secret_keys_revealable) VALUES ($1,$2,'universal','',$3,NULL,true,$4,$5,$6)").bind(env).bind(revision).bind("").bind(Blob::new(binding.config_keys_readable)).bind(Blob::new(binding.secret_keys_readable)).bind(Blob::new(binding.secret_keys_revealable))).await.unwrap();
         }
         let recipient = RecipientPattern::Account {
             account: AccountEmail::new(format!("{operator_id}@test.invalid")),
@@ -1099,6 +1104,16 @@ async fn declared_consent_and_refresh_work_before_first_deployment_and_grant_is_
     db.execute(sqlx::query("DELETE FROM deployment_mcp_imports"))
         .await
         .unwrap();
+    db.execute(sqlx::query(
+        "DELETE FROM deployment_tool_middleware_bindings",
+    ))
+    .await
+    .unwrap();
+    db.execute(sqlx::query(
+        "DELETE FROM deployment_tool_middleware_snapshots",
+    ))
+    .await
+    .unwrap();
     db.execute(sqlx::query("DELETE FROM deployment_revisions"))
         .await
         .unwrap();
@@ -1149,6 +1164,15 @@ async fn declared_consent_and_refresh_work_before_first_deployment_and_grant_is_
     fixture.pool.with_rw("oauth-service-test", "deploy").execute(
         sqlx::query("INSERT INTO deployment_revisions (environment_id,revision_id,version,hash,created_at,created_by) VALUES ($1,1,'v1',$2,$3,$4)")
             .bind(fixture.source.environment_id.0).bind(vec![0_u8;32]).bind(SqlDateTime::now()).bind(fixture.owner.0)
+    ).await.unwrap();
+    fixture.pool.with_rw("oauth-service-test", "deploy").execute(
+        sqlx::query("INSERT INTO deployment_tool_middleware_snapshots (environment_id,deployment_revision_id,registered_middlewares,compiled_chains,compatibility_mode) VALUES ($1,1,$2,$3,$4)")
+            .bind(fixture.source.environment_id.0).bind(Blob::new(Vec::<RegisteredToolMiddleware>::new())).bind(Blob::new(Vec::<CompiledToolMiddlewareChain>::new())).bind("strict-equality")
+    ).await.unwrap();
+    let binding = ToolBindingInput::default();
+    fixture.pool.with_rw("oauth-service-test", "deploy").execute(
+        sqlx::query("INSERT INTO deployment_tool_middleware_bindings (environment_id,deployment_revision_id,scope,agent_type_name,tool_name,merge_mode,has_installations,config_keys_readable,secret_keys_readable,secret_keys_revealable) VALUES ($1,1,'universal','',$2,NULL,true,$3,$4,$5)")
+            .bind(fixture.source.environment_id.0).bind("").bind(Blob::new(binding.config_keys_readable)).bind(Blob::new(binding.secret_keys_readable)).bind(Blob::new(binding.secret_keys_revealable))
     ).await.unwrap();
     fixture.insert_import(1, 0, Some("oauth"), None).await;
     let mut no_network = Queue::token();

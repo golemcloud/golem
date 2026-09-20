@@ -1551,6 +1551,145 @@ async fn dynamic_discovery_quota_exhaustion_suspends_without_completing_the_obse
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+async fn dynamic_tool_invocation_quota_exhaustion_during_activation_resumes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let handler = axum::routing::post({
+        let calls = calls.clone();
+        move |axum::Json(body): axum::Json<serde_json::Value>| {
+            let calls = calls.clone();
+            async move {
+                assert_eq!(body["method"], "tools/call");
+                calls.fetch_add(1, Ordering::SeqCst);
+                axum::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": body["id"],
+                    "result": {"content": []}
+                }))
+            }
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, axum::Router::new().route("/mcp", handler))
+            .await
+            .unwrap();
+    }));
+
+    let context = TestContext::new(last_unique_id);
+    let service = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(service.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let mut deployment = deployment_state(
+        &AgentTypeName("GolemHostApi".into()),
+        44,
+        component.revision,
+        &[],
+    );
+    add_mcp_imports(&mut deployment, 1);
+    deployment.mcp_imports[0].url = format!("http://127.0.0.1:{port}/mcp");
+    service.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(deployment),
+    );
+    let source = mcp_source(context.default_environment_id, 44, 0);
+    service.set_mcp_observation(
+        source.clone(),
+        Err(RegistryServiceError::LimitExceeded(
+            "activation HTTP budget".into(),
+        )),
+    );
+    let mut credential_source = source.clone();
+    credential_source.upstream_tool_name = "dynamic-call".into();
+    service.set_mcp_credential(
+        credential_source,
+        golem_service_base::clients::registry::McpRuntimeCredential {
+            credential: None,
+            oauth_grant_generation: None,
+        },
+    );
+    let agent_id = agent_id!("GolemHostApi", "dynamic-activation-quota");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "tool_rpc_invoke_and_await_result",
+                    data_value!("dynamic-call", Vec::<String>::new(), String::new()),
+                )
+                .await
+        })
+    };
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(30))
+        .await?;
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "tools/call was dispatched");
+    assert_eq!(service.mcp_observation_requests().len(), 1);
+    let suspended = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(!suspended.iter().any(|entry| matches!(
+        &entry.entry,
+        PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke"
+    )));
+
+    service.set_mcp_observation(
+        source.clone(),
+        Ok(mcp_observation(source, &["dynamic-call"])),
+    );
+    executor.resume(&worker_id, false).await?;
+    assert_eq!(
+        invocation.await??.into_typed::<Result<(), String>>()?,
+        Ok(())
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let completed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let starts = completed
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke"
+            )
+        })
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert_eq!(starts.len(), 1);
+    assert!(completed.iter().any(|entry| matches!(
+        &entry.entry,
+        PublicOplogEntry::End(end) if end.start_index == starts[0]
+    )));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
 async fn dynamic_tool_invocation_replays_committed_response_without_upstream_or_credentials(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

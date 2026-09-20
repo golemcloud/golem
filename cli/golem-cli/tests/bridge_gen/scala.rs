@@ -2352,7 +2352,8 @@ import golem.bridge.client.{name}_lookup.{client}
 import scala.concurrent.ExecutionContext
 object Consumer {{
   def consume(client: {client})(using ExecutionContext): Unit = {{
-    client.{name}Lookup("query").foreach {{ invocation =>
+    client.{name}Lookup(Some(3L), "query", Map("region" -> "west"))
+    client.{name}Lookup(None, "query", Map.empty).foreach {{ invocation =>
       val stdout: golem.tool.ToolInputStream = invocation.stdout
       invocation.result.foreach(_.foreach {{ result =>
         {fields}

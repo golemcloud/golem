@@ -1,20 +1,19 @@
 # GOL-36: MCP import — work-in-progress specification and plan
 
-Status: implementation in progress. Steps 1–7 and 9 completed after tests, Oracle
-review and bounded bug-finder loops. Steps 8 and 10 remain open: GOL-439 is now
-merged from main, but dynamic MCP chain compilation and combined acceptance remain.
+Status: steps 1–9 completed after tests, Oracle review and bounded bug-finder
+loops. GOL-439 is merged from main and dynamic MCP middleware integration passes
+combined acceptance. Step 10 remains open pending final CI validation.
 The resource-budget boundary has provisional user approval and must be revisited
 in the final review.
-Middleware integration remains required. The finalized planning snapshot
-is attached to GOL-36 in Linear.
+The finalized planning snapshot is attached to GOL-36 in Linear.
 The user approved a fixed one-day limit for resolver operation timeouts and
 refresh intervals. The correction passed 28 targeted tests and Oracle review;
 periodic-refresh bug-finder run 5 resolved the timeout finding with no new
 findings or active checkpoint. Public metadata inspection, refresh, generated
 clients, deployment warnings and operator documentation are now implemented and
 verified. Combined OAuth/agent acceptance, quota enforcement, public-oplog
-rendering, protocol validation and generated config checks pass; middleware
-integration can now proceed on the merged dependency.
+rendering, protocol validation and generated config checks pass, including
+universal and monomorphic middleware with offline replay.
 
 This is the living record of the requirements, decisions, implementation plan, and
 open details discussed in the planning thread. Update this file in place as the
@@ -1666,6 +1665,28 @@ Current verification and review findings:
   This closes step 9, not OAuth combined acceptance or middleware integration.
 
 ### Step 10 — combined acceptance in progress
+
+- Final generated-client acceptance covers optional integer arguments and typed
+  additional properties across Rust, TypeScript, Effect, Scala and MoonBit:
+  all five compiler checks pass. This exposed and fixed Rust tool parameter
+  encoding's missing `Result<SchemaValue, String>` closure boundary for nested
+  fallible encoders. The final generated-client bug-finder run is clean.
+- Fresh CLI/server binaries pass both live Rust acceptance tests: TLS OAuth
+  consent/refresh/offline replay and bearer/basic calls with exact upstream
+  arguments, ten distinct effect keys, text/binary/empty/mixed/resource output,
+  and full offline reconstruction. Resource checks assert the typed URI, both
+  MIME fields, inline bytes and empty stdout, not Debug formatting.
+- Quota exhaustion during invocation-time MCP activation now has a passing
+  suspend/resume regression: no entity Start or upstream call before suspension,
+  one settled entity Start and one call after resumption. It exposed a missing
+  primary replay-tail transition in request-reconstructing admission; the fix
+  uses the existing guarded transition and continues rejecting deleted regions
+  for primary callers and all live continuation for completed entities. Oracle
+  and its focused bug-finder approved the correction.
+- CI exposed direct-SQL fixtures missing required middleware snapshot/universal
+  binding rows and a cross-account deployment test omitting newly hash-significant
+  binding scopes. Fixtures and expected hashes are updated to the production
+  contract; no loader fallback or weakened hash validation is introduced.
 
 - The real CLI OAuth acceptance test uses predeployment manifest consent, an HTTPS
   provider, generated Rust clients and the registry credential RPC. It independently

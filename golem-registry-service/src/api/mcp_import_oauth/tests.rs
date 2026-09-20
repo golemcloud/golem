@@ -15,6 +15,8 @@ use golem_common::model::mcp_import::{
     McpImportAuthInput, McpImportBasicAuth, McpImportDeployment, McpImportSource,
 };
 use golem_common::model::security_scheme::{Provider, SecuritySchemeCreation, SecuritySchemeName};
+use golem_common::model::tool::ToolBindingInput;
+use golem_common::model::tool_middleware::{CompiledToolMiddlewareChain, RegisteredToolMiddleware};
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService, RegistryServiceError,
 };
@@ -100,6 +102,11 @@ async fn operator_and_runtime_routes_authenticate_and_target_exact_import() {
     let mut writer = pool.with_rw("oauth-routes-test", "seed");
     writer.execute(sqlx::query("INSERT INTO deployment_revisions (environment_id,revision_id,version,hash,created_at,created_by) VALUES ($1,1,'v1',$2,$3,$4)")
         .bind(env.id.0).bind(vec![0_u8; 32]).bind(SqlDateTime::now()).bind(root.id.0)).await.unwrap();
+    writer.execute(sqlx::query("INSERT INTO deployment_tool_middleware_snapshots (environment_id,deployment_revision_id,registered_middlewares,compiled_chains,compatibility_mode) VALUES ($1,1,$2,$3,'strict-equality')")
+        .bind(env.id.0).bind(Blob::new(Vec::<RegisteredToolMiddleware>::new())).bind(Blob::new(Vec::<CompiledToolMiddlewareChain>::new()))).await.unwrap();
+    let binding = ToolBindingInput::default();
+    writer.execute(sqlx::query("INSERT INTO deployment_tool_middleware_bindings (environment_id,deployment_revision_id,scope,agent_type_name,tool_name,merge_mode,has_installations,config_keys_readable,secret_keys_readable,secret_keys_revealable) VALUES ($1,1,'universal','','',NULL,true,$2,$3,$4)")
+        .bind(env.id.0).bind(Blob::new(binding.config_keys_readable)).bind(Blob::new(binding.secret_keys_readable)).bind(Blob::new(binding.secret_keys_revealable))).await.unwrap();
     let (import, _) = McpImportDeployment {
         url: "https://resource.invalid/mcp".into(),
         auth: None,

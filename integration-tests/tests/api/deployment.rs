@@ -28,7 +28,8 @@ use golem_common::model::deployment::{
     DeploymentAgentSecretDefault, DeploymentPlan, DeploymentRollback, DeploymentVersion,
 };
 use golem_common::model::diff::{
-    EffectiveToolBinding, RemoteToolDeployment as DiffRemoteToolDeployment,
+    Deployment as DiffDeployment, EffectiveToolBinding,
+    RemoteToolDeployment as DiffRemoteToolDeployment, tool_middleware_binding_inputs,
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
@@ -186,6 +187,44 @@ fn remote_tool_hash_input(
         },
         component_bindings: BTreeMap::new(),
         bindings,
+    }
+}
+
+fn add_remote_tool_hash_input(
+    deployment: &mut DiffDeployment,
+    remote: &RemoteToolDeployment,
+    hash_input: DiffRemoteToolDeployment,
+) {
+    deployment
+        .remote_tools
+        .insert(remote.name.to_string(), hash_input.into());
+
+    let environment_bindings = remote
+        .environment_binding
+        .iter()
+        .map(|binding| (remote.name.clone(), binding.clone()))
+        .collect();
+    let agent_bindings = remote
+        .agent_bindings
+        .iter()
+        .map(|(agent, binding)| {
+            (
+                agent.clone(),
+                BTreeMap::from([(remote.name.clone(), binding.clone())]),
+            )
+        })
+        .collect();
+    let (environment_bindings, agent_bindings) =
+        tool_middleware_binding_inputs(&environment_bindings, &agent_bindings);
+    deployment
+        .environment_tool_middleware_bindings
+        .extend(environment_bindings);
+    for (agent, bindings) in agent_bindings {
+        deployment
+            .agent_tool_middleware_bindings
+            .entry(agent)
+            .or_default()
+            .extend(bindings);
     }
 }
 
@@ -1293,10 +1332,17 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         .get_environment_deployment_plan(&other_consumer_env.id.0)
         .await?;
     let other_remote_hash_input = remote_tool_hash_input(&grant_v12, false);
+    let other_remote_request = remote_tool_request(
+        ToolReleaseReference::ById(ToolReleaseById {
+            release_id: release_v12.id,
+        }),
+        false,
+    );
     let mut other_hash_input = other_plan.to_diffable();
-    other_hash_input.remote_tools.insert(
-        tool_name.to_string(),
-        other_remote_hash_input.clone().into(),
+    add_remote_tool_hash_input(
+        &mut other_hash_input,
+        &other_remote_request,
+        other_remote_hash_input,
     );
     let ungranted_deploy = consumer_client
         .deploy_environment(
@@ -1306,12 +1352,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
                 "ungranted",
                 other_hash_input.hash()?,
                 Vec::new(),
-                vec![remote_tool_request(
-                    ToolReleaseReference::ById(ToolReleaseById {
-                        release_id: release_v12.id,
-                    }),
-                    false,
-                )],
+                vec![other_remote_request],
             ),
         )
         .await;
@@ -1333,10 +1374,18 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         .await?;
     let remote_v12_hash_input = remote_tool_hash_input(&grant_v12, true);
     let remote_v12_hash = remote_v12_hash_input.hash()?;
+    let remote_v12_request = remote_tool_request(
+        ToolReleaseReference::ById(ToolReleaseById {
+            release_id: release_v12.id,
+        }),
+        true,
+    );
     let mut consumer_hash_input_v12 = consumer_plan_v12.to_diffable();
-    consumer_hash_input_v12
-        .remote_tools
-        .insert(tool_name.to_string(), remote_v12_hash_input.into());
+    add_remote_tool_hash_input(
+        &mut consumer_hash_input_v12,
+        &remote_v12_request,
+        remote_v12_hash_input,
+    );
     let consumer_deployment_v12 = consumer_client
         .deploy_environment(
             &consumer_env.id.0,
@@ -1345,12 +1394,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
                 "consumer-1.2.0",
                 consumer_hash_input_v12.hash()?,
                 Vec::new(),
-                vec![remote_tool_request(
-                    ToolReleaseReference::ById(ToolReleaseById {
-                        release_id: release_v12.id,
-                    }),
-                    true,
-                )],
+                vec![remote_v12_request],
             ),
         )
         .await?;
@@ -1475,10 +1519,18 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
         .await?;
     let remote_v13_hash_input = remote_tool_hash_input(&grant_v13, true);
     let remote_v13_hash = remote_v13_hash_input.hash()?;
+    let remote_v13_request = remote_tool_request(
+        ToolReleaseReference::ById(ToolReleaseById {
+            release_id: release_v13.id,
+        }),
+        true,
+    );
     let mut consumer_hash_input_v13 = consumer_plan_v13.to_diffable();
-    consumer_hash_input_v13
-        .remote_tools
-        .insert(tool_name.to_string(), remote_v13_hash_input.into());
+    add_remote_tool_hash_input(
+        &mut consumer_hash_input_v13,
+        &remote_v13_request,
+        remote_v13_hash_input,
+    );
     let consumer_deployment_v13 = consumer_client
         .deploy_environment(
             &consumer_env.id.0,
@@ -1487,12 +1539,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
                 "consumer-1.3.0",
                 consumer_hash_input_v13.hash()?,
                 Vec::new(),
-                vec![remote_tool_request(
-                    ToolReleaseReference::ById(ToolReleaseById {
-                        release_id: release_v13.id,
-                    }),
-                    true,
-                )],
+                vec![remote_v13_request],
             ),
         )
         .await?;

@@ -11,7 +11,7 @@ use test_r::{test, timeout};
 #[test]
 #[timeout("15 minutes")]
 async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
-    let calls = Arc::new(Mutex::new(Vec::<(String, String, String)>::new()));
+    let calls = Arc::new(Mutex::new(Vec::<(String, Value, String)>::new()));
     let listings = Arc::new(Mutex::new(BTreeSet::<String>::new()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -40,8 +40,8 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
                         json!({"tools":[{
                             "name":"lookup",
                             "inputSchema":{
-                                "type":"object", "properties":{"query":{"type":"string"}},
-                                "required":["query"], "additionalProperties":false
+                                "type":"object", "properties":{"query":{"type":"string"},"limit":{"type":"integer"}},
+                                "required":["query"], "additionalProperties":{"type":"string"}
                             },
                             "outputSchema":{
                                 "type":"object", "properties":{"answer":{"type":"string"},"score":{"type":"integer"}},
@@ -58,7 +58,8 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
                         {
                             return StatusCode::BAD_REQUEST.into_response();
                         }
-                        let Some(query) = body["params"]["arguments"]["query"].as_str() else {
+                        let arguments = body["params"]["arguments"].clone();
+                        let Some(query) = arguments["query"].as_str().map(str::to_owned) else {
                             return StatusCode::BAD_REQUEST.into_response();
                         };
                         let Some(key) = headers
@@ -71,11 +72,19 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
                         calls
                             .lock()
                             .unwrap()
-                            .push((uri.path().into(), query.into(), key.into()));
-                        let content = if query == "mixed" {
-                            json!([{"type":"text","text":"left"},{"type":"text","text":"right"}])
-                        } else {
-                            json!([{"type":"text","text":format!("stdout:{query}")}])
+                            .push((uri.path().into(), arguments, key.into()));
+                        let content = match query.as_str() {
+                            "empty" => json!([]),
+                            "binary" => {
+                                json!([{"type":"image","data":"AAEC/w==","mimeType":"image/test"}])
+                            }
+                            "resource" => {
+                                json!([{"type":"resource","resource":{"uri":"file:///exact.bin","blob":"ECAw","mimeType":"application/x-exact"}}])
+                            }
+                            "mixed" => {
+                                json!([{"type":"text","text":"left"},{"type":"text","text":"right"}])
+                            }
+                            _ => json!([{"type":"text","text":format!("stdout:{query}")}]),
                         };
                         let score = if uri.path() == "/bearer" { 7 } else { 13 };
                         json!({"structuredContent":{"answer":format!("answer:{}:{query}", uri.path()),"score":score},"content":content})
@@ -146,9 +155,10 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
     )
     .unwrap();
     fs::write_str(ctx.cwd_path_join("src/counter_agent.rs"), indoc! {r#"
-        use bearer_lookup_tool_guest_client::{BearerLookupClient, Content as BearerContent, Blocks as BearerBlocks};
-        use basic_lookup_tool_guest_client::{BasicLookupClient, Content as BasicContent, Blocks as BasicBlocks};
+        use bearer_lookup_tool_guest_client::{BearerLookupClient, Content as BearerContent, Blocks as BearerBlocks, Body as BearerBody};
+        use basic_lookup_tool_guest_client::{BasicLookupClient, Content as BasicContent, Blocks as BasicBlocks, Body as BasicBody};
         use golem_rust::{agent_definition, agent_implementation};
+        use golem_rust::agentic::UnstructuredBinary;
 
         #[agent_definition]
         pub trait McpConsumer {
@@ -161,29 +171,55 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
         impl McpConsumer for Consumer {
             fn new(_name: String) -> Self { Self { results: Vec::new() } }
             async fn run(&mut self) -> Vec<String> {
-                for query in ["simple", "mixed"] {
-                    let (result, stdout) = BearerLookupClient::new().bearer_lookup(query.into()).await.unwrap().collect().await.unwrap();
+                for query in ["simple", "mixed", "empty", "binary", "resource"] {
+                    let (limit, extras) = if query == "simple" { (None, vec![]) } else { (Some(3), vec![("region".into(), "west".into())]) };
+                    let (result, stdout) = BearerLookupClient::new().bearer_lookup(limit, query.into(), extras).await.unwrap().collect().await.unwrap();
+                    if query == "resource" {
+                        let BearerContent::Blocks(blocks) = &result.content else { panic!("expected resource blocks") };
+                        let [BearerBlocks::EmbeddedResource(resource)] = blocks.as_slice() else { panic!("expected one embedded resource") };
+                        assert_eq!(resource.uri, "file:///exact.bin");
+                        assert_eq!(resource.mime_type.as_deref(), Some("application/x-exact"));
+                        let BearerBody::Blob(UnstructuredBinary::Inline { data, mime_type }) = &resource.body else { panic!("expected inline blob") };
+                        assert_eq!(data, &[16, 32, 48]);
+                        assert_eq!(mime_type, "application/x-exact");
+                        assert!(stdout.is_empty());
+                    }
                     let content = match result.content {
                         BearerContent::Blocks(blocks) => blocks.into_iter().map(|block| match block {
                             BearerBlocks::Text(text) => text.text,
-                            _ => panic!("expected text block"),
+                            other => format!("{other:?}"),
                         }).collect::<Vec<_>>().join(","),
                         BearerContent::Streamed(descriptor) => descriptor.mime_type,
-                        BearerContent::None => panic!("expected content"),
+                        BearerContent::None => "none".into(),
                     };
                     if query == "mixed" { assert_eq!(content, "left,right"); }
-                    self.results.push(format!("bearer:{}:{}:{}:{content}", result.structured.answer, result.structured.score, String::from_utf8(stdout).unwrap()));
-                    let (result, stdout) = BasicLookupClient::new().basic_lookup(query.into()).await.unwrap().collect().await.unwrap();
+                    if query == "empty" { assert_eq!((&content, stdout.as_slice()), (&"none".to_string(), [].as_slice())); }
+                    if query == "binary" { assert_eq!((&content, stdout.as_slice()), (&"image/test".to_string(), [0, 1, 2, 255].as_slice())); }
+                    self.results.push(format!("bearer:{}:{}:{stdout:?}:{content}", result.structured.answer, result.structured.score));
+                    let (limit, extras) = if query == "simple" { (None, vec![]) } else { (Some(3), vec![("region".into(), "west".into())]) };
+                    let (result, stdout) = BasicLookupClient::new().basic_lookup(limit, query.into(), extras).await.unwrap().collect().await.unwrap();
+                    if query == "resource" {
+                        let BasicContent::Blocks(blocks) = &result.content else { panic!("expected resource blocks") };
+                        let [BasicBlocks::EmbeddedResource(resource)] = blocks.as_slice() else { panic!("expected one embedded resource") };
+                        assert_eq!(resource.uri, "file:///exact.bin");
+                        assert_eq!(resource.mime_type.as_deref(), Some("application/x-exact"));
+                        let BasicBody::Blob(UnstructuredBinary::Inline { data, mime_type }) = &resource.body else { panic!("expected inline blob") };
+                        assert_eq!(data, &[16, 32, 48]);
+                        assert_eq!(mime_type, "application/x-exact");
+                        assert!(stdout.is_empty());
+                    }
                     let content = match result.content {
                         BasicContent::Blocks(blocks) => blocks.into_iter().map(|block| match block {
                             BasicBlocks::Text(text) => text.text,
-                            _ => panic!("expected text block"),
+                            other => format!("{other:?}"),
                         }).collect::<Vec<_>>().join(","),
                         BasicContent::Streamed(descriptor) => descriptor.mime_type,
-                        BasicContent::None => panic!("expected content"),
+                        BasicContent::None => "none".into(),
                     };
                     if query == "mixed" { assert_eq!(content, "left,right"); }
-                    self.results.push(format!("basic:{}:{}:{}:{content}", result.structured.answer, result.structured.score, String::from_utf8(stdout).unwrap()));
+                    if query == "empty" { assert_eq!((&content, stdout.as_slice()), (&"none".to_string(), [].as_slice())); }
+                    if query == "binary" { assert_eq!((&content, stdout.as_slice()), (&"image/test".to_string(), [0, 1, 2, 255].as_slice())); }
+                    self.results.push(format!("basic:{}:{}:{stdout:?}:{content}", result.structured.answer, result.structured.score));
                 }
                 self.results.clone()
             }
@@ -218,33 +254,68 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
     assert!(output.success_or_dump());
     for (prefix, score) in [("bearer", 7), ("basic", 13)] {
         assert!(output.stdout_contains(format!(
-            "{prefix}:answer:/{prefix}:simple:{score}:stdout:simple:text/plain; charset=utf-8"
+            "{prefix}:answer:/{prefix}:simple:{score}:[115, 116, 100, 111, 117, 116, 58, 115, 105, 109, 112, 108, 101]:text/plain; charset=utf-8"
         )));
         assert!(output.stdout_contains(format!(
-            "{prefix}:answer:/{prefix}:mixed:{score}::left,right"
+            "{prefix}:answer:/{prefix}:mixed:{score}:[]:left,right"
         )));
+        assert!(output.stdout_contains(format!("{prefix}:answer:/{prefix}:empty:{score}:[]:none")));
+        assert!(output.stdout_contains(format!(
+            "{prefix}:answer:/{prefix}:binary:{score}:[0, 1, 2, 255]:image/test"
+        )));
+        assert!(output.stdout_contains(format!("{prefix}:answer:/{prefix}:resource:{score}:[]:")));
     }
     {
         let calls = calls.lock().unwrap();
-        assert_eq!(calls.len(), 4);
+        assert_eq!(calls.len(), 10);
         assert_eq!(
             calls
                 .iter()
                 .map(|(_, _, key)| key)
                 .collect::<BTreeSet<_>>()
                 .len(),
-            4
+            10
         );
         assert_eq!(
             calls
                 .iter()
-                .map(|(path, query, _)| (path.as_str(), query.as_str()))
+                .map(|(path, arguments, _)| (path.as_str(), arguments.to_string()))
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from([
-                ("/bearer", "simple"),
-                ("/bearer", "mixed"),
-                ("/basic", "simple"),
-                ("/basic", "mixed")
+                ("/bearer", json!({"query":"simple"}).to_string()),
+                (
+                    "/bearer",
+                    json!({"query":"mixed","limit":3,"region":"west"}).to_string()
+                ),
+                (
+                    "/bearer",
+                    json!({"query":"empty","limit":3,"region":"west"}).to_string()
+                ),
+                (
+                    "/bearer",
+                    json!({"query":"binary","limit":3,"region":"west"}).to_string()
+                ),
+                (
+                    "/bearer",
+                    json!({"query":"resource","limit":3,"region":"west"}).to_string()
+                ),
+                ("/basic", json!({"query":"simple"}).to_string()),
+                (
+                    "/basic",
+                    json!({"query":"mixed","limit":3,"region":"west"}).to_string()
+                ),
+                (
+                    "/basic",
+                    json!({"query":"empty","limit":3,"region":"west"}).to_string()
+                ),
+                (
+                    "/basic",
+                    json!({"query":"binary","limit":3,"region":"west"}).to_string()
+                ),
+                (
+                    "/basic",
+                    json!({"query":"resource","limit":3,"region":"west"}).to_string()
+                )
             ])
         );
     }
@@ -259,11 +330,20 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
     assert!(replayed.success_or_dump());
     for (prefix, score) in [("bearer", 7), ("basic", 13)] {
         assert!(replayed.stdout_contains(format!(
-            "{prefix}:answer:/{prefix}:simple:{score}:stdout:simple:text/plain; charset=utf-8"
+            "{prefix}:answer:/{prefix}:simple:{score}:[115, 116, 100, 111, 117, 116, 58, 115, 105, 109, 112, 108, 101]:text/plain; charset=utf-8"
         )));
         assert!(replayed.stdout_contains(format!(
-            "{prefix}:answer:/{prefix}:mixed:{score}::left,right"
+            "{prefix}:answer:/{prefix}:mixed:{score}:[]:left,right"
         )));
+        assert!(
+            replayed.stdout_contains(format!("{prefix}:answer:/{prefix}:empty:{score}:[]:none"))
+        );
+        assert!(replayed.stdout_contains(format!(
+            "{prefix}:answer:/{prefix}:binary:{score}:[0, 1, 2, 255]:image/test"
+        )));
+        assert!(
+            replayed.stdout_contains(format!("{prefix}:answer:/{prefix}:resource:{score}:[]:"))
+        );
     }
-    assert_eq!(calls.lock().unwrap().len(), 4);
+    assert_eq!(calls.lock().unwrap().len(), 10);
 }

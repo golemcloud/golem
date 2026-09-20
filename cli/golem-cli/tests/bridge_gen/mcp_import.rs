@@ -14,9 +14,12 @@ use test_r::{tag, test};
 pub(super) fn projections() -> (ProjectedTool, ProjectedTool) {
     let input = json!({
         "type": "object",
-        "properties": { "query": { "type": "string" } },
+        "properties": {
+            "query": { "type": "string" },
+            "limit": { "type": "integer" }
+        },
         "required": ["query"],
-        "additionalProperties": false
+        "additionalProperties": { "type": "string" }
     });
     let typed = ProjectedTool::new(
         &json!({
@@ -91,7 +94,8 @@ fn mcp_projections_compile_with_rust_generator() {
             &format!(
                 r#"
 async fn consume(client: &{client}) {{
-    let invocation = client.{method}("query".into()).await.unwrap();
+    let invocation = client.{method}(None, "query".into(), vec![]).await.unwrap();
+    let _ = client.{method}(Some(3), "query".into(), vec![("region".into(), "west".into())]).await.unwrap();
     let result = invocation.result().await.unwrap();
     {fields}
     let _ = result.content;
@@ -136,7 +140,8 @@ fn mcp_projections_compile_with_typescript_generator() {
             &format!(
                 r#"
 async function consume(client: {client}) {{
-    const invocation = client.{name}_lookup("query");
+    const invocation = client.{name}_lookup(undefined, "query", new Map());
+    void client.{name}_lookup(3n, "query", new Map([["region", "west"]]));
     const stdout: ReadableStream<Uint8Array> = invocation.stdout;
     const result = await invocation.result;
     {fields}
@@ -179,7 +184,8 @@ fn mcp_projections_compile_with_effect_generator() {
                 r#"
 function consume(client: {client}) {{
     return Effect.gen(function*() {{
-        const invocation = yield* client.{name}_lookup("query");
+        const invocation = yield* client.{name}_lookup(undefined, "query", new Map());
+        yield* client.{name}_lookup(3n, "query", new Map([["region", "west"]]));
         const result = yield* invocation.result;
         {fields}
         void result.content; void invocation.stdout;
@@ -222,7 +228,8 @@ fn mcp_projections_compile_with_moonbit_generator() {
                 r#"
 ///|
 pub async fn consume(client : {client}) -> Unit {{
-  match client.{name}_lookup("query") {{
+  ignore(client.{name}_lookup(None, "query", {{}}))
+  match client.{name}_lookup(Some(3L), "query", {{ "region": "west" }}) {{
     Err(_) => ()
     Ok(invocation) => {{
       ignore(invocation.stdout)
