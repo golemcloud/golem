@@ -1169,7 +1169,12 @@ async fn guest_byte_drain_after_partial_fork_rejects_the_retained_batch_suffix()
         oplog: Arc<TestOplog>,
         handle: DurableStreamHandle,
     ) {
-        let streams = StreamSession::new(producer, oplog, handle.source_invocation.clone(), []);
+        let streams = StreamSession::new(
+            producer,
+            oplog,
+            StreamRegistrationInvocation::Local(handle.source_invocation.idempotency_key.clone()),
+            [],
+        );
         let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
         let (nested_tx, _nested_rx) = mpsc::unbounded_channel();
         let drain = PendingOwnedStreamDrain {
@@ -1256,13 +1261,7 @@ async fn guest_byte_drain_after_partial_fork_rejects_the_retained_batch_suffix()
     )
     .await
     .unwrap();
-    let fork_handle = cut
-        .streams
-        .iter()
-        .find(|mapping| mapping.source == handle)
-        .unwrap()
-        .continuation
-        .clone();
+    let fork_stream_id = cut.selected_stream_id.unwrap();
     let fork_oplog = Arc::new(TestOplog::default());
     for (_, entry) in source_oplog
         .read_exact(
@@ -1289,6 +1288,15 @@ async fn guest_byte_drain_after_partial_fork_rejects_the_retained_batch_suffix()
     )
     .await
     .unwrap();
+    let fork_handle = fork
+        .materialize_binding(&StreamBindingRecord {
+            transport_stream_id: 0,
+            source: StreamRecordReference::Local(fork_stream_id),
+            role: SessionStreamRole::Output,
+        })
+        .await
+        .unwrap()
+        .handle;
     let prefix = fork.read_segment(&fork_handle, None, None).await.unwrap();
     assert_eq!(prefix.len(), 2);
     assert_eq!(
