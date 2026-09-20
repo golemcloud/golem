@@ -172,15 +172,16 @@ export interface ObjectMetadata {
 /**
  * Optional inclusive byte range for {@link Container.getData}.
  *
- * **Backend caveat.** The Golem host implementation diverges across
- * backends:
- * - in-memory + filesystem: `{start..end}` is treated as a Rust
- *   half-open range (end exclusive);
- * - S3: `Range: bytes=start-end` is sent (end inclusive).
+ * Both offsets are inclusive, as the WIT spec says, and every Golem
+ * backend reads them the same way. A range of `{ start, end }` is
+ * `end - start + 1` bytes long, so an object of `n` bytes is read whole
+ * with `{ start: 0n, end: n - 1n }`.
  *
- * The WIT spec says "Start and end offsets are inclusive". Until the
- * host fixes the in-memory/fs backends, ranged reads are not
- * portable — prefer reading whole objects.
+ * A range that asks for a byte the object does not have gives a
+ * {@link BlobstoreHostError}. That covers an `end` at or after the
+ * size, a `start` after the `end`, and every range of an empty
+ * object. The host reports this as invalid input and does not retry
+ * it, so the error arrives on the first attempt.
  *
  * @since 1.5.0
  * @category models
@@ -208,7 +209,7 @@ export interface Container {
 
   /** Read the entire object's bytes. */
   getData(name: string): Effect.Effect<Uint8Array, BlobstoreHostError>
-  /** Read a byte range (see caveat on {@link ByteRange}). */
+  /** Read a byte range. Both offsets are inclusive: see {@link ByteRange}. */
   getData(name: string, range: ByteRange): Effect.Effect<Uint8Array, BlobstoreHostError>
 
   /** Create or replace `name` with `data`. */
@@ -216,9 +217,9 @@ export interface Container {
 
   /** True if the named object exists in this container. */
   hasObject(name: string): Effect.Effect<boolean, BlobstoreHostError>
-  /** Metadata for the named object. Fails if the object does not exist. */
+  /** Metadata for the named object. Gives an error if the object does not exist. */
   objectInfo(name: string): Effect.Effect<ObjectMetadata, BlobstoreHostError>
-  /** Delete the named object. Does NOT fail if it does not exist. */
+  /** Delete the named object. Gives no error if it does not exist. */
   deleteObject(name: string): Effect.Effect<void, BlobstoreHostError>
   /** Delete multiple objects. */
   deleteObjects(names: ReadonlyArray<string>): Effect.Effect<void, BlobstoreHostError>
@@ -360,30 +361,20 @@ const makeContainer = (host: HostContainer): Container => {
 
   const getData: Container["getData"] = (name: string, range?: ByteRange) =>
     Effect.gen(function* () {
-      // Explicit user range — pass through verbatim. Backend semantics
-      // diverge (see ByteRange JSDoc); the SDK does NOT massage them.
+      // Explicit user range: pass through verbatim.
       if (range !== undefined) {
         return yield* host.getData(name, range)
       }
 
-      // Whole-object read. The WIT spec says `end` is inclusive,
-      // but the Golem in-memory and filesystem backends implement
-      // it as Rust-exclusive. We tolerate both:
-      //   - empty object       → return Uint8Array(0) without a host call
-      //   - try inclusive  end = size - 1
-      //   - if backend returned size - 1 bytes (the in-mem/fs bug),
-      //     retry with end = size to recover the last byte.
+      // Whole-object read. `end` is inclusive on every backend, so the
+      // last byte is at `size - 1`. An empty object has no range that
+      // is in it, so the empty result comes back without a host call.
       const meta = yield* host.objectInfo(name)
       const size = meta.size
       if (size === 0n) {
         return new Uint8Array(0)
       }
-      const firstAttempt = yield* host.getData(name, { start: 0n, end: size - 1n })
-      if (BigInt(firstAttempt.length) === size) {
-        return firstAttempt
-      }
-      // Backend treats `end` as exclusive — replay with end = size.
-      return yield* host.getData(name, { start: 0n, end: size })
+      return yield* host.getData(name, { start: 0n, end: size - 1n })
     })
 
   const self: Container = {
@@ -412,7 +403,7 @@ const makeContainer = (host: HostContainer): Container => {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a new empty container. Fails with {@link BlobstoreHostError}
+ * Create a new empty container. Gives a {@link BlobstoreHostError}
  * if a container with the same name already exists.
  *
  * @since 1.5.0
@@ -428,7 +419,7 @@ export const createContainer = (
   })
 
 /**
- * Open an existing container by name. Fails with {@link BlobstoreHostError}
+ * Open an existing container by name. Gives a {@link BlobstoreHostError}
  * if the container does not exist.
  *
  * @since 1.5.0

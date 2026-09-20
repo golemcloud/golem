@@ -20,7 +20,7 @@
 // mutable state are built inside `vi.hoisted` (mock factories are hoisted above
 // imports and may only close over hoisted bindings). These fakes let us drive
 // the PURE logic the surfaces own — the `forSchema` JSON validate/encode/decode
-// round-trip, the typed error classes, the whole-object read recovery, and the
+// round-trip, the typed error classes, the whole-object read, and the
 // list-objects paging — without touching a live host.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -114,11 +114,6 @@ const h = vi.hoisted(() => {
     }
   }
 
-  // Controls whether the fake container treats getData `end` as inclusive
-  // (S3-like) or exclusive (in-memory/fs-like), so we can exercise both
-  // branches of the whole-object read recovery.
-  const blob = { endExclusive: false };
-
   class FakeBlobContainer {
     objects = new Map<string, Uint8Array>();
     constructor(readonly cname: string) {}
@@ -131,8 +126,7 @@ const h = vi.hoisted(() => {
     getData(name: string, start: bigint, end: bigint): FakeBlobIncoming {
       const data = this.objects.get(name);
       if (data === undefined) throw 'no such object';
-      const endIdx = blob.endExclusive ? Number(end) : Number(end) + 1;
-      return new FakeBlobIncoming(data.subarray(Number(start), endIdx));
+      return new FakeBlobIncoming(data.subarray(Number(start), Number(end) + 1));
     }
     writeData(name: string, ov: FakeBlobOutgoing): void {
       this.objects.set(name, ov.bytes);
@@ -206,7 +200,6 @@ const h = vi.hoisted(() => {
   return {
     kvStores,
     blobContainers,
-    blob,
     ws,
     FakeIncomingValue,
     FakeOutgoingValue,
@@ -310,7 +303,6 @@ import * as websocket from '../src/websocket';
 beforeEach(() => {
   h.kvStores.clear();
   h.blobContainers.clear();
-  h.blob.endExclusive = false;
   h.ws.last = undefined;
 });
 
@@ -429,13 +421,6 @@ describe.skip('blobstore', () => {
 
     await c.delete('a.txt');
     expect(await c.has('a.txt')).toBe(false);
-  });
-
-  it('whole-object read recovers when the backend treats end as exclusive', async () => {
-    const c = await blobstore.createContainer('exclusive');
-    h.blob.endExclusive = true; // in-memory/fs-style backend bug
-    await c.writeData('o', new TextEncoder().encode('abcd'));
-    expect(new TextDecoder().decode(await c.getData('o'))).toBe('abcd');
   });
 
   it('whole-object read of an empty object returns no bytes without a host call', async () => {

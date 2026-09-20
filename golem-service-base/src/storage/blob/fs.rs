@@ -14,7 +14,7 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_path_is_root,
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_path_is_root,
     validate_relative_blob_path,
 };
 use anyhow::{Context, Error, anyhow};
@@ -339,6 +339,24 @@ impl BlobStorage for FileSystemBlobStorage {
         Ok(result)
     }
 
+    async fn list_blobs_below(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        validate_relative_blob_path(path)?;
+        let namespace_root = self.path_of(&namespace, Path::new(""));
+        let full_path = self.path_of(&namespace, path);
+        self.ensure_path_is_inside_root(&full_path)?;
+
+        Ok(
+            tokio::task::spawn_blocking(move || list_files_below(&full_path, &namespace_root))
+                .await??,
+        )
+    }
+
     async fn delete_dir(
         &self,
         _target_label: &'static str,
@@ -408,4 +426,49 @@ impl BlobStorage for FileSystemBlobStorage {
         async_fs::copy(&from_full_path, &to_full_path).await?;
         Ok(())
     }
+}
+
+/// Lists each regular file below `directory`, with its path relative to `root` and its size.
+///
+/// A `directory` that does not exist, or that is not a directory, gives an empty list.
+fn list_files_below(directory: &Path, root: &Path) -> std::io::Result<Box<[ListedBlob]>> {
+    match std::fs::read_dir(directory) {
+        Ok(entries) => add_files(entries, root, Vec::new()).map(Vec::into_boxed_slice),
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(Box::default())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// Adds each regular file below the entries of a directory to `listed`, and gives the list back.
+///
+/// The walk does not follow symlinks, and symlinks are not in the list.
+fn add_files(
+    mut entries: std::fs::ReadDir,
+    root: &Path,
+    listed: Vec<ListedBlob>,
+) -> std::io::Result<Vec<ListedBlob>> {
+    entries.try_fold(listed, |mut listed, entry| {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            add_files(std::fs::read_dir(entry.path())?, root, listed)
+        } else if file_type.is_file() {
+            let path = entry.path();
+            let relative = path.strip_prefix(root).map_err(std::io::Error::other)?;
+            listed.push(ListedBlob {
+                path: relative.into(),
+                size: entry.metadata()?.len(),
+            });
+            Ok(listed)
+        } else {
+            Ok(listed)
+        }
+    })
 }

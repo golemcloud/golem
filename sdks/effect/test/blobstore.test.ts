@@ -279,21 +279,139 @@ describe("Container.forSchema", () => {
     }),
   )
 
-  it.effect("whole-object read tolerates exclusive-end backends", () =>
+  it.effect("whole-object read asks once for the inclusive last byte", () =>
     Effect.gen(function* () {
       const fake = yield* makeBlobFake
       yield* Effect.gen(function* () {
-        // The fake follows the in-mem/fs backend: end is exclusive.
-        // The SDK's getData first tries (0, size - 1) (returns size - 1
-        // bytes on the fake), then retries with end = size to recover
-        // the full payload.
-        const c = yield* Blobstore.createContainer("excl-c")
+        const c = yield* Blobstore.createContainer("whole-c")
         yield* c.writeData("k", u8("alpha"))
         const got = yield* c.getData("k")
         expect(s(got)).toBe("alpha")
       }).pipe(Effect.provide(fake.layer))
+      // The end offset is the last byte, not the size, and one call
+      // gets the whole object.
+      expect(yield* fake.getDataCalls).toEqual([
+        { container: "whole-c", object: "k", start: 0n, end: 4n },
+      ])
     }),
   )
+
+  it.effect("an explicit range gives end - start + 1 bytes", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeBlobFake
+      yield* Effect.gen(function* () {
+        const c = yield* Blobstore.createContainer("range-c")
+        yield* c.writeData("k", u8("alpha"))
+        expect(s(yield* c.getData("k", { start: 1n, end: 3n }))).toBe("lph")
+        expect(s(yield* c.getData("k", { start: 0n, end: 0n }))).toBe("a")
+        expect(s(yield* c.getData("k", { start: 4n, end: 4n }))).toBe("a")
+      }).pipe(Effect.provide(fake.layer))
+    }),
+  )
+
+  it.effect("an end past the last byte fails", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeBlobFake
+      const exit = yield* Effect.exit(
+        Effect.gen(function* () {
+          const c = yield* Blobstore.createContainer("bad-range-c")
+          yield* c.writeData("k", u8("alpha"))
+          // `end` is the size, so it is one past the last byte.
+          return yield* c.getData("k", { start: 0n, end: 5n })
+        }).pipe(Effect.provide(fake.layer)),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("BlobstoreHostError")
+        expect(json).toContain("Invalid input: the byte range 0-5 is not in the blob")
+      }
+    }),
+  )
+
+  it.effect("a start after the end fails", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeBlobFake
+      const exit = yield* Effect.exit(
+        Effect.gen(function* () {
+          const c = yield* Blobstore.createContainer("inverted-range-c")
+          yield* c.writeData("k", u8("alpha"))
+          return yield* c.getData("k", { start: 3n, end: 1n })
+        }).pipe(Effect.provide(fake.layer)),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("BlobstoreHostError")
+        expect(json).toContain("Invalid input: the byte range 3-1 is not in the blob")
+      }
+    }),
+  )
+
+  it.effect("every range of an empty object fails", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeBlobFake
+      const exit = yield* Effect.exit(
+        Effect.gen(function* () {
+          const c = yield* Blobstore.createContainer("empty-range-c")
+          yield* c.writeData("k", new Uint8Array(0))
+          return yield* c.getData("k", { start: 0n, end: 0n })
+        }).pipe(Effect.provide(fake.layer)),
+      )
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        const json = JSON.stringify(exit.cause)
+        expect(json).toContain("BlobstoreHostError")
+        expect(json).toContain("Invalid input: the byte range 0-0 is not in the blob")
+      }
+    }),
+  )
+
+  // The host gets a negative offset as the `u64` it wraps to: see
+  // `test/blob-range.ts`. A wrapped start and a wrapped end break the
+  // range in different ways, so each one needs its own case.
+  const negativeRanges = [
+    {
+      name: "a negative start is a start after the end",
+      range: { start: -1n, end: 2n },
+      message: "Invalid input: the byte range 18446744073709551615-2 is not in the blob",
+    },
+    {
+      name: "a negative end is an end past the last byte",
+      range: { start: -1n, end: -1n },
+      message:
+        "Invalid input: the byte range 18446744073709551615-18446744073709551615 is not in the blob",
+    },
+  ] as const
+
+  const blobstoreLayers = [
+    { name: "the fake", layer: Effect.map(makeBlobFake, (fake) => fake.layer) },
+    { name: "the generated binding", layer: Effect.succeed(BlobstoreLive) },
+  ] as const
+
+  for (const [layerIndex, host] of blobstoreLayers.entries()) {
+    for (const [rangeIndex, negative] of negativeRanges.entries()) {
+      it.effect(`${negative.name}, on ${host.name}`, () =>
+        Effect.gen(function* () {
+          const layer = yield* host.layer
+          const container = `negative-range-${layerIndex}-${rangeIndex}`
+          const exit = yield* Effect.exit(
+            Effect.gen(function* () {
+              const c = yield* Blobstore.createContainer(container)
+              yield* c.writeData("k", u8("alpha"))
+              return yield* c.getData("k", negative.range)
+            }).pipe(Effect.provide(layer)),
+          )
+          expect(exit._tag).toBe("Failure")
+          if (exit._tag === "Failure") {
+            const json = JSON.stringify(exit.cause)
+            expect(json).toContain("BlobstoreHostError")
+            expect(json).toContain(negative.message)
+          }
+        }),
+      )
+    }
+  }
 
   it.effect(
     "decode failure surfaces as a typed failure (Schema.SchemaError via fromJsonString)",

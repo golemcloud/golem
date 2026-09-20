@@ -50,6 +50,12 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error>;
 
+    /// Reads the bytes from `start` to `end` of a blob. Both offsets are inclusive.
+    ///
+    /// The result has `end - start + 1` bytes. `None` means that no blob has the path. A range
+    /// with a byte that is not in the blob gives an error that downcasts to [`BlobRangeError`]:
+    /// an `end` at or after the length of the blob, a `start` after `end`, and each range of an
+    /// empty blob. A `start` after `end` gives this error before the backend reads the blob.
     async fn get_raw_slice(
         &self,
         target_label: &'static str,
@@ -59,10 +65,18 @@ pub trait BlobStorage: Debug + Send + Sync {
         start: u64,
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
+        if start > end {
+            return Err(BlobRangeError { start, end }.into());
+        }
         let data = self
             .get_raw(target_label, op_label, namespace, path)
             .await?;
-        Ok(data.map(|data| data[(start as usize)..(end as usize)].to_vec()))
+        data.map(|data| {
+            blob_range(&data, start, end)
+                .map(<[u8]>::to_vec)
+                .map_err(Error::from)
+        })
+        .transpose()
     }
 
     async fn get_metadata(
@@ -128,6 +142,21 @@ pub trait BlobStorage: Debug + Send + Sync {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error>;
+
+    /// Lists each blob below a path, at all depths, with its size.
+    ///
+    /// Each path in the result is relative to the root of the namespace, as in `list_dir`. The
+    /// result has no directories. An object that a backend writes to record a directory is not in
+    /// the result. A path that does not exist, or the path of a blob, gives an empty result. Paths
+    /// that differ only in case are different paths, unless the backend stores them as one blob.
+    /// The order of the result is not specified.
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, Error>;
 
     /// Deletes the directory at the path and all the entries below it, at any depth.
     ///
@@ -412,6 +441,39 @@ pub struct BlobMetadata {
     pub size: u64,
 }
 
+/// The path and the size of one blob.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ListedBlob {
+    /// The path of the blob, relative to the root of its namespace.
+    pub path: Box<Path>,
+    /// The size of the blob in bytes.
+    pub size: u64,
+}
+
+/// A ranged read asked for a byte that is not in the blob.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the byte range {start}-{end} is not in the blob")]
+pub struct BlobRangeError {
+    /// The offset of the first byte of the range.
+    pub start: u64,
+    /// The offset of the last byte of the range.
+    pub end: u64,
+}
+
+/// Gives the bytes from `start` to `end` of `blob`, which holds the full blob. Both offsets are
+/// inclusive.
+///
+/// A range with a byte that is not in the blob gives a [`BlobRangeError`]. An `end` at or after
+/// the length of the blob is not in the blob. A `start` after `end` is not in the blob. No
+/// range is in an empty blob.
+pub(crate) fn blob_range(blob: &[u8], start: u64, end: u64) -> Result<&[u8], BlobRangeError> {
+    (start <= end)
+        .then(|| usize::try_from(start).ok().zip(usize::try_from(end).ok()))
+        .flatten()
+        .and_then(|(first, last)| blob.get(first..=last))
+        .ok_or(BlobRangeError { start, end })
+}
+
 pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
     if path.is_absolute() {
         return Err(anyhow!("Blob path must be relative: {path:?}"));
@@ -457,6 +519,19 @@ pub(crate) fn blob_parent_to_string(path: &Path) -> Result<String, Error> {
     }
 }
 
+/// Makes the path of a blob from the path of its directory and its name.
+///
+/// An empty directory path is the root of the namespace. The path is made in one allocation of
+/// its final size.
+pub(crate) fn blob_child_path(directory: &str, name: &str) -> Box<Path> {
+    let separator = if directory.is_empty() { "" } else { "/" };
+    let mut path = String::with_capacity(directory.len() + separator.len() + name.len());
+    path.push_str(directory);
+    path.push_str(separator);
+    path.push_str(name);
+    PathBuf::from(path).into_boxed_path()
+}
+
 pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
     path.file_name()
         .ok_or_else(|| anyhow!("Path must have a file name: {path:?}"))
@@ -465,4 +540,47 @@ pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
                 .map(|s| s.to_string())
                 .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BlobRangeError, blob_range};
+    use pretty_assertions::assert_eq;
+    use test_r::test;
+
+    #[test]
+    fn blob_range_gives_the_inclusive_range_or_a_range_error() {
+        let blob = b"abcdef";
+        let ranges = [
+            (1, 3),
+            (0, 5),
+            (5, 5),
+            (0, 6),
+            (6, 6),
+            (3, 2),
+            (u64::MAX, u64::MAX),
+        ];
+
+        let results = ranges.map(|(start, end)| blob_range(blob, start, end));
+
+        assert_eq!(
+            results,
+            [
+                Ok(&b"bcd"[..]),
+                Ok(&b"abcdef"[..]),
+                Ok(&b"f"[..]),
+                Err(BlobRangeError { start: 0, end: 6 }),
+                Err(BlobRangeError { start: 6, end: 6 }),
+                Err(BlobRangeError { start: 3, end: 2 }),
+                Err(BlobRangeError {
+                    start: u64::MAX,
+                    end: u64::MAX
+                }),
+            ]
+        );
+        assert_eq!(
+            blob_range(b"", 0, 0),
+            Err(BlobRangeError { start: 0, end: 0 })
+        );
+    }
 }
