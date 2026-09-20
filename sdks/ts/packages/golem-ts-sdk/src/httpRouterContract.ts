@@ -118,6 +118,7 @@ export interface RouterMountOptions {
   readonly mount: string;
   readonly auth?: boolean;
   readonly cors?: readonly string[];
+  /** Validated structural mappings returned by compileFileMappings. */
   readonly staticBindings?: readonly FileMapping[];
   readonly handlerMethod?: string;
   readonly openapiProviderMethod?: string;
