@@ -1160,6 +1160,178 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
 
 #[test]
 #[test_r::timeout("30s")]
+async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix() {
+    use crate::services::oplog::DurableStreamOplogRecord;
+    use crate::services::worker_fork::lineage::tests::prepared;
+
+    async fn drain_bytes(
+        producer: Arc<DurableStreamStore>,
+        oplog: Arc<TestOplog>,
+        handle: DurableStreamHandle,
+    ) {
+        let streams = StreamSession::new(
+            producer,
+            oplog,
+            StreamRegistrationInvocation::Local(handle.source_invocation.idempotency_key.clone()),
+            [],
+        );
+        let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
+        let (nested_tx, _nested_rx) = mpsc::unbounded_channel();
+        let drain = PendingOwnedStreamDrain {
+            handle,
+            endpoint,
+            element_type: SchemaType::u8(),
+            role: SessionStreamRole::Output,
+        };
+        let (result, ()) = tokio::join!(
+            streams.drain_output(
+                drain,
+                Arc::new(SchemaGraph::anonymous(SchemaType::u8())),
+                nested_tx,
+            ),
+            async {
+                for byte in [5, 19, 83] {
+                    publisher.publish_item(SchemaValue::U8(byte)).await.unwrap();
+                }
+                publisher.publish_end().await.unwrap();
+            }
+        );
+        result.unwrap();
+    }
+
+    let source_identity = identity();
+    let source_oplog = Arc::new(TestOplog::default());
+    let source = DurableStreamStore::load(
+        source_oplog.clone(),
+        source_identity.environment_id,
+        source_identity.agent_id.clone(),
+        source_identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    source
+        .append_session_record(
+            None,
+            StreamSessionRecord::Prepared(prepared(&source_identity.invocation)),
+        )
+        .await
+        .unwrap();
+    let handle = source
+        .register(
+            None,
+            registration(
+                &source_identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: source_identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: vec![],
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    drain_bytes(source.clone(), source_oplog.clone(), handle.clone()).await;
+    let original = source.read_segment(&handle, None, None).await.unwrap();
+    assert_eq!(original.len(), 4);
+    assert_eq!(original[1].offset.sub_index(), 1);
+    assert_eq!(
+        original[0].offset.producer_oplog_index(),
+        original[2].offset.producer_oplog_index(),
+        "all three bytes must be in the batch that the fork cuts"
+    );
+    let retained = original[1].offset;
+    let cut_index = retained.producer_oplog_index();
+    let mut target_identity = identity();
+    target_identity.agent_id.agent_id = "fork".into();
+    target_identity.fingerprint = AgentFingerprint(Uuid::from_u128(4));
+    let source_owner = OwnedAgentId::new(source_identity.environment_id, &source_identity.agent_id);
+    let target_owner = OwnedAgentId::new(source_identity.environment_id, &target_identity.agent_id);
+    let cut = DurableStreamStore::prepare_fork_cut(
+        source_oplog.as_ref(),
+        (&source_owner, source_identity.fingerprint),
+        (&target_owner, target_identity.fingerprint),
+        source_oplog.current_oplog_index().await,
+        cut_index,
+        Some((handle.stream_id, Some(retained))),
+        [0; 32],
+        false,
+    )
+    .await
+    .unwrap();
+    let fork_stream_id = cut.selected_stream_id.unwrap();
+    let fork_oplog = Arc::new(TestOplog::default());
+    for (_, entry) in source_oplog
+        .read_exact(
+            OplogIndex::INITIAL,
+            cut_index.as_u64() - OplogIndex::INITIAL.as_u64() + 1,
+        )
+        .await
+    {
+        fork_oplog.add(entry).await;
+    }
+    fork_oplog
+        .add(
+            DurableStreamOplogRecord::Session(None, Box::new(StreamSessionRecord::ForkCut(cut)))
+                .into_inline_entry(),
+        )
+        .await;
+    fork_oplog.commit(CommitLevel::Always).await;
+    let fork = DurableStreamStore::load(
+        fork_oplog.clone(),
+        target_owner.environment_id,
+        target_owner.agent_id,
+        target_identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let fork_handle = fork
+        .materialize_binding(&StreamBindingRecord {
+            transport_stream_id: 0,
+            source: StreamRecordReference::Local(fork_stream_id),
+            role: SessionStreamRole::Output,
+        })
+        .await
+        .unwrap()
+        .handle;
+    let prefix = fork.read_segment(&fork_handle, None, None).await.unwrap();
+    assert_eq!(prefix.len(), 2);
+    assert_eq!(
+        prefix[0].payload,
+        CommittedProducerStreamEventPayload::PackedU8(5)
+    );
+    assert_eq!(
+        prefix[1].payload,
+        CommittedProducerStreamEventPayload::PackedU8(19)
+    );
+    assert!(!fork.stream_head(&fork_handle).await.unwrap().closed);
+
+    drain_bytes(fork.clone(), fork_oplog, fork_handle.clone()).await;
+    let replayed = fork.read_segment(&fork_handle, None, None).await.unwrap();
+    assert_eq!(replayed.len(), 4);
+    assert_eq!(replayed[0], prefix[0]);
+    assert_eq!(replayed[1], prefix[1]);
+    assert_eq!(
+        replayed[2].payload,
+        CommittedProducerStreamEventPayload::PackedU8(83)
+    );
+    assert_eq!(replayed[2].producer_sequence, 2);
+    assert!(replayed[2].offset.producer_oplog_index() > cut_index);
+    assert_eq!(
+        replayed[3].payload,
+        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
+    );
+    assert_eq!(
+        source.read_segment(&handle, None, None).await.unwrap(),
+        original
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn materialized_output_releases_admission_and_survives_abandoned_response() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
@@ -1240,6 +1412,78 @@ async fn materialized_output_releases_admission_and_survives_abandoned_response(
         reader.next().await.unwrap().unwrap().payload,
         CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
     );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn nested_output_drain_recovers_transport_ids_allocated_by_another_runtime() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let parent = producer
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    let session_key = StreamRegistrationInvocation::Local(identity.invocation.idempotency_key);
+    let drain = StreamSession::new(producer.clone(), oplog.clone(), session_key.clone(), []);
+    let observer = StreamSession::new(producer, oplog, session_key, []);
+    let existing = observer
+        .ensure_nested_mapping(None, parent.clone(), SessionStreamRole::Output)
+        .await
+        .unwrap();
+    let child_type = SchemaType::u8();
+    let element_type = SchemaType::stream(Some(child_type));
+    let graph = Arc::new(SchemaGraph::anonymous(element_type.clone()));
+    let (publisher, endpoint) = test_output_stream_pair(2).unwrap();
+    let (_child_publisher, child_endpoint) = test_output_stream_pair(2).unwrap();
+    publisher
+        .publish_item(SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+            child_endpoint,
+        )))
+        .await
+        .unwrap();
+    publisher.publish_end().await.unwrap();
+    let (nested_tx, mut nested_rx) = mpsc::unbounded_channel();
+    drain
+        .drain_output(
+            PendingOwnedStreamDrain {
+                handle: parent,
+                endpoint,
+                element_type,
+                role: SessionStreamRole::Output,
+            },
+            graph,
+            nested_tx,
+        )
+        .await
+        .unwrap();
+    let child = nested_rx.try_recv().unwrap();
+    drain.recover_session_mappings().await.unwrap();
+    observer.recover_session_mappings().await.unwrap();
+    assert_eq!(drain.mapping(existing.transport_stream_id), Some(existing));
+    let child_mapping = drain.mapping(1).unwrap();
+    assert_eq!(child_mapping.handle, child.handle);
+    assert_eq!(observer.mapping(1), Some(child_mapping));
 }
 
 #[test]

@@ -2,6 +2,7 @@ package golem:api;
 
 world golem {
   import golem:agent/host@2.0.0;
+  import golem:agent/durable-streams@2.0.0;
   import golem:api/host@1.5.0;
   import golem:api/retry@1.5.0;
   import golem:api/context@1.5.0;

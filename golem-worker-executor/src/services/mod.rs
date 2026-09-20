@@ -27,6 +27,7 @@ pub mod component;
 pub mod direct_invocation_auth;
 pub mod environment_state;
 pub mod events;
+pub mod external_durable_stream;
 pub mod file_loader;
 pub mod golem_config;
 pub mod key_value;
@@ -92,6 +93,12 @@ pub trait HasAgentTypesService {
 
 pub trait HasAgentWebhooksService {
     fn agent_webhooks(&self) -> Arc<AgentWebhooksService>;
+}
+
+pub trait HasExternalDurableStreamService {
+    fn external_durable_streams(
+        &self,
+    ) -> Arc<dyn external_durable_stream::ExternalDurableStreamService>;
 }
 
 pub trait HasComponentService {
@@ -239,6 +246,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveAgents<Ctx>
     + HasAgentTypesService
     + HasAgentWebhooksService
+    + HasExternalDurableStreamService
     + HasNativeToolCatalog<Ctx>
     + HasCardService
     + HasComponentService
@@ -281,6 +289,7 @@ impl<
     T: HasActiveAgents<Ctx>
         + HasAgentTypesService
         + HasAgentWebhooksService
+        + HasExternalDurableStreamService
         + HasNativeToolCatalog<Ctx>
         + HasCardService
         + HasComponentService
@@ -325,6 +334,7 @@ pub struct All<Ctx: WorkerCtx> {
     active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     agent_types: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks: Arc<AgentWebhooksService>,
+    external_durable_streams: Arc<dyn external_durable_stream::ExternalDurableStreamService>,
     card_service: Arc<dyn card::CardService>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -371,6 +381,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             active_agents: self.active_agents.clone(),
             agent_types: self.agent_types.clone(),
             agent_webhooks: self.agent_webhooks.clone(),
+            external_durable_streams: self.external_durable_streams.clone(),
             card_service: self.card_service.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
@@ -415,6 +426,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks: Arc<AgentWebhooksService>,
+        external_durable_streams: Arc<dyn external_durable_stream::ExternalDurableStreamService>,
         card_service: Arc<dyn card::CardService>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -456,6 +468,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             active_agents,
             agent_types,
             agent_webhooks,
+            external_durable_streams,
             card_service,
             engine,
             linker,
@@ -505,6 +518,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.active_agents(),
             this.agent_types(),
             this.agent_webhooks(),
+            this.external_durable_streams(),
             this.card_service(),
             this.engine(),
             this.linker(),
@@ -572,6 +586,14 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentTypesService for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentWebhooksService for T {
     fn agent_webhooks(&self) -> Arc<AgentWebhooksService> {
         self.all().agent_webhooks.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasExternalDurableStreamService for T {
+    fn external_durable_streams(
+        &self,
+    ) -> Arc<dyn external_durable_stream::ExternalDurableStreamService> {
+        self.all().external_durable_streams.clone()
     }
 }
 

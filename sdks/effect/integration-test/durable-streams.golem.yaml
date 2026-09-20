@@ -1,0 +1,31 @@
+# Minimal consumer: build only the Durable Streams agent and its native-stream sink.
+manifestVersion: 1.6.0
+app: effect-golem-durable-streams-test
+localServer:
+  routerPort: 9882
+  customRequestPort: 9008
+  mcpPort: 9009
+environments:
+  local:
+    server: local
+componentTemplates:
+  durable-streams:
+    build:
+      - command: npx --no rollup -- -c "{{ appRootDir }}/rollup.config.component.mjs" --input ./src/durable-streams-agent.ts
+        dir: "{{ componentDir }}"
+        env:
+          GOLEM_APP_ROOT: "{{ appRootDir }}"
+          GOLEM_TEMP: "{{ golemTempDir }}"
+          GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
+      - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm"
+        module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
+        into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+    componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
+    outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+components:
+  effect-golem:durable-streams:
+    dir: components/agents
+    templates: durable-streams
+secretDefaults:
+  local:
+    durableStreamToken: "effect-durable-streams-test-token"

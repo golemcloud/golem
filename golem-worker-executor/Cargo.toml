@@ -46,6 +46,7 @@ async-lock = { workspace = true }
 async-recursion = { workspace = true }
 async-scoped = { workspace = true, features = ["use-tokio"] }
 async-trait = { workspace = true }
+base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 blake3 = { workspace = true }
@@ -81,6 +82,7 @@ mac_address = { workspace = true, features = ["serde"] }
 md5 = { workspace = true }
 metrohash = { workspace = true }
 mimalloc = { workspace = true }
+mime = { workspace = true }
 nonempty-collections = { workspace = true }
 nonzero_ext = { workspace = true }
 pgvector = { workspace = true }
@@ -89,6 +91,7 @@ prost = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
+reqwest = { workspace = true }
 ringbuf = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }

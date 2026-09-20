@@ -3867,6 +3867,7 @@ impl StreamSession {
                                         false,
                                         move |_, admission| async move {
                                             let _session_guard = session.session_lock.lock().await;
+                                            session.recover_session_mappings().await?;
                                             let session_for_write = session.clone();
                                             admission
                                                 .submit(move |_, context| async move {

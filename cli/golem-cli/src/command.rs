@@ -2945,7 +2945,7 @@ pub mod server {
         /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
         /// Overrides GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE and localServer.systemMemoryOverride.
         /// The executor reserves 20% for host overhead. This is not a hard RSS limit.
-        #[clap(long, value_parser = crate::model::byte_size::parse_positive)]
+        #[clap(long, value_parser = golem_common::config::byte_size::parse_positive)]
         pub system_memory_override: Option<std::num::NonZeroU64>,
 
         /// Address to serve the main API on, defaults to 0.0.0.0
@@ -3009,7 +3009,7 @@ pub mod server {
                 match get_env(NAME) {
                     Ok(value) => {
                         self.system_memory_override = Some(
-                            crate::model::byte_size::parse_positive(&value)
+                            golem_common::config::byte_size::parse_positive(&value)
                                 .map_err(anyhow::Error::msg)
                                 .with_context(|| format!("Failed to parse {NAME}: {value}"))?,
                         );

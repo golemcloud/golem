@@ -44,6 +44,7 @@ use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::DirectInvocationAuthService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
+use golem_worker_executor::services::external_durable_stream::DefaultExternalDurableStreamService;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
@@ -255,6 +256,7 @@ pub async fn create_debugging_service_services(
         Arc::clone(&oplog_service),
         additional_deps.debug_session(),
     ));
+    let external_durable_streams = Arc::new(DefaultExternalDurableStreamService::new()?);
 
     // When it comes to fork, we need the original oplog service
     let worker_fork = Arc::new(DefaultWorkerFork::new(
@@ -293,6 +295,7 @@ pub async fn create_debugging_service_services(
         native_tool_catalog.clone(),
         agent_types_service.clone(),
         agent_webhooks_service.clone(),
+        external_durable_streams.clone(),
         shutdown_token.clone(),
         http_connection_pool.clone(),
         websocket_connection_pool.clone(),
@@ -337,6 +340,7 @@ pub async fn create_debugging_service_services(
         native_tool_catalog.clone(),
         agent_types_service.clone(),
         agent_webhooks_service.clone(),
+        external_durable_streams.clone(),
         http_connection_pool.clone(),
         websocket_connection_pool.clone(),
         mcp_transport.clone(),
@@ -348,6 +352,7 @@ pub async fn create_debugging_service_services(
         active_agents,
         agent_types_service,
         agent_webhooks_service,
+        external_durable_streams,
         card_service,
         engine,
         linker,
@@ -494,6 +499,10 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
         get_durable_ctx,
     )?;
     golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::agent::durable_streams::add_to_linker::<
         _,
         HasSelf<DurableWorkerCtx<DebugContext>>,
     >(&mut linker, get_durable_ctx)?;
