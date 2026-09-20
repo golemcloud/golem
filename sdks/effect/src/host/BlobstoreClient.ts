@@ -33,8 +33,8 @@ export interface HostObjectId {
 
 /**
  * Inclusive byte range for {@link HostContainer.getData}. Passed
- * through to the host verbatim — the SDK does NOT massage backend
- * divergence (see public `ByteRange` JSDoc in `src/blobstore.ts`).
+ * through to the host verbatim (see the public `ByteRange` JSDoc in
+ * `src/Blobstore.ts` for the contract the host holds to).
  */
 export interface HostByteRange {
   readonly start: bigint
@@ -74,9 +74,9 @@ export interface HostContainer {
   readonly info: Effect.Effect<HostContainerMetadata, BlobstoreHostError>
   readonly clear: Effect.Effect<void, BlobstoreHostError>
   /**
-   * Fetch a byte range. Inclusive end per the WIT spec; backend
-   * divergence is the consumer's problem (see
-   * `src/blobstore.ts` `ByteRange` JSDoc).
+   * Fetch a byte range. Both offsets are inclusive, on every backend.
+   * A range that asks for a byte the object does not have gives an error,
+   * and the host does not retry it (see `src/Blobstore.ts` `ByteRange`).
    */
   getData(name: string, range: HostByteRange): Effect.Effect<Uint8Array, BlobstoreHostError>
   /** Create or replace `name` with `data`. Chunked at 4096 bytes per write. */
@@ -93,9 +93,9 @@ export interface HostContainer {
 }
 
 export interface BlobstoreClientShape {
-  /** Create a new empty container. Fails if a container with the same name already exists. */
+  /** Create a new empty container. Gives an error if a container with the same name already exists. */
   createContainer(name: string): Effect.Effect<HostContainer, BlobstoreHostError, Scope.Scope>
-  /** Open an existing container by name. Fails if the container does not exist. */
+  /** Open an existing container by name. Gives an error if the container does not exist. */
   getContainer(name: string): Effect.Effect<HostContainer, BlobstoreHostError, Scope.Scope>
   /**
    * Idempotent: open the named container, creating it first if it

@@ -16,16 +16,21 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
-    blob_path_is_root, blob_path_to_string, normalized_blob_path,
+    blob_path_is_root, blob_path_to_string, blob_range, normalized_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::http::HttpResponse;
-use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region, RequestChecksumCalculation};
-use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::config::interceptors::BeforeDeserializationInterceptorContextRef;
+use aws_sdk_s3::config::{
+    BehaviorVersion, ConfigBag, Credentials, Intercept, Region, RequestChecksumCalculation,
+    RuntimeComponents,
+};
+use aws_sdk_s3::error::{BoxError, SdkError};
 use aws_sdk_s3::operation::copy_object::CopyObjectError;
 use aws_sdk_s3::operation::delete_objects::DeleteObjectsOutput;
+use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey;
 use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_sdk_s3::operation::put_object::PutObjectError;
@@ -42,12 +47,20 @@ use http_body_util::combinators::BoxBody;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use tracing::info;
 
 /// The largest number of keys that S3 accepts in one `DeleteObjects` request.
 const MAX_KEYS_PER_DELETE_OBJECTS: usize = 1_000;
 
-/// The HTTP status that S3 gives for a range that has no byte in the object.
+/// The backend uses the body of a response with this HTTP status, and without a
+/// `Content-Range`, as the full object, unless its `Content-Length` shows that `end` is not in
+/// the object (`response_body`). RFC 9110 lets a server ignore the range and give this
+/// response (sections 14.2 and 15.5.17).
+const HTTP_OK: u16 = 200;
+
+/// A response with this HTTP status tells the backend that the range has no byte in the
+/// object (RFC 9110, section 15.5.17). `get_raw_slice` gives a `BlobRangeError` for it.
 const RANGE_NOT_SATISFIABLE: u16 = 416;
 
 /// The name of the object that records a directory, because S3 has no directories.
@@ -57,6 +70,53 @@ const DIR_MARKER: &str = "__dir_marker";
 pub struct S3BlobStorage {
     client: aws_sdk_s3::Client,
     config: S3BlobStorageConfig,
+}
+
+/// Records the HTTP status of the response that the SDK makes the output of a request from.
+///
+/// The output of a request does not hold the status of its response. The SDK runs
+/// `read_before_deserialization` with the response of an attempt, and then makes the output
+/// of that attempt from that response (`try_attempt` in
+/// `aws_smithy_runtime::client::orchestrator`). The interceptor stores the status of each
+/// response that it gets, and `get` gives the status that it stored last. The output comes
+/// from the last attempt, so `get` gives the status of the response of that attempt.
+#[derive(Debug, Clone, Default)]
+struct ResponseStatus(Arc<Mutex<Option<u16>>>);
+
+impl ResponseStatus {
+    /// Gives the status that the interceptor stored last, or `None` when it got no response.
+    fn get(&self) -> Option<u16> {
+        *self.0.lock().unwrap()
+    }
+}
+
+impl Intercept for ResponseStatus {
+    fn name(&self) -> &'static str {
+        "ResponseStatus"
+    }
+
+    fn read_before_deserialization(
+        &self,
+        context: &BeforeDeserializationInterceptorContextRef<'_>,
+        _runtime_components: &RuntimeComponents,
+        _cfg: &mut ConfigBag,
+    ) -> Result<(), BoxError> {
+        *self.0.lock().unwrap() = Some(context.response().status().as_u16());
+        Ok(())
+    }
+}
+
+/// How the backend reads the body of a response to a ranged read. `response_body` selects the
+/// variant from the status and the headers of the response, before the body is read.
+enum ResponseBody {
+    /// The backend uses the body as the bytes of the range. The range has `length` bytes. This
+    /// is the variant of a response whose `Content-Range` gives the range.
+    Range { length: u64 },
+    /// The backend uses the body as the full object, and cuts the range out of it. This is
+    /// the variant of a 200 response without a `Content-Range`, unless its `Content-Length`
+    /// shows that `end` is not in the object. The backend does not check that the body is the
+    /// object, so an error page with the status 200 gets this variant too.
+    WholeObject,
 }
 
 impl S3BlobStorage {
@@ -293,20 +353,70 @@ impl S3BlobStorage {
         Ok(!response.contents().is_empty())
     }
 
-    /// Checks that a ranged read got the bytes from `start` to `end`.
+    /// Tells how the backend reads the body of a response to a ranged read, before the body is
+    /// read.
     ///
-    /// If a range ends after the object, S3 sends only the bytes that exist. That answer gives a
-    /// `BlobRangeError`. A missing `Content-Range`, or a range that starts at a different byte,
-    /// gives a different error.
-    fn check_content_range(content_range: Option<&str>, start: u64, end: u64) -> Result<(), Error> {
+    /// `status`, `content_range` and `content_length` are the status, the `Content-Range` and
+    /// the `Content-Length` of the response.
+    ///
+    /// A `Content-Range` that gives the range `start` to `end` selects `Range`. A
+    /// `Content-Range` that starts at `start` and ends before `end` gives a `BlobRangeError`.
+    /// Any other `Content-Range` gives a different error. So does a range with more bytes than
+    /// a `u64` counts, which is only the range 0 to `u64::MAX`.
+    ///
+    /// The backend uses the body of a 200 response without a `Content-Range` as the full object
+    /// (RFC 9110, section 15.3.1). RFC 9110 lets a server ignore the range and give this
+    /// response (sections 14.2 and 15.5.17). The backend uses the `Content-Length` of this
+    /// response as the size of the object. A `Content-Length` that shows that `end` is not in
+    /// the object gives a `BlobRangeError` before the body is read. Without a `Content-Length`,
+    /// the backend uses the length of the body as the size. The backend does not check that the
+    /// body is the object. A 200 response with a different body, for example an error page,
+    /// gives the range of that body.
+    ///
+    /// The check of the `Content-Length` trusts the server. A server can send a
+    /// `Content-Length` that is shorter than its body. Then a range with `end` at or after that
+    /// `Content-Length` gets a `BlobRangeError`, even if the range is in the object. The guest
+    /// gets that as invalid input. `DefaultBlobStoreService::get_data` in
+    /// `golem_worker_executor::services::blob_store` maps a `BlobRangeError` to
+    /// `BlobStoreError::InvalidInput`. `classify_blob_store_error` in
+    /// `golem_worker_executor::durable_host::blobstore` makes that permanent. Without the
+    /// check, the SDK rejects such a body (`ContentLengthEnforcingBody` in
+    /// `aws_smithy_runtime`). `get_data` maps that error to `BlobStoreError::TransientBackend`,
+    /// which `classify_blob_store_error` makes transient. The executor retries a transient
+    /// error (`try_trigger_retry` in `golem_worker_executor::durable_host::durability`).
+    ///
+    /// Any other response without a `Content-Range` gives a different error. A 206 response
+    /// holds a part of the object (section 15.3.7). Without a `Content-Range`, the backend does
+    /// not know which part. Its `Content-Length` does not give the size of the object, and its
+    /// body does not give the range.
+    fn response_body(
+        status: u16,
+        content_range: Option<&str>,
+        content_length: Option<i64>,
+        start: u64,
+        end: u64,
+    ) -> Result<ResponseBody, Error> {
+        let Some(content_range) = content_range else {
+            let size = content_length.and_then(|length| u64::try_from(length).ok());
+            return match (status, size) {
+                (HTTP_OK, Some(size)) if end >= size => Err(BlobRangeError { start, end }.into()),
+                (HTTP_OK, _) => Ok(ResponseBody::WholeObject),
+                _ => Err(anyhow!(
+                    "S3 returned the status {status} with no content range for the byte range {start}-{end}"
+                )),
+            };
+        };
         let returned = content_range
-            .and_then(|value| value.strip_prefix("bytes "))
+            .strip_prefix("bytes ")
             .and_then(|value| value.split_once('/'))
             .and_then(|(range, _)| range.split_once('-'))
             .and_then(|(first, last)| first.parse::<u64>().ok().zip(last.parse::<u64>().ok()));
-        match returned {
-            Some((first, last)) if first == start && last == end => Ok(()),
-            Some((first, last)) if first == start && last < end => {
+        let length = end.checked_sub(start).and_then(|last| last.checked_add(1));
+        match (returned, length) {
+            (Some((first, last)), Some(length)) if first == start && last == end => {
+                Ok(ResponseBody::Range { length })
+            }
+            (Some((first, last)), _) if first == start && last < end => {
                 Err(BlobRangeError { start, end }.into())
             }
             _ => Err(anyhow!(
@@ -318,8 +428,8 @@ impl S3BlobStorage {
     /// Deletes objects in requests of at most [`MAX_KEYS_PER_DELETE_OBJECTS`] keys, one request
     /// at a time.
     ///
-    /// An empty list sends no request. The first request that fails after its last attempt stops
-    /// the deletion and gives its error.
+    /// An empty list sends no request. When the last attempt of a request has an error, the
+    /// deletion stops and gives that error.
     async fn delete_keys(
         &self,
         target_label: &'static str,
@@ -336,9 +446,11 @@ impl S3BlobStorage {
 
     /// Sends one `DeleteObjects` request in quiet mode, with retries.
     ///
-    /// A response that reports an error for a key is a failed attempt, so the whole request goes
-    /// again within the retry budget. S3 reports a key that does not exist as deleted, so a new
-    /// attempt is safe.
+    /// A response that reports an error for a key is an error of that attempt, so the request
+    /// goes again within the retry budget. The new attempt sends the keys that the attempt before
+    /// deleted too. In quiet mode, S3 gives an error only for a key that it did not delete. A
+    /// delete of a key that is not there is not an error, so a key that the attempt before
+    /// deleted gives no error.
     async fn delete_objects_request(
         &self,
         target_label: &'static str,
@@ -396,19 +508,28 @@ impl S3BlobStorage {
         })
     }
 
-    fn is_get_object_error_retriable(
-        error: &SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
-    ) -> bool {
+    /// Tells whether a `GetObject` error is a missing key or a 416. The retry loop stops at
+    /// such an error: the backend does not send the request again, does not write the error to
+    /// the error log, and does not count it as a failure.
+    ///
+    /// What the backend then gives is set at each `get_object` call. `get_raw`, `get_stream`
+    /// and `get_raw_slice` give `Ok(None)` for a missing key. `get_raw_slice` gives an
+    /// `Err` that holds a `BlobRangeError` for a 416. `get_raw` and `get_stream` send no
+    /// range, and give a 416 as an `Err` that holds the SDK error.
+    fn is_final_get_object_error(error: &GetObjectError, response: &HttpResponse) -> bool {
+        matches!(error, NoSuchKey(_)) || Self::is_range_not_satisfiable(response)
+    }
+
+    fn is_get_object_error_retriable(error: &SdkError<GetObjectError>) -> bool {
         match error {
             SdkError::ServiceError(service_error) => {
-                !matches!(service_error.err(), NoSuchKey(_))
-                    && !Self::is_range_not_satisfiable(service_error.raw())
+                !Self::is_final_get_object_error(service_error.err(), service_error.raw())
             }
             _ => true,
         }
     }
 
-    /// Tells whether S3 refused a range because no byte of the range is in the object.
+    /// Tells whether the status of a response is 416 (`RANGE_NOT_SATISFIABLE`).
     fn is_range_not_satisfiable(response: &HttpResponse) -> bool {
         response.status().as_u16() == RANGE_NOT_SATISFIABLE
     }
@@ -477,18 +598,18 @@ impl S3BlobStorage {
         Some(Self::error_string(error))
     }
 
-    fn get_object_error_as_loggable(
-        error: &SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
-    ) -> Option<String> {
+    /// Gives the text that the retry loop (`with_retries_customized` in `golem_common::retries`)
+    /// records for a `GetObject` error, or `None` for an error that the loop does not record and
+    /// does not count as a failure.
+    ///
+    /// A missing key and a 416 (`is_final_get_object_error`) stay out of the error log and out
+    /// of the failure counter. Every other error gets its text.
+    fn get_object_error_as_loggable(error: &SdkError<GetObjectError>) -> Option<String> {
         match error {
-            SdkError::ServiceError(service_error) => {
-                if matches!(service_error.err(), NoSuchKey(_))
-                    || Self::is_range_not_satisfiable(service_error.raw())
-                {
-                    None
-                } else {
-                    Some(Self::error_string(error))
-                }
+            SdkError::ServiceError(service_error)
+                if Self::is_final_get_object_error(service_error.err(), service_error.raw()) =>
+            {
+                None
             }
             _ => Some(Self::error_string(error)),
         }
@@ -618,11 +739,12 @@ impl BlobStorage for S3BlobStorage {
         start: u64,
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let path = &*normalized_blob_path(path)?;
-        // S3 ignores a range whose end is before its start, and sends the whole object.
+        // A `start` after `end` is an invalid range (RFC 9110, section 14.1.1). RFC 9110 lets a
+        // server ignore or reject it (section 14.2), so the backend sends no request for it.
         if start > end {
             return Err(BlobRangeError { start, end }.into());
         }
+        let path = &*normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -635,13 +757,17 @@ impl BlobStorage for S3BlobStorage {
             &(self.client.clone(), bucket, key_str),
             |(client, bucket, key)| {
                 Box::pin(async move {
+                    let status = ResponseStatus::default();
                     client
                         .get_object()
                         .bucket(*bucket)
                         .key(key.clone())
                         .range(format!("bytes={start}-{end}"))
+                        .customize()
+                        .interceptor(status.clone())
                         .send()
                         .await
+                        .map(|response| (response, status.get()))
                 })
             },
             Self::is_get_object_error_retriable,
@@ -651,11 +777,36 @@ impl BlobStorage for S3BlobStorage {
         .await;
 
         match result {
-            Ok(response) => {
-                Self::check_content_range(response.content_range(), start, end)?;
-                let body = response.body;
-                let aggregated_bytes = body.collect().await?;
-                let bytes = aggregated_bytes.to_vec();
+            Ok((response, status)) => {
+                // The SDK makes an output only after the interceptor stored the status of a
+                // response (see `ResponseStatus`).
+                let status = status.ok_or_else(|| {
+                    anyhow!("S3 gave an output without a response for the byte range {start}-{end}")
+                })?;
+                let response_body = Self::response_body(
+                    status,
+                    response.content_range.as_deref(),
+                    response.content_length,
+                    start,
+                    end,
+                )?;
+                let body = response.body.collect().await?.to_vec();
+                let bytes = match response_body {
+                    // A body with another number of bytes than the range gives an error.
+                    ResponseBody::Range { length } => {
+                        let returned = body.len();
+                        (u64::try_from(returned).ok() == Some(length))
+                            .then_some(body)
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "S3 returned {returned} bytes for the byte range {start}-{end}"
+                                )
+                            })?
+                    }
+                    // The rule of the default `get_raw_slice`, so every backend gives the same
+                    // error for a range that is not in the object.
+                    ResponseBody::WholeObject => blob_range(&body, start, end)?.to_vec(),
+                };
 
                 Ok(Some(bytes))
             }

@@ -1156,9 +1156,9 @@ async fn fs_list_blobs_below_fails_for_a_directory_that_it_cannot_read(
     #[tagged_as("cs")] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
-    // Writing a blob creates the directory of the namespace. Below it, a name of 300 bytes is
-    // longer than the name limit of each filesystem, so the directory read fails with an error
-    // that is not "not found" and not "not a directory".
+    // Writing a blob creates the directory of the namespace. Below it, the test lists a name of
+    // 300 bytes. The filesystem that holds the namespace must not accept a name of that length,
+    // so the directory read gives an error that is not "not found" and not "not a directory".
     put_blobs(&storage, namespace, &[("blob", 1)]).await;
     let too_long = "x".repeat(300);
 
@@ -1819,6 +1819,67 @@ async fn list_blobs_below_finds_nested_blobs_with_sizes(
     assert_eq!(listed_below_blob, Vec::new());
 }
 
+/// The namespace of the same kind in another environment.
+fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamespace {
+    let environment_id = EnvironmentId(Uuid::new_v4());
+    match namespace.clone() {
+        BlobStorageNamespace::CompilationCache { .. } => {
+            BlobStorageNamespace::CompilationCache { environment_id }
+        }
+        BlobStorageNamespace::InitialAgentFiles { .. } => {
+            BlobStorageNamespace::InitialAgentFiles { environment_id }
+        }
+        BlobStorageNamespace::CustomStorage { .. } => {
+            BlobStorageNamespace::CustomStorage { environment_id }
+        }
+        BlobStorageNamespace::OplogPayload {
+            agent_id,
+            agent_mode,
+            ..
+        } => BlobStorageNamespace::OplogPayload {
+            environment_id,
+            agent_id,
+            agent_mode,
+        },
+        BlobStorageNamespace::CompressedOplog {
+            component_id,
+            agent_mode,
+            level,
+            ..
+        } => BlobStorageNamespace::CompressedOplog {
+            environment_id,
+            component_id,
+            agent_mode,
+            level,
+        },
+        BlobStorageNamespace::Components { .. } => {
+            BlobStorageNamespace::Components { environment_id }
+        }
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn list_blobs_below_stays_in_its_namespace(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let other_namespace = in_another_environment(namespace);
+    let blobs = [("tree/a", 1)];
+    let other_blobs = [("tree/b", 2)];
+    put_blobs(&storage, namespace, &blobs).await;
+    put_blobs(&storage, &other_namespace, &other_blobs).await;
+
+    let listed_below_tree = sorted_listing(&storage, namespace, "tree").await;
+    let listed_below_root = sorted_listing(&storage, namespace, "").await;
+    let other_listed_below_tree = sorted_listing(&storage, &other_namespace, "tree").await;
+
+    assert_eq!(listed_below_tree, listed_blobs(&blobs));
+    assert_eq!(listed_below_root, listed_blobs(&blobs));
+    assert_eq!(other_listed_below_tree, listed_blobs(&other_blobs));
+}
+
 #[test]
 #[tracing::instrument]
 async fn get_raw_slice_uses_inclusive_ranges(
@@ -1868,6 +1929,20 @@ async fn get_raw_slice_uses_inclusive_ranges(
         ("ranges/blob", 3, 2),
         ("ranges/empty", 0, 0),
         ("ranges/missing", 3, 2),
+        // A guest gives an offset as a `u64`. A negative offset reaches the host as the
+        // value that it wraps to, which is at the top of the `u64` range. The Effect SDK
+        // test doubles assert on these two ranges (`sdks/effect/test/blobstore.test.ts`).
+        // The wrapped start is a start after the end, which each backend rejects as it
+        // rejects `(3, 2)`, before the S3 backend sends a request. The wrapped end reaches
+        // the backend. The MinIO release that `S3Test` starts parses each offset of the
+        // range with `strconv.ParseInt(s, 10, 64)` in `parseRequestRangeSpec`
+        // (`cmd/httprange.go`), so 2^64-1 overflows `int64` and gives a parse error that
+        // is not `errInvalidRange`. `getObjectHandler` (`cmd/object-handlers.go`) ignores
+        // such a parse error and serves a regular GET: the status 200, the full object and
+        // no `Content-Range`. This is the integer overflow path of MinIO, not a behaviour
+        // of S3.
+        ("ranges/blob", u64::MAX, 2),
+        ("ranges/blob", u64::MAX, u64::MAX),
     ];
     let range_errors = futures::stream::iter(outside)
         .then(|(path, start, end)| async move {

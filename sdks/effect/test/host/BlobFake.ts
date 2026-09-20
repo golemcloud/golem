@@ -4,10 +4,9 @@
  * fake's per-container handles, plus a `Ref<Option<...>>` for
  * one-shot error injection.
  *
- * The fake mirrors the bug in the Golem in-memory + filesystem
- * backends: ranged reads treat `end` as Rust-exclusive (i.e.
- * `bytes.subarray(start, end)`). The SDK's whole-object recovery
- * logic (in `src/blobstore.ts`) is what makes that observable.
+ * The fake holds to the same range contract as the host: both
+ * offsets are inclusive, and a range with a byte that is not in the
+ * object is an error (see `src/Blobstore.ts` `ByteRange`).
  *
  * Use with `Effect.provide(eff, fake.layer)` once per test (NOT via
  * `it.layer(fake.layer)`, which would share state across the entire
@@ -24,6 +23,7 @@ import {
   type HostObjectMetadata,
 } from "../../src/host/BlobstoreClient.js"
 import { BlobstoreHostError } from "../../src/Blobstore.js"
+import { hostRange } from "../blob-range.js"
 
 interface ObjectEntry {
   bytes: Uint8Array
@@ -36,8 +36,21 @@ interface ContainerEntry {
   objects: Map<string, ObjectEntry>
 }
 
+/** One `getData` call the fake was asked for, in the order it arrived. */
+export interface GetDataCall {
+  readonly container: string
+  readonly object: string
+  readonly start: bigint
+  readonly end: bigint
+}
+
 export interface BlobFake {
   readonly layer: Layer.Layer<BlobstoreClient>
+  /**
+   * Every range the fake was asked to read. Lets a test pin the range
+   * the SDK derives, and the number of calls it makes to get it.
+   */
+  readonly getDataCalls: Effect.Effect<ReadonlyArray<GetDataCall>>
   /**
    * Queue a one-shot host failure for the *next* call into any
    * service method (top-level OR per-container). Consumed exactly
@@ -86,6 +99,7 @@ const guardWith = <A>(
 const makeFakeContainer = (
   entry: ContainerEntry,
   nextError: Ref.Ref<Option.Option<BlobstoreHostError>>,
+  calls: Array<GetDataCall>,
 ): HostContainer => {
   const info: HostContainer["info"] = guardWith(
     nextError,
@@ -108,6 +122,14 @@ const makeFakeContainer = (
     guardWith(
       nextError,
       Effect.gen(function* () {
+        // The spy records the offsets that the caller gave. It does
+        // not record the offsets that `hostRange` resolves them to.
+        calls.push({
+          container: entry.name,
+          object: objectName,
+          start: range.start,
+          end: range.end,
+        })
         const obj = entry.objects.get(objectName)
         if (obj === undefined) {
           return yield* Effect.fail(
@@ -117,10 +139,15 @@ const makeFakeContainer = (
             ),
           )
         }
-        const start = Number(range.start)
-        // Mock follows the in-memory backend: `end` is exclusive.
-        const end = Math.min(Number(range.end), obj.bytes.length)
-        return new Uint8Array(obj.bytes.subarray(start, end))
+        // Fake follows the host, offsets included: see
+        // `test/blob-range.ts`.
+        const resolved = hostRange(range.start, range.end, BigInt(obj.bytes.length))
+        if (resolved.kind === "error") {
+          return yield* Effect.fail(
+            new BlobstoreHostError(new Error(resolved.message), "container.getData"),
+          )
+        }
+        return new Uint8Array(obj.bytes.subarray(resolved.first, resolved.last + 1))
       }),
     )
 
@@ -214,6 +241,7 @@ const makeFakeContainer = (
 export const make: Effect.Effect<BlobFake> = Effect.gen(function* () {
   const containers = new Map<string, ContainerEntry>()
   const nextError = yield* Ref.make<Option.Option<BlobstoreHostError>>(Option.none())
+  const calls: Array<GetDataCall> = []
 
   const ensure = (name: string): ContainerEntry => {
     let entry = containers.get(name)
@@ -225,7 +253,10 @@ export const make: Effect.Effect<BlobFake> = Effect.gen(function* () {
   }
 
   const acquire = (entry: ContainerEntry) =>
-    Effect.acquireRelease(Effect.succeed(makeFakeContainer(entry, nextError)), () => Effect.void)
+    Effect.acquireRelease(
+      Effect.succeed(makeFakeContainer(entry, nextError, calls)),
+      () => Effect.void,
+    )
 
   const layer = Layer.succeed(
     BlobstoreClient,
@@ -361,6 +392,7 @@ export const make: Effect.Effect<BlobFake> = Effect.gen(function* () {
   return {
     layer,
     setNextError: (err) => Ref.set(nextError, Option.some(err)),
+    getDataCalls: Effect.sync(() => [...calls]),
     containers: Effect.sync(() => Array.from(containers.keys())),
     objectsIn: (name) =>
       Effect.sync(() => {

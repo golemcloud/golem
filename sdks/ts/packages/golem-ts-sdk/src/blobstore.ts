@@ -153,7 +153,7 @@ export interface Container {
   /**
    * Read an object's bytes. With no range, the whole object is read. With an
    * explicit `[start, end]` range, both offsets are inclusive, and the read
-   * fails when a byte of the range is not in the object.
+   * gives an error when a byte of the range is not in the object.
    */
   getData(name: string, start?: bigint, end?: bigint): Promise<Uint8Array>;
   /** Create or replace `name` with `data` (chunked at 4096 bytes per write). */
@@ -161,7 +161,7 @@ export interface Container {
 
   /** True if the named object exists in this container. */
   has(name: string): Promise<boolean>;
-  /** Metadata for the named object. Fails if the object does not exist. */
+  /** Metadata for the named object. Gives an error if the object does not exist. */
   objectInfo(name: string): Promise<ObjectMetadata>;
   /** Delete the named object. Does NOT fail if it does not exist. */
   delete(name: string): Promise<void>;
@@ -326,7 +326,7 @@ export async function createContainer(name: string): Promise<Container> {
   return makeContainer(name, handle);
 }
 
-/** Open an existing container by name. Fails if it does not exist. */
+/** Open an existing container by name. Gives an error if it does not exist. */
 export async function getContainer(name: string): Promise<Container> {
   const handle = wrap('getContainer', () => Blob.getContainer(name));
   return makeContainer(name, handle);
