@@ -461,7 +461,7 @@ fn custom_storage() -> BlobStorageNamespace {
 
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "fs", "s3", "s3_prefixed", "sqlite");
 // The in-memory backend stands in for S3 in the tests of other crates, so the two must give the
-// same answer. The filesystem and the SQLite backends do not give it yet, which GOL-622 tracks.
+// same answer. The filesystem and the SQLite backends do not give it for every operation yet.
 define_matrix_dimension!(mem_and_s3: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "s3", "s3_prefixed");
 define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
 define_matrix_dimension!(s3_storage: Arc<dyn GetBlobStorage + Send + Sync> -> "s3", "s3_prefixed");
