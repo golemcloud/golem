@@ -1519,6 +1519,8 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 
 <p id="stream-ownership"><strong>Current ownership boundary.</strong> Persisted stream references are owner-relative. <code>Local</code> means “registered in this oplog” and is qualified into a runtime handle only when materialized; <code>Foreign</code> preserves the complete received handle. <code>DurableStreamStore</code> remains the per-worker journal/index store and owns serialized mutation, commit, and post-commit publication. The binding-local <code>StreamSession</code> owns its readers and mappings. This removes any need for replay-time source discovery: reconstruction projects the owner's complete local journal.</p>
 
+<p><strong>Nested transport IDs follow the journal.</strong> Independent session runtimes share the session lock, but not their mapping tables or ID counters. Guest nested-output drains recover committed mappings under that lock before allocating transport IDs, so a guest drain cannot reuse an ID already allocated by an output observer.</p>
+
 <h3>Why item order is still deterministic on replay</h3>
 <p>If stream records are hints, what guarantees that a consumer that performs a side effect per received item performs them in the same order on replay? Two things, working together.</p>
 <ol>

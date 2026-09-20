@@ -1160,7 +1160,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
 
 #[test]
 #[test_r::timeout("30s")]
-async fn guest_byte_drain_after_partial_fork_rejects_the_retained_batch_suffix() {
+async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix() {
     use crate::services::oplog::DurableStreamOplogRecord;
     use crate::services::worker_fork::lineage::tests::prepared;
 
@@ -1311,17 +1311,18 @@ async fn guest_byte_drain_after_partial_fork_rejects_the_retained_batch_suffix()
 
     drain_bytes(fork.clone(), fork_oplog, fork_handle.clone()).await;
     let replayed = fork.read_segment(&fork_handle, None, None).await.unwrap();
-    assert_eq!(replayed.len(), 3, "the suffix byte was not appended");
+    assert_eq!(replayed.len(), 4);
     assert_eq!(replayed[0], prefix[0]);
     assert_eq!(replayed[1], prefix[1]);
-    let CommittedProducerStreamEventPayload::End(StreamEndResult::ErrorContext(error)) =
-        &replayed[2].payload
-    else {
-        panic!("expected the byte-batch replay conflict, got {replayed:?}");
-    };
     assert_eq!(
-        String::from_utf8_lossy(error),
-        StreamStoreError::EventConflict.to_string()
+        replayed[2].payload,
+        CommittedProducerStreamEventPayload::PackedU8(83)
+    );
+    assert_eq!(replayed[2].producer_sequence, 2);
+    assert!(replayed[2].offset.producer_oplog_index() > cut_index);
+    assert_eq!(
+        replayed[3].payload,
+        CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
     );
     assert_eq!(
         source.read_segment(&handle, None, None).await.unwrap(),
@@ -1411,6 +1412,78 @@ async fn materialized_output_releases_admission_and_survives_abandoned_response(
         reader.next().await.unwrap().unwrap().payload,
         CommittedProducerStreamEventPayload::End(StreamEndResult::Ok)
     );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn nested_output_drain_recovers_transport_ids_allocated_by_another_runtime() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let parent = producer
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    let session_key = StreamRegistrationInvocation::Local(identity.invocation.idempotency_key);
+    let drain = StreamSession::new(producer.clone(), oplog.clone(), session_key.clone(), []);
+    let observer = StreamSession::new(producer, oplog, session_key, []);
+    let existing = observer
+        .ensure_nested_mapping(None, parent.clone(), SessionStreamRole::Output)
+        .await
+        .unwrap();
+    let child_type = SchemaType::u8();
+    let element_type = SchemaType::stream(Some(child_type));
+    let graph = Arc::new(SchemaGraph::anonymous(element_type.clone()));
+    let (publisher, endpoint) = test_output_stream_pair(2).unwrap();
+    let (_child_publisher, child_endpoint) = test_output_stream_pair(2).unwrap();
+    publisher
+        .publish_item(SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+            child_endpoint,
+        )))
+        .await
+        .unwrap();
+    publisher.publish_end().await.unwrap();
+    let (nested_tx, mut nested_rx) = mpsc::unbounded_channel();
+    drain
+        .drain_output(
+            PendingOwnedStreamDrain {
+                handle: parent,
+                endpoint,
+                element_type,
+                role: SessionStreamRole::Output,
+            },
+            graph,
+            nested_tx,
+        )
+        .await
+        .unwrap();
+    let child = nested_rx.try_recv().unwrap();
+    drain.recover_session_mappings().await.unwrap();
+    observer.recover_session_mappings().await.unwrap();
+    assert_eq!(drain.mapping(existing.transport_stream_id), Some(existing));
+    let child_mapping = drain.mapping(1).unwrap();
+    assert_eq!(child_mapping.handle, child.handle);
+    assert_eq!(observer.mapping(1), Some(child_mapping));
 }
 
 #[test]

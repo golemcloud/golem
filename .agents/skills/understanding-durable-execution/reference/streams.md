@@ -294,6 +294,9 @@ detached operation across local writes and remote waits. The same task polls the
 independently of the serial local writer. Operations acquire the session lock before calling
 `admission.submit`; queued bodies never acquire that lock or wait for peer attachment RPCs.
 Finish keeps the lock through topology validation and the durable session terminal.
+Guest nested-output drains recover journaled mappings while holding this lock before allocating
+transport IDs. Independent session runtimes share the lock, but not their mapping tables or ID
+counters; locking alone cannot make a stale allocator see mappings committed by another runtime.
 
 Each submit receives a `StreamWriteContext` and returns after the durability receipt. The admitted
 operation joins status callbacks after releasing its session lock and before returning to its
