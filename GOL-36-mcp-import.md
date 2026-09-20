@@ -1,8 +1,8 @@
 # GOL-36: MCP import — work-in-progress specification and plan
 
-Status: steps 1–9 completed after tests, Oracle review and bounded bug-finder
+Status: steps 1–10 completed after tests, Oracle review and bounded bug-finder
 loops. GOL-439 is merged from main and dynamic MCP middleware integration passes
-combined acceptance. Step 10 remains open pending final CI validation.
+combined acceptance. Final implementation CI passes all 54 jobs; the PR remains draft.
 The resource-budget boundary has provisional user approval and must be revisited
 in the final review.
 The finalized planning snapshot is attached to GOL-36 in Linear.
@@ -623,7 +623,7 @@ Generated artifacts accompany each contract change.
 - [x] **9. Add operator and codegen surfaces.** Manual refresh, periodic host
   refresh policy, inspection, warnings, projected-metadata codegen consumption,
   and documentation. These use the same resolver rather than independent paths.
-- [ ] **10. Verify the combined behavior.** Run focused projection, registry,
+- [x] **10. Verify the combined behavior.** Run focused projection, registry,
   executor, authentication, and CLI tests, then broaden across affected shared
   contracts. Update durability guidance and all required generated artifacts.
 
@@ -1664,7 +1664,29 @@ Current verification and review findings:
   `gol36-cli-e2e` bug-finder run 1 returned clean for acceptance/schema changes.
   This closes step 9, not OAuth combined acceptance or middleware integration.
 
-### Step 10 — combined acceptance in progress
+### Step 10 — completed
+
+- Final implementation [CI run](https://github.com/golemcloud/golem/actions/runs/35535461752)
+  passed all **54 jobs** on [the validated code](https://github.com/golemcloud/golem/commit/da8d44193b1886a239bff30f9c61fbfca4401906).
+  This supersedes the pending and partial validation entries below. The PR remains
+  draft and unmerged.
+- Final targeted local checks passed: 59 registry tests, five generated-language
+  consumer checks, three Rust generator regressions, two live CLI acceptance tests,
+  14 discovery integrations and three MCP stdout/middleware integrations.
+  Oracle follow-up found no remaining specified acceptance gaps; the final
+  generated-consumer and CI-fixture bug-finder loops returned clean.
+- CI also exposed a debugger observer-open race while the original worker appended
+  its constructor history. Archive watermarks now come from actual archive indexes,
+  rather than subtracting a newer physical primary length from the observer's
+  captured cursor. Two deterministic regressions cover empty and deep archives.
+  Oracle and the bounded bug-finder approved the correction, and the original
+  debugger integration passes in CI. The local debugger integration link failed
+  under disk pressure; it is not counted as local passing evidence.
+- Final review still must confirm the provisionally approved resource boundaries:
+  whole-envelope transport limits with independent structured/content projection
+  budgets, and registry discovery/refresh/OAuth requests charging the credential
+  owner's monthly ledger rather than executor per-invocation quota. Executor
+  `tools/call` charges both.
 
 - Final generated-client acceptance covers optional integer arguments and typed
   additional properties across Rust, TypeScript, Effect, Scala and MoonBit:
