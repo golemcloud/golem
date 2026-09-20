@@ -48,6 +48,12 @@ pub struct DeployableManifest {
     #[allow(dead_code)]
     pub mcp_deployments: BTreeMap<Domain, McpDeploymentDeployProperties>,
     pub mcp_imports: Vec<golem_common::model::mcp_import::McpImportDeployment>,
+    pub environment_tool_middleware_bindings:
+        BTreeMap<golem_common::model::tool::ToolName, golem_common::model::tool::ToolBindingInput>,
+    pub agent_tool_middleware_bindings: BTreeMap<
+        golem_common::model::agent::AgentTypeName,
+        BTreeMap<golem_common::model::tool::ToolName, golem_common::model::tool::ToolBindingInput>,
+    >,
 }
 
 #[derive(Debug)]

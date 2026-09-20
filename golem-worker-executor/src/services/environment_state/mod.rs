@@ -205,6 +205,7 @@ pub fn tool_activation_from_mcp(
     mut source: McpImportSource,
     protocol_version: String,
     tool: golem_mcp_import::tool::ProjectedTool,
+    deployment: &ToolDeploymentState,
     owner: &golem_service_base::model::component::Component,
     binding_owner: &ToolBindingOwner,
 ) -> Result<ToolActivationSnapshot, ToolDiscoveryError> {
@@ -240,7 +241,7 @@ pub fn tool_activation_from_mcp(
         deployment_revision: source.deployment_revision,
         release_id: None,
         owner: binding_owner.clone(),
-        tool_name,
+        tool_name: tool_name.clone(),
         version: registered_tool.definition.version.clone(),
         metadata_version: registered_tool.metadata_version.clone(),
         metadata_digest,
@@ -253,10 +254,49 @@ pub fn tool_activation_from_mcp(
         filesystem_access: ToolFilesystemAccess::Denied,
         source: mcp_import_bridge_source(),
     };
+    let configuration = &deployment.tool_middleware_configuration;
+    let environment_binding = configuration.environment_bindings.get(&tool_name);
+    let owner_binding = match binding_owner {
+        ToolBindingOwner::AgentType { agent_type_name } => configuration
+            .agent_bindings
+            .get(agent_type_name)
+            .and_then(|bindings| bindings.get(&tool_name)),
+        ToolBindingOwner::ComponentBaseline { .. } => None,
+    };
+    let (config, readable, revealable) = mcp_binding_scopes(environment_binding, owner_binding);
+    let mut binding = binding;
+    binding.config_keys_readable = config;
+    binding.secret_keys_readable = readable;
+    binding.secret_keys_revealable = revealable;
+    let compiled = golem_common::model::tool_middleware::compile::compile_tool_middleware_chain(
+        deployment.deployment_revision,
+        &registered_tool.definition,
+        &binding,
+        &deployment
+            .registered_tool_middlewares
+            .values()
+            .cloned()
+            .collect::<Vec<_>>(),
+        &configuration.universal,
+        environment_binding,
+        owner_binding,
+        configuration.compatibility_mode,
+    );
+    if !compiled.errors.is_empty() {
+        return Err(invalid(format!(
+            "middleware for dynamic tool '{tool_name}' is incompatible: {}",
+            compiled
+                .errors
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )));
+    }
     Ok(ToolActivationSnapshot {
         registered_tool,
         binding,
-        middleware_chain: None,
+        middleware_chain: compiled.chains.into_iter().next(),
         filesystem: FilesystemCapability::Incapable,
         mcp_import: Some(Box::new(McpImportActivation {
             source,
@@ -264,6 +304,42 @@ pub fn tool_activation_from_mcp(
             projected_tool,
         })),
     })
+}
+
+pub(crate) fn mcp_binding_scopes(
+    environment: Option<&golem_common::model::tool::ToolBindingInput>,
+    agent: Option<&golem_common::model::tool::ToolBindingInput>,
+) -> (
+    golem_common::model::tool::ConfigKeyScope,
+    golem_common::model::tool::SecretKeyScope,
+    golem_common::model::tool::SecretKeyScope,
+) {
+    use golem_common::model::tool::{ConfigKeyScope, SecretKeyScope};
+    let (config, readable, revealable) = match (environment, agent) {
+        (None, None) => (
+            ConfigKeyScope::Keys(BTreeSet::new()),
+            SecretKeyScope::Keys(BTreeSet::new()),
+            SecretKeyScope::Keys(BTreeSet::new()),
+        ),
+        (Some(binding), None) | (None, Some(binding)) => (
+            binding.config_keys_readable.clone(),
+            binding.secret_keys_readable.clone(),
+            binding.secret_keys_revealable.clone(),
+        ),
+        (Some(environment), Some(agent)) => (
+            environment
+                .config_keys_readable
+                .intersection(&agent.config_keys_readable),
+            environment
+                .secret_keys_readable
+                .intersection(&agent.secret_keys_readable),
+            environment
+                .secret_keys_revealable
+                .intersection(&agent.secret_keys_revealable),
+        ),
+    };
+    let revealable = revealable.intersection(&readable);
+    (config, readable, revealable)
 }
 
 pub fn get_tool_activation_from_deployment(

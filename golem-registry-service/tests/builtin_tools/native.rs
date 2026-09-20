@@ -13,6 +13,7 @@ use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::tool::{
     ConfigKeyScope, SecretKeyScope, ToolBindingInput, ToolName, ToolProvisionConfig,
 };
+use golem_common::model::tool_middleware::ToolMiddlewareMergeMode;
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{CommandNode, CommandTree, Tool};
@@ -170,6 +171,8 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
                 publish_tool_middlewares: vec![],
                 remote_tool_middlewares: vec![],
                 universal_tool_middlewares: vec![],
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
                 agent_secret_defaults: vec![],
                 quota_resource_defaults: vec![],
                 retry_policy_defaults: vec![],
@@ -235,6 +238,8 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
                 publish_tool_middlewares: vec![],
                 remote_tool_middlewares: vec![],
                 universal_tool_middlewares: vec![],
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
                 agent_secret_defaults: vec![],
                 quota_resource_defaults: vec![],
                 retry_policy_defaults: vec![],
@@ -274,6 +279,8 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
                 publish_tool_middlewares: vec![],
                 remote_tool_middlewares: vec![],
                 universal_tool_middlewares: vec![],
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
                 agent_secret_defaults: vec![],
                 quota_resource_defaults: vec![],
                 retry_policy_defaults: vec![],
@@ -286,6 +293,97 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
     assert!(matches!(
         error,
         DeploymentWriteError::DuplicateRemoteToolName(name) if name == tool_name
+    ));
+
+    let dynamic_binding = ToolBindingInput {
+        middleware: Some(Vec::new()),
+        middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+        ..Default::default()
+    };
+    let error = services
+        .deployment_write_service
+        .create_deployment(
+            env.id,
+            DeploymentCreation {
+                mcp_imports: Vec::new(),
+                current_revision: plan.current_revision,
+                expected_deployment_hash: canonical_request.0,
+                version: DeploymentVersion("dynamic-agent-native".into()),
+                publish_tools: vec![],
+                remote_tools: vec![],
+                publish_tool_middlewares: vec![],
+                remote_tool_middlewares: vec![],
+                universal_tool_middlewares: vec![],
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::from([(
+                    caller_agent_name.clone(),
+                    BTreeMap::from([(tool_name.clone(), dynamic_binding.clone())]),
+                )]),
+                agent_secret_defaults: vec![],
+                quota_resource_defaults: vec![],
+                retry_policy_defaults: vec![],
+                replace_incompatible_agent_secrets: false,
+            },
+            &auth,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        DeploymentWriteError::DeploymentValidationFailed(errors)
+            if errors.iter().any(|error| matches!(
+                error,
+                golem_registry_service::services::deployment::DeployValidationError::ToolMiddleware {
+                    agent_type_name: Some(agent_type),
+                    tool_name: Some(name),
+                    message,
+                    ..
+                } if agent_type == &caller_agent_name && name == &tool_name
+                    && message == "dynamic middleware bindings can only target MCP tools"
+            ))
+    ));
+
+    let error = services
+        .deployment_write_service
+        .create_deployment(
+            env.id,
+            DeploymentCreation {
+                mcp_imports: Vec::new(),
+                current_revision: plan.current_revision,
+                expected_deployment_hash: canonical_request.0,
+                version: DeploymentVersion("dynamic-environment-native".into()),
+                publish_tools: vec![],
+                remote_tools: vec![],
+                publish_tool_middlewares: vec![],
+                remote_tool_middlewares: vec![],
+                universal_tool_middlewares: vec![],
+                environment_tool_middleware_bindings: BTreeMap::from([(
+                    tool_name.clone(),
+                    dynamic_binding,
+                )]),
+                agent_tool_middleware_bindings: BTreeMap::new(),
+                agent_secret_defaults: vec![],
+                quota_resource_defaults: vec![],
+                retry_policy_defaults: vec![],
+                replace_incompatible_agent_secrets: false,
+            },
+            &auth,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        DeploymentWriteError::DeploymentValidationFailed(errors)
+            if errors.iter().any(|error| matches!(
+                error,
+                golem_registry_service::services::deployment::DeployValidationError::ToolMiddleware {
+                    agent_type_name: None,
+                    tool_name: Some(name),
+                    message,
+                    ..
+                } if name == &tool_name
+                    && message == "dynamic middleware bindings can only target MCP tools"
+            ))
     ));
 
     services
@@ -302,6 +400,8 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
                 publish_tool_middlewares: vec![],
                 remote_tool_middlewares: vec![],
                 universal_tool_middlewares: vec![],
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
                 agent_secret_defaults: vec![],
                 quota_resource_defaults: vec![],
                 retry_policy_defaults: vec![],
@@ -393,6 +493,33 @@ fn ambient_deployment_request(
                 agent_bindings: agent_overrides.clone(),
             }
         })
+        .collect::<Vec<_>>();
+    let environment_bindings = remote_tools
+        .iter()
+        .filter_map(|remote| {
+            remote
+                .environment_binding
+                .clone()
+                .map(|binding| (remote.name.clone(), binding))
+        })
         .collect();
+    let agent_bindings = remote_tools
+        .iter()
+        .fold(BTreeMap::new(), |mut result, remote| {
+            for (agent, binding) in &remote.agent_bindings {
+                result
+                    .entry(agent.clone())
+                    .or_insert_with(BTreeMap::new)
+                    .insert(remote.name.clone(), binding.clone());
+            }
+            result
+        });
+    (
+        target.environment_tool_middleware_bindings,
+        target.agent_tool_middleware_bindings,
+    ) = golem_common::model::diff::tool_middleware_binding_inputs(
+        &environment_bindings,
+        &agent_bindings,
+    );
     (target.hash().unwrap(), remote_tools)
 }

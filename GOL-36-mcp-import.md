@@ -617,7 +617,7 @@ Generated artifacts accompany each contract change.
   authorization, accounting, cancellation, and existing HTTP/RPC idempotency
   techniques. Persist/replay the nested remote result, including structured content
   and simple-output stdout, without repeating completed upstream effects.
-- [ ] **8. Complete middleware integration.** On the middleware dependency
+- [x] **8. Complete middleware integration.** On the middleware dependency
   baseline, apply universal and per-tool chains, supply recorded layer-appropriate
   metadata, and dispatch through runtime-minted underlying handles. Revalidate
   on refresh and surface incompatible drift without bypassing middleware.
@@ -1373,10 +1373,10 @@ public-oplog and config acceptance closes this step; middleware remains step 8.
   ordinary-tool attachment interleaving. Updated walkthrough rendering is pending.
   Step 7 remains open for combined quotas, transport/auth acceptance and review.
 
-### Step 8 — dynamic MCP middleware integration pending
+### Step 8 — dynamic MCP middleware integration complete
 
 The dependency is now merged from main. The reports below are historical; the
-remaining local implementation is:
+local implementation covers:
 
 1. Preserve per-name MCP middleware bindings through CLI validation, deployment
    requests, hashing, persistence and deployment snapshots. Unknown imported names
@@ -1397,8 +1397,49 @@ The pure compiler and its tests now live in `golem-common::model::tool_middlewar
 the registry uses that implementation directly. This isolated refactor preserves
 all compiler logic and all 15 tests. Tests pass before and after the move, the
 registry library compile-check passes, Oracle finds no blockers, and the bounded
-bug-finder is clean. Dynamic snapshot inputs and MCP chain construction are not
-implemented by this refactor; step 8 remains open.
+bug-finder is clean. Subsequent behavior changes preserve dynamic binding inputs
+through CLI, request, hash, database and protobuf snapshots, and use this compiler
+for both discovery and admission. The generic Host leaf retains its raw projection.
+
+Current verification and review findings:
+- Oracle found authority scope loss during persistence, authority widening by
+  agent overrides, and missing-record defaults. These are corrected with scope
+  persistence/hash inputs, shared intersection semantics, and fail-closed reads.
+  Explicit all-keys bindings remain distinct from absent bindings. Empty agent
+  maps contain no binding and are omitted consistently. Diff model version 12
+  has a new fingerprint; versions 10 and 11 remain unchanged.
+- Registry snapshot tests pass on SQLite, PostgreSQL and PostgreSQL TLS; the
+  explicit-default follow-up passes SQLite. A registry regression also passes
+  for rejecting supplemental dynamic bindings targeting native names at another
+  scope. This closes an API gap that the CLI's filtering already prevented.
+- 27 common compiler/hash/fingerprint tests and 59 executor environment/tool/MCP
+  unit tests pass. Monomorphic tests cover effective metadata versus lookup names,
+  admitted occurrence scopes, incompatible refresh, and first-collision rejection.
+- The real MCP integration passes a two-layer universal chain with three
+  underlying starts and distinct idempotency keys, structured output plus stdout,
+  pending-call cancellation, and full executor restart with the upstream offline.
+  It does not substitute a regular-tool definition for the raw MCP projection.
+  A second real monomorphic guest-export test now passes: a manually registered
+  partial structural contract transforms input, forwards stdout, intentionally
+  discards the structured result, and replays offline. This does not claim
+  coverage of the separate macro-generated typed adapter.
+- OpenAPI and generated REST docs are synchronized; both service binaries and the
+  generated client build. Durability guidance and the walkthrough describe the
+  new configuration and failure behavior.
+- The gateway CI regression passes all seven local tests. The OAuth admission
+  failure branch lost during merging is restored; its combined CLI rerun and
+  final CI remain outstanding under step 10.
+- A bug-finder recommendation to backfill preexisting databases for migration 043
+  is not adopted: it conflicts with the repository's explicit no-backward-
+  compatibility policy. Fresh-database tests cover both SQL implementations.
+- Oracle approves closing step 8 after reviewing the corrected native-name
+  regression and real monomorphic guest path. The final bug-finder prompted an
+  explicit post-restart effect-count assertion in the monomorphic test; both
+  discovery/credential counts and actual effects are now checked. The final
+  combined run passes all 15 discovery/MCP middleware integrations. Strict
+  all-targets Clippy for common, registry, executor, worker service and CLI passes.
+  OpenAPI drift checks pass and the updated walkthrough was rendered and inspected.
+  Step 10 CI is still pending.
 
 - The dependency status changed during implementation: GOL-39 is merged in
   [PR 3842](https://github.com/golemcloud/golem/pull/3842) and is included in the

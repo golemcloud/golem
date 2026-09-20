@@ -331,6 +331,9 @@ pub fn remote_tool_middleware_deployments(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolMiddlewareBindingInput {
+    pub config_keys_readable: ConfigKeyScope,
+    pub secret_keys_readable: SecretKeyScope,
+    pub secret_keys_revealable: SecretKeyScope,
     pub middleware: Option<Vec<ToolMiddlewareInstallation>>,
     pub middleware_merge_mode: Option<ToolMiddlewareMergeMode>,
 }
@@ -338,6 +341,9 @@ pub struct ToolMiddlewareBindingInput {
 impl From<&ToolBindingInput> for ToolMiddlewareBindingInput {
     fn from(value: &ToolBindingInput) -> Self {
         Self {
+            config_keys_readable: value.config_keys_readable.clone(),
+            secret_keys_readable: value.secret_keys_readable.clone(),
+            secret_keys_revealable: value.secret_keys_revealable.clone(),
             middleware: value.middleware.clone(),
             middleware_merge_mode: value.middleware_merge_mode,
         }
@@ -352,10 +358,6 @@ impl Diffable for ToolMiddlewareBindingInput {
     }
 }
 
-pub fn has_tool_middleware_binding_input(binding: &ToolBindingInput) -> bool {
-    binding.middleware.is_some() || binding.middleware_merge_mode.is_some()
-}
-
 pub fn tool_middleware_binding_inputs(
     environment: &BTreeMap<ToolName, ToolBindingInput>,
     agents: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
@@ -365,7 +367,6 @@ pub fn tool_middleware_binding_inputs(
 ) {
     let environment = environment
         .iter()
-        .filter(|(_, binding)| has_tool_middleware_binding_input(binding))
         .map(|(name, binding)| (name.to_string(), binding.into()))
         .collect();
     let agents = agents
@@ -373,7 +374,6 @@ pub fn tool_middleware_binding_inputs(
         .filter_map(|(agent, bindings)| {
             let bindings = bindings
                 .iter()
-                .filter(|(_, binding)| has_tool_middleware_binding_input(binding))
                 .map(|(name, binding)| (name.to_string(), binding.into()))
                 .collect::<BTreeMap<_, _>>();
             (!bindings.is_empty()).then(|| (agent.0.clone(), bindings))
@@ -765,12 +765,12 @@ mod tests {
     }
 
     #[test]
-    fn middleware_binding_projection_hash_retains_mode_only_and_ignores_empty_bindings() {
+    fn middleware_binding_projection_hash_retains_explicit_default_bindings() {
         let agent = AgentTypeName("Agent".to_string());
         let tool = ToolName::try_from("grep").unwrap();
         let empty_tool = ToolName::try_from("empty").unwrap();
         let environment = BTreeMap::from([(empty_tool.clone(), ToolBindingInput::default())]);
-        let agents = BTreeMap::from([(
+        let mut agents = BTreeMap::from([(
             agent,
             BTreeMap::from([
                 (
@@ -783,18 +783,20 @@ mod tests {
                 (empty_tool, ToolBindingInput::default()),
             ]),
         )]);
+        agents.insert(AgentTypeName("Unbound".to_string()), BTreeMap::new());
 
         let (environment_bindings, agent_bindings) =
             super::tool_middleware_binding_inputs(&environment, &agents);
-        assert!(environment_bindings.is_empty());
-        assert_eq!(agent_bindings["Agent"].len(), 1);
+        assert_eq!(environment_bindings.len(), 1);
+        assert_eq!(agent_bindings.len(), 1);
+        assert_eq!(agent_bindings["Agent"].len(), 2);
         assert_eq!(
             agent_bindings["Agent"]["grep"].middleware_merge_mode,
             Some(ToolMiddlewareMergeMode::Append)
         );
 
         let projected = Deployment {
-            environment_tool_middleware_bindings: environment_bindings,
+            environment_tool_middleware_bindings: environment_bindings.clone(),
             agent_tool_middleware_bindings: agent_bindings,
             ..Deployment::default()
         };
@@ -802,6 +804,68 @@ mod tests {
             projected.hash().unwrap(),
             Deployment::default().hash().unwrap()
         );
+
+        let environment_only = Deployment {
+            environment_tool_middleware_bindings: environment_bindings,
+            ..Deployment::default()
+        };
+        let agent_only = Deployment {
+            agent_tool_middleware_bindings: BTreeMap::from([(
+                "Agent".to_string(),
+                BTreeMap::from([(
+                    "empty".to_string(),
+                    super::ToolMiddlewareBindingInput::from(&ToolBindingInput::default()),
+                )]),
+            )]),
+            ..Deployment::default()
+        };
+        let absent = Deployment::default().hash().unwrap();
+        assert_ne!(environment_only.hash().unwrap(), absent);
+        assert_ne!(agent_only.hash().unwrap(), absent);
+    }
+
+    #[test]
+    fn middleware_binding_authority_scopes_each_change_deployment_hash() {
+        use crate::model::agent_config::CanonicalAgentConfigPath;
+        use crate::model::agent_secret::CanonicalAgentSecretPath;
+
+        let tool = ToolName::try_from("grep").unwrap();
+        let hash = |binding: ToolBindingInput| {
+            let (environment_tool_middleware_bindings, _) = super::tool_middleware_binding_inputs(
+                &BTreeMap::from([(tool.clone(), binding)]),
+                &BTreeMap::new(),
+            );
+            Deployment {
+                environment_tool_middleware_bindings,
+                ..Deployment::default()
+            }
+            .hash()
+            .unwrap()
+        };
+        let default_hash = Deployment::default().hash().unwrap();
+
+        for binding in [
+            ToolBindingInput {
+                config_keys_readable: ConfigKeyScope::Keys(BTreeSet::from([
+                    CanonicalAgentConfigPath(vec!["config".to_string()]),
+                ])),
+                ..Default::default()
+            },
+            ToolBindingInput {
+                secret_keys_readable: SecretKeyScope::Keys(BTreeSet::from([
+                    CanonicalAgentSecretPath(vec!["readable".to_string()]),
+                ])),
+                ..Default::default()
+            },
+            ToolBindingInput {
+                secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::from([
+                    CanonicalAgentSecretPath(vec!["revealable".to_string()]),
+                ])),
+                ..Default::default()
+            },
+        ] {
+            assert_ne!(hash(binding), default_hash);
+        }
     }
 
     #[test]

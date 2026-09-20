@@ -95,6 +95,8 @@ message ToolDeploymentState {
   repeated bytes registered_tool_middlewares = 4;
   repeated bytes tool_middleware_chains = 5;
   repeated McpImport mcp_imports = 6;
+  // BinaryCodec snapshot of ToolMiddlewareConfiguration for dynamic tool activation.
+  bytes tool_middleware_configuration = 7;
 }
 
 enum McpInlineCredentialKind {

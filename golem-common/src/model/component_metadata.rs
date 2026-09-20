@@ -1929,6 +1929,10 @@ mod protobuf {
                             .expect("middleware chain snapshot serialization must succeed")
                     })
                     .collect(),
+                tool_middleware_configuration: desert_rust::serialize_to_byte_vec(
+                    &value.tool_middleware_configuration,
+                )
+                .expect("middleware configuration snapshot serialization must succeed"),
             }
         }
     }
@@ -1940,6 +1944,10 @@ mod protobuf {
             value: golem_api_grpc::proto::golem::registry::ToolDeploymentState,
         ) -> Result<Self, Self::Error> {
             let deployment_revision = DeploymentRevision::try_from(value.deployment_revision)?;
+            let tool_middleware_configuration = desert_rust::deserialize(
+                &value.tool_middleware_configuration,
+            )
+            .map_err(|error| format!("invalid middleware configuration snapshot: {error}"))?;
             let mut registered_tools = BTreeMap::new();
             for proto in value.registered_tools {
                 let registered: RegisteredTool = proto.try_into()?;
@@ -2104,6 +2112,7 @@ mod protobuf {
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?,
+                tool_middleware_configuration,
                 registered_tool_middlewares,
                 tool_middleware_chains,
             })
@@ -2442,6 +2451,10 @@ mod tests {
             registered_tools: vec![registered_tool.into()],
             tool_bindings: Vec::new(),
             mcp_imports: Vec::new(),
+            tool_middleware_configuration: desert_rust::serialize_to_byte_vec(
+                &crate::model::tool_middleware::ToolMiddlewareConfiguration::default(),
+            )
+            .unwrap(),
             registered_tool_middlewares: Vec::new(),
             tool_middleware_chains: Vec::new(),
         };
@@ -2517,6 +2530,7 @@ mod tests {
                 ),
             ]),
             mcp_imports: Vec::new(),
+            tool_middleware_configuration: Default::default(),
             registered_tool_middlewares: BTreeMap::new(),
             tool_middleware_chains: BTreeMap::new(),
         };
@@ -2593,6 +2607,22 @@ mod tests {
                 ),
             ]),
             mcp_imports: Vec::new(),
+            tool_middleware_configuration:
+                crate::model::tool_middleware::ToolMiddlewareConfiguration {
+                    compatibility_mode:
+                        crate::schema::tool::compatibility::ToolCompatibilityMode::StrictEquality,
+                    environment_bindings: BTreeMap::from([(
+                        ToolName::try_from("future-mcp-tool").unwrap(),
+                        crate::model::tool::ToolBindingInput {
+                            middleware: Some(Vec::new()),
+                            middleware_merge_mode: Some(
+                                crate::model::tool_middleware::ToolMiddlewareMergeMode::Replace,
+                            ),
+                            ..Default::default()
+                        },
+                    )]),
+                    ..Default::default()
+                },
             registered_tool_middlewares: BTreeMap::new(),
             tool_middleware_chains: BTreeMap::new(),
         };
@@ -2694,6 +2724,7 @@ mod tests {
                 exclude: None,
                 version: Some(crate::base_model::mcp_import::PROTOCOL_VERSION.to_string()),
             }],
+            tool_middleware_configuration: Default::default(),
             registered_tool_middlewares: BTreeMap::new(),
             tool_middleware_chains: BTreeMap::new(),
         };

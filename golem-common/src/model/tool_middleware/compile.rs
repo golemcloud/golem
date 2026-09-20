@@ -46,6 +46,64 @@ pub struct CompiledToolMiddlewareChains {
     pub errors: Vec<ToolMiddlewareCompileDiagnostic>,
 }
 
+struct ChainCompileContext<'a> {
+    owner: &'a ToolBindingOwner,
+    tool_name: &'a ToolName,
+    config_keys_readable: &'a crate::model::tool::ConfigKeyScope,
+    secret_keys_readable: &'a crate::model::tool::SecretKeyScope,
+    secret_keys_revealable: &'a crate::model::tool::SecretKeyScope,
+}
+
+impl<'a> From<&'a CompiledToolBinding> for ChainCompileContext<'a> {
+    fn from(binding: &'a CompiledToolBinding) -> Self {
+        Self {
+            owner: &binding.owner,
+            tool_name: &binding.tool_name,
+            config_keys_readable: &binding.config_keys_readable,
+            secret_keys_readable: &binding.secret_keys_readable,
+            secret_keys_revealable: &binding.secret_keys_revealable,
+        }
+    }
+}
+
+/// Compiles one chain against a tool definition discovered after deployment.
+///
+/// Unlike the bulk deployment compiler this entry point does not require a synthetic registered
+/// tool. The caller supplies the activation binding that owns authority scopes, while the actual
+/// discovered definition is used for every compatibility and presentation decision.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_tool_middleware_chain(
+    deployment_revision: DeploymentRevision,
+    tool: &Tool,
+    binding: &CompiledToolBinding,
+    middleware_registrations: &[RegisteredToolMiddleware],
+    universal_installations: &[ToolMiddlewareInstallation],
+    environment_binding: Option<&ToolBindingInput>,
+    owner_binding: Option<&ToolBindingInput>,
+    compatibility_mode: ToolCompatibilityMode,
+) -> CompiledToolMiddlewareChains {
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    let context = ChainCompileContext::from(binding);
+    let chain = compile_one_chain(
+        deployment_revision,
+        tool,
+        &context,
+        middleware_registrations,
+        universal_installations,
+        environment_binding,
+        owner_binding,
+        compatibility_mode,
+        &mut warnings,
+        &mut errors,
+    );
+    CompiledToolMiddlewareChains {
+        chains: chain.into_iter().collect(),
+        warnings,
+        errors,
+    }
+}
+
 /// Purely compiles pinned middleware chains. It performs no repository access and has no
 /// deployment side effects.
 #[allow(clippy::too_many_arguments)]
@@ -194,7 +252,7 @@ pub fn compile_tool_middleware_chains(
     for binding in tool_bindings {
         let Some(tool) = tools.get(&binding.tool_name) else {
             errors.push(diagnostic(
-                binding,
+                &ChainCompileContext::from(binding),
                 None,
                 "compiled binding has no registered leaf tool",
             ));
@@ -209,62 +267,97 @@ pub fn compile_tool_middleware_chains(
                 .get(component_id)
                 .and_then(|name| tool.component_bindings.get(name)),
         };
-        let per_tool = effective_installations(environment, owner_binding);
-        let mut resolved = Vec::new();
-        let mut valid = true;
-        for (installation, universal) in universal_installations
-            .iter()
-            .map(|i| (i, true))
-            .chain(per_tool.iter().map(|i| (i, false)))
-        {
-            match resolve_registration(installation, middleware_registrations, universal) {
-                Ok(registration) => resolved.push((installation, registration, universal)),
-                Err(message) => {
-                    errors.push(diagnostic(
-                        binding,
-                        Some(installation.name.to_string()),
-                        message,
-                    ));
-                    valid = false;
-                }
+        if let Some(chain) = compile_one_chain(
+            deployment_revision,
+            &tool.definition,
+            &ChainCompileContext::from(binding),
+            middleware_registrations,
+            universal_installations,
+            environment,
+            owner_binding,
+            compatibility_mode,
+            &mut warnings,
+            &mut errors,
+        ) {
+            chains.push(chain);
+        }
+    }
+    CompiledToolMiddlewareChains {
+        chains,
+        warnings,
+        errors,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_one_chain(
+    deployment_revision: DeploymentRevision,
+    tool: &Tool,
+    binding: &ChainCompileContext<'_>,
+    middleware_registrations: &[RegisteredToolMiddleware],
+    universal_installations: &[ToolMiddlewareInstallation],
+    environment: Option<&ToolBindingInput>,
+    owner_binding: Option<&ToolBindingInput>,
+    compatibility_mode: ToolCompatibilityMode,
+    warnings: &mut Vec<ToolMiddlewareCompileDiagnostic>,
+    errors: &mut Vec<ToolMiddlewareCompileDiagnostic>,
+) -> Option<CompiledToolMiddlewareChain> {
+    let per_tool = effective_installations(environment, owner_binding);
+    let mut resolved = Vec::new();
+    let mut valid = true;
+    for (installation, universal) in universal_installations
+        .iter()
+        .map(|i| (i, true))
+        .chain(per_tool.iter().map(|i| (i, false)))
+    {
+        match resolve_registration(installation, middleware_registrations, universal) {
+            Ok(registration) => resolved.push((installation, registration, universal)),
+            Err(message) => {
+                errors.push(diagnostic(
+                    binding,
+                    Some(installation.name.to_string()),
+                    message,
+                ));
+                valid = false;
             }
         }
-        if !valid {
-            continue;
-        }
+    }
+    if !valid {
+        return None;
+    }
 
-        let universal_count = universal_installations.len();
-        let mut effective = tool.definition.clone();
-        let mut compiled_reversed = Vec::with_capacity(resolved.len());
-        for (occurrence_index, (installation, registration, universal)) in
-            resolved.iter().enumerate().rev()
+    let universal_count = universal_installations.len();
+    let mut effective = tool.clone();
+    let mut compiled_reversed = Vec::with_capacity(resolved.len());
+    for (occurrence_index, (installation, registration, universal)) in
+        resolved.iter().enumerate().rev()
+    {
+        let next = effective.clone();
+        let parameters = match compile_parameters(installation, registration) {
+            Ok(parameters) => Some(parameters),
+            Err(message) => {
+                errors.push(diagnostic(
+                    binding,
+                    Some(installation.name.to_string()),
+                    format!("occurrence {} parameters: {message}", occurrence_index + 1),
+                ));
+                valid = false;
+                None
+            }
+        };
+        let (expected, presented, compatibility, next_effective) = match &registration
+            .definition
+            .scope
         {
-            let next = effective.clone();
-            let parameters = match compile_parameters(installation, registration) {
-                Ok(parameters) => Some(parameters),
-                Err(message) => {
-                    errors.push(diagnostic(
-                        binding,
-                        Some(installation.name.to_string()),
-                        format!("occurrence {} parameters: {message}", occurrence_index + 1),
-                    ));
-                    valid = false;
-                    None
-                }
-            };
-            let (expected, presented, compatibility, next_effective) = match &registration
-                .definition
-                .scope
-            {
-                ToolMiddlewareScope::Universal if *universal => (None, None, None, next.clone()),
-                ToolMiddlewareScope::Monomorphic(scope) if !*universal => {
-                    let expected = scope.expected.clone();
-                    let compatibility = match &expected {
-                        Some(expected) => {
-                            match compile_tool_compatibility(expected, &next, compatibility_mode) {
-                                Ok(compiled) => {
-                                    for warning in &compiled.warnings {
-                                        warnings.push(diagnostic(
+            ToolMiddlewareScope::Universal if *universal => (None, None, None, next.clone()),
+            ToolMiddlewareScope::Monomorphic(scope) if !*universal => {
+                let expected = scope.expected.clone();
+                let compatibility = match &expected {
+                    Some(expected) => {
+                        match compile_tool_compatibility(expected, &next, compatibility_mode) {
+                            Ok(compiled) => {
+                                for warning in &compiled.warnings {
+                                    warnings.push(diagnostic(
                                             binding,
                                             Some(installation.name.to_string()),
                                             format!(
@@ -272,82 +365,121 @@ pub fn compile_tool_middleware_chains(
                                                 warning.path, warning.name
                                             ),
                                         ));
-                                    }
-                                    Some(compiled)
                                 }
-                                Err(es) => {
-                                    for error in es {
-                                        errors.push(diagnostic(
-                                            binding,
-                                            Some(installation.name.to_string()),
-                                            format!("{}: {}", error.path, error.message),
-                                        ));
-                                    }
-                                    valid = false;
-                                    None
+                                Some(compiled)
+                            }
+                            Err(es) => {
+                                for error in es {
+                                    errors.push(diagnostic(
+                                        binding,
+                                        Some(installation.name.to_string()),
+                                        format!("{}: {}", error.path, error.message),
+                                    ));
                                 }
+                                valid = false;
+                                None
                             }
                         }
-                        None => None,
-                    };
-                    let synthesized = match synthesize_effective_definition(
-                        &scope.presented,
-                        expected.as_ref(),
-                        &next,
-                    ) {
-                        Ok(tool) => tool,
-                        Err(message) => {
-                            errors.push(diagnostic(
-                                binding,
-                                Some(installation.name.to_string()),
-                                message,
-                            ));
-                            valid = false;
-                            scope.presented.clone()
-                        }
-                    };
-                    (
-                        expected,
-                        Some(scope.presented.clone()),
-                        compatibility,
-                        synthesized,
-                    )
-                }
-                _ => unreachable!("scope was checked while resolving"),
-            };
-            effective = next_effective;
-            let Some(parameters) = parameters else {
-                continue;
-            };
-            compiled_reversed.push(CompiledToolMiddlewareOccurrence {
-                middleware: (*registration).clone(),
-                parameters,
-                provision: registration.provision.clone(),
-                config_keys_readable: binding.config_keys_readable.clone(),
-                secret_keys_readable: binding.secret_keys_readable.clone(),
-                secret_keys_revealable: binding.secret_keys_revealable.clone(),
-                filesystem_access: installation.filesystem_access,
-                expected_definition: expected,
-                presented_definition: presented,
-                next_effective_definition: next,
-                compatibility,
-            });
-        }
-        if !valid {
+                    }
+                    None => None,
+                };
+                let synthesized = match synthesize_effective_definition(
+                    &scope.presented,
+                    expected.as_ref(),
+                    &next,
+                ) {
+                    Ok(tool) => tool,
+                    Err(message) => {
+                        errors.push(diagnostic(
+                            binding,
+                            Some(installation.name.to_string()),
+                            message,
+                        ));
+                        valid = false;
+                        scope.presented.clone()
+                    }
+                };
+                (
+                    expected,
+                    Some(scope.presented.clone()),
+                    compatibility,
+                    synthesized,
+                )
+            }
+            _ => unreachable!("scope was checked while resolving"),
+        };
+        effective = next_effective;
+        let Some(parameters) = parameters else {
             continue;
-        }
-        compiled_reversed.reverse();
-        debug_assert_eq!(compiled_reversed.len(), universal_count + per_tool.len());
-        chains.push(CompiledToolMiddlewareChain {
-            deployment_revision,
-            owner: binding.owner.clone(),
-            tool_name: binding.tool_name.clone(),
-            effective_definition: effective,
-            occurrences: compiled_reversed,
+        };
+        compiled_reversed.push(CompiledToolMiddlewareOccurrence {
+            middleware: (*registration).clone(),
+            parameters,
+            provision: registration.provision.clone(),
+            config_keys_readable: binding.config_keys_readable.clone(),
+            secret_keys_readable: binding.secret_keys_readable.clone(),
+            secret_keys_revealable: binding.secret_keys_revealable.clone(),
+            filesystem_access: installation.filesystem_access,
+            expected_definition: expected,
+            presented_definition: presented,
+            next_effective_definition: next,
+            compatibility,
         });
     }
+    if !valid {
+        return None;
+    }
+    compiled_reversed.reverse();
+    debug_assert_eq!(compiled_reversed.len(), universal_count + per_tool.len());
+    Some(CompiledToolMiddlewareChain {
+        deployment_revision,
+        owner: binding.owner.clone(),
+        tool_name: binding.tool_name.clone(),
+        effective_definition: effective,
+        occurrences: compiled_reversed,
+    })
+}
+
+/// Compiles presentation metadata for a dynamically discovered tool without requiring registry
+/// identity fields that do not exist in a discovery observation.
+#[allow(clippy::too_many_arguments)]
+pub fn compile_discovered_tool_middleware_chain(
+    deployment_revision: DeploymentRevision,
+    tool: &Tool,
+    owner: &ToolBindingOwner,
+    tool_name: &ToolName,
+    config_keys_readable: &crate::model::tool::ConfigKeyScope,
+    secret_keys_readable: &crate::model::tool::SecretKeyScope,
+    secret_keys_revealable: &crate::model::tool::SecretKeyScope,
+    middleware_registrations: &[RegisteredToolMiddleware],
+    universal_installations: &[ToolMiddlewareInstallation],
+    environment_binding: Option<&ToolBindingInput>,
+    owner_binding: Option<&ToolBindingInput>,
+    compatibility_mode: ToolCompatibilityMode,
+) -> CompiledToolMiddlewareChains {
+    let context = ChainCompileContext {
+        owner,
+        tool_name,
+        config_keys_readable,
+        secret_keys_readable,
+        secret_keys_revealable,
+    };
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    let chain = compile_one_chain(
+        deployment_revision,
+        tool,
+        &context,
+        middleware_registrations,
+        universal_installations,
+        environment_binding,
+        owner_binding,
+        compatibility_mode,
+        &mut warnings,
+        &mut errors,
+    );
     CompiledToolMiddlewareChains {
-        chains,
+        chains: chain.into_iter().collect(),
         warnings,
         errors,
     }
@@ -717,7 +849,7 @@ fn command_errors(tool: &Tool) -> BTreeMap<Vec<String>, Vec<ErrorCase>> {
 }
 
 fn diagnostic(
-    binding: &CompiledToolBinding,
+    binding: &ChainCompileContext<'_>,
     middleware_name: Option<String>,
     message: impl Into<String>,
 ) -> ToolMiddlewareCompileDiagnostic {

@@ -1074,6 +1074,8 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             publish_tool_middlewares: Vec::new(),
             remote_tool_middlewares: Vec::new(),
             universal_tool_middlewares: Vec::new(),
+            environment_tool_middleware_bindings: Default::default(),
+            agent_tool_middleware_bindings: Default::default(),
             agent_secret_defaults: Vec::new(),
             quota_resource_defaults: Vec::new(),
             retry_policy_defaults: Vec::new(),

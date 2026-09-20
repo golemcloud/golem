@@ -126,6 +126,14 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub universal_tool_middlewares: Vec<ToolMiddlewareInstallation>,
+        /// Middleware-only bindings retained for tools whose implementation is discovered dynamically.
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub environment_tool_middleware_bindings: std::collections::BTreeMap<ToolName, ToolBindingInput>,
+        /// Agent-specific middleware-only bindings retained for dynamically discovered tools.
+        #[serde(default)]
+        #[cfg_attr(feature = "full", oai(default))]
+        pub agent_tool_middleware_bindings: std::collections::BTreeMap<AgentTypeName, std::collections::BTreeMap<ToolName, ToolBindingInput>>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub replace_incompatible_agent_secrets: bool,

@@ -463,8 +463,62 @@ impl DeploymentWriteService {
                 &remote_middlewares,
                 &mut errors,
             );
-        let (environment_tool_bindings, agent_tool_binding_inputs) =
+        let (mut environment_tool_bindings, mut agent_tool_binding_inputs) =
             deployment_context.tool_middleware_binding_inputs(&data.remote_tools);
+        let registered_tool_names: BTreeSet<golem_common::model::tool::ToolName> = compiled_tools
+            .registered_tools
+            .iter()
+            .filter_map(|tool| tool.definition.name()?.try_into().ok())
+            .collect::<BTreeSet<_>>();
+        for (tool_name, binding) in &data.environment_tool_middleware_bindings {
+            if registered_tool_names.contains(tool_name) {
+                errors.push(DeployValidationError::ToolMiddleware {
+                    middleware_name: None,
+                    agent_type_name: None,
+                    tool_name: Some(tool_name.clone()),
+                    message: "dynamic middleware bindings can only target MCP tools".to_string(),
+                });
+                continue;
+            }
+            if environment_tool_bindings
+                .insert(tool_name.clone(), binding.clone())
+                .is_some()
+            {
+                errors.push(DeployValidationError::ToolMiddleware {
+                    middleware_name: None,
+                    agent_type_name: None,
+                    tool_name: Some(tool_name.clone()),
+                    message: "dynamic middleware binding duplicates a native tool binding"
+                        .to_string(),
+                });
+            }
+        }
+        for (agent_type_name, bindings) in &data.agent_tool_middleware_bindings {
+            let target = agent_tool_binding_inputs
+                .entry(agent_type_name.clone())
+                .or_default();
+            for (tool_name, binding) in bindings {
+                if registered_tool_names.contains(tool_name) {
+                    errors.push(DeployValidationError::ToolMiddleware {
+                        middleware_name: None,
+                        agent_type_name: Some(agent_type_name.clone()),
+                        tool_name: Some(tool_name.clone()),
+                        message: "dynamic middleware bindings can only target MCP tools"
+                            .to_string(),
+                    });
+                    continue;
+                }
+                if target.insert(tool_name.clone(), binding.clone()).is_some() {
+                    errors.push(DeployValidationError::ToolMiddleware {
+                        middleware_name: None,
+                        agent_type_name: Some(agent_type_name.clone()),
+                        tool_name: Some(tool_name.clone()),
+                        message: "dynamic middleware binding duplicates a native tool binding"
+                            .to_string(),
+                    });
+                }
+            }
+        }
         let mut compiled_middleware = compile_tool_middleware_chains(
             next_deployment_revision,
             &compiled_tools.registered_tools,

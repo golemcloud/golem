@@ -777,6 +777,8 @@ pub struct ToolDeploymentState {
     pub registered_tools: BTreeMap<ToolName, RegisteredTool>,
     pub tool_bindings: BTreeMap<ToolBindingOwner, BTreeMap<ToolName, CompiledToolBinding>>,
     pub mcp_imports: Vec<crate::base_model::mcp_import::McpImport>,
+    pub tool_middleware_configuration:
+        crate::base_model::tool_middleware::ToolMiddlewareConfiguration,
     pub registered_tool_middlewares: BTreeMap<
         crate::model::tool_middleware::ToolMiddlewareName,
         crate::model::tool_middleware::RegisteredToolMiddleware,

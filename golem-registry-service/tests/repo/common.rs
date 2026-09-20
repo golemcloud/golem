@@ -21,6 +21,7 @@ use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::account::{AccountEmail, AccountId, AccountRevision, AccountSetPlan};
+use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -41,9 +42,9 @@ use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::plan::PlanId;
 use golem_common::model::tool::{
-    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, TOOL_METADATA_WIT_VERSION,
-    ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata, ToolFilesystemAccess, ToolName,
-    ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope,
+    TOOL_METADATA_WIT_VERSION, ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata,
+    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
@@ -6337,24 +6338,40 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 installation("audit-u", 2, ToolFilesystemAccess::Denied),
             ];
             let alpha = ToolName::try_from("alpha").unwrap();
-            let environment_bindings = BTreeMap::from([(
-                alpha.clone(),
-                ToolBindingInput {
-                    middleware: Some(vec![installation(
-                        "remote-r",
-                        3,
-                        ToolFilesystemAccess::Unset,
-                    )]),
-                    middleware_merge_mode: None,
-                    ..Default::default()
-                },
-            )]);
+            let environment_bindings = BTreeMap::from([
+                (
+                    alpha.clone(),
+                    ToolBindingInput {
+                        config_keys_readable: ConfigKeyScope::Keys(BTreeSet::from([
+                            CanonicalAgentConfigPath(vec!["public".to_string()]),
+                        ])),
+                        middleware: Some(vec![installation(
+                            "remote-r",
+                            3,
+                            ToolFilesystemAccess::Unset,
+                        )]),
+                        middleware_merge_mode: None,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    ToolName::try_from("explicit-default-environment").unwrap(),
+                    ToolBindingInput::default(),
+                ),
+            ]);
             let agent_bindings = BTreeMap::from([(
                 AgentTypeName(agent_type_name.clone()),
                 BTreeMap::from([
                     (
                         alpha.clone(),
                         ToolBindingInput {
+                            secret_keys_readable: SecretKeyScope::Keys(BTreeSet::from([
+                                CanonicalAgentSecretPath(vec!["token".to_string()]),
+                                CanonicalAgentSecretPath(vec!["visible".to_string()]),
+                            ])),
+                            secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::from([
+                                CanonicalAgentSecretPath(vec!["visible".to_string()]),
+                            ])),
                             middleware: Some(vec![installation(
                                 "audit-u",
                                 4,
@@ -6376,12 +6393,19 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                         ToolName::try_from("list-empty").unwrap(),
                         ToolBindingInput {
                             middleware: Some(Vec::new()),
-                            middleware_merge_mode: None,
+                            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
                             ..Default::default()
                         },
                     ),
                     (
-                        ToolName::try_from("unrelated-default").unwrap(),
+                        ToolName::try_from("scope-only").unwrap(),
+                        ToolBindingInput {
+                            config_keys_readable: ConfigKeyScope::Keys(BTreeSet::new()),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        ToolName::try_from("explicit-default-agent").unwrap(),
                         ToolBindingInput::default(),
                     ),
                 ]),
@@ -6615,6 +6639,27 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         );
     }
     assert_eq!(exact_first_state.deployment_revision.get(), 1);
+    let expected_agent_configuration = BTreeMap::from([(
+        AgentTypeName(agent_type_name.clone()),
+        expected_agent_middleware_bindings[&AgentTypeName(agent_type_name.clone())]
+            .iter()
+            .map(|(name, binding)| (name.clone(), binding.clone()))
+            .collect(),
+    )]);
+    assert_eq!(
+        exact_first_state.tool_middleware_configuration,
+        golem_common::model::tool_middleware::ToolMiddlewareConfiguration {
+            universal: expected_universal_middlewares.clone(),
+            compatibility_mode:
+                golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal,
+            environment_bindings: expected_environment_middleware_bindings.clone(),
+            agent_bindings: expected_agent_configuration,
+        }
+    );
+    assert_eq!(
+        exact_second_state.tool_middleware_configuration,
+        golem_common::model::tool_middleware::ToolMiddlewareConfiguration::default()
+    );
     assert_eq!(
         exact_first_state.tool_bindings[&ToolBindingOwner::AgentType {
             agent_type_name: agent_type.clone()
@@ -6727,14 +6772,9 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         first_identity.identity.middleware.environment_bindings,
         expected_environment_middleware_bindings
     );
-    let mut expected_persisted_agent_bindings = expected_agent_middleware_bindings.clone();
-    expected_persisted_agent_bindings
-        .get_mut(&AgentTypeName(agent_type_name.clone()))
-        .unwrap()
-        .remove(&ToolName::try_from("unrelated-default").unwrap());
     assert_eq!(
         first_identity.identity.middleware.agent_bindings,
-        expected_persisted_agent_bindings
+        expected_agent_middleware_bindings
     );
     let first_plan = first_identity.identity.into_plan(None).unwrap();
     let (expected_environment_binding_inputs, expected_agent_binding_inputs) =
@@ -7563,6 +7603,70 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         "1.0.0"
     );
     assert_eq!(rolled_back.registered_tools.len(), 2);
+
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            pool.with_rw("test", "delete_universal_middleware_binding")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_bindings WHERE environment_id = $1 AND deployment_revision_id = 6 AND scope = 'universal'")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+        TestDb::Sqlite(pool) => {
+            pool.with_rw("test", "delete_universal_middleware_binding")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_bindings WHERE environment_id = $1 AND deployment_revision_id = 6 AND scope = 'universal'")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+    };
+    let missing_universal = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 6)
+        .await
+        .err()
+        .expect("missing universal binding must fail");
+    assert!(
+        missing_universal
+            .to_string()
+            .contains("exactly one universal binding")
+    );
+
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            pool.with_rw("test", "delete_middleware_snapshot")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_snapshots WHERE environment_id = $1 AND deployment_revision_id = 6")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+        TestDb::Sqlite(pool) => {
+            pool.with_rw("test", "delete_middleware_snapshot")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_snapshots WHERE environment_id = $1 AND deployment_revision_id = 6")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+    };
+    let missing_snapshot = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 6)
+        .await
+        .err()
+        .expect("missing middleware snapshot must fail");
+    assert!(
+        missing_snapshot
+            .to_string()
+            .contains("missing its middleware snapshot")
+    );
 }
 
 struct ResolveTestEnv {

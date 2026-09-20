@@ -612,6 +612,14 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   executor's shared MCP transport, and records `tools/call` as `WriteRemote` with the ordinary key
   derived from its `Start`. Its encoded remote response is committed before result projection,
   stdout publication, or best-effort 401 feedback; completed replay is therefore offline.
+- Dynamic discovery and admission use the shared middleware compiler with installations,
+  environment/agent bindings and compatibility mode from the exact deployment snapshot.
+  Discovery presents effective metadata without changing the lookup name. Admission pins the
+  chain and unchanged MCP leaf projection in the ordinary entity plan. Incompatible refreshed
+  definitions fail closed without selecting a later colliding import. Authority scopes intersect
+  across environment and agent, then revealable secrets narrow to readable secrets. Explicit
+  bindings, including all-keys bindings, are persisted and hashed; absent dynamic bindings deny
+  config/secret access. Missing required middleware records fail rather than produce an empty chain.
 - A remote `-32602` triggers a separate durable `ReadRemote` presence observation with a forced
   exact-source refresh. Quota suspension or a crash can repair that read while preserving the
   committed call (ordinary atomic-region rollback can still roll both back). Present or

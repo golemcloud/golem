@@ -274,6 +274,7 @@ pub(crate) fn deployment_state(
         registered_tools,
         tool_bindings: BTreeMap::from([(owner, bindings)]),
         mcp_imports: Vec::new(),
+        tool_middleware_configuration: Default::default(),
         registered_tool_middlewares: BTreeMap::new(),
         tool_middleware_chains: BTreeMap::new(),
     }

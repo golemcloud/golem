@@ -362,6 +362,8 @@ async fn deploy(
                 publish_tool_middlewares: vec![],
                 remote_tool_middlewares: vec![],
                 universal_tool_middlewares: vec![],
+                environment_tool_middleware_bindings: Default::default(),
+                agent_tool_middleware_bindings: Default::default(),
                 agent_secret_defaults: vec![],
                 quota_resource_defaults: vec![],
                 retry_policy_defaults: vec![],

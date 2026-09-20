@@ -1564,11 +1564,13 @@ where
             .find(|tool| tool.definition.name() == Some(rpc.tool_name.as_str()))
         {
             let binding_owner = binding_owner.clone();
+            let deployment = deployment.clone();
             return tokio::task::spawn_blocking(move || {
                 tool_activation_from_mcp(
                     source,
                     observation.protocol_version,
                     tool,
+                    &deployment,
                     &owner,
                     &binding_owner,
                 )
@@ -1703,6 +1705,34 @@ where
                                 "tool '{}' is not registered",
                                 rpc.tool_name
                             )),
+                            stdin,
+                        ));
+                    }
+                    Err(ToolDiscoveryError::Mcp(
+                        golem_service_base::clients::registry::RegistryServiceError::LimitExceeded(
+                            _,
+                        ),
+                    )) => {
+                        return Err(
+                            GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted.into()
+                        );
+                    }
+                    Err(ToolDiscoveryError::Mcp(error))
+                        if matches!(
+                            classify_tool_discovery_error(&ToolDiscoveryError::Mcp(error.clone())),
+                            HostFailureKind::Permanent
+                        ) =>
+                    {
+                        return Ok(rejected_tool_call(
+                            &tool_name,
+                            attempt_ordinal,
+                            &command_path,
+                            Some(input),
+                            None,
+                            has_stdin,
+                            stdout_requested,
+                            call_mode,
+                            mcp::registry_failure(&error),
                             stdin,
                         ));
                     }
@@ -5349,11 +5379,59 @@ fn merge_discovered_tools(
         .map(|name| name.as_str().to_owned())
         .collect::<std::collections::BTreeSet<_>>();
     for observation in snapshot.dynamic_tools {
-        for tool in observation.tools.0 {
+        for mut tool in observation.tools.0 {
             if let Some(name) = tool.definition.name()
                 && selected_name.is_none_or(|selected| selected.as_str() == name)
                 && names.insert(name.to_owned())
             {
+                let tool_name = ToolName::try_from(name)
+                    .map_err(|details| ToolDiscoveryError::InconsistentSnapshot { details })?;
+                if let Some(deployment) = deployment {
+                    let configuration = &deployment.tool_middleware_configuration;
+                    let environment_binding = configuration.environment_bindings.get(&tool_name);
+                    let owner_binding = match owner {
+                        ToolBindingOwner::AgentType { agent_type_name } => configuration
+                            .agent_bindings
+                            .get(agent_type_name)
+                            .and_then(|bindings| bindings.get(&tool_name)),
+                        ToolBindingOwner::ComponentBaseline { .. } => None,
+                    };
+                    let (config, readable, revealable) =
+                        crate::services::environment_state::mcp_binding_scopes(
+                            environment_binding,
+                            owner_binding,
+                        );
+                    let compiled = golem_common::model::tool_middleware::compile::compile_discovered_tool_middleware_chain(
+                        deployment.deployment_revision,
+                        &tool.definition,
+                        owner,
+                        &tool_name,
+                        &config,
+                        &readable,
+                        &revealable,
+                        &deployment.registered_tool_middlewares.values().cloned().collect::<Vec<_>>(),
+                        &configuration.universal,
+                        environment_binding,
+                        owner_binding,
+                        configuration.compatibility_mode,
+                    );
+                    if !compiled.errors.is_empty() {
+                        return Err(ToolDiscoveryError::InconsistentSnapshot {
+                            details: format!(
+                                "middleware for dynamic tool '{tool_name}' is incompatible: {}",
+                                compiled
+                                    .errors
+                                    .iter()
+                                    .map(|diagnostic| diagnostic.message.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join("; ")
+                            ),
+                        });
+                    }
+                    if let Some(chain) = compiled.chains.into_iter().next() {
+                        tool.definition = chain.effective_definition;
+                    }
+                }
                 tools.push(Arc::new(tool));
             }
         }
@@ -5963,10 +6041,10 @@ mod tests {
         ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolStdinEntry,
         ToolStdinStreamConsumer, ToolStdoutWriterEntry, WitRegisteredTool,
         await_native_entity_body, caller_tool_owner, classify_tool_discovery_error,
-        cleanup_tool_endpoints, option_args, recorded_tool_body_is_skipped, resolve_tool_command,
-        select_native_body_result, stdout_limit_error, terminal_tool_discovery_error,
-        validate_declared_tool_error, validate_declared_tool_result, validate_native_tool_output,
-        validate_stream_attachments,
+        cleanup_tool_endpoints, merge_discovered_tools, option_args, recorded_tool_body_is_skipped,
+        resolve_tool_command, select_native_body_result, stdout_limit_error,
+        terminal_tool_discovery_error, validate_declared_tool_error, validate_declared_tool_result,
+        validate_native_tool_output, validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -5977,6 +6055,7 @@ mod tests {
     use crate::preview2::golem::tool::host::{ByteStreamCloseCause, ByteStreamFailure};
     use crate::services::environment_state::ToolDiscoveryError;
     use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::AgentTypeName;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::card::owner::ToolOwnerPattern;
     use golem_common::model::card::{
@@ -5986,16 +6065,29 @@ mod tests {
     use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::entity::{EntityCallMode, NamedToolErrorSchema, ToolOutputContract};
     use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::HostResponseEntityInvocation;
     use golem_common::model::oplog::payload::types::{
         SerializableCustomToolError, SerializableEntityBodyExecution, SerializableToolError,
         SerializableToolOperationTerminal, SerializableToolResultValue, SerializableToolRpcError,
         SerializableToolStructuredResult,
     };
-    use golem_common::model::tool::{RegisteredTool, ToolName, ToolProvisionConfig, ToolSource};
+    use golem_common::model::oplog::payload::types::{
+        SerializableDiscoveredTools, SerializableMcpImportDiscovery,
+        SerializableToolDiscoverySnapshot,
+    };
+    use golem_common::model::tool::{
+        RegisteredTool, ToolBindingInput, ToolBindingOwner, ToolDeploymentState, ToolName,
+        ToolProvisionConfig, ToolSource,
+    };
+    use golem_common::model::tool_middleware::{
+        RegisteredToolMiddleware, ToolMiddlewareInstallation, ToolMiddlewareName,
+        ToolMiddlewareSource,
+    };
     use golem_common::schema::tool::{
         CommandBody, CommandNode, CommandTree, Constraint, DiscoveredTool, Doc, Globals,
-        OptionShape, OptionSpec, Positional, Positionals, Ref, Repetition, Tool,
+        MonomorphicToolMiddlewareScope, OptionShape, OptionSpec, Positional, Positionals, Ref,
+        Repetition, Tool, ToolMiddleware, ToolMiddlewareScope,
     };
     use golem_common::schema::{
         IntoTypedSchemaValue, MetadataEnvelope, SchemaGraph, SchemaType, SchemaTypeDef,
@@ -6003,6 +6095,7 @@ mod tests {
     };
     use golem_schema::schema::SchemaValueStream;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::Poll;
@@ -6466,6 +6559,195 @@ mod tests {
             },
             component_id,
         )
+    }
+
+    fn dynamic_middleware_deployment(expected: Tool) -> (ToolDeploymentState, ToolBindingOwner) {
+        let revision = DeploymentRevision::INITIAL;
+        let tool_name = ToolName::try_from("search").unwrap();
+        let middleware_name = ToolMiddlewareName::try_from("project").unwrap();
+        let mut presented = expected.clone();
+        presented.commands.nodes[0].name = "effective-search".to_string();
+        presented.commands.nodes[0].doc.summary = "Effective projected metadata".to_string();
+        let registration = RegisteredToolMiddleware {
+            deployment_revision: revision,
+            release_id: None,
+            definition: ToolMiddleware {
+                name: middleware_name.to_string(),
+                version: "1.0.0".to_string(),
+                aliases: Vec::new(),
+                doc: Doc::default(),
+                parameter_schema: SchemaGraph::empty(),
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+                    presented,
+                    expected: Some(expected),
+                })),
+            },
+            provision: ToolProvisionConfig::default(),
+            source: ToolMiddlewareSource::Component {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                component_name: ComponentName("middleware:project".to_string()),
+            },
+            owner_account_id: AccountId::new(),
+            owner_account_email: AccountEmail::new("middleware@example.com"),
+            metadata_version: "0.1.0".to_string(),
+            metadata_digest: Default::default(),
+        };
+        let installation = ToolMiddlewareInstallation {
+            name: middleware_name.clone(),
+            version: Some("1.0.0".to_string()),
+            parameters: NormalizedJsonValue::new(serde_json::json!({})),
+            account: Some(AccountEmail::new("middleware@example.com")),
+            filesystem_access: Default::default(),
+        };
+        let agent = AgentTypeName("Agent".to_string());
+        let owner = ToolBindingOwner::AgentType {
+            agent_type_name: agent.clone(),
+        };
+        (
+            ToolDeploymentState {
+                deployment_revision: revision,
+                registered_tools: BTreeMap::new(),
+                tool_bindings: BTreeMap::new(),
+                mcp_imports: Vec::new(),
+                tool_middleware_configuration:
+                    golem_common::model::tool_middleware::ToolMiddlewareConfiguration {
+                        universal: Vec::new(),
+                        compatibility_mode: Default::default(),
+                        environment_bindings: BTreeMap::from([(
+                            tool_name,
+                            ToolBindingInput {
+                                middleware: Some(vec![installation]),
+                                ..Default::default()
+                            },
+                        )]),
+                        agent_bindings: BTreeMap::new(),
+                    },
+                registered_tool_middlewares: BTreeMap::from([(middleware_name, registration)]),
+                tool_middleware_chains: BTreeMap::new(),
+            },
+            owner,
+        )
+    }
+
+    fn discovery_snapshot(tools: Vec<DiscoveredTool>) -> SerializableToolDiscoverySnapshot {
+        SerializableToolDiscoverySnapshot {
+            deployment_revision: Some(DeploymentRevision::INITIAL.get()),
+            dynamic_tools: vec![SerializableMcpImportDiscovery {
+                import_index: 0,
+                tools: SerializableDiscoveredTools(tools),
+                exclusions: Vec::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn dynamic_discovery_presents_effective_metadata_without_changing_lookup_name() {
+        use golem_common::model::mcp_import::mcp_import_bridge_source;
+        use golem_mcp_import::tool::{Limits, ProjectedTool};
+
+        let projected = ProjectedTool::new(
+            &serde_json::json!({
+                "name": "search",
+                "description": "Genuine upstream metadata",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"],
+                    "additionalProperties": false
+                },
+                "outputSchema": { "type": "string" }
+            }),
+            "search",
+            Limits::default(),
+        )
+        .unwrap();
+        let discovered =
+            DiscoveredTool::new(projected.definition.clone(), mcp_import_bridge_source());
+        let (deployment, owner) = dynamic_middleware_deployment(projected.definition);
+        let selected = ToolName::try_from("search").unwrap();
+
+        for tools in [
+            merge_discovered_tools(
+                Some(&deployment),
+                &owner,
+                None,
+                discovery_snapshot(vec![discovered.clone()]),
+            )
+            .unwrap(),
+            merge_discovered_tools(
+                Some(&deployment),
+                &owner,
+                Some(&selected),
+                discovery_snapshot(vec![discovered]),
+            )
+            .unwrap(),
+        ] {
+            assert_eq!(tools.len(), 1);
+            assert_eq!(tools[0].lookup_name, "search");
+            assert_eq!(tools[0].definition.name(), Some("effective-search"));
+            assert_eq!(
+                tools[0].definition.commands.nodes[0].doc.summary,
+                "Effective projected metadata"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_discovery_rejects_first_incompatible_collision_without_selecting_later_tool() {
+        use golem_common::model::mcp_import::mcp_import_bridge_source;
+        use golem_mcp_import::tool::{Limits, ProjectedTool};
+
+        let compatible = ProjectedTool::new(
+            &serde_json::json!({
+                "name": "search",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": { "query": { "type": "string" } },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }),
+            "search",
+            Limits::default(),
+        )
+        .unwrap();
+        let changed = ProjectedTool::new(
+            &serde_json::json!({
+                "name": "search",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": { "query": { "type": "integer" } },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }),
+            "search",
+            Limits::default(),
+        )
+        .unwrap();
+        let (deployment, owner) = dynamic_middleware_deployment(compatible.definition.clone());
+        let selected = ToolName::try_from("search").unwrap();
+        let error = merge_discovered_tools(
+            Some(&deployment),
+            &owner,
+            Some(&selected),
+            discovery_snapshot(vec![
+                DiscoveredTool::new(changed.definition, mcp_import_bridge_source()),
+                DiscoveredTool::new(compatible.definition, mcp_import_bridge_source()),
+            ]),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ToolDiscoveryError::InconsistentSnapshot { .. }
+        ));
+        assert!(
+            error
+                .to_string()
+                .contains("middleware for dynamic tool 'search' is incompatible")
+        );
     }
 
     #[test]

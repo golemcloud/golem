@@ -1040,22 +1040,20 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         }
                     }
                     let mut bindings = Vec::new();
-                    bindings.push(("universal", "", "", None, Some(&deployment_creation.universal_tool_middlewares)));
+                    bindings.push(("universal", "", "", None, Some(&deployment_creation.universal_tool_middlewares), None));
                     for (tool, binding) in &deployment_creation.environment_tool_middleware_bindings {
-                        if binding.middleware.is_some() || binding.middleware_merge_mode.is_some() {
-                            bindings.push(("environment", "", tool.as_str(), binding.middleware_merge_mode, binding.middleware.as_ref()));
-                        }
+                        bindings.push(("environment", "", tool.as_str(), binding.middleware_merge_mode, binding.middleware.as_ref(), Some(binding)));
                     }
                     for (agent, agent_bindings) in &deployment_creation.agent_tool_middleware_bindings {
                         for (tool, binding) in agent_bindings {
-                            if binding.middleware.is_some() || binding.middleware_merge_mode.is_some() {
-                                bindings.push(("agent", agent.0.as_str(), tool.as_str(), binding.middleware_merge_mode, binding.middleware.as_ref()));
-                            }
+                            bindings.push(("agent", agent.0.as_str(), tool.as_str(), binding.middleware_merge_mode, binding.middleware.as_ref(), Some(binding)));
                         }
                     }
-                    for (scope, agent, tool, mode, installations) in bindings {
+                    for (scope, agent, tool, mode, installations, binding) in bindings {
                         let mode = mode.map(|mode| match mode { golem_common::model::tool_middleware::ToolMiddlewareMergeMode::Prepend => "prepend", golem_common::model::tool_middleware::ToolMiddlewareMergeMode::Append => "append", golem_common::model::tool_middleware::ToolMiddlewareMergeMode::Replace => "replace" });
-                        tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_bindings (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, merge_mode, has_installations) VALUES ($1, $2, $3, $4, $5, $6, $7)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(mode).bind(installations.is_some())).await?;
+                        let default_binding = golem_common::model::tool::ToolBindingInput::default();
+                        let binding = binding.unwrap_or(&default_binding);
+                        tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_bindings (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, merge_mode, has_installations, config_keys_readable, secret_keys_readable, secret_keys_revealable) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(mode).bind(installations.is_some()).bind(Blob::new(binding.config_keys_readable.clone())).bind(Blob::new(binding.secret_keys_readable.clone())).bind(Blob::new(binding.secret_keys_revealable.clone()))).await?;
                         for (index, installation) in installations.into_iter().flatten().enumerate() {
                             let filesystem_access = match installation.filesystem_access { golem_common::model::tool::ToolFilesystemAccess::Unset => "unset", golem_common::model::tool::ToolFilesystemAccess::Allowed => "allowed", golem_common::model::tool::ToolFilesystemAccess::Denied => "denied" };
                             tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_installations (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, installation_index, middleware_name, middleware_version, parameters, account_email, filesystem_access) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(index as i64).bind(installation.name.to_string()).bind(&installation.version).bind(Blob::new(installation.parameters.clone())).bind(installation.account.as_ref().map(ToString::to_string)).bind(filesystem_access)).await?;
@@ -1585,12 +1583,25 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 .bind(deployment_revision_id),
             )
             .await?;
+        let middleware = Self::get_middleware_identity(
+            &mut self.with_ro("get_tool_deployment_middleware_configuration"),
+            environment_id,
+            deployment_revision_id,
+        )
+        .await?;
         Ok(Some(ToolDeploymentStateRecord {
             deployment_revision_id,
             registered_tools,
             agent_tool_bindings,
             mcp_imports,
             middleware_snapshot,
+            middleware_configuration:
+                golem_common::model::tool_middleware::ToolMiddlewareConfiguration {
+                    universal: middleware.universal,
+                    compatibility_mode: middleware.compatibility_mode,
+                    environment_bindings: middleware.environment_bindings,
+                    agent_bindings: middleware.agent_bindings,
+                },
         }))
     }
 
@@ -2216,14 +2227,16 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .bind(environment_id).bind(revision_id),
         ).await?;
         let Some(snapshot) = snapshot else {
-            return Ok(Default::default());
+            return Err(RepoError::InternalError(anyhow::anyhow!(
+                "deployment revision {revision_id} is missing its middleware snapshot"
+            )));
         };
         let names: Vec<DeploymentToolMiddlewareNameRecord> = api.fetch_all_as(
             sqlx::query_as("SELECT middleware_name, kind FROM deployment_tool_middleware_names WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY kind, middleware_name")
                 .bind(environment_id).bind(revision_id),
         ).await?;
         let bindings: Vec<DeploymentToolMiddlewareBindingRecord> = api.fetch_all_as(
-            sqlx::query_as("SELECT scope, agent_type_name, tool_name, merge_mode, has_installations FROM deployment_tool_middleware_bindings WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY scope, agent_type_name, tool_name")
+            sqlx::query_as("SELECT scope, agent_type_name, tool_name, merge_mode, has_installations, config_keys_readable, secret_keys_readable, secret_keys_revealable FROM deployment_tool_middleware_bindings WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY scope, agent_type_name, tool_name")
                 .bind(environment_id).bind(revision_id),
         ).await?;
         let installations: Vec<DeploymentToolMiddlewareInstallationRecord> = api.fetch_all_as(
@@ -2268,6 +2281,15 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .collect::<Result<_, _>>()?,
             ..Default::default()
         };
+        let universal_count = bindings
+            .iter()
+            .filter(|binding| binding.scope == "universal")
+            .count();
+        if universal_count != 1 {
+            return Err(RepoError::InternalError(anyhow::anyhow!(
+                "deployment middleware snapshot must have exactly one universal binding, found {universal_count}"
+            )));
+        }
         for binding in bindings {
             let middleware = binding.has_installations.then(|| {
                 grouped
@@ -2279,10 +2301,17 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     .unwrap_or_default()
             });
             if binding.scope == "universal" {
-                result.universal = middleware.unwrap();
+                result.universal = middleware.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "deployment middleware universal binding is missing its installation list"
+                    ))
+                })?;
                 continue;
             }
             let input = golem_common::model::tool::ToolBindingInput {
+                config_keys_readable: binding.config_keys_readable.into_value(),
+                secret_keys_readable: binding.secret_keys_readable.into_value(),
+                secret_keys_revealable: binding.secret_keys_revealable.into_value(),
                 middleware,
                 middleware_merge_mode: binding
                     .merge_mode
@@ -2306,6 +2335,11 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     ))
                     .or_default()
                     .insert(tool, input);
+            } else {
+                return Err(RepoError::InternalError(anyhow::anyhow!(
+                    "invalid deployment middleware binding scope {}",
+                    binding.scope
+                )));
             }
         }
         Ok(result)

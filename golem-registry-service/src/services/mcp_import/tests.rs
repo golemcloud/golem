@@ -637,6 +637,8 @@ async fn deployment_without_oauth_consent_succeeds_with_discovery_warning() {
                 publish_tool_middlewares: vec![],
                 remote_tool_middlewares: vec![],
                 universal_tool_middlewares: vec![],
+                environment_tool_middleware_bindings: Default::default(),
+                agent_tool_middleware_bindings: Default::default(),
                 replace_incompatible_agent_secrets: false,
             },
             &AuthCtx::System,

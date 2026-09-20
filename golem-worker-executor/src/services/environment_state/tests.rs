@@ -27,16 +27,18 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
 use golem_common::model::tool::{
-    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, ToolBindingOwner,
-    ToolDeploymentState, ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope,
+    ToolBindingInput, ToolBindingOwner, ToolDeploymentState, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::tool_middleware::CompiledToolMiddlewareChain;
 use golem_common::model::tool_middleware::{
-    CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware, ToolMiddlewareName,
-    ToolMiddlewareSource,
+    CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware, ToolMiddlewareInstallation,
+    ToolMiddlewareName, ToolMiddlewareSource,
 };
 use golem_common::schema::tool::{
-    CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
+    CommandNode, CommandTree, Doc, Globals, MonomorphicToolMiddlewareScope, Tool, ToolMiddleware,
+    ToolMiddlewareScope,
 };
 use golem_common::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
 use golem_service_base::clients::registry::{
@@ -53,6 +55,70 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{test, timeout};
+
+#[test]
+fn mcp_binding_scopes_intersect_environment_and_agent_authority() {
+    use golem_common::model::agent_config::CanonicalAgentConfigPath;
+    use golem_common::model::tool::{ConfigKeyScope, ToolBindingInput};
+    let config = |names: &[&str]| {
+        ConfigKeyScope::Keys(
+            names
+                .iter()
+                .map(|name| CanonicalAgentConfigPath(vec![(*name).to_string()]))
+                .collect(),
+        )
+    };
+    let secrets = |names: &[&str]| {
+        SecretKeyScope::Keys(
+            names
+                .iter()
+                .map(|name| CanonicalAgentSecretPath(vec![(*name).to_string()]))
+                .collect(),
+        )
+    };
+    let environment = ToolBindingInput {
+        config_keys_readable: config(&["shared", "environment"]),
+        secret_keys_readable: secrets(&["shared", "environment"]),
+        secret_keys_revealable: secrets(&["shared", "unreadable"]),
+        ..Default::default()
+    };
+    let agent = ToolBindingInput {
+        config_keys_readable: config(&["shared", "agent"]),
+        secret_keys_readable: secrets(&["shared", "agent"]),
+        secret_keys_revealable: secrets(&["agent", "unreadable"]),
+        ..Default::default()
+    };
+    assert_eq!(
+        super::mcp_binding_scopes(Some(&environment), Some(&agent)),
+        (config(&["shared"]), secrets(&["shared"]), secrets(&[]),)
+    );
+    let middleware_only = ToolBindingInput {
+        middleware: Some(vec![]),
+        ..Default::default()
+    };
+    for owner in [None, Some(&middleware_only)] {
+        assert_eq!(
+            super::mcp_binding_scopes(Some(&environment), owner),
+            (
+                config(&["shared", "environment"]),
+                secrets(&["shared", "environment"]),
+                secrets(&["shared"]),
+            )
+        );
+    }
+    assert_eq!(
+        super::mcp_binding_scopes(None, Some(&agent)),
+        (
+            config(&["shared", "agent"]),
+            secrets(&["shared", "agent"]),
+            secrets(&["agent"]),
+        )
+    );
+    assert_eq!(
+        super::mcp_binding_scopes(None, None),
+        (config(&[]), secrets(&[]), secrets(&[]))
+    );
+}
 
 fn registered_tool(name: &str, deployment_revision: DeploymentRevision) -> RegisteredTool {
     RegisteredTool {
@@ -143,6 +209,7 @@ fn deployment_state() -> (ToolDeploymentState, AgentTypeName, AgentTypeName) {
                 ),
             ]),
             mcp_imports: Vec::new(),
+            tool_middleware_configuration: Default::default(),
             registered_tool_middlewares: BTreeMap::new(),
             tool_middleware_chains: BTreeMap::new(),
         },
@@ -176,9 +243,210 @@ fn empty_deployment(revision: DeploymentRevision) -> ToolDeploymentState {
         registered_tools: BTreeMap::new(),
         tool_bindings: BTreeMap::new(),
         mcp_imports: Vec::new(),
+        tool_middleware_configuration: Default::default(),
         registered_tool_middlewares: BTreeMap::new(),
         tool_middleware_chains: BTreeMap::new(),
     }
+}
+
+fn monomorphic_middleware(
+    deployment_revision: DeploymentRevision,
+    expected: Tool,
+    presented_name: &str,
+) -> (
+    ToolMiddlewareName,
+    RegisteredToolMiddleware,
+    ToolMiddlewareInstallation,
+) {
+    let name = ToolMiddlewareName::try_from("project").unwrap();
+    let mut presented = expected.clone();
+    presented.commands.nodes[0].name = presented_name.to_string();
+    let registration = RegisteredToolMiddleware {
+        deployment_revision,
+        release_id: None,
+        definition: ToolMiddleware {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            parameter_schema: SchemaGraph::empty(),
+            scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+                presented,
+                expected: Some(expected),
+            })),
+        },
+        provision: ToolProvisionConfig::default(),
+        source: ToolMiddlewareSource::Component {
+            component_id: ComponentId::new(),
+            component_revision: ComponentRevision::INITIAL,
+            component_name: ComponentName("middleware:project".to_string()),
+        },
+        owner_account_id: AccountId::new(),
+        owner_account_email: AccountEmail::new("middleware@example.com"),
+        metadata_version: "0.1.0".to_string(),
+        metadata_digest: Default::default(),
+    };
+    let installation = ToolMiddlewareInstallation {
+        name: name.clone(),
+        version: Some("1.0.0".to_string()),
+        parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        account: Some(AccountEmail::new("middleware@example.com")),
+        filesystem_access: ToolFilesystemAccess::Denied,
+    };
+    (name, registration, installation)
+}
+
+#[test]
+fn dynamic_admission_compiles_projected_metadata_and_rejects_changed_upstream_contract() {
+    use golem_common::model::agent_config::CanonicalAgentConfigPath;
+    use golem_common::model::component_metadata::ComponentMetadata;
+    use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::mcp_import::McpImportSource;
+    use golem_mcp_import::tool::{Limits, ProjectedTool};
+
+    let revision = DeploymentRevision::INITIAL;
+    let agent = AgentTypeName("Agent".to_string());
+    let owner = agent_owner(&agent);
+    let projected = ProjectedTool::new(
+        &serde_json::json!({
+            "name": "search",
+            "description": "Search the genuine upstream catalog",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "query": { "type": "string", "description": "search text" } },
+                "required": ["query"],
+                "additionalProperties": false
+            },
+            "outputSchema": { "type": "string" }
+        }),
+        "search",
+        Limits::default(),
+    )
+    .unwrap();
+    let tool_name = ToolName::try_from("search").unwrap();
+    let (middleware_name, middleware, installation) =
+        monomorphic_middleware(revision, projected.definition.clone(), "presented-search");
+    let config_key = CanonicalAgentConfigPath(vec!["allowed".to_string()]);
+    let secret_key = CanonicalAgentSecretPath(vec!["allowed".to_string()]);
+    let mut deployment = empty_deployment(revision);
+    deployment
+        .registered_tool_middlewares
+        .insert(middleware_name, middleware);
+    deployment
+        .tool_middleware_configuration
+        .environment_bindings
+        .insert(
+            tool_name.clone(),
+            ToolBindingInput {
+                config_keys_readable: ConfigKeyScope::All,
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                middleware: Some(vec![installation]),
+                ..Default::default()
+            },
+        );
+    deployment
+        .tool_middleware_configuration
+        .agent_bindings
+        .insert(
+            agent.clone(),
+            BTreeMap::from([(
+                tool_name.clone(),
+                ToolBindingInput {
+                    config_keys_readable: ConfigKeyScope::Keys([config_key].into()),
+                    secret_keys_readable: SecretKeyScope::Keys([secret_key.clone()].into()),
+                    secret_keys_revealable: SecretKeyScope::Keys([secret_key].into()),
+                    ..Default::default()
+                },
+            )]),
+        );
+    let component = Component {
+        id: ComponentId::new(),
+        revision: ComponentRevision::INITIAL,
+        environment_id: EnvironmentId::new(),
+        component_name: ComponentName("agent".to_string()),
+        hash: Default::default(),
+        application_id: ApplicationId::new(),
+        account_id: AccountId::new(),
+        account_email: AccountEmail::new("owner@example.com"),
+        application_name: ApplicationName("app".to_string()),
+        environment_name: EnvironmentName::try_from("test").unwrap(),
+        component_size: 0,
+        metadata: ComponentMetadata::default(),
+        created_at: chrono::Utc::now(),
+        wasm_hash: Default::default(),
+        object_store_key: String::new(),
+    };
+    let source = McpImportSource {
+        environment_id: component.environment_id,
+        deployment_revision: revision,
+        import_index: 0,
+        upstream_tool_name: String::new(),
+    };
+
+    let activation = super::tool_activation_from_mcp(
+        source.clone(),
+        "2025-06-18".to_string(),
+        projected.clone(),
+        &deployment,
+        &component,
+        &owner,
+    )
+    .unwrap();
+    assert_eq!(
+        activation.registered_tool().definition,
+        projected.definition
+    );
+    let chain = activation.middleware_chain().unwrap();
+    assert_eq!(chain.effective_definition.name(), Some("presented-search"));
+    assert_eq!(chain.occurrences.len(), 1);
+    let occurrence = &chain.occurrences[0];
+    assert_eq!(
+        occurrence.config_keys_readable,
+        activation.binding().config_keys_readable
+    );
+    assert_eq!(
+        occurrence.secret_keys_readable,
+        activation.binding().secret_keys_readable
+    );
+    assert_eq!(
+        occurrence.secret_keys_revealable,
+        activation.binding().secret_keys_revealable
+    );
+
+    let changed = ProjectedTool::new(
+        &serde_json::json!({
+            "name": "search",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "query": { "type": "integer" } },
+                "required": ["query"],
+                "additionalProperties": false
+            },
+            "outputSchema": { "type": "string" }
+        }),
+        "search",
+        Limits::default(),
+    )
+    .unwrap();
+    let error = super::tool_activation_from_mcp(
+        source,
+        "2025-06-18".to_string(),
+        changed,
+        &deployment,
+        &component,
+        &owner,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ToolDiscoveryError::InconsistentSnapshot { .. }
+    ));
+    assert!(
+        error
+            .to_string()
+            .contains("middleware for dynamic tool 'search' is incompatible")
+    );
 }
 
 #[test]

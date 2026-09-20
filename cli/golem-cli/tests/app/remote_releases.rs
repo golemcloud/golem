@@ -268,6 +268,8 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
                 publish_tool_middlewares: Vec::new(),
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
                 replace_incompatible_agent_secrets: false,
             },
         )
@@ -645,6 +647,8 @@ async fn remote_middleware_release_is_pinned_across_accounts(
                 publish_tool_middlewares: vec![middleware_name.clone()],
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
                 replace_incompatible_agent_secrets: false,
             },
         )
@@ -826,6 +830,8 @@ environments:
                 publish_tool_middlewares: vec![middleware_name.clone()],
                 remote_tool_middlewares: Vec::new(),
                 universal_tool_middlewares: Vec::new(),
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
                 replace_incompatible_agent_secrets: false,
             },
         )

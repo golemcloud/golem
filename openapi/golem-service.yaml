@@ -24175,6 +24175,20 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ToolMiddlewareInstallation'
+        environmentToolMiddlewareBindings:
+          description: Middleware-only bindings retained for tools whose implementation is discovered dynamically.
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
+        agentToolMiddlewareBindings:
+          description: Agent-specific middleware-only bindings retained for dynamically discovered tools.
+          default: {}
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              $ref: '#/components/schemas/ToolBindingInput'
         replaceIncompatibleAgentSecrets:
           default: false
           type: boolean

@@ -875,6 +875,7 @@ pub struct ToolDeploymentStateRecord {
     pub agent_tool_bindings: Vec<DeploymentAgentToolBindingRecord>,
     pub mcp_imports: Vec<DeploymentMcpImportRecord>,
     pub middleware_snapshot: Option<DeploymentToolMiddlewareSnapshotRecord>,
+    pub middleware_configuration: golem_common::model::tool_middleware::ToolMiddlewareConfiguration,
 }
 
 #[derive(Debug, Clone, PartialEq, FromRow)]
@@ -897,6 +898,9 @@ pub struct DeploymentToolMiddlewareBindingRecord {
     pub tool_name: String,
     pub merge_mode: Option<String>,
     pub has_installations: bool,
+    pub config_keys_readable: Blob<golem_common::model::tool::ConfigKeyScope>,
+    pub secret_keys_readable: Blob<golem_common::model::tool::SecretKeyScope>,
+    pub secret_keys_revealable: Blob<golem_common::model::tool::SecretKeyScope>,
 }
 #[derive(Debug, Clone, PartialEq, FromRow)]
 pub struct DeploymentToolMiddlewareInstallationRecord {
@@ -951,6 +955,11 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
     type Error = DeployRepoError;
 
     fn try_from(value: ToolDeploymentStateRecord) -> Result<Self, Self::Error> {
+        if value.middleware_snapshot.is_none() {
+            return Err(DeployRepoError::InternalError(anyhow!(
+                "tool deployment state is missing its middleware snapshot"
+            )));
+        }
         let deployment_revision: DeploymentRevision = value.deployment_revision_id.try_into()?;
         let registered_tools = value
             .registered_tools
@@ -1048,38 +1057,36 @@ impl TryFrom<ToolDeploymentStateRecord> for ToolDeploymentState {
                 }
                 Ok(record.import_config.into_value())
             }).collect::<Result<Vec<_>, _>>()?,
+            tool_middleware_configuration: value.middleware_configuration,
             registered_tool_middlewares: value
                 .middleware_snapshot
                 .as_ref()
-                .map(|snapshot| {
-                    snapshot
-                        .registered_middlewares
-                        .value()
-                        .iter()
-                        .cloned()
-                        .map(|middleware| {
-                            (
-                                ToolMiddlewareName::try_from(middleware.definition.name.clone())
-                                    .expect("validated snapshot name"),
-                                middleware,
-                            )
-                        })
-                        .collect()
+                .expect("middleware snapshot checked above")
+                .registered_middlewares
+                .value()
+                .iter()
+                .cloned()
+                .map(|middleware| {
+                    (
+                        ToolMiddlewareName::try_from(middleware.definition.name.clone())
+                            .expect("validated snapshot name"),
+                        middleware,
+                    )
                 })
-                .unwrap_or_default(),
-            tool_middleware_chains: value
-                .middleware_snapshot
-                .map(|snapshot| {
-                    let mut result = std::collections::BTreeMap::new();
-                    for chain in snapshot.compiled_chains.into_value() {
-                        result
-                            .entry(chain.owner.clone())
-                            .or_insert_with(std::collections::BTreeMap::new)
-                            .insert(chain.tool_name.clone(), chain);
-                    }
+                .collect(),
+            tool_middleware_chains: {
+                let snapshot = value
+                    .middleware_snapshot
+                    .expect("middleware snapshot checked above");
+                let mut result = std::collections::BTreeMap::new();
+                for chain in snapshot.compiled_chains.into_value() {
                     result
-                })
-                .unwrap_or_default(),
+                        .entry(chain.owner.clone())
+                        .or_insert_with(std::collections::BTreeMap::new)
+                        .insert(chain.tool_name.clone(), chain);
+                }
+                result
+            },
         })
     }
 }

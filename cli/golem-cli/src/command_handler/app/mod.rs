@@ -1392,6 +1392,8 @@ impl AppCommandHandler {
             components,
             remote_tools,
             tools_to_publish,
+            environment_tool_middleware_bindings: dynamic_environment_bindings,
+            agent_tool_middleware_bindings: dynamic_agent_bindings,
         } = self
             .ctx
             .component_handler()
@@ -1558,24 +1560,22 @@ impl AppCommandHandler {
             })
             .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
-        let mut environment_tool_middleware_bindings = BTreeMap::new();
-        let mut agent_tool_middleware_bindings = BTreeMap::new();
+        let (mut environment_tool_middleware_bindings, mut agent_tool_middleware_bindings) =
+            diff::tool_middleware_binding_inputs(
+                &dynamic_environment_bindings,
+                &dynamic_agent_bindings,
+            );
         for (tool_name, config) in components
             .values()
             .flat_map(|component| component.tool_deployment_configs.iter())
         {
-            if let Some(binding) = &config.environment_binding
-                && diff::has_tool_middleware_binding_input(binding)
-            {
+            if let Some(binding) = &config.environment_binding {
                 environment_tool_middleware_bindings.insert(
                     tool_name.to_string(),
                     diff::ToolMiddlewareBindingInput::from(binding),
                 );
             }
             for (agent, binding) in &config.agent_bindings {
-                if !diff::has_tool_middleware_binding_input(binding) {
-                    continue;
-                }
                 agent_tool_middleware_bindings
                     .entry(agent.to_string())
                     .or_insert_with(BTreeMap::new)
@@ -1586,18 +1586,13 @@ impl AppCommandHandler {
             }
         }
         for (tool_name, deployment) in &remote_tools.deployments {
-            if let Some(binding) = &deployment.environment_binding
-                && diff::has_tool_middleware_binding_input(binding)
-            {
+            if let Some(binding) = &deployment.environment_binding {
                 environment_tool_middleware_bindings.insert(
                     tool_name.to_string(),
                     diff::ToolMiddlewareBindingInput::from(binding),
                 );
             }
             for (agent, binding) in &deployment.agent_bindings {
-                if !diff::has_tool_middleware_binding_input(binding) {
-                    continue;
-                }
                 agent_tool_middleware_bindings
                     .entry(agent.to_string())
                     .or_insert_with(BTreeMap::new)
@@ -1642,6 +1637,8 @@ impl AppCommandHandler {
                 http_api_deployments: deployable_manifest_http_api_deployments,
                 mcp_deployments: deployable_manifest_mcp_deployments,
                 mcp_imports: deployable_manifest_mcp_imports,
+                environment_tool_middleware_bindings: dynamic_environment_bindings,
+                agent_tool_middleware_bindings: dynamic_agent_bindings,
             },
             diffable_local_deployment,
             local_deployment_hash,
@@ -3075,6 +3072,14 @@ impl AppCommandHandler {
                         universal_tool_middlewares: deploy_diff
                             .diffable_local_deployment
                             .universal_tool_middlewares
+                            .clone(),
+                        environment_tool_middleware_bindings: deploy_diff
+                            .deployable_manifest
+                            .environment_tool_middleware_bindings
+                            .clone(),
+                        agent_tool_middleware_bindings: deploy_diff
+                            .deployable_manifest
+                            .agent_tool_middleware_bindings
                             .clone(),
                         agent_secret_defaults: if replace_incompatible_agent_secrets {
                             let mut defaults = environment_setup.agent_secret_defaults.clone();
