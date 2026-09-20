@@ -131,9 +131,6 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-        key_value_storage: Arc<
-            dyn golem_worker_executor::storage::keyvalue::KeyValueStorage + Send + Sync,
-        >,
         active_agents: Arc<ActiveAgents<DebugContext>>,
         engine: Arc<Engine>,
         linker: Arc<Linker<DebugContext>>,
@@ -170,7 +167,6 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     ) -> anyhow::Result<All<DebugContext>> {
         create_debugging_service_services(
             direct_invocation_auth_service,
-            key_value_storage,
             active_agents,
             engine,
             linker,
@@ -217,9 +213,6 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
 #[allow(clippy::too_many_arguments)]
 pub async fn create_debugging_service_services(
     direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
-    key_value_storage: Arc<
-        dyn golem_worker_executor::storage::keyvalue::KeyValueStorage + Send + Sync,
-    >,
     active_agents: Arc<ActiveAgents<DebugContext>>,
     engine: Arc<Engine>,
     linker: Arc<Linker<DebugContext>>,
@@ -262,7 +255,6 @@ pub async fn create_debugging_service_services(
 
     // When it comes to fork, we need the original oplog service
     let worker_fork = Arc::new(DefaultWorkerFork::new(
-        key_value_storage,
         Arc::new(RemoteInvocationRpc::new(
             worker_proxy.clone(),
             shard_service.clone(),
