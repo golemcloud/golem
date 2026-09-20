@@ -33,6 +33,7 @@ import type { Secret } from './secret';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { buildAgentClientSurface } from './client';
 import type { AgentClientFactory } from './client';
+import type { RouterMountOptions } from './httpRouterContract';
 
 export type { ConfigSpec } from './config';
 
@@ -105,6 +106,8 @@ export interface AgentMetadataSpec {
   readonly config?: ConfigSpec;
   /** HTTP mount declaration; surfaced as `agent-type.http-mount`. */
   readonly http?: HttpMountSpec;
+  /** @internal Compiled by the dedicated router authoring surface. */
+  readonly router?: RouterMountOptions;
 }
 
 type InferRecord<R extends Record<string, StandardSchemaV1>> = {

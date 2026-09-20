@@ -42,6 +42,7 @@ function registeredType(mode: 'durable' | 'ephemeral' = 'durable'): RegisteredAg
   return {
     agentType: {
       typeName: 'ReflectedEcho',
+      kind: 'regular',
       description: 'Echoes a string',
       sourceLanguage: 'typescript',
       schema,

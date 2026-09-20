@@ -283,31 +283,35 @@ export class ReflectedAgentMethod {
 }
 
 export function getAllAgentTypes(): readonly AgentType[] {
-  return Object.freeze(hostGetAllAgentTypes().map((registered) => new AgentType(registered)));
+  return Object.freeze(
+    hostGetAllAgentTypes()
+      .filter((registered) => registered.agentType.kind === 'regular')
+      .map((registered) => new AgentType(registered)),
+  );
 }
 
 /**
  * Look up a deployed agent type by name.
  *
- * This is an optional discovery operation: it returns `undefined` when the type is not visible in
+ * This is an optional discovery operation: it returns `undefined` for routers or types not visible in
  * the current environment. Once returned, each schema operation is strict and throws for malformed
  * JSON or schema values.
  */
 export function getAgentType(name: string): AgentType | undefined {
   const registered = hostGetAgentType(name);
-  return registered === undefined ? undefined : new AgentType(registered);
+  return registered?.agentType.kind === 'regular' ? new AgentType(registered) : undefined;
 }
 
 /**
  * Look up the current deployed schema for a full environment-scoped identity.
  *
- * Returns `undefined` when the agent does not exist, its ID is malformed, its type is missing, or
+ * Returns `undefined` for routers, or when the agent does not exist, its ID is malformed, its type is missing, or
  * the caller lacks `View` permission. Use {@link ParsedAgentId.parsed} when strict identity parsing is
  * required independently of discovery.
  */
 export function getAgentTypeByAgentId(agentId: ParsedAgentId): AgentType | undefined {
   const registered = hostGetAgentTypeByAgentId(agentId.value);
-  return registered === undefined ? undefined : new AgentType(registered);
+  return registered?.agentType.kind === 'regular' ? new AgentType(registered) : undefined;
 }
 
 interface ReflectedGraph {

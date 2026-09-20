@@ -34,6 +34,7 @@ mod scala_http_router;
 mod scala_tool_middleware;
 mod tool_middleware;
 mod typescript_guest_streams;
+mod typescript_http_router;
 
 inherit_test_dep!(Tracing);
 
@@ -61,6 +62,7 @@ tag_suite!(scala_http_router, agents_guest_bridge);
 tag_suite!(scala_tool_middleware, deploy);
 tag_suite!(tool_middleware, deploy);
 tag_suite!(typescript_guest_streams, agents_guest_bridge);
+tag_suite!(typescript_http_router, deploy);
 
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;

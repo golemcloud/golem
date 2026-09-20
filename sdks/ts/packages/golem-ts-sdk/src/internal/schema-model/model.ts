@@ -352,7 +352,7 @@ function schemaTypesMatch(
   }
 }
 
-function resolveShapeType(graph: SchemaGraph, type: SchemaType): SchemaTypeBody | undefined {
+export function resolveShapeType(graph: SchemaGraph, type: SchemaType): SchemaTypeBody | undefined {
   let current = type;
   const seen = new Set<TypeId>();
   while (current.body.tag === 'ref') {
