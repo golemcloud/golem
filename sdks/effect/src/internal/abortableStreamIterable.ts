@@ -45,6 +45,7 @@ export class AbortableStreamIterable<A, E, R> implements AsyncIterableIterator<A
       )
       this.execution = pulling
       const chunk = await pulling
+      if (this.pending === controller) this.pending = undefined
       if (chunk.length === 0) {
         await this.close(Exit.void)
         return { done: true, value: undefined }
@@ -52,6 +53,7 @@ export class AbortableStreamIterable<A, E, R> implements AsyncIterableIterator<A
       this.current = chunk[Symbol.iterator]()
       return this.current.next()
     } catch (error) {
+      if (this.pending === controller) this.pending = undefined
       if (controller.signal.aborted) {
         await this.close()
         return { done: true, value: undefined }
