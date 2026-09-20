@@ -438,6 +438,27 @@ const NO_SUCH_BUCKET: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Co
 /// The body of the response of a `CopyObject` that S3 did.
 const COPY_RESULT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><LastModified>2015-10-21T07:28:00.000Z</LastModified><ETag>"9b2cf535f27731c974343645a3985328"</ETag></CopyObjectResult>"#;
 
+/// The body of the error of a body that is over the 5 GiB that one `PutObject` accepts. S3 and
+/// MinIO give the code `EntityTooLarge` with the status 400 (`ErrEntityTooLarge` in
+/// `cmd/api-errors.go`). The S3 model names no error of `PutObject` for this code, so the SDK
+/// gives it as `PutObjectError::Unhandled` and keeps the code in the metadata of the error.
+const ENTITY_TOO_LARGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>EntityTooLarge</Code><Message>Your proposed upload exceeds the maximum allowed object size.</Message></Error>"#;
+
+/// The body of the error of a request that S3 asks the client to send again. S3 gives the code
+/// `RequestTimeout` with the status 400, and `TRANSIENT_ERRORS` in
+/// `aws_runtime::retries::classifiers` holds the code, so the status alone must not make a
+/// permanent error of it.
+const REQUEST_TIMEOUT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>RequestTimeout</Code><Message>Your socket connection to the server was not read from or written to within the timeout period.</Message></Error>"#;
+
+/// The body of the answer of a server that asks the client to send fewer requests. S3 and
+/// MinIO give the code `SlowDown` with the status 503.
+const SLOW_DOWN: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>"#;
+
+/// The body of the error of a request that is not valid. The S3 model names `InvalidRequest` as
+/// an error of `PutObject`, so the SDK gives the `PutObjectError::InvalidRequest` variant for
+/// the code, whatever status the response carries.
+const INVALID_REQUEST: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>InvalidRequest</Code><Message>A parameter or header in your request is not valid.</Message></Error>"#;
+
 fn delete_result_with_error(key: &str, code: &str, message: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?><DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Error><Key>{key}</Key><Code>{code}</Code><Message>{message}</Message></Error></DeleteResult>"#
@@ -1027,6 +1048,86 @@ async fn get_raw_slice_retries_a_transport_error() {
         .unwrap();
 
     assert_eq!((result, sent(&requests).len()), (Some(b"abc".to_vec()), 2));
+}
+
+#[test]
+async fn a_put_that_s3_rejects_sends_one_request() {
+    // One `PutObject` carries the whole blob and accepts 5 GiB of it, so an attempt that sends
+    // a body which S3 rejects costs the time of that body and gives the same answer again. The
+    // retry loop makes 3 attempts, and it stops at the first of them here: the write of the
+    // blob, and the write of the marker object of a directory, which `create_dir` sends
+    // through the same predicate.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(400, ENTITY_TOO_LARGE));
+
+    let written = storage
+        .put_raw("test", "put-raw", namespace(), Path::new("blob"), b"x")
+        .await;
+    let created = storage
+        .create_dir("test", "create-dir", namespace(), Path::new("dir"))
+        .await;
+
+    assert_eq!(
+        (
+            written.is_err(),
+            created.is_err(),
+            sent(&requests)
+                .iter()
+                .map(|request| request.method.clone())
+                .collect::<Vec<_>>()
+        ),
+        (true, true, vec!["PUT".to_string(), "PUT".to_string()])
+    );
+}
+
+#[test]
+async fn a_put_that_the_model_names_a_fault_of_the_request_sends_one_request() {
+    // The S3 model names `InvalidRequest` as an error of `PutObject`, so the SDK gives the
+    // `PutObjectError::InvalidRequest` variant for the code and the backend reads the variant
+    // and not the status. The script gives the code with the status 500, which the status rule
+    // alone would send again: the model says that the request is the fault, so one more
+    // attempt of the same request gets the same answer.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(500, INVALID_REQUEST));
+
+    let written = storage
+        .put_raw("test", "put-raw", namespace(), Path::new("blob"), b"x")
+        .await;
+
+    assert_eq!((written.is_err(), sent(&requests).len()), (true, 1));
+}
+
+#[test]
+async fn a_put_that_one_more_attempt_can_pass_goes_again() {
+    // The retry loop makes 3 attempts. A fault of the server keeps the loop, and so does a 4xx
+    // whose code asks for one more attempt: S3 gives `RequestTimeout` with the status 400, and
+    // `SlowDown` comes with the status 503, which keeps the loop by its status.
+    let (after_a_server_error, server_error_requests) =
+        scripted_storage("", |_, earlier| match earlier {
+            0 => Answer::new(500, INTERNAL_ERROR),
+            _ => Answer::new(200, ""),
+        });
+    let (timed_out, timeout_requests) =
+        scripted_storage("", |_, _| Answer::new(400, REQUEST_TIMEOUT));
+    let (slowed_down, slow_down_requests) =
+        scripted_storage("", |_, _| Answer::new(503, SLOW_DOWN));
+    let write = |storage: S3BlobStorage| async move {
+        storage
+            .put_raw("test", "put-raw", namespace(), Path::new("blob"), b"x")
+            .await
+            .is_ok()
+    };
+
+    let after_a_server_error = write(after_a_server_error).await;
+    let timed_out = write(timed_out).await;
+    let slowed_down = write(slowed_down).await;
+
+    assert_eq!(
+        (
+            (after_a_server_error, sent(&server_error_requests).len()),
+            (timed_out, sent(&timeout_requests).len()),
+            (slowed_down, sent(&slow_down_requests).len())
+        ),
+        ((true, 2), (false, 3), (false, 3))
+    );
 }
 
 #[test]

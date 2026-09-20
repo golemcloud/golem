@@ -65,6 +65,42 @@ const HTTP_OK: u16 = 200;
 /// object (RFC 9110, section 15.5.17). `get_raw_slice` gives a `BlobRangeError` for it.
 const RANGE_NOT_SATISFIABLE: u16 = 416;
 
+/// The first HTTP status of a response that reports a fault of the request (RFC 9110, section
+/// 15.5), and the first of a response that reports a fault of the server (section 15.6).
+///
+/// A server tells a client with a 4xx that the request is the fault, so the same request gets
+/// the same answer. `is_permanent_put_object_error` reads the range between the two as
+/// permanent.
+const CLIENT_ERROR: u16 = 400;
+const SERVER_ERROR: u16 = 500;
+
+/// The 4xx statuses that ask the client to send the request again: the server did not get the
+/// request in time (RFC 9110, section 15.5.9), or the client sent too many requests (RFC 6585,
+/// section 4). Neither says that the request itself is the fault.
+const RETRIABLE_CLIENT_ERROR_STATUSES: [u16; 2] = [408, 429];
+
+/// The codes of an error of the service that the backend sends again, whatever the status of
+/// the response is.
+///
+/// `TRANSIENT_ERRORS` and `THROTTLING_ERRORS` in `aws_runtime::retries::classifiers` hold the
+/// codes that the SDK itself sends again. These are the codes of those two lists that an S3 or
+/// a MinIO answer carries, and the backend keeps them retriable so that it never stops at an
+/// error that the SDK would send again. S3 gives `RequestTimeout` with the status 400 and a
+/// service behind the same API can give a throttling code with the status 429, so the status
+/// alone would make a permanent error of an answer that asks for one more attempt. MinIO gives
+/// its own back-pressure codes (`SlowDownRead`, `SlowDownWrite`, `ServerBusy` and
+/// `RequestTimeout`) with the status 503 (`cmd/api-errors.go`), which is retriable by its
+/// status.
+const RETRIABLE_SERVICE_ERROR_CODES: [&str; 7] = [
+    "RequestTimeout",
+    "RequestTimeoutException",
+    "RequestLimitExceeded",
+    "ServerBusy",
+    "SlowDown",
+    "SlowDownRead",
+    "SlowDownWrite",
+];
+
 /// The code that S3 gives in the body of the error of a key that is not there.
 ///
 /// The S3 model (`com.amazonaws.s3#NoSuchKey`) holds the code with the status 404 and the
@@ -640,10 +676,68 @@ impl S3BlobStorage {
         }
     }
 
-    fn is_put_object_error_retriable(
-        _error: &SdkError<aws_sdk_s3::operation::put_object::PutObjectError>,
-    ) -> bool {
-        true
+    /// Tells whether the retry loop sends a `PutObject` request again after an error.
+    ///
+    /// An error that stays for every attempt of the same request stops the loop
+    /// (`is_permanent_put_object_error`): each attempt of it writes no object, and one
+    /// `PutObject` can carry 5 GiB, so the attempts that follow cost the time of that body
+    /// again and give the same answer. The error then reaches the caller as it is. Every other
+    /// error keeps the loop, as it does for the shape of an error that carries no response:
+    /// the transport, the timeout and the construction of the request.
+    fn is_put_object_error_retriable(error: &SdkError<PutObjectError>) -> bool {
+        match error {
+            SdkError::ServiceError(service_error) => !Self::is_permanent_put_object_error(
+                service_error.err(),
+                service_error.raw().status().as_u16(),
+            ),
+            _ => true,
+        }
+    }
+
+    /// Tells whether a `PutObject` error of the service stays for every attempt of the same
+    /// request.
+    ///
+    /// The S3 model names four errors of `PutObject`, and it marks each of them as an error of
+    /// the client with the status 400: the request carries the wrong encryption parameters for
+    /// the session (`EncryptionTypeMismatch`), a parameter or a header of it is not valid
+    /// (`InvalidRequest`), its write offset does not match the size of the object
+    /// (`InvalidWriteOffset`), or the object already has the 10,000 parts that S3 accepts
+    /// (`TooManyParts`). Each of them is a fault of the request that the caller sent, and the
+    /// backend sends the same request again, so it would get the same answer. The SDK reads the
+    /// code of the body and not the status, so the variant holds whatever status carries the
+    /// code.
+    ///
+    /// The model names no other error, so the SDK gives every other code as
+    /// `PutObjectError::Unhandled` and keeps the code of the body in the metadata of the
+    /// error. The status of the response is what tells those apart: a 4xx reports a fault of
+    /// the request (RFC 9110, section 15.5), for example `EntityTooLarge` for a body over 5
+    /// GiB, `AccessDenied` for a key that the credentials cannot write, or
+    /// `XMinioInvalidObjectName` for a name that MinIO does not accept. A 5xx reports a fault
+    /// of the server (section 15.6) and keeps the loop, and so does every other status.
+    ///
+    /// The cost of the status rule is the 4xx answer that one more attempt could pass:
+    /// credentials that a provider refreshes between two attempts (`ExpiredToken`), a clock
+    /// that a host corrects (`RequestTimeTooSkewed`), or a conflicting operation on the same
+    /// key (`OperationAborted`, status 409). The SDK does not send those again either, and the
+    /// caller of a guest operation still gets its own retry:
+    /// `golem_worker_executor::services::blob_store` makes a `BlobStoreError::TransientBackend`
+    /// of an error that is not a [`BlobNameError`], which the executor retries.
+    /// [`RETRIABLE_CLIENT_ERROR_STATUSES`] and [`RETRIABLE_SERVICE_ERROR_CODES`] keep the 4xx
+    /// answers that ask for one more attempt.
+    fn is_permanent_put_object_error(error: &PutObjectError, status: u16) -> bool {
+        if matches!(
+            error,
+            PutObjectError::EncryptionTypeMismatch(_)
+                | PutObjectError::InvalidRequest(_)
+                | PutObjectError::InvalidWriteOffset(_)
+                | PutObjectError::TooManyParts(_)
+        ) {
+            return true;
+        }
+
+        (CLIENT_ERROR..SERVER_ERROR).contains(&status)
+            && !RETRIABLE_CLIENT_ERROR_STATUSES.contains(&status)
+            && !RETRIABLE_SERVICE_ERROR_CODES.contains(&error.meta().code().unwrap_or_default())
     }
 
     fn is_list_objects_v2_error_retriable(
