@@ -98,6 +98,7 @@ mod tests {
             mcp_imports: Vec::new(),
             registered_tool_middlewares: BTreeMap::new(),
             tool_middleware_chains: BTreeMap::new(),
+            tool_middleware_configuration: Default::default(),
         };
         let state = EnvironmentState {
             agent_deployment_details: HashMap::new(),
