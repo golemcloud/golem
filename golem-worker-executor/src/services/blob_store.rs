@@ -1055,9 +1055,8 @@ mod tests {
     /// `BlobStoreError::InvalidInput`. Both errors are permanent: the executor retries neither
     /// a name that can never work nor a read of a blob that the storage does not hold.
     ///
-    /// Only the in-memory backend is here. It is the backend whose answers #3915 holds, and
-    /// the S3 backend gives each of these answers too, which `tests/blob_storage.rs` holds
-    /// against MinIO.
+    /// Only the in-memory backend is here. The S3 backend gives each of these errors too,
+    /// which `tests/blob_storage.rs` holds against MinIO.
     async fn test_a_root_name_reads_nothing_and_writes_nothing(blob_store: &impl BlobStoreService) {
         let environment_id = EnvironmentId::new();
         blob_store
@@ -1110,7 +1109,11 @@ mod tests {
     /// `BlobStoreError::NotFound`. The name is good, so it is not an error of the name: the
     /// storage holds no object at it, and a retry cannot make the storage hold it.
     ///
-    /// The error names the path of the source object, and `move_object` deletes nothing.
+    /// The error names the path of the source object, and the copy writes nothing. The test
+    /// does not hold that the move deletes nothing: the delete of a move is of the source, and
+    /// the source is not there, so the listing is the same whether the delete runs or not. The
+    /// S3 test `move_gives_a_missing_error_for_a_source_that_is_not_there_and_deletes_nothing`
+    /// holds that, by the one request that the move sends.
     async fn test_a_source_that_is_not_there_is_not_found(blob_store: &impl BlobStoreService) {
         let environment_id = EnvironmentId::new();
         blob_store
@@ -1162,7 +1165,48 @@ mod tests {
                 .await
                 .unwrap(),
             vec!["obj1"],
-            "a source that is not there writes and deletes nothing"
+            "a source that is not there writes nothing"
+        );
+    }
+
+    /// A guest picks the source container name and the source object name, so the guest writes
+    /// the path of the source. `./missing` and `missing` are two forms of one path, and each
+    /// backend normalizes the path before it reads the storage. The error names the path as the
+    /// guest wrote it, as a `BlobNameError` does, because the guest reads the message and the
+    /// normalized form is of the storage.
+    ///
+    /// The copy is onto the same path, which each backend reads before it writes: the in-memory
+    /// backend uses the default `copy` of `BlobStorage` there, and the filesystem backend has
+    /// a `copy` of its own. The S3 backend has one too, which
+    /// `copy_names_the_source_path_as_the_guest_wrote_it` in
+    /// `golem_service_base::storage::blob::s3::tests` holds.
+    async fn test_a_missing_source_names_the_path_that_the_guest_wrote(
+        blob_store: &impl BlobStoreService,
+    ) {
+        let environment_id = EnvironmentId::new();
+        blob_store
+            .create_container(environment_id, "container1".to_string())
+            .await
+            .unwrap();
+
+        let copied = blob_store
+            .copy_object(
+                environment_id,
+                "container1".to_string(),
+                "./missing".to_string(),
+                "container1".to_string(),
+                "missing".to_string(),
+            )
+            .await;
+
+        assert_eq!(
+            copied.map_err(|error| error.to_string()),
+            Err(format!(
+                "Not found: {}",
+                BlobMissingError {
+                    path: PathBuf::from("container1/./missing"),
+                }
+            ))
         );
     }
 
@@ -1245,6 +1289,19 @@ mod tests {
     async fn test_a_source_that_is_not_there_is_not_found_in_memory() {
         let blob_store = in_memory_blob_store();
         test_a_source_that_is_not_there_is_not_found(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_missing_source_names_the_path_that_the_guest_wrote_in_memory() {
+        let blob_store = in_memory_blob_store();
+        test_a_missing_source_names_the_path_that_the_guest_wrote(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_missing_source_names_the_path_that_the_guest_wrote_local() {
+        let tempdir = TempDir::new().unwrap();
+        let blob_store = fs_blob_store(tempdir.path()).await;
+        test_a_missing_source_names_the_path_that_the_guest_wrote(&blob_store).await;
     }
 
     #[test]

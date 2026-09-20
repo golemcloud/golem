@@ -429,6 +429,12 @@ const INTERNAL_ERROR: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Co
 
 const NO_SUCH_KEY: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>"#;
 
+/// The body of the error of a bucket that is not there. S3 and MinIO give the code
+/// `NoSuchBucket` with the status 404, as they give `NoSuchKey` with the status 404, so the
+/// code is the one part of the error that a missing bucket and a missing source key do not
+/// share.
+const NO_SUCH_BUCKET: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message></Error>"#;
+
 /// The body of the response of a `CopyObject` that S3 did.
 const COPY_RESULT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><LastModified>2015-10-21T07:28:00.000Z</LastModified><ETag>"9b2cf535f27731c974343645a3985328"</ETag></CopyObjectResult>"#;
 
@@ -1768,6 +1774,94 @@ async fn copy_retries_a_server_error() {
     assert_eq!(
         (result.map_err(missing_error), sent(&requests).len()),
         (Ok(()), 2)
+    );
+}
+
+#[test]
+async fn copy_keeps_the_retry_of_a_bucket_that_is_not_there() {
+    // A source key that is not there and a bucket that is not there are two conditions, and
+    // the backend reads the code of the error to know which one it has. `NoSuchKey` says that
+    // the bucket holds no object at the source key, which no retry can change, so the copy
+    // gives a `BlobMissingError` and stops. `NoSuchBucket` says that the bucket itself is not
+    // there, which is of the configuration of the storage, so the error keeps its retry and
+    // the guest does not read "no blob at the path" for it.
+    //
+    // Each code comes with the status 404 (`com.amazonaws.s3#NoSuchBucket` in the S3 model,
+    // and `ErrNoSuchBucket` in `cmd/api-errors.go` of MinIO), so a test of the status, or of
+    // any code with that status, gives the same result for the two. The storage sends 3
+    // requests for a retriable error, as `copy_retries_a_server_error` holds, and 1 request
+    // for a source key that is not there.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, NO_SUCH_BUCKET));
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), copy_requests(&requests)),
+        (Err(None), vec![one_copy_request("from", "to"); 3].concat())
+    );
+}
+
+#[test]
+async fn copy_names_the_source_path_as_the_guest_wrote_it() {
+    // A guest picks the source container name and the source object name, so the guest writes
+    // the path of the source. `./from` and `from` are two forms of one path, and the backend
+    // normalizes the path before it makes the key of the object. The `BlobMissingError` names
+    // the path as the guest wrote it, as each `BlobNameError` does, because the guest reads the
+    // message.
+    //
+    // The copy onto the same path reads the source and sends no `CopyObject`; the copy onto
+    // another path sends one. Each gives the error, and each names `./from`.
+    let (storage, _) = scripted_storage("", |request, _| {
+        if request.method == "HEAD" {
+            // A response to a `HEAD` has no body, so the SDK reads its status.
+            Answer::new(404, "")
+        } else if request.is_list_objects() {
+            Answer::new(200, list_page(&[], None))
+        } else {
+            Answer::new(404, NO_SUCH_KEY)
+        }
+    });
+
+    let onto_the_same_path = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("./from"),
+            Path::new("from"),
+        )
+        .await;
+    let onto_another_path = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("./from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (
+            onto_the_same_path.map_err(missing_error),
+            onto_another_path.map_err(missing_error)
+        ),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("./from")
+            })),
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("./from")
+            }))
+        )
     );
 }
 

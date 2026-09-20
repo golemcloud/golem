@@ -433,6 +433,9 @@ impl BlobStorage for FileSystemBlobStorage {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        // `BlobMissingError` names the path as the guest wrote it. The next line makes `from`
+        // the normalized path, so keep the path of the guest first.
+        let guest_from = from;
         let from = &*normalized_blob_path(from)?;
         let to = &*normalized_blob_path(to)?;
 
@@ -446,7 +449,7 @@ impl BlobStorage for FileSystemBlobStorage {
             {
                 ExistsResult::File => Ok(()),
                 _ => Err(BlobMissingError {
-                    path: from.to_path_buf(),
+                    path: guest_from.to_path_buf(),
                 }
                 .into()),
             };

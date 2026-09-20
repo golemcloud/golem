@@ -557,7 +557,9 @@ pub struct BlobRangeError {
 /// `CopyObject` request and gives this error for the code `NoSuchKey` of the source key. The
 /// default `move` is a copy and then a delete of the source, so it gives the error too, and it
 /// deletes nothing. A guest picks the source container name and the source object name of
-/// `copy_object` and of `move_object`, so the path is of the guest.
+/// `copy_object` and of `move_object`, so the path is of the guest. Each backend names the
+/// path as the guest wrote it, and not in the normalized form that the storage uses. Each
+/// [`BlobNameError`] does the same, because the guest reads the message.
 ///
 /// The error is permanent. `blob_store_error` in
 /// `golem_worker_executor::services::blob_store` maps it to `BlobStoreError::NotFound`, and
@@ -567,7 +569,7 @@ pub struct BlobRangeError {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("the blob storage has no blob at the path {path:?}")]
 pub struct BlobMissingError {
-    /// The path of the blob that the storage does not hold.
+    /// The path of the blob that the storage does not hold, as the guest wrote it.
     pub path: PathBuf,
 }
 
