@@ -1011,6 +1011,52 @@ async fn list_dir_root_only_subdirs(
 
 #[test]
 #[tracing::instrument]
+async fn list_dir_gives_a_created_directory_below_the_path_at_any_depth(
+    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    // The in-memory backend holds the key of a directory that `create_dir` made, and the S3
+    // backend holds the marker object of it. Each of them reads every such key below the path,
+    // so a directory two names below the path is in the list with both names. A directory that
+    // only holds blobs has no key and no marker, so `dir/blobs` is not in the list, and neither
+    // is the blob that is below it.
+    let storage = test.get_blob_storage().await;
+
+    storage
+        .create_dir(
+            "list_dir_gives_a_created_directory_below_the_path_at_any_depth",
+            "create-dir",
+            namespace.clone(),
+            Path::new("dir/sub/deep"),
+        )
+        .await
+        .unwrap();
+    put_blobs(
+        &storage,
+        namespace,
+        &[("dir/blob", 1), ("dir/blobs/nested", 1)],
+    )
+    .await;
+
+    let mut entries = storage
+        .list_dir(
+            "list_dir_gives_a_created_directory_below_the_path_at_any_depth",
+            "list-dir",
+            namespace.clone(),
+            Path::new("dir"),
+        )
+        .await
+        .unwrap();
+    entries.sort();
+
+    assert_eq!(
+        entries,
+        vec![PathBuf::from("dir/blob"), PathBuf::from("dir/sub/deep"),]
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn list_dir_same_prefix(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,

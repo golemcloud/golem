@@ -175,7 +175,14 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<(), Error>;
 
-    /// Lists the entries that are directly below the path.
+    /// Lists the blobs that are directly below the path, and each directory that `create_dir`
+    /// made below the path, at any depth.
+    ///
+    /// Each path in the result is relative to the root of the namespace. A directory that
+    /// `create_dir` made is in the result at its own path, so a directory that sits two names
+    /// below the path is in the result with both names. A directory that only holds blobs is
+    /// not in the result, because the storage keeps no entry for it, and a blob that is not
+    /// directly below the path is not in it either.
     ///
     /// Returns an empty list if the path holds nothing. A path that has nothing at it holds
     /// nothing, and so does the root of a namespace that has nothing in it.
