@@ -667,10 +667,10 @@ mod tests {
     /// `blob_store_error` has one downcast for `BlobNameError`, so each rule of a name is
     /// permanent, and the rules of the path are in it with the rules of the object key of S3.
     ///
-    /// The filesystem backend gives the two errors of the path, so the test reads the real
-    /// rules and breaks if the type of their error changes. It also gives an error of the
-    /// backend: a write that the filesystem cannot do. The NUL byte is a rule of the S3
-    /// backend, and only a scripted transport gives it here, so the test builds that error.
+    /// The filesystem backend gives the three errors of the path, so the test reads the real
+    /// rules and breaks if the type of their error changes. The NUL rule is a rule of MinIO,
+    /// and every backend applies it, so the filesystem backend gives it here too. The backend
+    /// also gives an error of its own: a write that the filesystem cannot do.
     #[test]
     async fn blob_store_error_makes_an_error_of_the_input_permanent_and_a_backend_error_transient()
     {
@@ -696,7 +696,7 @@ mod tests {
         let names = [
             put("../escape").await.unwrap_err(),
             put("/escape").await.unwrap_err(),
-            BlobNameError::NulByte.into(),
+            put("a\0b").await.unwrap_err(),
             BlobRangeError { start: 3, end: 2 }.into(),
         ]
         .map(blob_store_error);

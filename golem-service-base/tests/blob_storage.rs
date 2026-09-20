@@ -1201,6 +1201,86 @@ async fn reject_parent_traversal_in_put_raw(
     assert!(result.is_err());
 }
 
+/// Gives the `BlobNameError` of an error of the blob storage, or `None` for another error.
+///
+/// `blob_store_error` in `golem_worker_executor::services::blob_store` downcasts the same way
+/// and makes a `BlobStoreError::InvalidInput` of what it gets. `classify_blob_store_error` in
+/// `golem_worker_executor::durable_host::blobstore` makes that permanent, so the guest gets the
+/// error at once and the executor does not retry it.
+fn name_error(error: Error) -> Option<BlobNameError> {
+    error.downcast_ref::<BlobNameError>().cloned()
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_name_that_breaks_a_rule_of_the_storage_gives_that_rule(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    // Each of these rules is a rule of S3 or of MinIO, and `normalized_blob_path` applies it,
+    // so each backend gives the same error for the same name. The in-memory backend stands in
+    // for S3 in the tests of other crates, so a name that passes there must be a name that S3
+    // accepts.
+    let storage = test.get_blob_storage().await;
+    let label = "a_name_that_breaks_a_rule_of_the_storage_gives_that_rule";
+    let names = [
+        ("a\0b", BlobNameError::NulByte),
+        (
+            " .. ",
+            BlobNameError::DotSegment {
+                segment: " .. ".to_string(),
+            },
+        ),
+        (
+            "a\\..\\b",
+            BlobNameError::DotSegment {
+                segment: "..".to_string(),
+            },
+        ),
+        (
+            "dir/__dir_marker",
+            BlobNameError::Reserved {
+                marker: "__dir_marker",
+            },
+        ),
+    ];
+
+    for (name, rule) in names {
+        let path = Path::new(name);
+
+        let written = storage
+            .put_raw(label, "put-raw", namespace.clone(), path, b"payload")
+            .await
+            .err()
+            .and_then(name_error);
+        let created = storage
+            .create_dir(label, "create-dir", namespace.clone(), path)
+            .await
+            .err()
+            .and_then(name_error);
+        let read = storage
+            .get_raw(label, "get-raw", namespace.clone(), path)
+            .await
+            .err()
+            .and_then(name_error);
+
+        assert_eq!(
+            (written, created, read),
+            (Some(rule.clone()), Some(rule.clone()), Some(rule)),
+            "the name {name:?}"
+        );
+    }
+
+    assert_eq!(
+        storage
+            .list_dir(label, "list-root", namespace.clone(), Path::new(""))
+            .await
+            .unwrap(),
+        Vec::<PathBuf>::new(),
+        "a name that breaks a rule left an entry behind"
+    );
+}
+
 #[test]
 #[tracing::instrument]
 async fn delete_dir_escapes_like_wildcards(

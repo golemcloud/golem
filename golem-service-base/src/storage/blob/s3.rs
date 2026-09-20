@@ -16,8 +16,9 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
-    BlobStorageNamespace, ExistsResult, ListedBlob, blob_copy_changes_nothing, blob_path_is_root,
-    blob_path_to_string, blob_range, normalized_blob_path, reject_root_blob_path,
+    BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob, blob_copy_changes_nothing,
+    blob_path_is_root, blob_path_to_string, blob_range, check_blob_name, normalized_blob_path,
+    reject_root_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -76,12 +77,6 @@ const RANGE_NOT_SATISFIABLE: u16 = 416;
 /// names one error only, `ObjectNotInActiveTierError`, so `is_copy_source_missing` reads this
 /// code out of the metadata of a `CopyObjectError`.
 const NO_SUCH_KEY_CODE: &str = "NoSuchKey";
-
-/// The name of the object that records a directory, because S3 has no directories.
-///
-/// [`BlobNameError::Reserved`] in the parent module keeps the name for this object, and this
-/// backend gives that error with this name in it.
-const DIR_MARKER: &str = "__dir_marker";
 
 /// The largest number of bytes of UTF-8 that S3 accepts in an object key.
 ///
@@ -315,23 +310,13 @@ impl S3BlobStorage {
     /// Applies the rules of [`BlobNameError`] to an object key. Gives the key when it
     /// satisfies each rule.
     ///
-    /// A `.` or `..` segment is found after the whitespace around it is removed, in a key
-    /// that is split at `/` and at `\`, because that is how MinIO reads the key.
+    /// `check_blob_name` holds the three rules that read the text of a name, and
+    /// `normalized_blob_path` has already applied them to the blob path. This call applies them
+    /// to the full key, so an `object_prefix` of the configuration gets them too. The length is
+    /// the rule of this backend alone: S3 measures the full key, and only this backend builds
+    /// it.
     fn checked_key(key: String) -> Result<String, BlobNameError> {
-        if key.contains('\0') {
-            return Err(BlobNameError::NulByte);
-        }
-        if let Some(segment) = key
-            .split(['/', '\\'])
-            .find(|segment| matches!(segment.trim(), "." | ".."))
-        {
-            return Err(BlobNameError::DotSegment {
-                segment: segment.to_string(),
-            });
-        }
-        if key.rsplit('/').next() == Some(DIR_MARKER) {
-            return Err(BlobNameError::Reserved { marker: DIR_MARKER });
-        }
+        check_blob_name(&key)?;
         Self::checked_length(key)
     }
 

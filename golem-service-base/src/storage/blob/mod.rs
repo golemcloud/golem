@@ -573,6 +573,14 @@ pub struct BlobMissingError {
     pub path: PathBuf,
 }
 
+/// The name of the object that the S3 backend writes to record a directory, because S3 has no
+/// directories.
+///
+/// [`BlobNameError::Reserved`] keeps the name for that object, and `check_blob_name` gives that
+/// error for a name whose last segment is this one. Each backend applies the rule, so a name
+/// that the in-memory backend accepts is a name that the S3 backend accepts.
+pub(crate) const DIR_MARKER: &str = "__dir_marker";
+
 /// The error of a blob name that the storage cannot use.
 ///
 /// A guest picks the name of a container and the name of an object, and
@@ -580,18 +588,25 @@ pub struct BlobMissingError {
 /// that breaks a rule gets this error before a backend reads or writes anything, so the name
 /// costs no request and no retry.
 ///
-/// The first group of rules is of the blob path. Each backend applies `NotRelative` and
-/// `ParentDir` (`normalized_blob_path`), a backend that keeps the path as text applies
-/// `NotUtf8` too (`blob_path_to_string`), and each operation that writes a blob applies
-/// `NoName`: the write operations of the in-memory and the S3 backends apply it to the path of
-/// the blob (`reject_root_blob_path`), `copy` and `move` apply it to both of their paths
-/// (`blob_copy_changes_nothing`), and the in-memory and the SQLite backends apply it to each
-/// path whose last name they read (`blob_file_name_to_string`). The second group is of the
-/// object key of
-/// the S3 backend, which applies it to the full key: the namespace prefix, the separators and
-/// the name (`S3BlobStorage::key_of`). S3 and MinIO measure the full key. Each rule of the
-/// second group is a rule of S3 or of MinIO, and one is the name that the backend keeps for
+/// The first group of rules is of the blob path, and `normalized_blob_path` applies each of
+/// them. Every backend calls that function for every path that it gets, so every backend gives
+/// the same answer for a name: `NotRelative` and `ParentDir` for a path that leaves the
+/// namespace, `NotUtf8` for a path that the one form cannot hold as text, and then `NulByte`,
+/// `DotSegment` and `Reserved` for the text of that form (`check_blob_name`). The three rules
+/// of the text are rules of S3 or of MinIO, and one is the name that the S3 backend keeps for
 /// its own object.
+///
+/// Each operation that writes a blob applies `NoName` as well: the write operations of the
+/// in-memory and the S3 backends apply it to the path of the blob (`reject_root_blob_path`),
+/// `copy` and `move` apply it to both of their paths (`blob_copy_changes_nothing`), and the
+/// in-memory and the SQLite backends apply it to each path whose last name they read
+/// (`blob_file_name_to_string`).
+///
+/// The second group is of the object key of the S3 backend, which applies it to the full key:
+/// the namespace prefix, the separators and the name (`S3BlobStorage::key_of`). `TooLong` is
+/// the one rule of that group, because S3 and MinIO measure the full key and only that backend
+/// builds it. The key gets the three rules of the text a second time there, so a namespace
+/// prefix of the configuration gets them too.
 ///
 /// The error is permanent, whichever rule it names and whichever backend gives it.
 /// `blob_store_error` in `golem_worker_executor::services::blob_store` maps it to
@@ -608,14 +623,14 @@ pub enum BlobNameError {
     /// the path can name a blob above the root of its namespace. A `..` name is a name of the
     /// path, which is `std::path::Component::ParentDir`.
     ///
-    /// [`BlobNameError::DotSegment`] holds the neighbouring rule of the S3 backend, which
-    /// reads an object key as MinIO reads it: at `\` as well as at `/`, and without the
-    /// whitespace around a segment. A segment that is not a `..` name of the path, for example
-    /// `" .. "`, gets that error and not this one.
+    /// [`BlobNameError::DotSegment`] holds the neighbouring rule, which reads a name as MinIO
+    /// reads an object key: at `\` as well as at `/`, and without the whitespace around a
+    /// segment. A segment that is not a `..` name of the path, for example `" .. "`, gets that
+    /// error and not this one.
     #[error("the blob path has a `..` name in it: {path:?}")]
     ParentDir { path: PathBuf },
-    /// The blob path is not valid UTF-8. The in-memory, SQLite and S3 backends keep the path
-    /// as text, so each of them reads the text of the path.
+    /// The blob path is not valid UTF-8. The one form of the path is text
+    /// (`normalized_blob_path`), and the in-memory, SQLite and S3 backends keep it as text.
     #[error("the blob path must be valid UTF-8: {path:?}")]
     NotUtf8 { path: PathBuf },
     /// The blob path has no name in it, so it is at the root of its namespace
@@ -640,19 +655,20 @@ pub enum BlobNameError {
         "the object key of the blob name has {length} bytes of UTF-8, and S3 accepts at most {max}; the key holds the namespace prefix before the name"
     )]
     TooLong { length: usize, max: usize },
-    /// The object key has a NUL byte. MinIO rejects such a key.
+    /// The blob name has a NUL byte. MinIO rejects an object key with such a byte, and the
+    /// filesystem backend cannot write a name with it either.
     #[error("the blob name has a NUL byte")]
     NulByte,
-    /// The object key has a segment that is `.` or `..` without the whitespace around it.
-    /// MinIO rejects such a key, and reads `\` as a separator like `/`. `segment` is the
-    /// segment with its whitespace.
+    /// The blob name has a segment that is `.` or `..` without the whitespace around it.
+    /// MinIO rejects such an object key, and reads `\` as a separator like `/`. `segment` is
+    /// the segment with its whitespace.
     #[error(
         "the blob name has the segment {segment:?}, which is `.` or `..` without the whitespace around it; `\\` is a separator like `/`"
     )]
     DotSegment { segment: String },
-    /// The last segment of the object key is `marker`, the name of the object that the S3
-    /// backend writes to record a directory. The blob listing leaves that name out, so a blob
-    /// with that name would stay out of a snapshot.
+    /// The last segment of the blob name is `marker`, the name of the object that the S3
+    /// backend writes to record a directory ([`DIR_MARKER`]). The blob listing leaves that
+    /// name out, so a blob with that name would stay out of a snapshot.
     ///
     /// The rule applies to a directory name too, and a collision is the reason. `create_dir`
     /// of `x/__dir_marker` writes its marker object at the key `x/__dir_marker/__dir_marker`,
@@ -681,6 +697,36 @@ pub(crate) fn blob_range(blob: &[u8], start: u64, end: u64) -> Result<&[u8], Blo
         .ok_or(BlobRangeError { start, end })
 }
 
+/// Applies the rules of [`BlobNameError`] that read the text of a name, in this order: the NUL
+/// byte, then the `.` or `..` segment, then the reserved last segment.
+///
+/// `normalized_blob_path` applies them to the one form of each blob path, so every backend
+/// applies them. The S3 backend applies them a second time to the full object key
+/// (`S3BlobStorage::checked_key`), which holds the namespace prefix before the name.
+///
+/// The name is split at `\` as well as at `/`, and the whitespace around a segment goes away
+/// before the segment is read, because that is how MinIO reads an object key. The reserved
+/// segment is the last segment at `/` only: [`DIR_MARKER`] is reserved because the S3 backend
+/// writes the object that records a directory at the key of the directory, a `/`, and that
+/// name.
+pub(crate) fn check_blob_name(name: &str) -> Result<(), BlobNameError> {
+    if name.contains('\0') {
+        return Err(BlobNameError::NulByte);
+    }
+    if let Some(segment) = name
+        .split(['/', '\\'])
+        .find(|segment| matches!(segment.trim(), "." | ".."))
+    {
+        return Err(BlobNameError::DotSegment {
+            segment: segment.to_string(),
+        });
+    }
+    if name.rsplit('/').next() == Some(DIR_MARKER) {
+        return Err(BlobNameError::Reserved { marker: DIR_MARKER });
+    }
+    Ok(())
+}
+
 /// Gives the one form of a relative blob path, or an error.
 ///
 /// The form holds the names of the path and one separator between two names. A `.` and an extra
@@ -688,6 +734,13 @@ pub(crate) fn blob_range(blob: &[u8], start: u64, end: u64) -> Result<&[u8], Blo
 /// empty path. Two paths that name the same blob get the same form. An absolute path, a path
 /// with `..` in it, and a path with a drive letter give a [`BlobNameError`], which is
 /// permanent.
+///
+/// The form is then read as text, so a path that is not valid UTF-8 gives
+/// [`BlobNameError::NotUtf8`], and `check_blob_name` gives the rule that the text breaks. The
+/// text is what a backend stores, and the rules read `\` as a separator, which the names of the
+/// path do not (`Path::components` reads `\` as a name on unix). Every backend calls this
+/// function for every path that it gets, so every backend gives the same error for the same
+/// name.
 pub(crate) fn normalized_blob_path(path: &Path) -> Result<Cow<'_, Path>, BlobNameError> {
     if path.is_absolute() {
         return Err(BlobNameError::NotRelative {
@@ -719,15 +772,23 @@ pub(crate) fn normalized_blob_path(path: &Path) -> Result<Cow<'_, Path>, BlobNam
 
     // The path is already in its one form when its length is exactly its names plus the one
     // separator that sits between two names, so nothing has to be built.
-    if names_length + names_count.saturating_sub(1) == path.as_os_str().len() {
-        return Ok(Cow::Borrowed(path));
-    }
+    let normalized = if names_length + names_count.saturating_sub(1) == path.as_os_str().len() {
+        Cow::Borrowed(path)
+    } else {
+        Cow::Owned(
+            path.components()
+                .filter(|component| matches!(component, Component::Normal(_)))
+                .collect(),
+        )
+    };
 
-    Ok(Cow::Owned(
-        path.components()
-            .filter(|component| matches!(component, Component::Normal(_)))
-            .collect(),
-    ))
+    // The error names the path as the caller gave it, because the guest reads the message.
+    let text = normalized.to_str().ok_or_else(|| BlobNameError::NotUtf8 {
+        path: path.to_path_buf(),
+    })?;
+    check_blob_name(text)?;
+
+    Ok(normalized)
 }
 
 /// Tells if the path is at the root of a namespace.
@@ -891,8 +952,53 @@ mod tests {
         );
     }
 
+    /// The rules of the text hold for the one form of the path, so a `.` name that the one
+    /// form removes is not a `.` segment, and a `\` that is a name of the path on unix is a
+    /// separator of the text.
+    #[test]
+    fn the_one_form_of_a_path_gives_the_rule_that_its_text_breaks() {
+        let paths = [
+            "a\0b",
+            " . ",
+            "a/ .. /b",
+            "a\\..\\b",
+            "dir/__dir_marker",
+            "__dir_marker",
+            "a/./b",
+            "a/__dir_marker/b",
+        ];
+
+        let results =
+            paths.map(|path| normalized_blob_path(Path::new(path)).map(|path| path.into_owned()));
+
+        assert_eq!(
+            results,
+            [
+                Err(BlobNameError::NulByte),
+                Err(BlobNameError::DotSegment {
+                    segment: " . ".to_string()
+                }),
+                Err(BlobNameError::DotSegment {
+                    segment: " .. ".to_string()
+                }),
+                Err(BlobNameError::DotSegment {
+                    segment: "..".to_string()
+                }),
+                Err(BlobNameError::Reserved {
+                    marker: "__dir_marker"
+                }),
+                Err(BlobNameError::Reserved {
+                    marker: "__dir_marker"
+                }),
+                Ok(PathBuf::from("a/b")),
+                Ok(PathBuf::from("a/__dir_marker/b")),
+            ]
+        );
+    }
+
     /// The guest gives its names as text, so only a path of another source can break this
-    /// rule. Each function that reads the text of a path gives the one error for it.
+    /// rule. The one form of the path is text, so every backend gives the error, and each
+    /// function that reads the text of a path gives it too.
     #[cfg(unix)]
     #[test]
     fn a_path_that_is_not_utf8_gives_the_utf8_rule() {
@@ -905,8 +1011,12 @@ mod tests {
         };
 
         assert_eq!(
-            (blob_path_to_string(path), blob_file_name_to_string(path)),
-            (Err(expected.clone()), Err(expected))
+            (
+                normalized_blob_path(path).map(|path| path.into_owned()),
+                blob_path_to_string(path),
+                blob_file_name_to_string(path)
+            ),
+            (Err(expected.clone()), Err(expected.clone()), Err(expected))
         );
     }
 
