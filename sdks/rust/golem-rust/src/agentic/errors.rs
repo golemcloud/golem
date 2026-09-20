@@ -62,7 +62,7 @@ pub fn custom_tool_error<T: IntoTypedSchemaValue>(name: impl Into<String>, value
     let typed = value
         .into_typed_schema_value()
         .expect("failed to encode custom tool error");
-    ToolError::CustomError(crate::schema::tool::wit::wire::CustomToolError {
+    ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
         name: name.into(),
         payload: crate::encode_typed_schema_value(&typed)
             .expect("failed to encode custom tool error"),

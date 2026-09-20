@@ -28,26 +28,121 @@ use super::schema_mapping::{
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
 use golem_common::model::domain_registration::Domain;
 use golem_common::schema::graph::SchemaGraph;
-use golem_service_base::custom_api::PathSegment;
+use golem_service_base::custom_api::{AgentRouteMode, PathSegment};
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+
+mod durable_streams;
 
 pub struct HttpApiOpenApiSpec(pub Value);
 
 impl HttpApiOpenApiSpec {
     pub fn from_routes(routes: &[RichCompiledRoute], domain: &Domain) -> Result<Self, String> {
-        let document = build_document_schema(routes).map_err(|e| e.to_string())?;
+        let mut ds_only_paths: HashSet<_> = routes
+            .iter()
+            .filter_map(|route| match &route.behavior {
+                RichRouteBehaviour::CallAgent(inner)
+                    if inner.route_mode == AgentRouteMode::DurableStreams =>
+                {
+                    Some(&route.path)
+                }
+                _ => None,
+            })
+            .collect();
+        for route in routes {
+            match &route.behavior {
+                RichRouteBehaviour::CallAgent(inner)
+                    if inner.route_mode == AgentRouteMode::DurableStreams => {}
+                RichRouteBehaviour::CorsPreflight(_) => {}
+                _ => {
+                    ds_only_paths.remove(&route.path);
+                }
+            }
+        }
+        let routes: Vec<_> = routes
+            .iter()
+            .filter(|route| match &route.behavior {
+                RichRouteBehaviour::CallAgent(inner) => {
+                    inner.route_mode == AgentRouteMode::Rest
+                        || (route.method == http::Method::PUT
+                            && route
+                                .path
+                                .iter()
+                                .filter(|segment| !matches!(segment, PathSegment::Literal { .. }))
+                                .count()
+                                == inner.base_path_variables as usize)
+                }
+                RichRouteBehaviour::CorsPreflight(_) => !ds_only_paths.contains(&route.path),
+                _ => true,
+            })
+            .collect();
+        let document = build_document_schema(&routes).map_err(|e| e.to_string())?;
         let graph = &document.graph;
 
         let mut component_schemas: Map<String, Value> = Map::new();
         let mut security_schemes: Map<String, Value> = Map::new();
         let mut paths: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
 
-        for (route, route_schema) in routes.iter().zip(document.per_route.iter()) {
+        // Emit synthesized DS paths first. Explicit literal routes take
+        // precedence over the compiled DS slot wildcard in the HTTP router.
+        let mut ordered: Vec<_> = routes.iter().zip(document.per_route.iter()).collect();
+        ordered.sort_by_key(|(_, schema)| {
+            !schema
+                .call_agent
+                .as_ref()
+                .is_some_and(|call| call.stream_slots.is_some())
+        });
+        for (route, route_schema) in ordered {
             collect_security_scheme(route, &mut security_schemes);
 
-            let operation = build_operation(route, route_schema, graph, &mut component_schemas)?;
-            let path_item = paths.entry(render_full_path(&route.path)).or_default();
+            if route_schema
+                .call_agent
+                .as_ref()
+                .is_some_and(|call| call.stream_slots.is_some())
+            {
+                durable_streams::emit(
+                    route,
+                    route_schema,
+                    graph,
+                    &mut component_schemas,
+                    &mut paths,
+                )?;
+                continue;
+            }
+            let mut operation =
+                build_operation(route, route_schema, graph, &mut component_schemas)?;
+            let rendered = render_full_path(&route.path);
+            let canonical = paths
+                .iter()
+                .find(|(path, item)| {
+                    item.contains_key("x-golem-route-mode")
+                        && path
+                            .split('/')
+                            .map(template_segment)
+                            .eq(rendered.split('/').map(template_segment))
+                })
+                .map(|(path, _)| path.clone())
+                .unwrap_or_else(|| rendered.clone());
+            if canonical != rendered
+                && let Some(parameters) = operation["parameters"].as_array_mut()
+            {
+                for parameter in parameters {
+                    if parameter["in"] == "path" {
+                        for (from, to) in rendered.split('/').zip(canonical.split('/')) {
+                            if let (Some(from), Some(to)) = (capture_name(from), capture_name(to))
+                                && parameter["name"] == from
+                            {
+                                parameter["name"] = json!(to);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            let path_item = paths.entry(canonical).or_default();
+            if path_item.contains_key("x-golem-route-mode") {
+                operation["x-golem-route-mode"] = json!("rest");
+            }
             insert_operation(path_item, route.method.as_str(), operation);
         }
 
@@ -386,6 +481,18 @@ fn render_full_path(path_segments: &[PathSegment]) -> String {
         .collect::<Vec<String>>()
         .join("/");
     format!("/{suffix}")
+}
+
+fn capture_name(segment: &str) -> Option<&str> {
+    segment.strip_prefix('{')?.strip_suffix('}')
+}
+
+fn template_segment(segment: &str) -> std::borrow::Cow<'_, str> {
+    if capture_name(segment).is_some() {
+        "{}".into()
+    } else {
+        urlencoding::decode(segment).unwrap_or_else(|_| segment.into())
+    }
 }
 
 fn insert_operation(path_item: &mut Map<String, Value>, method: &str, operation: Value) {

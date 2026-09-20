@@ -71,7 +71,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
     AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
 };
-use golem_service_base::error::worker_executor::InterruptKind;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::any::Any;
 use std::future::Future;
 use std::sync::Arc;
@@ -187,8 +187,8 @@ enum StatusJob {
         entry: Box<OplogEntry>,
         _worker_keepalive: Arc<dyn Any + Send + Sync>,
         _instance_guard: OwnedMutexGuard<WorkerInstance>,
-        _card_event_boundary_guard: OwnedMutexGuard<()>,
-        done: oneshot::Sender<()>,
+        _card_event_boundary_guard: Option<OwnedMutexGuard<()>>,
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
     AppendInvocationIfVersion {
         entry: Box<OplogEntry>,
@@ -223,6 +223,9 @@ enum StatusJob {
 /// lock, so it remains safe for store-polled callers.
 enum LifecycleJob<Ctx: WorkerCtx> {
     Stop,
+    Drain {
+        done: oneshot::Sender<()>,
+    },
     /// Wakes the invocation loop after a commit changed the published status.
     NotifyStatusChanged,
     /// Records a `GrowMemory` oplog hint after a guest growth has committed.
@@ -331,6 +334,13 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     .commit_and_update_state(CommitLevel::Always, None)
                                     .await;
                                 state.ensure_status_attached().await;
+                                if state.detached.load(Ordering::Acquire) {
+                                    Err(WorkerExecutorError::runtime(
+                                        "Committed worker status could not be reconstructed",
+                                    ))
+                                } else {
+                                    Ok(())
+                                }
                             },
                             done,
                         )
@@ -396,9 +406,13 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         let notification_queued_task = notification_queued.clone();
         let (lifecycle_jobs, mut lifecycle_rx) = mpsc::unbounded_channel::<LifecycleJob<Ctx>>();
         let lifecycle_task = tokio::spawn(async move {
+            let mut drains = Vec::new();
             while let Some(job) = lifecycle_rx.recv().await {
                 match job {
                     LifecycleJob::Stop => break,
+                    LifecycleJob::Drain { done } => {
+                        drains.push(done);
+                    }
                     LifecycleJob::NotifyStatusChanged => {
                         let lifecycle_guard = lifecycle.lock().await;
                         notification_queued_task.store(false, Ordering::Release);
@@ -429,6 +443,12 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 )
                                 .await;
                         }
+                    }
+                }
+                // Earlier growth jobs can enqueue another pass behind a drain request.
+                if lifecycle_rx.is_empty() {
+                    for done in drains.drain(..) {
+                        let _ = done.send(());
                     }
                 }
             }
@@ -500,8 +520,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         entry: OplogEntry,
         worker: Arc<Worker<Ctx>>,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
-        card_event_boundary_guard: OwnedMutexGuard<()>,
-    ) {
+        card_event_boundary_guard: Option<OwnedMutexGuard<()>>,
+    ) -> Result<(), WorkerExecutorError> {
         let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
         self.commit
             .run_status_job(|done| StatusJob::AppendAndCommitAttached {
@@ -540,6 +560,14 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .await
     }
 
+    pub async fn try_attached_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        self.reattach_worker_status().await;
+        self.commit
+            .run_status_job(|done| StatusJob::NonDetachedStatus { done })
+            .await
+            .ok_or_else(|| WorkerExecutorError::runtime("Worker status could not be reconstructed"))
+    }
+
     /// Returns the published status, asserting it is attached to the oplog. Serialized behind
     /// any in-flight commit/reattach transactions. The assert lives here on the caller side, so
     /// a job left behind by a cancelled caller cannot panic the actor.
@@ -574,6 +602,18 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         {
             self.notification_queued.store(false, Ordering::Release);
         }
+    }
+
+    /// Joins queued lifecycle work and its requeued descendants after execution has stopped.
+    /// Must not be awaited while holding the worker instance lock or from a lifecycle job.
+    pub async fn drain_lifecycle(&self) -> Result<(), WorkerExecutorError> {
+        let (done, result) = oneshot::channel();
+        self.lifecycle_jobs
+            .send(LifecycleJob::Drain { done })
+            .map_err(|_| WorkerExecutorError::runtime("Worker lifecycle actor stopped"))?;
+        result
+            .await
+            .map_err(|_| WorkerExecutorError::runtime("Worker lifecycle drain stopped"))
     }
 
     /// Asks the lifecycle task to record a committed guest `memory.grow` of `delta` bytes. Fire

@@ -29,8 +29,8 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::card::InvocationWalletPin;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
-    StreamCancelRecordV1, StreamEndRecordV1, StreamItemsRecordV1, StreamRegisteredRecordV1,
-    StreamSessionRecordV1,
+    StreamCancelRecord, StreamEndRecord, StreamItemsRecord, StreamRegisteredRecord,
+    StreamSessionRecord,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -113,6 +113,42 @@ pub trait OplogService: Debug + Send + Sync {
     fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>);
 
     fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>>;
+
+    /// Creates an empty, hidden oplog with one writer and a fresh per-attempt stage id.
+    /// It bypasses visible oplog caches, archives and derived session indexes. Payloads use
+    /// the final agent's blob namespace so publication needs no payload rewrite.
+    async fn create_staged(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _stage_id: uuid::Uuid,
+        _initial_worker_metadata: AgentMetadata,
+    ) -> Result<Arc<dyn Oplog>, String> {
+        Err("staged oplogs are unsupported by this oplog service".to_string())
+    }
+
+    /// Publishes a fully committed stage if no primary oplog exists. The caller must stop
+    /// and drop its staged writer first. `false` means a competing target exists; errors may
+    /// have indeterminate outcomes and must be reconciled using the target's fork provenance.
+    async fn publish_staged(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _stage_id: uuid::Uuid,
+        _expected_last_index: OplogIndex,
+    ) -> Result<bool, String> {
+        Err("staged oplogs are unsupported by this oplog service".to_string())
+    }
+
+    /// Removes only this attempt's hidden index, never the target's shared payload namespace.
+    async fn discard_staged(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _stage_id: uuid::Uuid,
+    ) -> Result<(), String> {
+        Err("staged oplogs are unsupported by this oplog service".to_string())
+    }
 
     async fn create(
         &self,
@@ -471,11 +507,11 @@ pub struct OrderedOplogStart {
 }
 
 pub enum DurableStreamOplogRecord {
-    Registered(Option<OplogIndex>, StreamRegisteredRecordV1),
-    Items(Option<OplogIndex>, StreamItemsRecordV1),
-    End(Option<OplogIndex>, StreamEndRecordV1),
-    Cancel(Option<OplogIndex>, StreamCancelRecordV1),
-    Session(Option<OplogIndex>, Box<StreamSessionRecordV1>),
+    Registered(Option<OplogIndex>, StreamRegisteredRecord),
+    Items(Option<OplogIndex>, StreamItemsRecord),
+    End(Option<OplogIndex>, StreamEndRecord),
+    Cancel(Option<OplogIndex>, StreamCancelRecord),
+    Session(Option<OplogIndex>, Box<StreamSessionRecord>),
     InlineEntry(OplogEntry),
 }
 
@@ -674,7 +710,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// through the returned watermark; storage failures must not be reported as absence.
     async fn raw_durable_stream_session_status(
         &self,
-        _session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        _session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> RawDurableStreamSessionStatus {
         RawDurableStreamSessionStatus {
             watermark: self.current_oplog_index().await,

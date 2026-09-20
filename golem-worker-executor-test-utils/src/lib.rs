@@ -37,7 +37,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::config::{DbSqliteConfig, RedisConfig};
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, Principal, ResolvedOwnerContext};
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::card::recipient::RecipientPattern;
@@ -46,6 +46,7 @@ use golem_common::model::card::{
 };
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::component::{CanonicalFilePath, ComponentId};
+use golem_common::model::durable_stream::{StreamExportForkAdmittedRecord, StreamSessionRecord};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
@@ -62,15 +63,16 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
+use golem_common::model::tool::ToolName;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
-    AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord,
-    IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment,
-    ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision, TransactionId,
+    AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
+    AgentStatusRecord, IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig,
+    ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision, TransactionId,
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
-use golem_common::schema::{FromSchema, IntoTypedSchemaValue, SchemaValue};
+use golem_common::schema::{FromSchema, IntoTypedSchemaValue, SchemaValue, TypedSchemaValue};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{
@@ -158,7 +160,9 @@ use golem_worker_executor::services::worker_enumeration::WorkerEnumerationServic
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
-use golem_worker_executor::services::{HasAll, NoAdditionalDeps, rdbms};
+use golem_worker_executor::services::{
+    HasActiveAgents, HasAll, HasWorkerService, NoAdditionalDeps, rdbms,
+};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
 use golem_worker_executor::workerctx::{
@@ -589,6 +593,7 @@ pub struct TestWorkerExecutor {
     /// wasmtime instance while keeping the `Worker` shell (and its read-only
     /// cache) alive, and to read per-agent instance load counts.
     additional_test_deps: AdditionalTestDeps,
+    services: Option<golem_worker_executor::services::All<TestWorkerCtx>>,
     production_active_agents:
         Option<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
     concurrent_resource_entry: Option<Arc<AtomicResourceEntry>>,
@@ -596,6 +601,152 @@ pub struct TestWorkerExecutor {
 }
 
 impl TestWorkerExecutor {
+    /// Exercises creation and lookup of the virtual owner used by native external-tool ingress.
+    /// The returned worker is only valid while this executor's service graph is alive.
+    pub async fn get_or_add_ephemeral_external_tool(
+        &self,
+        component_id: ComponentId,
+        environment_id: EnvironmentId,
+        idempotency_key: &IdempotencyKey,
+        invocation_context: &InvocationContextStack,
+        principal: Principal,
+    ) -> Result<Arc<Worker<TestWorkerCtx>>, WorkerExecutorError> {
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        services
+            .active_agents()
+            .get_or_add_ephemeral_external_tool(
+                services,
+                component_id,
+                environment_id,
+                idempotency_key,
+                invocation_context,
+                principal,
+            )
+            .await
+    }
+
+    /// Exercises executor-internal external-tool admission without introducing a public transport.
+    /// Resolves only an already-persisted owner, including when it is cold after an executor
+    /// restart; unlike ordinary invocation ingress, this cannot create a missing owner.
+    pub async fn invoke_external_tool(
+        &self,
+        agent_id: &AgentId,
+        expected_fingerprint: AgentFingerprint,
+        idempotency_key: IdempotencyKey,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+        scope_card: Option<golem_common::model::card::ScopeCard>,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker =
+            Worker::get_exact_existing_suspended(services, &owned_agent_id, principal.clone())
+                .await?;
+        worker
+            .invoke_external_tool(
+                expected_fingerprint,
+                idempotency_key,
+                tool_name,
+                command_path,
+                input,
+                invocation_context,
+                principal,
+                scope_card,
+            )
+            .await
+    }
+
+    pub async fn shutdown_and_wait_for_invocation_loops(&self) -> anyhow::Result<()> {
+        self._run_details.shutdown.cancel();
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            self._run_details.invocation_loops.wait_for_exit(),
+        )
+        .await
+        .map_err(|_| anyhow!("executor invocation loops did not retire within 10s"))
+    }
+
+    pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        let services = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured");
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        services
+            .worker_service()
+            .remove_cached_status(&owned_agent_id)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn export_fork_admission_records(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<Vec<StreamExportForkAdmittedRecord>> {
+        use golem_worker_executor::services::HasOplogService;
+        use golem_worker_executor::services::oplog::OplogServiceOps;
+
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let oplog = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured")
+            .oplog_service();
+        let entries = oplog
+            .read_exact(
+                &owned_agent_id,
+                AgentMode::Durable,
+                OplogIndex::INITIAL,
+                oplog
+                    .get_last_index(&owned_agent_id, AgentMode::Durable)
+                    .await
+                    .as_u64(),
+            )
+            .await;
+        let mut records = Vec::new();
+        for entry in entries.into_values() {
+            if let OplogEntry::StreamSession { record, .. } = entry {
+                let record = oplog
+                    .download_payload(&owned_agent_id, AgentMode::Durable, record)
+                    .await
+                    .map_err(Error::msg)?;
+                if let StreamSessionRecord::ExportForkAdmitted(record) = record {
+                    records.push(record);
+                }
+            }
+        }
+        Ok(records)
+    }
+
+    pub async fn export_fork_admissions(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<golem_common::model::ExportForkAdmissions> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = Worker::find_durable_stream_worker(
+            self.services
+                .as_ref()
+                .expect("test service graph is captured"),
+            &owned_agent_id,
+        )
+        .await?
+        .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
+        Ok(worker
+            .get_attached_last_known_status()
+            .await
+            .export_fork_admissions
+            .clone())
+    }
+
     pub async fn acquire_account_concurrent_agent_permit(
         &self,
         agent_id: AgentId,
@@ -752,6 +903,41 @@ impl TestWorkerExecutor {
             oplog_index,
             reads_to_skip,
         );
+    }
+
+    /// Pauses one `Oplog::read` or `read_exact` starting at the given index before accessing storage.
+    /// Dropping the release sender also unblocks it; `OplogService::read` is not intercepted.
+    pub fn gate_next_oplog_read(
+        &self,
+        agent_id: &AgentId,
+        oplog_index: OplogIndex,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        self.additional_test_deps
+            .oplog_read_gates
+            .lock()
+            .unwrap()
+            .insert(
+                (agent_id.clone(), oplog_index),
+                OplogReadGate {
+                    entered_tx,
+                    release_rx,
+                },
+            );
+        (entered_rx, release_tx)
+    }
+
+    /// Appends a buffered lifecycle hint after the next source commit has flushed.
+    pub fn append_after_next_oplog_commit(&self, agent_id: &AgentId) {
+        self.additional_test_deps
+            .append_after_commit
+            .lock()
+            .unwrap()
+            .insert(agent_id.clone());
     }
 
     pub async fn commit_oplog(&self, agent_id: &AgentId) -> anyhow::Result<()> {
@@ -964,7 +1150,13 @@ impl TestWorkerExecutor {
         if self.worker_is_loaded(owned_agent_id).await {
             return Err(anyhow!("worker {owned_agent_id} is still loaded"));
         }
-        active_agents.remove(owned_agent_id).await;
+        if let Some(worker) = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+        {
+            active_agents.remove_worker(&worker, false).await;
+        }
         Ok(())
     }
 
@@ -1607,6 +1799,8 @@ type WrapKeyValueStorageFn = dyn Fn(Arc<dyn KeyValueStorage + Send + Sync>) -> A
     + Sync;
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
+type WrapComponentServiceFn =
+    dyn Fn(Arc<dyn ComponentService>) -> Arc<dyn ComponentService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
 type WrapWorkerEnumerationServiceFn =
     dyn Fn(Arc<dyn WorkerEnumerationService>) -> Arc<dyn WorkerEnumerationService> + Send + Sync;
@@ -1624,6 +1818,7 @@ pub struct TestExecutorOverrides {
     /// budget would.
     pub wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
+    pub wrap_component_service: Option<Arc<WrapComponentServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
     pub wrap_worker_enumeration_service: Option<Arc<WrapWorkerEnumerationServiceFn>>,
     /// Wraps the executor's `ShardService`, so a test can observe or fake which
@@ -1759,6 +1954,7 @@ async fn start_executor_with_config(
     // `TestWorkerExecutor` returned to the test (so tests can observe and
     // mutate per-worker test-only state, e.g. eviction).
     let additional_test_deps = AdditionalTestDeps::new();
+    let services = Arc::new(Mutex::new(None));
 
     context.wait_for_shut_down_executors().await;
     let details = run(
@@ -1768,6 +1964,7 @@ async fn start_executor_with_config(
         deps.component_service_directory.clone(),
         overrides,
         additional_test_deps.clone(),
+        services.clone(),
         &mut join_set,
     )
     .await?;
@@ -1798,6 +1995,7 @@ async fn start_executor_with_config(
                 client,
                 context: context.clone(),
                 additional_test_deps,
+                services: services.lock().unwrap().take(),
                 production_active_agents: None,
                 concurrent_resource_entry: None,
                 leak_detector,
@@ -1864,6 +2062,7 @@ async fn run(
     component_service_directory: PathBuf,
     overrides: TestExecutorOverrides,
     additional_test_deps: AdditionalTestDeps,
+    services: Arc<Mutex<Option<golem_worker_executor::services::All<TestWorkerCtx>>>>,
     join_set: &mut JoinSet<Result<(), Error>>,
 ) -> Result<RunDetails, Error> {
     info!("Golem Worker Executor starting up...");
@@ -1873,6 +2072,7 @@ async fn run(
             component_service_directory,
             overrides,
             additional_test_deps,
+            services,
         },
         golem_config,
         prometheus_registry,
@@ -2294,6 +2494,7 @@ struct TestServerBootstrap {
     /// from `create_additional_deps`. Shared with `TestWorkerExecutor` so tests
     /// can observe (and mutate) per-worker test-only state.
     additional_test_deps: AdditionalTestDeps,
+    services: Arc<Mutex<Option<golem_worker_executor::services::All<TestWorkerCtx>>>>,
 }
 
 #[async_trait]
@@ -2331,7 +2532,7 @@ impl WorkerCtx for TestWorkerCtx {
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -2394,7 +2595,7 @@ impl WorkerCtx for TestWorkerCtx {
 
         let durable_ctx = DurableWorkerCtx::create(
             owned_agent_id,
-            agent_id,
+            owner_context,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -2473,6 +2674,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
+    }
+
+    fn owner_context(&self) -> &ResolvedOwnerContext {
+        self.durable_ctx.owner_context()
     }
 
     fn agent_type_provision_config(
@@ -2786,6 +2991,10 @@ impl InvocationContextManagement for TestWorkerCtx {
 
 #[async_trait]
 impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
+    fn capture_services(&self, services: &golem_worker_executor::services::All<TestWorkerCtx>) {
+        *self.services.lock().unwrap() = Some(services.clone());
+    }
+
     fn create_native_tool_catalog(&self) -> anyhow::Result<Arc<NativeToolCatalog<TestWorkerCtx>>> {
         let helper_effects = self.additional_test_deps.native_test_helper_effects.clone();
         let helper = NativeDurableHelperImpl(helper_effects.clone());
@@ -2906,12 +3115,17 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         _registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService> {
-        Arc::new(ComponentServiceLocalFileSystem::new(
+        let service = Arc::new(ComponentServiceLocalFileSystem::new(
             &self.component_service_directory,
             10000,
             Duration::from_secs(3600),
             Arc::new(DefaultCompiledComponentService::new(blob_storage)),
-        ))
+        ));
+        if let Some(wrap) = &self.overrides.wrap_component_service {
+            wrap(service)
+        } else {
+            service
+        }
     }
 
     fn create_card_service(
@@ -3324,6 +3538,7 @@ async fn run_production_context_bootstrap(
                 // use `production_active_agents`; the remaining test-context-only
                 // helpers see empty additional dependencies.
                 additional_test_deps: AdditionalTestDeps::new(),
+                services: None,
                 production_active_agents: Some(
                     active_agents
                         .get()
@@ -4267,7 +4482,21 @@ impl Oplog for TestOplog {
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "commit");
-        self.oplog.commit(level).await
+        let committed = self.oplog.commit(level).await;
+        let append = self
+            .additional_test_deps
+            .append_after_commit
+            .lock()
+            .unwrap()
+            .remove(&self.owned_agent_id.agent_id);
+        if append {
+            self.oplog
+                .add(OplogEntry::Suspend {
+                    timestamp: golem_common::model::Timestamp::now_utc(),
+                })
+                .await;
+        }
+        committed
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -4276,7 +4505,7 @@ impl Oplog for TestOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> golem_worker_executor::services::oplog::RawDurableStreamSessionStatus {
         self.oplog
             .raw_durable_stream_session_status(session_key)
@@ -4292,6 +4521,16 @@ impl Oplog for TestOplog {
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
+        let gate = self
+            .additional_test_deps
+            .oplog_read_gates
+            .lock()
+            .unwrap()
+            .remove(&(self.owned_agent_id.agent_id.clone(), oplog_index));
+        if let Some(gate) = gate {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+        }
         if self
             .additional_test_deps
             .take_no_op_oplog_read(&self.owned_agent_id.agent_id, oplog_index)
@@ -4340,6 +4579,16 @@ impl Oplog for TestOplog {
         oplog_index: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
+        let gate = self
+            .additional_test_deps
+            .oplog_read_gates
+            .lock()
+            .unwrap()
+            .remove(&(self.owned_agent_id.agent_id.clone(), oplog_index));
+        if let Some(gate) = gate {
+            let _ = gate.entered_tx.send(());
+            let _ = gate.release_rx.await;
+        }
         self.additional_test_deps
             .record_oplog_call(&self.owned_agent_id, "read_exact");
         self.oplog.read_exact(oplog_index, n).await
@@ -4692,6 +4941,11 @@ impl RpcMemoryFailure {
     }
 }
 
+struct OplogReadGate {
+    entered_tx: tokio::sync::oneshot::Sender<()>,
+    release_rx: tokio::sync::oneshot::Receiver<()>,
+}
+
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
     rpc_memory_failures: Arc<std::sync::Mutex<HashMap<AgentId, RpcMemoryFailure>>>,
@@ -4703,6 +4957,8 @@ pub struct AdditionalTestDeps {
     snapshot_download_failures: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), PayloadId>>>,
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
+    oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,
+    append_after_commit: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     rdbms_tx_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     /// One-shot gates pausing the first consume-body chunk `End` append of an
     /// agent inside the [`TestOplog`] wrapper — after the entry is durable in
@@ -4754,6 +5010,8 @@ impl AdditionalTestDeps {
             snapshot_download_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
             no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_read_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            append_after_commit: Arc::new(std::sync::Mutex::new(HashSet::new())),
             rdbms_tx_failures,
             consume_body_chunk_end_gates: Arc::new(scc::HashMap::new()),
             agent_initialization_enqueue_gates: Arc::new(scc::HashMap::new()),

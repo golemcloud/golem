@@ -3,7 +3,8 @@
 
 import { WasmRpc, type RpcError as AgentRpcError } from 'golem:agent/host@2.0.0';
 import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0';
-import { createStdin, ToolRpc, type ByteStreamFailure, type RpcError } from 'golem:tool/host@0.1.0';
+import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
+import { createStdin, ToolRpc, type ByteStreamFailure } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
 import { bridge } from '../src';
 import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';

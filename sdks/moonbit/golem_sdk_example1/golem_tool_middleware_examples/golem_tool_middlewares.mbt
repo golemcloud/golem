@@ -478,17 +478,17 @@ fn[T : @schema.IntoSchema + @schema.FromSchema, E] __golem_middleware_decode_can
   context : String,
 ) -> Result[T, @toolMiddleware.ToolInvokeError[E]] {
   try @tool.decode_canonical_field(fields, name, context) catch {
-    @toolCommon.ToolError::InvalidToolName(name) =>
+    @types.ToolError::InvalidToolName(name) =>
       Err(@toolMiddleware.ToolInvokeError::InvalidToolName(name))
-    @toolCommon.ToolError::InvalidCommandPath(path) =>
+    @types.ToolError::InvalidCommandPath(path) =>
       Err(@toolMiddleware.ToolInvokeError::InvalidCommandPath(path))
-    @toolCommon.ToolError::InvalidInput(message) =>
+    @types.ToolError::InvalidInput(message) =>
       Err(@toolMiddleware.ToolInvokeError::InvalidInput(message))
-    @toolCommon.ToolError::ConstraintViolation(message) =>
+    @types.ToolError::ConstraintViolation(message) =>
       Err(@toolMiddleware.ToolInvokeError::ConstraintViolation(message))
-    @toolCommon.ToolError::InvalidResult(message) =>
+    @types.ToolError::InvalidResult(message) =>
       Err(@toolMiddleware.ToolInvokeError::InvalidResult(message))
-    @toolCommon.ToolError::CustomError(value) => {
+    @types.ToolError::CustomError(value) => {
       @model.drop_wit_capabilities(value.payload.value)
       Err(
         @toolMiddleware.ToolInvokeError::InvalidResult(
@@ -749,6 +749,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
         examples: [],
       },
       scope: @toolMiddleware.ToolMiddlewareScope::Universal,
+      parameter_schema: @toolMiddleware.empty_parameter_schema(),
     },
     __golem_universal_tool_middleware_invoke_audit,
   )
@@ -766,6 +767,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
         presented: __golem_middleware_tool_def_Messages().to_tool(),
         expected: Some(__golem_middleware_tool_def_Messages().to_tool()),
       }),
+      parameter_schema: @toolMiddleware.empty_parameter_schema(),
     },
     __golem_monomorphic_tool_middleware_invoke_MessagePolicy,
   )
@@ -783,6 +785,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
         presented: __golem_middleware_tool_def_PublicFiles().to_tool(),
         expected: Some(__golem_middleware_tool_def_Storage().to_tool()),
       }),
+      parameter_schema: @toolMiddleware.empty_parameter_schema(),
     },
     __golem_monomorphic_tool_middleware_invoke_FileAdapter,
   )

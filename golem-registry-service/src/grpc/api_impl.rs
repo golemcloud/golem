@@ -546,7 +546,7 @@ impl RegistryServiceGrpcApi {
 
         let tool_deployment = self
             .deployment_service
-            .get_latest_tool_deployment_state_by_component_revision(
+            .get_active_tool_deployment_state_by_component_revision(
                 environment_id,
                 component_id,
                 component_revision,

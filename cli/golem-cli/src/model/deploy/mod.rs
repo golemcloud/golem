@@ -281,250 +281,7 @@ impl TextOutput for EnvironmentToolGrantPlanView {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use golem_common::base_model::UntypedJsonBody;
-    use golem_common::base_model::retry_policy::{ApiNeverPolicy, ApiPredicateFalse};
-    use golem_common::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
-    use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath};
-    use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::quota::{
-        EnforcementAction, ResourceCapacityLimit, ResourceDefinitionId, ResourceLimit, ResourceName,
-    };
-    use golem_common::model::retry_policy::{RetryPolicyId, RetryPolicyRevision};
-    use golem_common::schema::schema_type::SchemaType;
-    use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaValue};
-    use uuid::Uuid;
-
-    fn schema_str() -> SchemaType {
-        SchemaType::string()
-    }
-
-    fn secret_dto(
-        path: &[&str],
-        secret_type: SchemaGraph,
-        value: Option<SchemaValue>,
-    ) -> AgentSecretDto {
-        AgentSecretDto {
-            id: AgentSecretId(Uuid::nil()),
-            environment_id: EnvironmentId(Uuid::nil()),
-            path: CanonicalAgentSecretPath::from_path_in_unknown_casing(
-                &path.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-            ),
-            revision: serde_json::from_value(serde_json::json!(0)).unwrap(),
-            secret_type,
-            secret_value: value.map(|value| ExternalSchemaValue::try_from(value).unwrap()),
-        }
-    }
-
-    fn retry_policy(name: &str, priority: u32) -> RetryPolicyDto {
-        RetryPolicyDto {
-            id: RetryPolicyId(Uuid::nil()),
-            environment_id: EnvironmentId(Uuid::nil()),
-            name: name.to_string(),
-            revision: RetryPolicyRevision::INITIAL,
-            priority,
-            predicate: UntypedJsonBody(
-                serde_json::to_value(ApiPredicate::False(ApiPredicateFalse {})).unwrap(),
-            ),
-            policy: UntypedJsonBody(
-                serde_json::to_value(ApiRetryPolicy::Never(ApiNeverPolicy {})).unwrap(),
-            ),
-        }
-    }
-
-    fn resource(name: &str, limit_value: u64) -> ResourceDefinition {
-        ResourceDefinition {
-            id: ResourceDefinitionId(Uuid::nil()),
-            revision: serde_json::from_value(serde_json::json!(0)).unwrap(),
-            environment_id: EnvironmentId(Uuid::nil()),
-            name: ResourceName(name.to_string()),
-            limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: limit_value }),
-            enforcement_action: EnforcementAction::Reject,
-            unit: "unit".to_string(),
-            units: "units".to_string(),
-        }
-    }
-
-    fn resource_creation(name: &str, limit_value: u64) -> ResourceDefinitionCreation {
-        ResourceDefinitionCreation {
-            name: ResourceName(name.to_string()),
-            limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: limit_value }),
-            enforcement_action: EnforcementAction::Reject,
-            unit: "unit".to_string(),
-            units: "units".to_string(),
-        }
-    }
-
-    #[::test_r::test]
-    fn tool_publication_plan_distinguishes_work_and_conflicts() {
-        let entry = |action| ToolPublicationPlanEntry {
-            action,
-            name: "example".to_string(),
-            version: "1.0.0".to_string(),
-            reason: None,
-        };
-
-        assert!(
-            !ToolPublicationPlan::new(
-                BTreeSet::new(),
-                vec![entry(ToolPublicationPlanAction::NoChange)]
-            )
-            .has_work()
-        );
-        assert!(
-            ToolPublicationPlan::new(
-                BTreeSet::new(),
-                vec![entry(ToolPublicationPlanAction::Publish)]
-            )
-            .has_work()
-        );
-        assert!(
-            ToolPublicationPlan::new(
-                BTreeSet::new(),
-                vec![entry(ToolPublicationPlanAction::Conflict)]
-            )
-            .has_conflicts()
-        );
-    }
-
-    #[::test_r::test]
-    fn environment_setup_secret_type_rendering_matches_between_manifest_and_environment() {
-        let mut secret_types = BTreeMap::new();
-        secret_types.insert("superSecret".to_string(), schema_str());
-
-        let plan = build_environment_setup_plan(
-            MaskingConfig::hide_secrets(),
-            vec![DeploymentAgentSecretDefault {
-                path: AgentSecretPath(vec!["superSecret".to_string()]),
-                secret_value: serde_json::json!("same-value"),
-            }],
-            Vec::new(),
-            Vec::new(),
-            vec![secret_dto(
-                &["superSecret"],
-                SchemaGraph::anonymous(SchemaType::string()),
-                Some(SchemaValue::String("same-value".to_string())),
-            )],
-            Vec::new(),
-            Vec::new(),
-            &secret_types,
-            &SourceLanguage::TypeScript,
-        )
-        .unwrap();
-
-        assert!(
-            plan.display
-                .skipped_already_exists
-                .secret_values
-                .contains("superSecret")
-        );
-    }
-
-    #[::test_r::test]
-    fn environment_setup_classifies_secret_create_and_skip_existing() {
-        let mut secret_types = BTreeMap::new();
-        secret_types.insert("createSecret".to_string(), schema_str());
-        secret_types.insert("existingSecret".to_string(), schema_str());
-
-        let plan = build_environment_setup_plan(
-            MaskingConfig::hide_secrets(),
-            vec![
-                DeploymentAgentSecretDefault {
-                    path: AgentSecretPath(vec!["createSecret".to_string()]),
-                    secret_value: serde_json::json!("create"),
-                },
-                DeploymentAgentSecretDefault {
-                    path: AgentSecretPath(vec!["existingSecret".to_string()]),
-                    secret_value: serde_json::json!("manifest"),
-                },
-            ],
-            Vec::new(),
-            Vec::new(),
-            vec![secret_dto(
-                &["existingSecret"],
-                SchemaGraph::anonymous(SchemaType::string()),
-                Some(SchemaValue::String("env".to_string())),
-            )],
-            Vec::new(),
-            Vec::new(),
-            &secret_types,
-            &SourceLanguage::TypeScript,
-        )
-        .unwrap();
-
-        assert!(
-            plan.display
-                .to_be_applied
-                .secret_values
-                .contains_key("createSecret")
-        );
-        assert!(
-            plan.display
-                .skipped_already_exists
-                .secret_values
-                .contains("existingSecret")
-        );
-    }
-
-    #[::test_r::test]
-    fn environment_setup_classifies_retry_policies_and_resources() {
-        let plan = build_environment_setup_plan(
-            MaskingConfig::hide_secrets(),
-            Vec::new(),
-            vec![
-                DeploymentRetryPolicyDefault {
-                    name: "create-policy".to_string(),
-                    priority: 1,
-                    predicate: ApiPredicate::False(ApiPredicateFalse {}),
-                    policy: ApiRetryPolicy::Never(ApiNeverPolicy {}),
-                },
-                DeploymentRetryPolicyDefault {
-                    name: "existing-policy".to_string(),
-                    priority: 2,
-                    predicate: ApiPredicate::False(ApiPredicateFalse {}),
-                    policy: ApiRetryPolicy::Never(ApiNeverPolicy {}),
-                },
-            ],
-            vec![
-                resource_creation("create-resource", 1),
-                resource_creation("existing-resource", 2),
-            ],
-            Vec::new(),
-            vec![retry_policy("existing-policy", 999)],
-            vec![resource("existing-resource", 999)],
-            &BTreeMap::new(),
-            &SourceLanguage::TypeScript,
-        )
-        .unwrap();
-
-        assert!(
-            plan.display
-                .to_be_applied
-                .retry_policies
-                .contains_key("create-policy")
-        );
-        assert!(
-            plan.display
-                .skipped_already_exists
-                .retry_policies
-                .contains("existing-policy")
-        );
-
-        assert!(
-            plan.display
-                .to_be_applied
-                .resources
-                .contains_key("create-resource")
-        );
-        assert!(
-            plan.display
-                .skipped_already_exists
-                .resources
-                .contains("existing-resource")
-        );
-    }
-}
+mod tests;
 
 impl EnvironmentSetupDetailedSection {
     pub fn is_empty(&self) -> bool {
@@ -894,6 +651,7 @@ pub struct DeploymentDisplayMethod {
 pub struct DeploymentDisplayHttpEndpoint {
     pub method: String,
     pub path: String,
+    pub route_mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_required: Option<bool>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -1354,6 +1112,11 @@ fn display_method(
     } else {
         format!("{}({}) -> {}", method.name, input, output)
     };
+    let route_mode = if method.uses_streams(graph) {
+        "DurableStreams"
+    } else {
+        "Rest"
+    };
 
     DeploymentDisplayMethod {
         signature,
@@ -1362,7 +1125,7 @@ fn display_method(
         http: method
             .http_endpoint
             .iter()
-            .map(display_http_endpoint)
+            .map(|endpoint| display_http_endpoint(endpoint, route_mode))
             .collect(),
     }
 }
@@ -1378,10 +1141,14 @@ fn display_http_mount(http_mount: &HttpMountDetails) -> DeploymentDisplayHttpMou
     }
 }
 
-fn display_http_endpoint(endpoint: &HttpEndpointDetails) -> DeploymentDisplayHttpEndpoint {
+fn display_http_endpoint(
+    endpoint: &HttpEndpointDetails,
+    route_mode: &str,
+) -> DeploymentDisplayHttpEndpoint {
     DeploymentDisplayHttpEndpoint {
         method: render_http_method(&endpoint.http_method).to_string(),
         path: render_path(&endpoint.path_suffix),
+        route_mode: route_mode.to_string(),
         auth_required: endpoint.auth_details.as_ref().map(|auth| auth.required),
         headers: endpoint
             .header_vars

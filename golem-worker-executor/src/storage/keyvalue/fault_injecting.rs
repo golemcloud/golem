@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Test support: a [`KeyValueStorage`] decorator that fails, or pauses and then fails, chosen
-//! operations on demand.
+//! Test support: a [`KeyValueStorage`] decorator that pauses or fails chosen operations on demand.
 //!
 //! Operations are selected by the `api_name` label every call carries, which is how a test names
 //! one read on a code path without knowing the key. It lives in the crate rather than under
@@ -70,7 +69,7 @@ struct ArmedFault {
     skip: usize,
     /// Matching calls still to fail once it has started.
     remaining: usize,
-    error: KeyValueStorageError,
+    error: Option<KeyValueStorageError>,
     gate: Option<Arc<GateState>>,
 }
 
@@ -82,7 +81,7 @@ struct GateState {
 
 /// A paused operation. The test awaits [`entered`](Gate::entered) to learn the operation has
 /// reached the fault, does whatever it needs to interleave, then [`release`](Gate::release)s it,
-/// at which point the operation fails with the armed error.
+/// at which point the operation proceeds or fails with the armed error.
 pub struct Gate {
     state: Arc<GateState>,
 }
@@ -143,6 +142,19 @@ impl KeyValueStorageFaults {
         Gate { state }
     }
 
+    /// Pauses the next labelled operation, then lets it reach storage on release.
+    pub fn pause_next(&self, api_name: &'static str) -> Gate {
+        let state = Arc::new(GateState::default());
+        self.state.lock().unwrap().armed.push(ArmedFault {
+            selector: Selector::Label(api_name),
+            skip: 0,
+            remaining: 1,
+            error: None,
+            gate: Some(state.clone()),
+        });
+        Gate { state }
+    }
+
     /// Makes every failing operation apply to the inner storage before its failure is reported,
     /// so a retry observes the effect of an attempt whose answer was lost.
     pub fn apply_before_failing(&self) {
@@ -185,7 +197,7 @@ impl KeyValueStorageFaults {
             selector,
             skip,
             remaining,
-            error,
+            error: Some(error),
             gate,
         });
     }
@@ -215,7 +227,13 @@ impl KeyValueStorageFaults {
             state.armed.remove(index);
         }
         let apply_first = state.apply_before_failing;
-        (Decision::Fail { error, apply_first }, gate)
+        (
+            error.map_or(Decision::Pass, |error| Decision::Fail {
+                error,
+                apply_first,
+            }),
+            gate,
+        )
     }
 
     async fn intercept(&self, api_name: &'static str) -> Decision {
@@ -315,6 +333,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError> {
         self.run(
@@ -326,6 +345,7 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
                 namespace,
                 key,
                 expected,
+                deletes,
                 pairs,
             ),
         )

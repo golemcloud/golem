@@ -90,7 +90,7 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
         "def inspect(@_root_.golem.runtime.annotations.internalToolMiddlewareField(\"config\", false) config: _root_.java.lang.String, " +
           "@_root_.golem.runtime.annotations.internalToolMiddlewareField(\"prefix\", false) prefix: _root_.java.lang.String, " +
           "@_root_.golem.runtime.annotations.internalToolMiddlewareField(\"name\", false) name: _root_.java.lang.String): " +
-          "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolInvokeError[_root_.scala.Nothing], _root_.java.lang.String]]"
+          "_root_.golem.tool.ToolUnderlyingInvocation[_root_.scala.Nothing, _root_.java.lang.String]"
       ),
       content
     )

@@ -13,6 +13,7 @@ import "golem/worker/agent_config.proto";
 import "golem/worker/idempotency_key.proto";
 import "golem/worker/invocation.proto";
 import "golem/worker/invocation_context.proto";
+import "golem/worker/public_oplog.proto";
 import "golem/worker/scope_card.proto";
 import "golem/worker/v1/worker_execution_error.proto";
 import "golem/worker/worker_id.proto";
@@ -36,6 +37,20 @@ message InvocationStart {
   golem.common.UUID expected_callee_fingerprint = 15;
   repeated DurableStreamMapping durable_input_mappings = 16;
   optional golem.worker.EncodedScopeCard scope_card = 17;
+  // Executor-authored RPC provenance. Public invocation adapters must clear this field.
+  // Forks retain the authoring invocation even when their local stream producers diverge.
+  StreamInvocationIdentity origin_invocation = 19;
+  optional ExternalToolInvocation external_tool = 18;
+}
+
+message ExternalToolInvocation {
+  string tool_name = 1;
+  repeated string command_path = 2;
+  golem.schema.TypedSchemaValue input = 3;
+  bool stdin = 4;
+  bool stdout = 5;
+  bool fresh_owner = 6;
+  optional uint64 expected_deployment_revision = 7;
 }
 
 message ResumeAttach {
@@ -79,6 +94,7 @@ message DurableStreamHandle {
   StreamInvocationIdentity source_invocation = 6;
   optional uint64 component_revision = 7;
   bytes element_schema_fingerprint = 8;
+  uint64 producer_generation = 9;
 }
 
 message DurableStreamMapping {
@@ -204,12 +220,19 @@ message InvocationAccepted {
   golem.common.EnvironmentId environment_id = 8;
   golem.common.UUID callee_fingerprint = 9;
   optional string method_name = 10;
+  // A validated same-origin caller observes the existing invocation without owning
+  // its attachment. Mappings are read out of band; no stream control frames are allowed.
+  // Result and Finished retain their ordinary durable publication boundaries.
+  bool joined_origin_observer = 13;
+  optional string tool_name = 11;
+  repeated string command_path = 12;
 }
 
 message InvocationSessionResult {
   oneof result {
     golem.schema.SchemaValue method_result = 1;
     golem.common.Empty no_result = 2;
+    golem.worker.PublicExternalToolResult tool_result = 11;
   }
   optional uint64 component_revision = 3;
   golem.worker.AgentId agent_id = 4;

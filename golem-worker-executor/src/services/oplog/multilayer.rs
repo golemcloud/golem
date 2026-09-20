@@ -591,6 +591,46 @@ impl OplogService for MultiLayerOplogService {
         self.primary.stream_session_index()
     }
 
+    async fn create_staged(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+        initial_worker_metadata: AgentMetadata,
+    ) -> Result<Arc<dyn Oplog>, String> {
+        self.primary
+            .create_staged(
+                owned_agent_id,
+                agent_mode,
+                stage_id,
+                initial_worker_metadata,
+            )
+            .await
+    }
+
+    async fn publish_staged(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+        expected_last_index: OplogIndex,
+    ) -> Result<bool, String> {
+        self.primary
+            .publish_staged(owned_agent_id, agent_mode, stage_id, expected_last_index)
+            .await
+    }
+
+    async fn discard_staged(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+    ) -> Result<(), String> {
+        self.primary
+            .discard_staged(owned_agent_id, agent_mode, stage_id)
+            .await
+    }
+
     async fn create(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
@@ -1227,7 +1267,7 @@ impl Oplog for MultiLayerOplog {
 
     async fn raw_durable_stream_session_status(
         &self,
-        session_key: &golem_common::model::durable_stream::StreamSessionKeyV1,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
     ) -> super::RawDurableStreamSessionStatus {
         self.primary
             .raw_durable_stream_session_status(session_key)

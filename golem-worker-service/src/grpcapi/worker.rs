@@ -550,6 +550,9 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (tail, initial_requests_checked) = validated_request_tail(inbound, state.clone());
         let result = match initial {
             invocation_request::Request::Start(mut start) => {
+                if !trusted_internal_caller {
+                    start.origin_invocation = None;
+                }
                 start.freshness_disposition = match sanitize_invocation_freshness_disposition(
                     start.freshness_disposition,
                     trusted_internal_caller,
@@ -1235,25 +1238,26 @@ impl WorkerGrpcApi {
             .map_err(|error| {
                 bad_request_error(format!("invalid producer_environment_id: {error}"))
             })?;
-        let consumer_agent_id = validate_protobuf_agent_id(request.consumer_agent_id)?;
+        let consumer_agent_id = request
+            .consumer_agent_id
+            .map(TryInto::try_into)
+            .transpose()
+            .map_err(|error| bad_request_error(format!("invalid consumer_agent_id: {error}")))?;
         let consumer_environment_id = request
             .consumer_environment_id
-            .ok_or_else(|| bad_request_error("Missing consumer_environment_id"))?
-            .try_into()
+            .map(TryInto::try_into)
+            .transpose()
             .map_err(|error| {
                 bad_request_error(format!("invalid consumer_environment_id: {error}"))
             })?;
-        let expected_consumer_fingerprint = AgentFingerprint(
-            request
-                .expected_consumer_fingerprint
-                .ok_or_else(|| bad_request_error("Missing expected_consumer_fingerprint"))?
-                .into(),
-        );
+        let expected_consumer_fingerprint = request
+            .expected_consumer_fingerprint
+            .map(|value| AgentFingerprint(value.into()));
         self.worker_service
             .read_durable_stream_segment(
                 &producer_agent_id,
                 producer_environment_id,
-                &consumer_agent_id,
+                consumer_agent_id.as_ref(),
                 consumer_environment_id,
                 expected_consumer_fingerprint,
                 request.payload,
@@ -1334,6 +1338,7 @@ mod protocol_tests {
     fn start() -> InvocationRequest {
         InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
+                method_name: Some("run".to_string()),
                 input: Some(SchemaValue {
                     value: Some(schema_value::Value::U8Value(1)),
                 }),

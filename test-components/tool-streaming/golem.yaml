@@ -1,7 +1,7 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.8/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.8/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
 
 manifestVersion: 1.6.0
 
@@ -21,16 +21,22 @@ components:
       tools:
       - golem-it:tool-streaming-rust-provider/streaming
       - golem-it:tool-streaming-rust-provider/capable-streaming
+      - golem-it:tool-streaming-rust-provider/typed-output-stream
+  golem-it:tool-streaming-rust-middleware:
+    dir: rust-middleware
+    templates: rust, rust-test-component
 
 tools:
   streaming: {}
   capable-streaming: {}
+  typed-output-stream: {}
 
 agents:
   ToolStreamingCaller:
     tools:
       streaming: {}
       capable-streaming: {}
+      typed-output-stream: {}
 
 bridge:
   rust:
@@ -38,6 +44,7 @@ bridge:
       tools:
       - streaming
       - capable-streaming
+      - typed-output-stream
 
 environments:
   local:

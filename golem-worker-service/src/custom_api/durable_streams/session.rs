@@ -1,0 +1,420 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! Session lifecycle: creating the invocation session behind a stream URL,
+//! PUT/DELETE handling and the session summary, plus the input/output schema
+//! inspection that decides which slots a route declares.
+
+use super::super::call_agent::principal_from_request;
+use super::super::error::RequestHandlerError;
+use super::super::route_resolver::ResolvedRouteEntry;
+use super::super::{ResponseBody, RichRequest, RouteExecutionResult};
+use super::encoding::{metadata_response, offset_text};
+use super::{DurableStreamsHandler, body_response, response, route_method};
+use golem_api_grpc::proto::golem::worker::{
+    AgentInvocationMode, InvocationContext, InvocationStart,
+};
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest, ExportStreamControl,
+    ExportStreamControlResult,
+};
+use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::schema::stream::SchemaValueStream;
+use golem_common::schema::{
+    FieldSource, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
+    schema_value_to_proto_with_streams,
+};
+use golem_service_base::custom_api::{CallAgentBehaviour, MethodParameter};
+use golem_service_base::model::auth::AuthCtx;
+use http::{HeaderName, Method, StatusCode};
+use tokio::io::AsyncReadExt;
+use uuid::Uuid;
+
+impl DurableStreamsHandler {
+    /// Starts (or idempotently re-attaches to) the invocation session identified
+    /// by `session`. Stream-typed input fields are bound to host endpoints in
+    /// declaration order; the remaining arguments come from the request.
+    pub(super) async fn create(
+        &self,
+        request: &mut RichRequest,
+        route: &ResolvedRouteEntry,
+        behaviour: &CallAgentBehaviour,
+        agent_id: &AgentId,
+        session: &str,
+    ) -> Result<CreateStreamSessionSuccess, RequestHandlerError> {
+        let body = request.parse_request_body(&route.route.body).await?;
+        let args = self
+            .call_agent
+            .resolve_method_arguments(route, request, behaviour, body)?;
+        let mut args = args.into_iter();
+        let mut transport_id = 0u64;
+        let fields = behaviour
+            .method_input
+            .input_schema
+            .fields()
+            .iter()
+            .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+            .map(|field| {
+                if matches!(
+                    behaviour
+                        .method_input
+                        .graph
+                        .resolve_ref(&field.schema)
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+                    SchemaType::Stream { .. }
+                ) {
+                    let value =
+                        SchemaValue::Stream(SchemaValueStream::from_host_endpoint(transport_id));
+                    transport_id += 1;
+                    Ok(value)
+                } else {
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("missing non-stream method argument"))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if args.next().is_some() {
+            return Err(anyhow::anyhow!("too many non-stream method arguments").into());
+        }
+        let input = schema_value_to_proto_with_streams(SchemaValue::Record { fields }, |stream| {
+            stream.take_host_endpoint::<u64>()
+        })
+        .map_err(|e| anyhow::anyhow!("invalid durable stream input: {e}"))?;
+        let principal = principal_from_request(request)?;
+        let start = InvocationStart {
+            agent_id: Some(agent_id.clone().into()),
+            method_name: Some(behaviour.method_name.clone()),
+            external_tool: None,
+            input: Some(input),
+            idempotency_key: Some(IdempotencyKey::new(session.to_owned()).into()),
+            context: Some(InvocationContext {
+                parent: None,
+                env: Default::default(),
+                tracing: Some(request.invocation_context().into()),
+            }),
+            auth_ctx: Some(AuthCtx::System.into()),
+            principal: Some(principal.into()),
+            environment_id: Some(route.route.environment_id.into()),
+            config: vec![],
+            component_owner_account_id: Some(route.route.account_id.into()),
+            mode: AgentInvocationMode::Await as i32,
+            schedule_at: None,
+            freshness_disposition: 0,
+            attempt_id: Some(Uuid::new_v4().into()),
+            expected_callee_fingerprint: None,
+            durable_input_mappings: vec![],
+            scope_card: None,
+            origin_invocation: None,
+        };
+        self.worker_service
+            .create_stream_session(agent_id, start)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// `PUT` on the session collection: creates a session under a freshly
+    /// generated id and points the client at it.
+    pub(super) async fn create_generated(
+        &self,
+        request: &mut RichRequest,
+        route: &ResolvedRouteEntry,
+        behaviour: &CallAgentBehaviour,
+        agent_id: &AgentId,
+        session: &str,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let created = self
+            .create(request, route, behaviour, agent_id, session)
+            .await?;
+        let mut result = response(created_status(created.replayed));
+        result.headers.insert(
+            http::header::LOCATION,
+            format!(
+                "{}/invocations/{session}",
+                request.underlying.uri().path().trim_end_matches('/')
+            ),
+        );
+        Ok(result)
+    }
+
+    /// `PUT` on an explicit session, optionally scoped to one slot. A slot PUT
+    /// must carry no body, must match the slot's declared content type and only
+    /// creates the session when all method arguments come from the URL.
+    pub(super) async fn put(
+        &self,
+        request: &mut RichRequest,
+        route: &ResolvedRouteEntry,
+        behaviour: &CallAgentBehaviour,
+        agent_id: &AgentId,
+        session: &str,
+        slot: Option<&str>,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        if let Some(slot) = slot {
+            let mut body = request.underlying.take_body().into_async_read();
+            if body
+                .read(&mut [0u8; 1])
+                .await
+                .map_err(anyhow::Error::from)?
+                != 0
+            {
+                return Ok(response(StatusCode::BAD_REQUEST));
+            }
+            let args_from_url = arguments_come_from_url(behaviour);
+            if let Some(metadata) = self
+                .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
+                .await?
+            {
+                if metadata.tombstoned || content_type_mismatch(request, &metadata.content_type)? {
+                    return Ok(response(StatusCode::CONFLICT));
+                }
+                if args_from_url {
+                    self.create(request, route, behaviour, agent_id, session)
+                        .await?;
+                }
+                return metadata_response(&metadata, true);
+            }
+            if self
+                .read_slot(route, agent_id, session, "", Vec::new(), 0, 0)
+                .await?
+                .is_some()
+            {
+                return Ok(response(StatusCode::NOT_FOUND));
+            }
+            let Some(content_type) = declared_slot_content_type(behaviour, slot)? else {
+                return Ok(response(StatusCode::NOT_FOUND));
+            };
+            if content_type_mismatch(request, content_type)? {
+                return Ok(response(StatusCode::CONFLICT));
+            }
+            if !args_from_url {
+                return Ok(response(StatusCode::BAD_REQUEST));
+            }
+        }
+        let created = self
+            .create(request, route, behaviour, agent_id, session)
+            .await?;
+        let mut result = match slot {
+            Some(slot) => match self
+                .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
+                .await?
+            {
+                Some(metadata) if metadata.tombstoned => {
+                    return Ok(response(StatusCode::CONFLICT));
+                }
+                Some(metadata) => metadata_response(&metadata, true)?,
+                None => return Ok(response(StatusCode::NOT_FOUND)),
+            },
+            None => response(StatusCode::OK),
+        };
+        result.status = created_status(created.replayed);
+        Ok(result)
+    }
+
+    /// `DELETE` on a session or one of its slots, forwarded to the executor as
+    /// an export stream control request.
+    pub(super) async fn delete(
+        &self,
+        route: &ResolvedRouteEntry,
+        agent_id: &AgentId,
+        session: String,
+        slot: Option<String>,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let result = self
+            .worker_service
+            .control_export_stream(
+                agent_id,
+                DurableStreamAttachmentControlRequest {
+                    producer_agent_id: Some(agent_id.clone().into()),
+                    producer_environment_id: Some(route.route.environment_id.into()),
+                    auth_ctx: Some(AuthCtx::System.into()),
+                    export_control: Some(ExportStreamControl {
+                        session,
+                        slot,
+                        expected_method: route_method(route).to_owned(),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(response(match result {
+            ExportStreamControlResult::Applied => StatusCode::NO_CONTENT,
+            ExportStreamControlResult::NotFound => StatusCode::NOT_FOUND,
+            ExportStreamControlResult::Gone => StatusCode::GONE,
+            ExportStreamControlResult::Unspecified => {
+                return Err(anyhow::anyhow!("unspecified export stream control result").into());
+            }
+        }))
+    }
+
+    /// `GET`/`HEAD` on a session: a JSON summary of every slot and whether the
+    /// whole session has finished.
+    pub(super) async fn describe(
+        &self,
+        request: &RichRequest,
+        route: &ResolvedRouteEntry,
+        agent_id: &AgentId,
+        session: &str,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let read = self
+            .read_slot(route, agent_id, session, "", Vec::new(), 0, 0)
+            .await?;
+        let Some(read) = read else {
+            return Ok(response(StatusCode::NOT_FOUND));
+        };
+        let mut streams = Vec::new();
+        let mut closed = true;
+        for slot in &read.slots {
+            let Some(metadata) = self
+                .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
+                .await?
+            else {
+                return Ok(response(StatusCode::NOT_FOUND));
+            };
+            closed &= metadata.closed || metadata.tombstoned;
+            streams.push(serde_json::json!({
+                "name": slot,
+                "contentType": metadata.content_type,
+                "nextOffset": offset_text(&metadata.head_offset)?,
+                "closed": metadata.closed,
+                "cancelled": metadata.cancelled,
+                "deleted": metadata.tombstoned,
+            }));
+        }
+        let fork = read
+            .fork
+            .as_ref()
+            .map(|fork| {
+                Ok::<_, RequestHandlerError>(serde_json::json!({
+                    "sourcePath": fork.source_path,
+                    "forkOffset": offset_text(&fork.fork_offset)?,
+                    "subOffset": fork.sub_offset,
+                }))
+            })
+            .transpose()?;
+        let body = serde_json::to_vec(
+            &serde_json::json!({"session": session, "streams": streams, "closed": closed, "fork": fork}),
+        )
+        .map_err(anyhow::Error::from)?;
+        let mut result = body_response(StatusCode::OK, body, "application/json");
+        result
+            .headers
+            .insert(http::header::CACHE_CONTROL, "no-store".into());
+        result
+            .headers
+            .insert(http::header::CONTENT_TYPE, "application/json".into());
+        result
+            .headers
+            .insert(HeaderName::from_static("stream-closed"), closed.to_string());
+        if request.underlying.method() == Method::HEAD {
+            result.body = ResponseBody::NoBody;
+        }
+        Ok(result)
+    }
+}
+
+fn created_status(replayed: bool) -> StatusCode {
+    if replayed {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    }
+}
+
+/// True when every non-stream method argument is bound to a path or query
+/// parameter, so a body-less request can still create the session.
+pub(super) fn arguments_come_from_url(behaviour: &CallAgentBehaviour) -> bool {
+    behaviour.method_parameters.iter().all(|param| {
+        matches!(
+            param,
+            MethodParameter::Path { .. } | MethodParameter::Query { .. }
+        )
+    })
+}
+
+pub(super) fn content_type_mismatch(
+    request: &RichRequest,
+    expected: &str,
+) -> Result<bool, RequestHandlerError> {
+    Ok(request
+        .header_string_value("content-type")?
+        .is_some_and(|actual| {
+            !actual
+                .split(';')
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .eq_ignore_ascii_case(expected)
+        }))
+}
+
+/// Content type of a slot declared by the route's method signature: an input
+/// stream field, the `$result` output, or a stream field of a record output.
+/// `None` when the route declares no such slot.
+pub(super) fn declared_slot_content_type(
+    behaviour: &CallAgentBehaviour,
+    slot: &str,
+) -> Result<Option<&'static str>, RequestHandlerError> {
+    fn stream_type(
+        graph: &SchemaGraph,
+        ty: &SchemaType,
+    ) -> Result<Option<&'static str>, RequestHandlerError> {
+        let ty = graph
+            .resolve_ref(ty)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        match ty {
+            SchemaType::Stream {
+                inner: Some(inner), ..
+            } => Ok(Some(
+                if matches!(
+                    graph
+                        .resolve_ref(inner)
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+                    SchemaType::U8 { .. }
+                ) {
+                    "application/octet-stream"
+                } else {
+                    "application/json"
+                },
+            )),
+            _ => Ok(None),
+        }
+    }
+    if let Some(field) = behaviour
+        .method_input
+        .input_schema
+        .fields()
+        .iter()
+        .find(|field| field.name == slot && matches!(field.source, FieldSource::UserSupplied))
+        && let Some(content_type) = stream_type(&behaviour.method_input.graph, &field.schema)?
+    {
+        return Ok(Some(content_type));
+    }
+    let graph = &behaviour.expected_agent_response.graph;
+    let OutputSchema::Single(output) = &behaviour.expected_agent_response.output_schema else {
+        return Ok(None);
+    };
+    if slot == "$result" {
+        return Ok(stream_type(graph, output)?.or_else(|| {
+            (!golem_common::schema::agent::contains_stream_in_graph(graph, output))
+                .then_some("application/json")
+        }));
+    }
+    if let SchemaType::Record { fields, .. } = graph
+        .resolve_ref(output)
+        .map_err(|e| anyhow::anyhow!(e.to_string()))?
+        && let Some(field) = fields.iter().find(|field| field.name == slot)
+    {
+        return stream_type(graph, &field.body);
+    }
+    Ok(None)
+}

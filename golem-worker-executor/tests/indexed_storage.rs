@@ -322,6 +322,318 @@ define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_mem
 define_matrix_dimension!(sql_is: Arc<dyn GetIndexedStorage + Send + Sync> -> "sqlite", "postgres");
 
 #[test]
+async fn staged_publication_preserves_atomic_visibility(
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    let agent = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "fork-publication".into(),
+    };
+    let mode = AgentMode::Durable;
+    let staged = IndexedStorageNamespace::StagedOpLog {
+        agent_id: agent.clone(),
+        agent_mode: mode,
+    };
+    let visible = IndexedStorageNamespace::OpLog {
+        agent_id: agent.clone(),
+        agent_mode: mode,
+    };
+    for (key, ids, expected) in [
+        ("missing", vec![], 1),
+        ("gap", vec![1, 3], 3),
+        ("shifted", vec![2, 3], 2),
+        ("wrong-tip", vec![1, 2, 3], 2),
+        ("zero-tip", vec![1], 0),
+    ] {
+        for id in ids {
+            storage
+                .append(
+                    "test",
+                    "stage",
+                    "entry",
+                    staged.clone(),
+                    key,
+                    id,
+                    vec![id as u8],
+                )
+                .await
+                .unwrap();
+        }
+        assert!(
+            storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    expected,
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !storage
+                .exists("test", "visible", visible.clone(), key)
+                .await
+                .unwrap()
+        );
+    }
+    for (key, value) in [("first", 17u8), ("second", 39)] {
+        storage
+            .append_many(
+                "test",
+                "stage",
+                "entry",
+                &staged,
+                key,
+                (1..=3)
+                    .map(|id| (id, Bytes::from(vec![value, id as u8])))
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+            .await
+            .unwrap();
+    }
+    assert!(
+        storage
+            .scan_stable(
+                "test",
+                "scan",
+                IndexedStorageMetaNamespace::Oplog { agent_mode: mode },
+                None,
+                None,
+                100
+            )
+            .await
+            .unwrap()
+            .1
+            .is_empty()
+    );
+    let (first, second) = tokio::join!(
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged.clone(),
+            "first",
+            visible.clone(),
+            "target",
+            3,
+        ),
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged.clone(),
+            "second",
+            visible.clone(),
+            "target",
+            3,
+        ),
+    );
+    let first = first.unwrap();
+    assert_ne!(first, second.unwrap());
+    let (winner, loser, value) = if first {
+        ("first", "second", 17)
+    } else {
+        ("second", "first", 39)
+    };
+    let expected: Vec<_> = (1..=3).map(|id| (id, vec![value, id as u8])).collect();
+    assert_eq!(
+        storage
+            .read("test", "read", "entry", visible.clone(), "target", 1, 3)
+            .await
+            .unwrap(),
+        expected
+    );
+    assert!(
+        !storage
+            .exists("test", "stage", staged.clone(), winner)
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .exists("test", "stage", staged.clone(), loser)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !storage
+            .move_if_absent(
+                "test",
+                "publish",
+                staged.clone(),
+                loser,
+                visible.clone(),
+                "target",
+                3,
+            )
+            .await
+            .unwrap()
+    );
+    storage
+        .delete("test", "discard", staged.clone(), loser)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .read("test", "read", "entry", visible.clone(), "target", 1, 3)
+            .await
+            .unwrap(),
+        expected
+    );
+
+    for (key, first_id) in [("archived", 1), ("archived-arbitrary", 17)] {
+        storage
+            .append(
+                "test",
+                "create",
+                "entry",
+                visible.clone(),
+                key,
+                first_id,
+                vec![61],
+            )
+            .await
+            .unwrap();
+        storage
+            .drop_prefix("test", "archive", visible.clone(), key, first_id)
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .exists("test", "exists", visible.clone(), key)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .length("test", "length", visible.clone(), key)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(
+            storage
+                .first("test", "first", "entry", visible.clone(), key)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .last("test", "last", "entry", visible.clone(), key)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        storage
+            .append("test", "stage", "entry", staged.clone(), key, 1, vec![23])
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    1,
+                )
+                .await
+                .unwrap()
+        );
+        storage
+            .delete("test", "delete", visible.clone(), key)
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .exists("test", "exists", visible.clone(), key)
+                .await
+                .unwrap()
+        );
+        assert!(
+            storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    1,
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .read("test", "read", "entry", visible.clone(), key, 1, first_id)
+                .await
+                .unwrap(),
+            vec![(1, vec![23])]
+        );
+    }
+    storage
+        .drop_prefix("test", "archive", visible.clone(), "never-existed", 50)
+        .await
+        .unwrap();
+    assert!(
+        !storage
+            .exists("test", "exists", visible.clone(), "never-existed")
+            .await
+            .unwrap()
+    );
+
+    storage
+        .append(
+            "test",
+            "stage",
+            "entry",
+            staged.clone(),
+            "race",
+            1,
+            vec![51],
+        )
+        .await
+        .unwrap();
+    let (published, ordinary) = tokio::join!(
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged,
+            "race",
+            visible.clone(),
+            "ordinary",
+            1,
+        ),
+        storage.append(
+            "test",
+            "create",
+            "entry",
+            visible.clone(),
+            "ordinary",
+            1,
+            vec![77]
+        ),
+    );
+    let published = published.unwrap();
+    assert_ne!(published, ordinary.is_ok());
+    assert_eq!(
+        storage
+            .read("test", "read", "entry", visible, "ordinary", 1, 2)
+            .await
+            .unwrap(),
+        vec![(1, vec![if published { 51 } else { 77 }])]
+    );
+}
+
+#[test]
 async fn postgres_singleton_append_many_preserves_storage_contract(
     #[tagged_as("postgres")] storage: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] primary: &IndexedStorageNamespaces,

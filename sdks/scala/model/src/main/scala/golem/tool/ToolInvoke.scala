@@ -24,9 +24,9 @@ import golem.tool.wire.WitToolError
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
- * Platform-neutral mirror of the wire `tool-error`, used by macro-generated
- * tool invokers. The platform layer converts it to the wire representation at
- * the guest-export boundary.
+ * Platform-neutral tool and underlying-invocation errors, used by
+ * macro-generated tool invokers. The platform layer converts them to the wire
+ * representation at the guest-export boundary.
  */
 sealed trait ToolInvokeError[+E] extends Product with Serializable {
   def mapTool[E2](f: E => E2): ToolInvokeError[E2] =
@@ -38,6 +38,11 @@ sealed trait ToolInvokeError[+E] extends Product with Serializable {
       case error: ToolInvokeError.InvalidInput        => error
       case error: ToolInvokeError.ConstraintViolation => error
       case error: ToolInvokeError.InvalidResult       => error
+      case error: ToolInvokeError.ProtocolError       => error
+      case error: ToolInvokeError.Denied              => error
+      case error: ToolInvokeError.InternalError       => error
+      case ToolInvokeError.Cancelled                  => ToolInvokeError.Cancelled
+      case error: ToolInvokeError.ResourceExhausted   => error
     }
 }
 
@@ -47,6 +52,11 @@ object ToolInvokeError {
   final case class InvalidInput(message: String)                             extends ToolInvokeError[Nothing]
   final case class ConstraintViolation(message: String)                      extends ToolInvokeError[Nothing]
   final case class InvalidResult(message: String)                            extends ToolInvokeError[Nothing]
+  final case class ProtocolError(message: String)                            extends ToolInvokeError[Nothing]
+  final case class Denied(message: String)                                   extends ToolInvokeError[Nothing]
+  final case class InternalError(message: String)                            extends ToolInvokeError[Nothing]
+  case object Cancelled                                                      extends ToolInvokeError[Nothing]
+  final case class ResourceExhausted(message: String)                        extends ToolInvokeError[Nothing]
   final case class Tool[E](error: E)                                         extends ToolInvokeError[E]
   final case class UnknownToolError(name: String, payload: TypedSchemaValue) extends ToolInvokeError[Nothing]
 
@@ -57,7 +67,13 @@ object ToolInvokeError {
       case InvalidInput(message)        => WitToolError.InvalidInput(message)
       case ConstraintViolation(message) => WitToolError.ConstraintViolation(message)
       case InvalidResult(message)       => WitToolError.InvalidResult(message)
-      case Tool(_)                      =>
+      case ProtocolError(message)       => WitToolError.InvalidResult(s"protocol error: $message")
+      case Denied(message)              => WitToolError.ConstraintViolation(message)
+      case InternalError(message)       => WitToolError.InvalidResult(s"internal error: $message")
+      case Cancelled                    => WitToolError.ConstraintViolation("underlying invocation was cancelled")
+      case ResourceExhausted(message)   =>
+        WitToolError.ConstraintViolation(s"underlying invocation exhausted resources: $message")
+      case Tool(_) =>
         throw new IllegalArgumentException("named tool errors must be encoded through ToolErrorSchema")
       case UnknownToolError(name, payload) =>
         WitToolError.CustomError(
