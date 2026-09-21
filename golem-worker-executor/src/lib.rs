@@ -16,6 +16,10 @@ pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
 pub(crate) mod filesystem_pressure;
+// The service of filesystem snapshots uses the store in a later step, so only the tests of the
+// store use it now.
+#[allow(dead_code)]
+pub(crate) mod filesystem_snapshot;
 pub mod grpc;
 pub mod identity;
 pub mod metrics;
