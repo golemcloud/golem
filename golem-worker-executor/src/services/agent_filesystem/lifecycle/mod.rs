@@ -1963,6 +1963,10 @@ pub(crate) enum ObjectKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AccessMode {
     Read,
+    /// Reads, and changes the times of the object that the open pinned. A guest open never asks
+    /// for this. The lifecycle uses it for a followed attribute change, where the change must
+    /// land on the object that the read-only check was decided against.
+    ReadAndSetTimes,
     Write,
     ReadWrite,
 }
@@ -2749,7 +2753,7 @@ async fn open_followed_object<Adapter: SandboxFilesystemAdapter>(
     .await?;
     let options = OpenOptions::Existing {
         expected: agent_object_kind(read.kind),
-        access: AccessMode::Read,
+        access: AccessMode::ReadAndSetTimes,
         follow: Follow::Yes,
     };
     let opened = execute_open(Arc::clone(generation), target, options).await?;
@@ -4121,6 +4125,7 @@ fn sandbox_object_kind(kind: ObjectKind) -> SandboxObjectKind {
 fn sandbox_access_mode(mode: AccessMode) -> SandboxAccessMode {
     match mode {
         AccessMode::Read => SandboxAccessMode::Read,
+        AccessMode::ReadAndSetTimes => SandboxAccessMode::ReadAndSetTimes,
         AccessMode::Write => SandboxAccessMode::Write,
         AccessMode::ReadWrite => SandboxAccessMode::ReadWrite,
     }

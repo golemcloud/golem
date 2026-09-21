@@ -984,7 +984,9 @@ fn agent_descriptor_flags(
     let mut flags = types::DescriptorFlags::empty();
     if matches!(
         mode,
-        agent_filesystem::AccessMode::Read | agent_filesystem::AccessMode::ReadWrite
+        agent_filesystem::AccessMode::Read
+            | agent_filesystem::AccessMode::ReadAndSetTimes
+            | agent_filesystem::AccessMode::ReadWrite
     ) {
         flags |= types::DescriptorFlags::READ;
     }

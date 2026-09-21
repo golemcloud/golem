@@ -449,7 +449,10 @@ fn p2_agent_path_target(
 fn p2_agent_flags(descriptor: &AgentDescriptor) -> Result<DescriptorFlags, FsError> {
     let (kind, mode) = descriptor.with_node(|node| (node.kind(), node.access()));
     let mut flags = DescriptorFlags::empty();
-    if matches!(mode, AccessMode::Read | AccessMode::ReadWrite) {
+    if matches!(
+        mode,
+        AccessMode::Read | AccessMode::ReadAndSetTimes | AccessMode::ReadWrite
+    ) {
         flags |= DescriptorFlags::READ;
     }
     if matches!(mode, AccessMode::Write | AccessMode::ReadWrite) {

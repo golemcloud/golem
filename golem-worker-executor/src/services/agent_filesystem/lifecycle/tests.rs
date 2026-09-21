@@ -3510,6 +3510,54 @@ async fn a_time_change_through_a_symlink_changes_the_object_that_its_permission_
 
 #[test]
 #[timeout("10s")]
+async fn a_followed_time_change_opens_with_the_right_that_the_change_needs() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let alias = PathTarget::at_root(&generation_handle, "alias").unwrap();
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_read_only_resolution(1, "alias", false, false);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_open(Ok(SandboxOpened::scripted_read_only_file(711)));
+
+    let changed = set_attributes(
+        &generation_handle,
+        Target::Path(&alias, Follow::Yes),
+        AttributeChanges::Times(TimeChanges {
+            accessed: TimeChange::Keep,
+            modified: TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(40)),
+        }),
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(changed, Err(Error::Access(AccessError::NotPermitted))),
+        "{changed:?}"
+    );
+    // The change runs on the descriptor that this open pins, so the open must already carry the
+    // right that the change needs. A plain read open maps to GENERIC_READ on Windows, which
+    // SetFileTime refuses, and no later step can widen a handle that is already open.
+    let opened = control
+        .calls()
+        .iter()
+        .filter(|call| call.starts_with("open("))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert!(
+        opened[0].contains("ReadAndSetTimes"),
+        "a followed time change must open for a time change: {}",
+        opened[0]
+    );
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
 async fn a_time_change_through_a_symlink_starts_again_when_the_open_finds_another_kind() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);

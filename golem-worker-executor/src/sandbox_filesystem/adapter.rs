@@ -24,6 +24,19 @@ use std::hash::{Hash, Hasher};
 use std::io::{Seek, SeekFrom, Write};
 use std::time::SystemTime;
 
+/// Asks for the rights that a change of an object's times needs on Windows.
+///
+/// A read open maps to `GENERIC_READ`, which does not carry `FILE_WRITE_ATTRIBUTES`, so
+/// `SetFileTime` on such a handle is refused. An explicit access mode wins over the read and
+/// write flags, so this asks for the rights of a read together with the one the change needs.
+#[cfg(windows)]
+fn windows_add_set_times_right(options: &mut cap_std::fs::OpenOptions) {
+    use cap_std::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_WRITE_ATTRIBUTES};
+
+    options.access_mode(FILE_GENERIC_READ | FILE_WRITE_ATTRIBUTES);
+}
+
 #[cfg(windows)]
 fn windows_directory_is_case_sensitive(directory: &cap_std::fs::Dir) -> std::io::Result<bool> {
     use std::mem::{MaybeUninit, size_of};
@@ -593,6 +606,11 @@ pub(crate) enum SandboxObjectKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SandboxAccessMode {
     Read,
+    /// Reads, and carries the right that a change of the object's times needs. On a Unix platform
+    /// that is an ordinary read open, because the change goes through the descriptor and needs
+    /// nothing more. On Windows `SetFileTime` needs `FILE_WRITE_ATTRIBUTES`, which the rights of
+    /// a read open do not include.
+    ReadAndSetTimes,
     Write,
     ReadWrite,
 }
@@ -1117,7 +1135,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                     native_options.read(true);
                 } else {
                     match access {
-                        SandboxAccessMode::Read => {
+                        SandboxAccessMode::Read | SandboxAccessMode::ReadAndSetTimes => {
                             native_options.read(true);
                         }
                         SandboxAccessMode::Write => {
@@ -1127,6 +1145,11 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                             native_options.read(true).write(true);
                         }
                     }
+                }
+                // A directory takes the same right, because its times change the same way.
+                #[cfg(windows)]
+                if access == SandboxAccessMode::ReadAndSetTimes {
+                    windows_add_set_times_right(&mut native_options);
                 }
                 match disposition {
                     None => {}
