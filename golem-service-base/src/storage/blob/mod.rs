@@ -133,9 +133,6 @@ pub trait BlobStorage: Debug + Send + Sync {
     /// `put_raw` does. When the response to an attempt that wrote the blob does not arrive, the
     /// next attempt finds that blob. The call then gives `AlreadyExists`, although the call
     /// wrote the blob.
-    ///
-    /// The method has no default. A default would check the path and then write the blob in two
-    /// steps, and two calls could both write between the check and the write.
     async fn put_raw_if_absent(
         &self,
         target_label: &'static str,
@@ -1312,9 +1309,10 @@ mod tests {
         );
     }
 
-    /// The filesystem backend keeps oplog payloads at paths that hold this segment, so the
-    /// segment of an agent must not change. The first agent name is longer than 32 characters
-    /// and holds characters that the segment replaces, and the second is empty.
+    /// The segment is the agent name with each character that is not an ASCII letter, a digit,
+    /// `-` or `_` replaced by `_`, cut to 32 characters. An empty name gives `agent`. Then comes
+    /// `-` and the blake3 hash of the full agent id. The first agent name here is longer than 32
+    /// characters and holds characters that the segment replaces. The second name is empty.
     #[test]
     fn the_path_segment_of_an_agent_keeps_its_form() {
         let component_id =

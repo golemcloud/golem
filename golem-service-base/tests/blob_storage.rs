@@ -3553,7 +3553,7 @@ async fn put_raw_if_absent_writes_a_blob_where_the_path_has_none(
 ) {
     let storage = test.get_blob_storage().await;
     let label = "put_raw_if_absent_writes_a_blob_where_the_path_has_none";
-    let path = Path::new("repository/config");
+    let path = Path::new("dir/blob");
 
     let written = storage
         .put_raw_if_absent(label, "put-if-absent", namespace.clone(), path, b"first")
@@ -3686,7 +3686,7 @@ async fn of_concurrent_put_raw_if_absent_calls_on_one_path_one_writes(
     // than one connection, and S3 gets the requests in parallel.
     let storage = test.get_blob_storage().await;
     let label = "of_concurrent_put_raw_if_absent_calls_on_one_path_one_writes";
-    let path = Path::new("repository/config");
+    let path = Path::new("dir/blob");
     let payloads = (0..16)
         .map(|writer| format!("writer {writer}").into_bytes())
         .collect::<Vec<_>>();
