@@ -14,10 +14,10 @@
 
 //! A filesystem snapshot store that keeps each snapshot in the memory of the process.
 //!
-//! The snapshots of a scope are one immutable slice. Each change makes a new slice from the old
-//! one with a pure function, and the store puts it in place under a lock that no await holds.
-//! A restore keeps the tree that it read under the lock, so a delete at the same time cannot
-//! change it, and two scopes that a copy made share trees that never change.
+//! The snapshots of a scope are one immutable slice. Each change makes a new slice from the old one
+//! with a pure function. The store puts the new slice in place under a lock that no await holds. A
+//! restore keeps the tree that it read under the lock, so a delete at the same time cannot change
+//! it. Two scopes that a copy made share trees that never change.
 
 mod tree;
 
@@ -57,8 +57,8 @@ impl InMemorySnapshotStore {
         Self::default()
     }
 
-    /// Gives the snapshots of each scope. No lock is held across an await, so a panic cannot
-    /// leave a change half made, and the store uses the map of a poisoned lock as it is.
+    /// Gives the snapshots of each scope. No lock is held across an await, so a panic cannot leave
+    /// a change half made. The store therefore uses the map of a poisoned lock as it is.
     fn scopes(&self) -> MutexGuard<'_, HashMap<SnapshotScope, Arc<[Stored]>>> {
         self.scopes.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -210,7 +210,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         to: &SnapshotScope,
     ) -> Result<(), SnapshotStoreError> {
         // The snapshots never change, so the two scopes can hold the same slice and stay
-        // independent: a change of one scope puts a new slice in that scope only.
+        // independent. A change of one scope puts a new slice in that scope only.
         let mut scopes = self.scopes();
         if let Some(snapshots) = scopes.get(from).cloned() {
             scopes.insert(to.clone(), snapshots);

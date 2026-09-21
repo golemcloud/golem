@@ -480,10 +480,9 @@ const STAGING_DIRECTORY: &str = ".staging";
 
 /// Writes `data` as the file at `target` when `target` has no file.
 ///
-/// The bytes go to a new file in `staging` first. The file then gets the name `target` in one
-/// step that refuses a name that exists, so a reader sees the whole file or no file, and of two
-/// calls for one `target` only one gives `Written`. The file in `staging` goes away when the
-/// step fails.
+/// The bytes go to a new file in `staging` first. Then the file gets the name `target` in one step.
+/// That step refuses a name that exists. So a reader sees the whole file or no file. Of two calls
+/// for one `target`, only one gives `Written`. The file in `staging` goes away when the step fails.
 fn write_if_absent(staging: &Path, target: &Path, data: &[u8]) -> std::io::Result<PutIfAbsent> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;

@@ -239,8 +239,8 @@ fn make_symlink(_target: &str, _link: &Path) {
     unreachable!("the fixture has symlinks only on unix");
 }
 
-/// Gives `size` bytes that do not repeat in a short period, so a store that compresses or cuts
-/// its data into parts cannot make them small.
+/// Gives `size` bytes that do not repeat in a short period. So a store that compresses its data or
+/// cuts it into parts cannot make them small.
 pub(super) fn pattern(size: usize) -> Box<[u8]> {
     (0..size)
         .scan(0x2545_f491_u32, |state, _| {

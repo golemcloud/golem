@@ -14,10 +14,10 @@
 
 //! The contract of [`FilesystemSnapshotStore`]: the behaviour that each store must have.
 //!
-//! Each case sees a store only through the trait. A store registers the suite with
-//! [`register`] from a `#[test_gen]` function, and gives the suite a function that opens
-//! stores over one new storage for each case. The suite writes its own trees and reads them back
-//! with its own code, so it does not use the code of a store to check that store.
+//! Each case sees a store only through the trait. A store registers the suite with [`register`]
+//! from a `#[test_gen]` function. It gives the suite a function that opens stores over one new
+//! storage for each case. The suite writes its own trees and reads them back with its own code. So
+//! it does not use the code of a store to check that store.
 
 mod tree;
 
@@ -473,8 +473,8 @@ async fn an_unknown_name_gives_not_found_every_time(open: OpenStore) {
 }
 
 async fn a_restore_into_a_directory_that_is_not_empty_writes_nothing(open: OpenStore) {
-    // The entry that is already in the directory has a name that the tree does not have, so
-    // only the check of an empty directory can refuse the restore.
+    // The entry that is already in the directory has a name that the tree does not have. So only
+    // the check of an empty directory can refuse the restore.
     let store = open();
     let scope = new_scope();
     let tree = new_tree(&one_file("content"));
@@ -916,11 +916,10 @@ async fn a_dropped_save_publishes_the_whole_tree_or_nothing(open: OpenStore) {
 }
 
 async fn no_method_blocks_the_runtime(open: OpenStore) {
-    // The calls run in a `LocalSet` on one thread, next to a local task that counts. The task
-    // runs only while a call waits, so a call that does its work without giving the thread back
-    // leaves the count as it was. test-r runs a test on a runtime with more than one thread, so
-    // a task of that runtime could count on another thread; the `LocalSet` keeps the count on
-    // the thread of the calls.
+    // The calls run in a `LocalSet` on one thread, next to a local task that counts. The task runs
+    // only while a call waits. So a call that does its work without giving the thread back leaves
+    // the count as it was. The test-r runtime has more than one thread, so a task of that runtime
+    // could count on another thread. The `LocalSet` keeps the count on the thread of the calls.
     let store = open();
     let scope = new_scope();
     let tree = new_tree(&[(

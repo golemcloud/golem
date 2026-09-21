@@ -3682,8 +3682,8 @@ async fn of_concurrent_put_raw_if_absent_calls_on_one_path_one_writes(
     #[tagged_as("fss")] namespace: &BlobStorageNamespace,
 ) {
     // Each call writes other bytes, so the blob tells which call wrote it. The calls run at the
-    // same time: the filesystem backend writes on blocking threads, the SQLite pool has more
-    // than one connection, and S3 gets the requests in parallel.
+    // same time. The filesystem backend writes on blocking threads, the SQLite pool has more than
+    // one connection, and S3 gets the requests in parallel.
     let storage = test.get_blob_storage().await;
     let label = "of_concurrent_put_raw_if_absent_calls_on_one_path_one_writes";
     let path = Path::new("dir/blob");
@@ -3757,9 +3757,9 @@ async fn fs_put_raw_if_absent_gives_the_error_of_a_name_that_the_filesystem_refu
     #[tagged_as("fs")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[tagged_as("fss")] namespace: &BlobStorageNamespace,
 ) {
-    // The filesystem that holds the storage must not accept a name of 300 bytes, so the move of
-    // the written file into place fails with an error that is not "already exists". The call
-    // gives that error and writes no blob.
+    // The filesystem that holds the storage must not accept a name of 300 bytes. So the move of the
+    // written file into place fails with an error that is not "already exists". The call gives that
+    // error and writes no blob.
     let storage = test.get_blob_storage().await;
     let label = "fs_put_raw_if_absent_gives_the_error_of_a_name_that_the_filesystem_refuses";
     let too_long = "x".repeat(300);
@@ -3784,12 +3784,11 @@ async fn fs_put_raw_if_absent_gives_the_error_of_a_name_that_the_filesystem_refu
 async fn the_filesystem_snapshots_namespace_gives_each_agent_its_own_location(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
 ) {
-    // Each namespace holds a blob at the same path with its own bytes. The agents differ in
-    // their name, their environment or their component, and the last two namespaces are other
-    // kinds of namespace of the same environment and agent. One agent name holds a `..`
-    // segment, which the rules of a blob name refuse, so its location must not hold the name.
-    // The oplog payloads of such an agent are not in the test, because their S3 location holds
-    // the agent name.
+    // Each namespace holds a blob at the same path with its own bytes. The agents differ in their
+    // name, their environment or their component. The last two namespaces are other kinds of
+    // namespace of the same environment and agent. One agent name holds a `..` segment, which the
+    // rules of a blob name refuse. So its location must not hold the name. The oplog payloads of
+    // such an agent are not in the test, because their S3 location holds the agent name.
     let storage = test.get_blob_storage().await;
     let label = "the_filesystem_snapshots_namespace_gives_each_agent_its_own_location";
     let environment = "0a8cd1b1-5c35-4f0e-9c67-2bb4c0f0f3a1";

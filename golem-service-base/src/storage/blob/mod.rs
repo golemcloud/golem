@@ -122,12 +122,11 @@ pub trait BlobStorage: Debug + Send + Sync {
 
     /// Writes the bytes as the blob at the path when the path has no blob.
     ///
-    /// When the path has no blob, the call writes the blob and gives [`PutIfAbsent::Written`].
-    /// When the path has a blob, the call writes nothing and gives
-    /// [`PutIfAbsent::AlreadyExists`]. The check and the write are one step, so when two calls
-    /// write one path at the same time, one call gives `Written` and the other gives
-    /// `AlreadyExists`. The rules of [`BlobNameError`] apply as for `put_raw`, and a root path
-    /// gives [`BlobNameError::NoName`] on every backend.
+    /// When the path has no blob, the call writes the blob and gives [`PutIfAbsent::Written`]. When
+    /// the path has a blob, the call writes nothing and gives [`PutIfAbsent::AlreadyExists`]. The
+    /// check and the write are one step. So when two calls write one path at the same time, one
+    /// call gives `Written` and the other gives `AlreadyExists`. The rules of [`BlobNameError`]
+    /// apply as for `put_raw`, and a root path gives [`BlobNameError::NoName`] on every backend.
     ///
     /// The S3 backend sends the request again after an error that one more attempt can pass, as
     /// `put_raw` does. When the response to an attempt that wrote the blob does not arrive, the
@@ -565,12 +564,13 @@ pub enum PutIfAbsent {
 
 /// Gives one path segment for an agent, which a backend can use as a directory name.
 ///
-/// The segment is the agent name, with each character that is not an ASCII letter, a digit, `-`
-/// or `_` replaced by `_`, cut to 32 characters, then `-` and the blake3 hash of the full agent
-/// id, which holds the component id and the agent name. So the segment has at most 97 bytes and
-/// holds no separator and no `.` segment, and the hash makes it very unlikely that two agents get
-/// the same segment. An agent name can be longer than a file name can be, and it can hold `/`,
-/// `\` and `.` segments, so a backend does not use the agent name itself.
+/// The segment is the agent name with each character that is not an ASCII letter, a digit, `-` or
+/// `_` replaced by `_`. The name is cut to 32 characters, and an empty name gives `agent`. Then
+/// come `-` and the blake3 hash of the full agent id, which holds the component id and the agent
+/// name. So the segment has at most 97 bytes, and it holds no separator and no `.` segment. The
+/// hash makes it very unlikely that two agents get the same segment. An agent name can be longer
+/// than a file name, and it can hold `/`, `\` and `.` segments. So a backend does not use the agent
+/// name itself.
 pub fn agent_path_segment(agent_id: &AgentId) -> String {
     let logical = agent_id.to_string();
     let digest = blake3::hash(logical.as_bytes()).to_hex();
@@ -1309,10 +1309,10 @@ mod tests {
         );
     }
 
-    /// The segment is the agent name with each character that is not an ASCII letter, a digit,
-    /// `-` or `_` replaced by `_`, cut to 32 characters. An empty name gives `agent`. Then comes
-    /// `-` and the blake3 hash of the full agent id. The first agent name here is longer than 32
-    /// characters and holds characters that the segment replaces. The second name is empty.
+    /// The segment is the agent name with each character that is not an ASCII letter, a digit, `-`
+    /// or `_` replaced by `_`. The name is cut to 32 characters, and an empty name gives `agent`.
+    /// Then come `-` and the blake3 hash of the full agent id. The first agent name here is longer
+    /// than 32 characters and holds characters that the segment replaces. The second name is empty.
     #[test]
     fn the_path_segment_of_an_agent_keeps_its_form() {
         let component_id =

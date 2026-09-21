@@ -80,10 +80,10 @@ const SERVER_ERROR: u16 = 500;
 /// 15.5.13). `put_raw_if_absent` gives `PutIfAbsent::AlreadyExists` for it.
 const PRECONDITION_FAILED: u16 = 412;
 
-/// A response with this HTTP status to a write with `If-None-Match: *` tells the backend that a
-/// request on the same key ran at the same time (RFC 9110, section 15.5.10). S3 gives it when a
-/// delete of the key finishes before the write, and the S3 documentation of conditional writes
-/// says that the client can send a `PutObject` again after it.
+/// This HTTP status answers a write with `If-None-Match: *` when a request on the same key ran at
+/// the same time. RFC 9110 defines it in section 15.5.10. S3 gives it when a delete of the key
+/// finishes before the write. The S3 documentation of conditional writes says that the client can
+/// send a `PutObject` again after it.
 const CONFLICT: u16 = 409;
 
 /// The 4xx statuses that ask the client to send the request again: the server did not get the
@@ -877,8 +877,8 @@ impl S3BlobStorage {
     /// Tells whether the retry loop sends a `PutObject` with `If-None-Match: *` again after an
     /// error.
     ///
-    /// A [`CONFLICT`] keeps the loop: a request on the same key ran at the same time, and the
-    /// next attempt gets the answer for the key as it is then. Every other error follows
+    /// A [`CONFLICT`] keeps the loop. A request on the same key ran at the same time, and the next
+    /// attempt gets the answer for the key as it is then. Every other error follows
     /// `is_put_object_error_retriable`, so a [`PRECONDITION_FAILED`], which is an error of the
     /// client, stops the loop.
     fn is_put_if_absent_error_retriable(error: &SdkError<PutObjectError>) -> bool {
@@ -893,12 +893,12 @@ impl S3BlobStorage {
     }
 
     /// Gives the text that the retry loop records for an error of a `PutObject` with
-    /// `If-None-Match: *`, or `None` for an error that the loop does not record and does not
+    /// `If-None-Match: *`. Gives `None` for an error that the loop does not record and does not
     /// count as a failure.
     ///
-    /// A key that already has an object ([`PRECONDITION_FAILED`]) is an answer and not a
-    /// failure, so it stays out of the error log and out of the failure counter. Every other
-    /// error gets its text.
+    /// A key that already has an object ([`PRECONDITION_FAILED`]) is an answer and not a failure.
+    /// So it stays out of the error log and out of the failure counter. Every other error gets its
+    /// text.
     fn put_if_absent_error_as_loggable(error: &SdkError<PutObjectError>) -> Option<String> {
         match error {
             SdkError::ServiceError(service_error)

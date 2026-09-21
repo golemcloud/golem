@@ -2555,10 +2555,10 @@ async fn put_raw_if_absent_gives_already_exists_for_a_412_after_one_request_and_
 
 #[test]
 async fn put_raw_if_absent_sends_a_write_that_a_409_answers_again() {
-    // S3 gives a 409 when a request on the same key ran at the same time, for example a delete
-    // that finished before the write, and its documentation says that a `PutObject` can go
-    // again after it. The status rule of `put_raw` stops at a 4xx, so this is the one answer
-    // that the conditional write treats in another way.
+    // S3 gives a 409 when a request on the same key ran at the same time, for example a delete that
+    // finished before the write. Its documentation says that a `PutObject` can go again after it.
+    // The status rule of `put_raw` stops at a 4xx. So this is the one answer that the conditional
+    // write treats in another way.
     let (storage, requests) = scripted_storage("", |_, earlier| match earlier {
         0 => Answer::new(409, CONDITIONAL_REQUEST_CONFLICT),
         _ => Answer::new(200, ""),
@@ -2608,8 +2608,8 @@ async fn put_raw_if_absent_after_a_lost_response_can_find_its_own_object() {
 
 #[test]
 async fn put_raw_if_absent_stops_at_a_fault_of_the_request() {
-    // The conditional write keeps the rule of `put_raw` for every answer other than a 409: a
-    // 4xx that reports a fault of the request gets the same answer again, so the loop stops.
+    // The conditional write keeps the rule of `put_raw` for every answer other than a 409. A 4xx
+    // that reports a fault of the request gets the same answer again, so the loop stops.
     let (storage, requests) = scripted_storage("", |_, _| Answer::new(400, ENTITY_TOO_LARGE));
 
     let result = storage
@@ -2675,9 +2675,9 @@ async fn put_raw_if_absent_rejects_a_name_that_breaks_a_rule_without_a_request()
 
 #[test]
 async fn a_filesystem_snapshot_blob_goes_to_its_own_bucket_and_to_the_key_of_its_agent() {
-    // The agent name holds a `..` segment, which the rules of a key refuse, so the key holds
-    // the bounded segment of the agent and not the agent name. The path style of the client
-    // puts the bucket first in the URI.
+    // The agent name holds a `..` segment, which the rules of a key refuse. So the key holds the
+    // bounded segment of the agent and not the agent name. The path style of the client puts the
+    // bucket first in the URI.
     let agent_id = AgentId {
         component_id: ComponentId(Uuid::nil()),
         agent_id: r#"counter("a/../b")"#.to_string(),

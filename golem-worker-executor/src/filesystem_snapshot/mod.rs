@@ -174,10 +174,10 @@ impl std::error::Error for SnapshotStoreError {
 
 /// Keeps directory trees as named filesystem snapshots, one scope for each agent.
 ///
-/// A snapshot keeps, for each entry below the tree, its relative path, its kind, the content of
-/// a file, the target of a symlink, the permission bits and the modification time. It does not
-/// keep the owner, the access time, extended attributes, or the metadata of the root of the
-/// tree. An entry that is not a regular file, a directory or a symlink is outside this
+/// A snapshot keeps the relative path and the kind of each entry below the tree. It also keeps the
+/// content of a file, the target of a symlink, the permission bits and the modification time. It
+/// does not keep the owner, the access time, extended attributes, or the metadata of the root of
+/// the tree. An entry that is not a regular file, a directory or a symlink is outside this
 /// contract.
 ///
 /// One scope can have more than one writer at the same time, and no method locks. A delete of one
@@ -212,10 +212,10 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// Rebuilds a saved tree in the empty directory `into`.
     ///
     /// The result is the tree as it was at the save: the same files, directories, symlinks,
-    /// permissions and modification times. Each name of a file comes back as a separate file.
-    /// A snapshot does not keep the metadata of the root of the tree, so the call does not set
-    /// the permissions or the modification time of `into`. A failed restore can leave a part of
-    /// the tree in `into`, so only a successful restore gives a whole tree.
+    /// permissions and modification times. Each name of a file comes back as a separate file. A
+    /// snapshot does not keep the metadata of the root of the tree. So the call does not set the
+    /// permissions or the modification time of `into`. A failed restore can leave a part of the
+    /// tree in `into`, so only a successful restore gives a whole tree.
     ///
     /// `NotFound` means that no complete snapshot has the name, because no save of it finished
     /// or the snapshot was deleted. `Corrupt` means that an integrity check failed. Both give
@@ -300,9 +300,9 @@ fn newest_first(
 /// Gives the time of a new snapshot: `now`, or one millisecond after `newest` when `now` is not
 /// later than `newest`.
 ///
-/// `newest` is the time of the newest snapshot that the scope holds when the save starts. The
-/// time of a new snapshot is then later than the time of each snapshot in the scope, also when
-/// the clocks of two executors differ.
+/// `newest` is the time of the newest snapshot that the scope holds when the save starts. So the
+/// time of a new snapshot is later than the time of each snapshot in the scope. This holds also
+/// when the clocks of two executors differ.
 fn snapshot_time(now: Timestamp, newest: Option<Timestamp>) -> Timestamp {
     newest.map_or(now, |newest| {
         now.max(Timestamp::from(newest.to_millis().saturating_add(1)))
