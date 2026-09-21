@@ -402,8 +402,8 @@ async function sessionCancellation() {
       method: "PUT",
     });
     const values = await observations.json();
-    if (values[4] === 1) {
-      assert.deepEqual(values, [1, 1, 1, 0, 1, 0, 0]);
+    if (values[4] === "1") {
+      assert.deepEqual(values, ["1", "1", "1", "0", "1", "0", "0"]);
       break;
     }
     assert.ok(
