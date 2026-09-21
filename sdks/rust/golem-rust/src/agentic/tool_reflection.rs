@@ -474,7 +474,7 @@ impl ToolCommand {
             })
             .transpose()
     }
-    pub fn start_value(
+    pub async fn start_value(
         &self,
         value: SchemaValue,
         stdin: Option<InputStream>,
@@ -501,6 +501,7 @@ impl ToolCommand {
             move |result| command.decode_result(result),
             self.error_decoder(),
         )
+        .await
         .map_err(ToolReflectionError::Tool)
     }
     pub fn trigger_value(
@@ -631,7 +632,7 @@ impl DynamicToolClient {
         .await
     }
 
-    pub fn start(
+    pub async fn start(
         &self,
         path: &[String],
         input: &TypedSchemaValue,
@@ -655,6 +656,7 @@ impl DynamicToolClient {
             Ok,
             |name, payload| Ok(Some(ReflectedToolCustomError { name, payload })),
         )
+        .await
     }
 
     pub fn trigger(

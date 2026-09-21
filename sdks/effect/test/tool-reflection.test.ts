@@ -161,6 +161,94 @@ describe("native tool reflection", () => {
     expect(cancel).toHaveBeenCalledTimes(1)
   })
 
+  it("settles result and stdout and gives the result error precedence", async () => {
+    const streaming = toolDefinition("settle-both").body((body) =>
+      body.positional("name", Schema.String).output().returns(Schema.String),
+    )
+    const registration = {
+      ...registered,
+      lookupName: "settle-both",
+      definition: compileDefinition(streaming).wire,
+    }
+    let stdoutSettled = false
+    const transport = ToolTransport.of({
+      start: () =>
+        Effect.succeed({
+          stdout: (async function* () {
+            try {
+              yield { tag: "err", val: { tag: "failed", val: "stdout failed" } } as const
+            } finally {
+              stdoutSettled = true
+            }
+          })(),
+          result: Effect.fail({ tag: "denied", val: "result failed" } as const),
+          cancel: Effect.void,
+        }),
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [registration],
+      getTool: () => registration,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createStdout: vi.fn() as never,
+      rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
+    })
+    const failure = new ToolType(registration).client
+      .command([])
+      .startJson({ name: "hello" })
+      .pipe(
+        Effect.flatMap((started) => started.collect),
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(ToolClient, host),
+        Effect.scoped,
+        Effect.flip,
+      )
+
+    await expect(Effect.runPromise(failure)).resolves.toMatchObject({
+      tag: "rpc",
+      error: { tag: "denied", val: "result failed" },
+    })
+    expect(stdoutSettled).toBe(true)
+  })
+
+  it("uses fallible reflected RPC creation for triggers and preserves its structured error", async () => {
+    const createRpc = vi.fn(() => {
+      throw { tag: "denied", val: "not granted" }
+    })
+    const rpc = vi.fn(() => {
+      throw new Error("infallible constructor must not be used")
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [registered],
+      getTool: () => registered,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createStdout: vi.fn() as never,
+      rpc: rpc as never,
+      createRpc: createRpc as never,
+    })
+    const command = new ToolType(registered).client.command([])
+    const failure = command
+      .triggerJson({ name: "hello" })
+      .pipe(Effect.provideService(ToolClient, host), Effect.flip)
+
+    await expect(Effect.runPromise(failure)).resolves.toEqual({
+      tag: "rpc",
+      error: { tag: "denied", val: "not granted" },
+    })
+    const startFailure = command
+      .startJson({ name: "hello" })
+      .pipe(Effect.provideService(ToolClient, host), Effect.scoped, Effect.flip)
+    await expect(Effect.runPromise(startFailure)).resolves.toEqual({
+      tag: "rpc",
+      error: { tag: "denied", val: "not granted" },
+    })
+    expect(createRpc).toHaveBeenCalledTimes(2)
+    expect(createRpc).toHaveBeenCalledWith("effect-reflection")
+    expect(rpc).not.toHaveBeenCalled()
+  })
+
   it("rejects a remote result whose graph differs from the declaration", async () => {
     const codec = Effect.runSync(compile(Schema.String))
     const transport = ToolTransport.of({

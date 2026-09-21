@@ -1,8 +1,8 @@
 /** Effect-native reflection for ambient Golem tools. @since 1.6.0 */
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Core from "golem:core/types@2.0.0"
-import { Effect, Scope, Stream } from "effect"
-import { createToolClientRuntime, type ToolRuntimeError } from "./BridgeTool.js"
+import { Effect, Exit, Scope, Stream } from "effect"
+import { createToolClientRuntime, isRpcError, type ToolRuntimeError } from "./BridgeTool.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
   field,
@@ -59,6 +59,40 @@ export interface StartedToolInvocation<A, E = never> {
     ToolRuntimeError<E> | ToolReflectionError
   >
 }
+
+const collectResultAndStdout = <
+  A,
+  ResultError,
+  StdoutError,
+  ResultRequirements,
+  StdoutRequirements,
+>(
+  result: Effect.Effect<A, ResultError, ResultRequirements>,
+  stdout: Stream.Stream<Uint8Array, StdoutError, StdoutRequirements>,
+): Effect.Effect<
+  { readonly result: A; readonly stdout: Uint8Array },
+  ResultError | StdoutError,
+  ResultRequirements | StdoutRequirements
+> =>
+  Effect.scoped(
+    Effect.all([Effect.exit(result), Effect.exit(Stream.runCollect(stdout))], {
+      concurrency: "unbounded",
+    }),
+  ).pipe(
+    Effect.flatMap(
+      ([resultExit, stdoutExit]): Effect.Effect<
+        { readonly result: A; readonly stdout: Uint8Array },
+        ResultError | StdoutError
+      > => {
+        if (Exit.isFailure(resultExit)) return Effect.failCause(resultExit.cause)
+        if (Exit.isFailure(stdoutExit)) return Effect.failCause(stdoutExit.cause)
+        return Effect.succeed({
+          result: resultExit.value,
+          stdout: concatBytes(stdoutExit.value),
+        })
+      },
+    ),
+  )
 
 /** A callable command in a discovered tool snapshot. @since 1.6.0 @category models */
 export class ToolCommand {
@@ -314,14 +348,7 @@ export class ToolCommand {
           )
         }),
       )
-      const collect = Effect.all([result, Stream.runCollect(stdout)], {
-        concurrency: "unbounded",
-      }).pipe(
-        Effect.map(([value, chunks]) => ({
-          result: value,
-          stdout: concatBytes(chunks),
-        })),
-      )
+      const collect = collectResultAndStdout(result, stdout)
       return { stdout, result, cancel: started.cancel, collect }
     })
   }
@@ -351,9 +378,7 @@ export class ToolCommand {
                 }),
           ),
         )
-        const collect = Effect.all([result, Stream.runCollect(started.stdout)], {
-          concurrency: "unbounded",
-        }).pipe(Effect.map(([value, chunks]) => ({ result: value, stdout: concatBytes(chunks) })))
+        const collect = collectResultAndStdout(result, started.stdout)
         return { stdout: started.stdout, result, cancel: started.cancel, collect }
       }),
     )
@@ -421,8 +446,11 @@ export class ToolCommand {
       })
       const host = yield* ToolClient
       const rpc = yield* Effect.try({
-        try: () => host.rpc(command.toolName),
-        catch: (cause) => new ToolReflectionError("invoke", cause),
+        try: () => host.createRpc(command.toolName),
+        catch: (cause) =>
+          isRpcError(cause)
+            ? ({ tag: "rpc", error: cause } as ToolRuntimeError<never>)
+            : new ToolReflectionError("invoke", cause),
       })
       const source = stdin
         ? yield* Stream.toAsyncIterableEffect(
@@ -443,7 +471,10 @@ export class ToolCommand {
             },
             source ? host.createStdinFromStream(source) : undefined,
           ),
-        catch: (cause) => new ToolReflectionError("invoke", cause),
+        catch: (cause) =>
+          isRpcError(cause)
+            ? ({ tag: "rpc", error: cause } as ToolRuntimeError<never>)
+            : new ToolReflectionError("invoke", cause),
       })
     })
   }
@@ -602,9 +633,7 @@ export class DynamicToolClient {
       )
       const stdout = started.stdout ?? Stream.empty
       const result = started.result.pipe(Effect.map((terminal) => terminal.result))
-      const collect = Effect.all([result, Stream.runCollect(stdout)], {
-        concurrency: "unbounded",
-      }).pipe(Effect.map(([value, chunks]) => ({ result: value, stdout: concatBytes(chunks) })))
+      const collect = collectResultAndStdout(result, stdout)
       return { stdout, result, cancel: started.cancel, collect }
     })
   }
@@ -633,8 +662,11 @@ export class DynamicToolClient {
     return Effect.gen(function* () {
       const host = yield* ToolClient
       const rpc = yield* Effect.try({
-        try: () => host.rpc(name),
-        catch: (cause) => new ToolReflectionError("invoke", cause),
+        try: () => host.createRpc(name),
+        catch: (cause) =>
+          isRpcError(cause)
+            ? ({ tag: "rpc", error: cause } as ToolRuntimeError<never>)
+            : new ToolReflectionError("invoke", cause),
       })
       const source = stdin
         ? yield* Stream.toAsyncIterableEffect(
@@ -644,7 +676,10 @@ export class DynamicToolClient {
       yield* Effect.try({
         try: () =>
           rpc.invoke([...path], input, source ? host.createStdinFromStream(source) : undefined),
-        catch: (cause) => new ToolReflectionError("invoke", cause),
+        catch: (cause) =>
+          isRpcError(cause)
+            ? ({ tag: "rpc", error: cause } as ToolRuntimeError<never>)
+            : new ToolReflectionError("invoke", cause),
       })
     })
   }

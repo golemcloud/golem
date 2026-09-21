@@ -24,6 +24,8 @@ use std::time::Duration;
 #[async_trait]
 pub trait McpCapabilityLookup: Send + Sync {
     async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError>;
+    async fn invalidate(&self, domain: &Domain);
+    async fn invalidate_all(&self);
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -75,6 +77,16 @@ impl RegistryServiceMcpCapabilityLookup {
 
 #[async_trait]
 impl McpCapabilityLookup for RegistryServiceMcpCapabilityLookup {
+    async fn invalidate(&self, domain: &Domain) {
+        self.cache.remove(domain).await;
+    }
+
+    async fn invalidate_all(&self) {
+        for domain in self.cache.keys().await {
+            self.cache.remove(&domain).await;
+        }
+    }
+
     async fn get(&self, domain: &Domain) -> Result<CompiledMcp, McpCapabilitiesLookupError> {
         let registry_client = self.registry_service_client.clone();
         let domain_clone = domain.clone();

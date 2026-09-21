@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod byte_size;
+
 use crate::SafeDisplay;
 use crate::model::RetryConfig;
 use figment::Figment;

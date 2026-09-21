@@ -10,12 +10,12 @@ QuickJS-backed WASI Preview 3 components.
 - Durable agents expose `client.get`, `getPhantom`, and `newPhantom`; ephemeral agents expose
   `getPhantom` and `newPhantom`. RPC call/trigger/schedule input is one object. Awaited calls are
   fiber-interruptible.
-- `defineAgentClient({ name, id, methods, mode?, config? })` is the recommended complete caller-only
-  contract with `agentId` and lifecycle factories. Its method-only `{ methods }` form has neither
+- `defineAgentClient({ name, id, methods, mode?, config? })` is the recommended full caller-owned
+  client with `agentId` and lifecycle factories. Its method-only `{ methods }` form has neither
   factory nor identity constructor and binds without discovery using durable results. Unimplemented
-  `defineAgent` specs remain available as shared contracts. `identity.client(contract)` validates
+  `defineAgent` specs remain available as shared definitions. `identity.client(clientDefinition)` validates
   exact names and constructor schemas before opening RPC.
-  `DynamicClient.bind(identity)` uses schema-native values with no contract or discovery. Complete
+  `DynamicClient.bind(identity)` uses schema-native values with no client definition or discovery. Full
   ephemeral specs and reflected ephemeral types reject generic existing-ID binding; use their
   `getPhantom` or `newPhantom` factories. `identity.dynamicClient()` binds schema-native values.
 - Config secrets are `Schema.Redacted` opaque handles. They are uncached, excluded from overrides,

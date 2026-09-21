@@ -168,6 +168,10 @@ fn card_managed_by(card: &StoredCard) -> String {
                 "agent initial {} rev {} {}",
                 managed_by.component_id, managed_by.component_revision, managed_by.agent_type
             ),
+            Some(CardManagedBy::ComponentInitial(managed_by)) => format!(
+                "component initial {} rev {}",
+                managed_by.component_id, managed_by.component_revision
+            ),
             Some(CardManagedBy::RuntimeDerived(managed_by)) => format!(
                 "runtime derived {} {} invocation {} oplog {}",
                 managed_by.environment_id,

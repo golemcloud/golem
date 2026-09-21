@@ -35,14 +35,11 @@ impl ReplayState {
         .await
     }
 
-    /// Delivery-time validation of a resolved outcome: a `CompletedButDiscarded` resolution whose
-    /// marker lies *beyond* the effective replay target is an invalid replay configuration — the
-    /// target falls between the call's successful `End` and its `CompletionDiscarded` marker, so
-    /// the delivery status of the `End` cannot be decided from the visible oplog prefix. Debug
-    /// target validation and cut-point validation reject such targets up front; this check is
-    /// defense in depth for any other path that bounds replay between the two entries. Future
-    /// knowledge (the marker beyond the target) is only ever used to *reject* the target, never
-    /// to decide a call's outcome within it.
+    /// Rejects a resolved delivery marker beyond the effective replay target. Debug target
+    /// validation rejects such targets up front; this is defense in depth if the target changes
+    /// after resolution. Fork/revert instead remove the future marker from visible history and
+    /// recover the retained `End` at the replay tail. Future knowledge is never used to decide
+    /// a call's outcome within the retained prefix.
     fn validate_resolved_outcome(
         &self,
         outcome: ResolutionOutcome,

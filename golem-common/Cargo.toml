@@ -39,6 +39,7 @@ full = [
     "dep:figment",
     "dep:fred",
     "dep:heck",
+    "dep:humanize-rs",
     "dep:itertools",
     "dep:lazy_static",
     "dep:mac_address",
@@ -97,6 +98,7 @@ fred = { workspace = true, optional = true }
 glob-match = { workspace = true }
 heck = { workspace = true, optional = true }
 http = { workspace = true }
+humanize-rs = { workspace = true, optional = true }
 humantime = { workspace = true }
 humantime-serde = { workspace = true }
 ident-mash = { workspace = true }

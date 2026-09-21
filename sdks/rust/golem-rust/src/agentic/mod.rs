@@ -14,7 +14,7 @@
 
 pub use crate::golem_agentic::golem::agent::common::Principal;
 pub type InputStream = wit_bindgen::StreamReader<
-    Result<Vec<u8>, crate::golem_agentic::golem::tool::host::ByteStreamFailure>,
+    Result<Vec<u8>, crate::golem_agentic::golem::tool::streams::ByteStreamFailure>,
 >;
 pub use agent::*;
 pub use agent_config::*;

@@ -32,6 +32,8 @@ pub mod compatibility;
 pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;
 pub mod durability;
+pub mod external_durable_stream;
+pub mod fork;
 pub mod fuel;
 pub mod hot_update;
 pub mod http;
@@ -100,6 +102,7 @@ tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 tag_suite!(in_function_retry, in_function_retry);
 tag_suite!(http, group1);
+tag_suite!(external_durable_stream, group1);
 tag_suite!(rdbms, group1);
 
 tag_suite!(hot_update, group2);
@@ -202,6 +205,12 @@ test_component!(
     "agent_rpc_rust",
     "golem_it_agent_rpc_rust_release",
     "golem-it:agent-rpc-rust"
+);
+test_component!(
+    external_durable_streams,
+    "external_durable_streams",
+    "golem_it_external_durable_streams_release",
+    "golem-it:external-durable-streams"
 );
 test_component!(
     agent_rpc_rust_as_resolve_target,

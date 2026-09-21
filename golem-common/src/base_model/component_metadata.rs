@@ -18,7 +18,7 @@ use crate::base_model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolM
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
 use crate::model::card::PolymorphicCard;
-use crate::schema::AgentTypeSchema;
+use crate::schema::{AgentTypeSchema, ComponentConfigSchema};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -198,6 +198,12 @@ pub struct ComponentMetadataInnerData {
 
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
+    pub config_schema: ComponentConfigSchema,
+
+    pub component_provision_config: ComponentProvisionConfig,
+
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
     pub agent_types: Vec<AgentTypeSchema>,
 
     /// Server-derived streaming classification for each declared agent method.
@@ -218,6 +224,39 @@ pub struct ComponentMetadataInnerData {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub tool_middlewares: BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentProvisionConfig {
+    pub initial_permissions: PolymorphicCard,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub config: Vec<TypedAgentConfigEntry>,
+    #[serde(default)]
+    pub plugins: Vec<InstalledPlugin>,
+    #[serde(default)]
+    pub files: Vec<InitialAgentFile>,
+}
+
+impl Default for ComponentProvisionConfig {
+    fn default() -> Self {
+        Self {
+            initial_permissions: crate::model::component::AgentTypeInitialPermissions::default()
+                .to_polymorphic_card(),
+            env: BTreeMap::new(),
+            config: Vec::new(),
+            plugins: Vec::new(),
+            files: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

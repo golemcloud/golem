@@ -25,6 +25,7 @@ use golem_common::model::tool::TOOL_METADATA_WIT_VERSION;
 use golem_common::model::tool::ToolProvisionConfig;
 use golem_common::model::tool_middleware::{RegisteredToolMiddleware, ToolMiddlewareSource};
 use golem_common::model::tool_middleware_release::ToolMiddlewareReleaseId;
+use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{Doc, ToolMiddleware, ToolMiddlewareScope};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_resource_override::DbAccountResourceOverrideRepo;
@@ -723,6 +724,7 @@ async fn test_tool_depublication_waits_for_grant_eligibility_lock(db: &PostgresD
         version: "1.0.0".to_string(),
         aliases: Vec::new(),
         doc: Doc::default(),
+        parameter_schema: SchemaGraph::empty(),
         scope: ToolMiddlewareScope::Universal,
     };
     let release = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(

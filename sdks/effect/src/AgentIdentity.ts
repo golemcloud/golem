@@ -18,11 +18,11 @@ export interface Identity {
   readonly typeName: string
   readonly constructorValue: CoreTypes.SchemaValueTree
   readonly phantomId?: string
-  /** Bind a caller-owned or reflected contract without rediscovery. @since 1.6.0 @category constructors */
+  /** Bind a method-only, full, or reflected client without rediscovery. @since 1.6.0 @category constructors */
   readonly client: <Client, Error, Requirements>(
     binding: IdentityBinding<Client, Error, Requirements>,
   ) => Effect.Effect<Client, Error, Requirements>
-  /** Bind schema-value methods without a contract or discovery. @since 1.6.0 @category constructors */
+  /** Bind schema-value methods without a typed client definition or discovery. @since 1.6.0 @category constructors */
   readonly dynamicClient: () => ReturnType<typeof bindDynamic>
 }
 

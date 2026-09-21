@@ -106,6 +106,9 @@ export * as Datetime from "./Datetime.js"
  */
 export * as Durability from "./Durability.js"
 
+/** External Durable Streams readers and producers. @since 1.6.0 @category modules */
+export * as DurableStreams from "./DurableStreams.js"
+
 /** Schema-value RPC for callers that only have an agent identity. @since 1.6.0 @category modules */
 export * as DynamicClient from "./DynamicClient.js"
 
@@ -340,7 +343,7 @@ export * as WitTypes from "./WitTypes.js"
  */
 export { defineAgent } from "./Agent.js"
 
-/** Define a caller-only contract without registering an agent. @since 1.6.0 @category dsl */
+/** Define a method-only or full client without registering an agent. @since 1.6.0 @category dsl */
 export { defineAgentClient } from "./Client.js"
 
 /**

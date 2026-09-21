@@ -76,37 +76,36 @@ describe('SchemaRef canonical JSON', () => {
     expect(ref.validateJson({ bytes: 'AQI', mimeType: 'not a mime' }).success).toBe(false);
   });
 
-  it('accepts ISO 8601 and shorthand durations and emits ISO 8601', () => {
+  it('uses a canonical signed decimal nanosecond string for durations', () => {
     const ref = schema(t.duration());
 
-    expect(ref.packJson('PT1M2.003S')).toEqual(v.duration(62_003_000_000n));
-    expect(ref.packJson('250ms')).toEqual(v.duration(250_000_000n));
-    expect(ref.unpackJson(v.duration(-90_000_000_000n))).toBe('-PT1M30S');
+    expect(ref.packJson({ nanoseconds: '62003000000' })).toEqual(v.duration(62_003_000_000n));
+    expect(ref.unpackJson(v.duration(-90_000_000_000n))).toEqual({
+      nanoseconds: '-90000000000',
+    });
+    expect(ref.validateJson({ nanoseconds: '-0' }).success).toBe(false);
+    expect(ref.validateJson({ nanoseconds: '01' }).success).toBe(false);
   });
 
-  it('uses JSON integers for quantity mantissas', () => {
+  it('uses canonical signed decimal strings for quantity mantissas', () => {
     const ref = schema(t.quantity({ baseUnit: 'm', allowedUnits: [] }));
-    const json = { mantissa: 123, scale: -2, unit: 'm' } as const;
+    const json = { mantissa: '123', scale: -2, unit: 'm' } as const;
 
     expect(ref.packJson(json)).toEqual(v.quantity({ mantissa: 123n, scale: -2, unit: 'm' }));
     expect(ref.unpackJson(ref.packJson(json))).toEqual(json);
-    expect(ref.validateJson({ ...json, mantissa: '123' }).success).toBe(false);
+    expect(ref.validateJson({ ...json, mantissa: 123 }).success).toBe(false);
   });
 
-  it('uses lossless JSON numbers for s64 and u64 values', () => {
+  it('uses full-range canonical decimal strings for s64 and u64 values', () => {
     const signed = schema(t.s64());
     const unsigned = schema(t.u64());
 
-    expect(signed.packJson(Number.MIN_SAFE_INTEGER)).toEqual(
-      v.s64(BigInt(Number.MIN_SAFE_INTEGER)),
-    );
-    expect(unsigned.packJson(Number.MAX_SAFE_INTEGER)).toEqual(
-      v.u64(BigInt(Number.MAX_SAFE_INTEGER)),
-    );
-    expect(signed.unpackJson(v.s64(BigInt(Number.MAX_SAFE_INTEGER)))).toBe(Number.MAX_SAFE_INTEGER);
-    expect(unsigned.validateJson(-1).success).toBe(false);
-    expect(signed.validateJson(Number.MAX_SAFE_INTEGER + 1).success).toBe(false);
-    expect(() => unsigned.unpackJson(v.u64(2n ** 63n))).toThrow(/cannot be represented losslessly/);
+    expect(signed.packJson('-9223372036854775808')).toEqual(v.s64(-(2n ** 63n)));
+    expect(unsigned.packJson('18446744073709551615')).toEqual(v.u64(2n ** 64n - 1n));
+    expect(signed.unpackJson(v.s64(2n ** 63n - 1n))).toBe('9223372036854775807');
+    expect(unsigned.validateJson('-1').success).toBe(false);
+    expect(signed.validateJson('9223372036854775808').success).toBe(false);
+    expect(unsigned.validateJson('01').success).toBe(false);
   });
 
   it('rejects out-of-range and malformed primitive values', () => {
@@ -185,12 +184,46 @@ describe('SchemaRef JSON Schema', () => {
           required: ['text'],
           additionalProperties: false,
         },
-        duration: { type: 'string', format: 'duration' },
+        duration: {
+          type: 'object',
+          properties: {
+            nanoseconds: {
+              type: 'string',
+              format: 'int64',
+              pattern: '^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$',
+              'x-golem-minimum': '-9223372036854775808',
+              'x-golem-maximum': '9223372036854775807',
+            },
+          },
+        },
         quantity: {
           type: 'object',
-          properties: { mantissa: { type: 'integer' } },
+          properties: {
+            mantissa: {
+              type: 'string',
+              format: 'int64',
+              pattern: '^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$',
+            },
+          },
         },
       },
+    });
+  });
+
+  it('renders full-range metadata for wide integers', () => {
+    expect(schema(t.s64()).toJsonSchema()).toMatchObject({
+      type: 'string',
+      format: 'int64',
+      pattern: '^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$',
+      'x-golem-minimum': '-9223372036854775808',
+      'x-golem-maximum': '9223372036854775807',
+    });
+    expect(schema(t.u64()).toJsonSchema()).toMatchObject({
+      type: 'string',
+      format: 'uint64',
+      pattern: '^(?:0|[1-9][0-9]*)$',
+      'x-golem-minimum': '0',
+      'x-golem-maximum': '18446744073709551615',
     });
   });
 });

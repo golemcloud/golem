@@ -10,7 +10,9 @@ use golem_common::model::deployment::{DeploymentCreation, DeploymentVersion};
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::{EnvironmentCreation, EnvironmentName};
 use golem_common::model::json::NormalizedJsonValue;
-use golem_common::model::tool::{ConfigKeyScope, ToolBindingInput, ToolName, ToolProvisionConfig};
+use golem_common::model::tool::{
+    ConfigKeyScope, SecretKeyScope, ToolBindingInput, ToolName, ToolProvisionConfig,
+};
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{CommandNode, CommandTree, Tool};
@@ -101,12 +103,15 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
         .cloned()
         .expect("the real caller component must export ToolStreamingCaller");
     let caller_agent_name = caller_agent.type_name.clone();
+    let caller_component_name = ComponentName("golem-it:tool-streaming-rust-caller".into());
     services
         .component_write_service
         .create(
             env.id,
             ComponentCreation {
-                component_name: ComponentName("golem-it:tool-streaming-rust-caller".into()),
+                component_name: caller_component_name.clone(),
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 agent_types: vec![caller_agent],
                 agent_type_provision_configs: BTreeMap::from([(
                     caller_agent_name.clone(),
@@ -146,6 +151,7 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
     let stale_request = ambient_deployment_request(
         &stale_plan,
         std::slice::from_ref(&caller_agent_name),
+        &BTreeMap::new(),
         &BTreeMap::new(),
     );
 
@@ -189,11 +195,21 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
             ..Default::default()
         },
     )]);
+    let component_overrides = BTreeMap::from([(
+        caller_component_name,
+        ToolBindingInput {
+            config_keys_readable: empty_scope,
+            secret_keys_readable: SecretKeyScope::Keys(BTreeSet::new()),
+            ..Default::default()
+        },
+    )]);
     let request = ambient_deployment_request(
         &plan,
         std::slice::from_ref(&caller_agent_name),
         &agent_overrides,
+        &component_overrides,
     );
+    assert_eq!(request.1[0].component_bindings, component_overrides);
     let mut remote_tools = request.1;
     remote_tools[0].provision.config =
         NormalizedJsonValue::new(serde_json::json!({"spoofed": true}));
@@ -235,6 +251,7 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
         &plan,
         std::slice::from_ref(&caller_agent_name),
         &agent_overrides,
+        &component_overrides,
     );
     let mut duplicate_remote_tools = canonical_request.1.clone();
     let mut conflicting_duplicate = duplicate_remote_tools[0].clone();
@@ -344,6 +361,7 @@ fn ambient_deployment_request(
     plan: &golem_common::model::deployment::DeploymentPlan,
     agent_types: &[golem_common::model::agent::AgentTypeName],
     agent_overrides: &BTreeMap<golem_common::model::agent::AgentTypeName, ToolBindingInput>,
+    component_overrides: &BTreeMap<ComponentName, ToolBindingInput>,
 ) -> (Hash, Vec<golem_common::model::tool::RemoteToolDeployment>) {
     let mut target = plan.to_diffable();
     let remote_tools = plan
@@ -353,7 +371,11 @@ fn ambient_deployment_request(
             target.remote_tools.insert(
                 ambient.name.to_string(),
                 ambient
-                    .to_diffable(agent_types.iter().cloned(), agent_overrides)
+                    .to_diffable(
+                        agent_types.iter().cloned(),
+                        agent_overrides,
+                        component_overrides,
+                    )
                     .into(),
             );
             golem_common::model::tool::RemoteToolDeployment {
@@ -363,6 +385,7 @@ fn ambient_deployment_request(
                 }),
                 provision: ambient.provision.clone(),
                 environment_binding: Some(ambient.environment_binding.clone()),
+                component_bindings: component_overrides.clone(),
                 agent_bindings: agent_overrides.clone(),
             }
         })
