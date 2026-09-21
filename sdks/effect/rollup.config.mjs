@@ -75,6 +75,33 @@ export default defineConfig([
   },
 
   {
+    input: "src/Ai.ts",
+    output: {
+      file: "dist/ai.mjs",
+      format: "esm",
+      sourcemap: true,
+    },
+    external,
+    plugins: [
+      resolve({ extensions: [".js", ".ts", ".mjs"] }),
+      commonjs(),
+      typescript({
+        tsconfig: "./tsconfig.json",
+        include: ["src/**/*", "golem-types/**/*"],
+        tsconfigOverride: {
+          compilerOptions: {
+            declaration: false,
+            sourceMap: true,
+            module: "ESNext",
+            moduleResolution: "Bundler",
+          },
+        },
+      }),
+      terser(),
+    ],
+  },
+
+  {
     input: "src/Middleware.ts",
     output: {
       file: "dist/middleware.mjs",

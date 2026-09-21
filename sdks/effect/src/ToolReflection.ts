@@ -19,9 +19,12 @@ import {
   schemaGraphFromWit,
   schemaGraphToWit,
   schemaValueFromWit,
+  schemaValueToWit,
 } from "./internal/schema-model/wit.js"
 import { freezeSchemaGraph, SchemaRef, type JsonValue } from "./SchemaRef.js"
 import { SchemaRenderError } from "./internal/reflection/schemaRender.js"
+
+const EMPTY_TUPLE_GRAPH: SchemaGraph = { defs: new Map(), root: t.tuple([]) }
 
 /** A local schema, metadata, or remote output failure. @since 1.6.0 @category errors */
 export class ToolReflectionError {
@@ -41,6 +44,7 @@ export interface ToolArgument {
   readonly schema: SchemaRef
   readonly optionalCarrier?: true
   readonly default?: SchemaValue
+  readonly defaultJson?: JsonValue
 }
 
 /** A declared custom tool failure decoded from the discovered schema. @since 1.6.0 @category errors */
@@ -108,6 +112,7 @@ export class ToolCommand {
   readonly stdout?: Common.StreamSpec
   readonly result?: SchemaRef
   readonly errors: ReadonlyArray<{ readonly name: string; readonly payload?: SchemaRef }>
+  readonly annotations?: Common.CommandAnnotations
   private readonly wireGraph?: SchemaGraph
 
   constructor(
@@ -133,20 +138,24 @@ export class ToolCommand {
       ? [
           ...body.positionals.fixed.map((positional) => {
             const optional = !positional.required && positional.default_ === undefined
+            const schema = SchemaRef.fromImmutableGraph(
+              graph,
+              optional ? t.option(typeAt(positional.type)) : typeAt(positional.type),
+            )
+            const defaultValue =
+              positional.default_ === undefined
+                ? undefined
+                : schemaValueFromWit(positional.default_)
             return Object.freeze({
               kind: "positional" as const,
               name: positional.name,
               aliases: [] as ReadonlyArray<string>,
               required: positional.required,
               optionalCarrier: optional ? (true as const) : undefined,
-              default:
-                positional.default_ === undefined
-                  ? undefined
-                  : schemaValueFromWit(positional.default_),
-              schema: SchemaRef.fromImmutableGraph(
-                graph,
-                optional ? t.option(typeAt(positional.type)) : typeAt(positional.type),
-              ),
+              default: defaultValue,
+              defaultJson:
+                defaultValue === undefined ? undefined : canonicalDefault(schema, defaultValue),
+              schema,
             })
           }),
           ...(body.positionals.tail
@@ -156,6 +165,8 @@ export class ToolCommand {
                   name: body.positionals.tail.name,
                   aliases: [] as ReadonlyArray<string>,
                   required: body.positionals.tail.min > 0,
+                  default: body.positionals.tail.min > 0 ? undefined : v.list([]),
+                  defaultJson: body.positionals.tail.min > 0 ? undefined : freezeJson([]),
                   schema: SchemaRef.fromImmutableGraph(
                     graph,
                     t.list(typeAt(body.positionals.tail.itemType)),
@@ -178,6 +189,7 @@ export class ToolCommand {
     this.constraints = Object.freeze([...(body?.constraints ?? [])])
     this.stdin = body?.stdin
     this.stdout = body?.stdout
+    this.annotations = body?.annotations
     this.result = body?.result
       ? SchemaRef.fromImmutableGraph(graph, typeAt(body.result.type))
       : undefined
@@ -205,9 +217,15 @@ export class ToolCommand {
   /** Pack canonical JSON before a remote call. @since 1.6.0 @category validation */
   packJson(input: JsonValue): Core.SchemaValueTree {
     if (!this.inputSchema) throw new ToolReflectionError("input", "command has no body")
-    const value = this.inputSchema.packJson(input)
-    if (!this.inputSchema.validateValue(value).success)
-      throw new ToolReflectionError("input", "invalid tool input")
+    const validated = this.inputSchema.validateJson(input)
+    if (!validated.success) {
+      const issue = validated.issues[0]
+      throw new ToolReflectionError(
+        "input",
+        issue?.cause ?? new SchemaRenderError(issue?.path ?? [], issue?.message ?? "invalid input"),
+      )
+    }
+    const value = validated.value
     this.validateConstraints(value)
     return value
   }
@@ -504,7 +522,11 @@ export class ToolCommand {
     try {
       if (!declared.payload) {
         const value = schemaValueFromWit(custom.payload.value)
-        if (value.tag !== "tuple" || value.elements.length !== 0)
+        if (
+          !schemaShapesMatch(EMPTY_TUPLE_GRAPH, schemaGraphFromWit(custom.payload.graph)) ||
+          value.tag !== "tuple" ||
+          value.elements.length !== 0
+        )
           return new ToolReflectionError("output", "custom error has an unexpected payload")
         return { tag: "tool", error: { name: custom.name } }
       }
@@ -744,28 +766,41 @@ function optionArgument(
     option.default_ === undefined &&
     option.shape.tag !== "repeatable-list" &&
     option.shape.tag !== "repeatable-map"
+  const schema = SchemaRef.fromImmutableGraph(graph, optional ? t.option(root) : root)
+  const defaultValue =
+    option.default_ !== undefined
+      ? schemaValueFromWit(option.default_)
+      : !option.required && option.shape.tag === "repeatable-list"
+        ? v.list([])
+        : !option.required && option.shape.tag === "repeatable-map"
+          ? v.map([])
+          : undefined
   return Object.freeze({
     kind: "option",
     name: option.long,
     aliases: Object.freeze([...option.aliases]),
     required: option.required,
     optionalCarrier: optional ? true : undefined,
-    default: option.default_ === undefined ? undefined : schemaValueFromWit(option.default_),
-    schema: SchemaRef.fromImmutableGraph(graph, optional ? t.option(root) : root),
+    default: defaultValue,
+    defaultJson: defaultValue === undefined ? undefined : canonicalDefault(schema, defaultValue),
+    schema,
   })
 }
 
 function flagArgument(flag: Common.FlagSpec, graph: SchemaGraph): ToolArgument {
+  const defaultValue = flag.shape.tag === "bool-flag" ? v.bool(flag.shape.val.default_) : v.u32(0)
+  const schema = SchemaRef.fromImmutableGraph(
+    graph,
+    flag.shape.tag === "bool-flag" ? t.bool() : t.u32(),
+  )
   return Object.freeze({
     kind: "flag",
     name: flag.long,
     aliases: Object.freeze([...flag.aliases]),
     required: false,
-    default: flag.shape.tag === "bool-flag" ? v.bool(flag.shape.val.default_) : v.u32(0),
-    schema: SchemaRef.fromImmutableGraph(
-      graph,
-      flag.shape.tag === "bool-flag" ? t.bool() : t.u32(),
-    ),
+    default: defaultValue,
+    defaultJson: freezeJson(schema.unpackJson(schemaValueToWit(defaultValue))),
+    schema,
   })
 }
 
@@ -812,4 +847,20 @@ function concatBytes(chunks: ReadonlyArray<Uint8Array>): Uint8Array {
     offset += chunk.length
   }
   return result
+}
+
+function freezeJson<T extends JsonValue>(value: T): T {
+  if (typeof value === "object" && value !== null) {
+    for (const child of Object.values(value)) freezeJson(child)
+    Object.freeze(value)
+  }
+  return value
+}
+
+function canonicalDefault(schema: SchemaRef, value: SchemaValue): JsonValue | undefined {
+  try {
+    return freezeJson(schema.unpackJson(schemaValueToWit(value)))
+  } catch {
+    return undefined
+  }
 }

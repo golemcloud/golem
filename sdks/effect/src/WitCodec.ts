@@ -71,6 +71,7 @@ import {
   peekGuestPermissionCardHandle,
 } from "./internal/schema-model/permissionCardHandle.js"
 import { PERMISSION_CARD_INTERNAL } from "./internal/schema-model/permissionCardInternal.js"
+import { SchemaRef, type JsonValue } from "./SchemaRef.js"
 
 // Branded so `Durability.wrap` (and any other downstream consumer that uses
 // nominal SDK-error detection) can route this into the defect channel without
@@ -165,6 +166,18 @@ export interface CompiledWitCodec<S extends Schema.Top> extends WitCodec<S> {
   readonly decode: (
     value: CoreTypes.SchemaValueTree,
   ) => Effect.Effect<S["Type"], Schema.SchemaError, S["DecodingServices"]>
+}
+
+/** A compiled schema whose public boundary is the schema model's canonical JSON representation. */
+export interface CompiledJsonCodec<S extends Schema.Top> {
+  readonly schema: S
+  readonly jsonSchema: JsonValue
+  readonly decode: (
+    value: JsonValue,
+  ) => Effect.Effect<S["Type"], Schema.SchemaError, S["DecodingServices"]>
+  readonly encode: (
+    value: S["Type"],
+  ) => Effect.Effect<JsonValue, Schema.SchemaError, S["EncodingServices"]>
 }
 
 /** Leaf pair for a primitive whose schema value carries a single `value`. */
@@ -1735,6 +1748,34 @@ export const compile = <S extends Schema.Top>(
       ),
     decode: (value) => decodeFromWire(compiled.codec, value),
   }))
+
+/** Compile an Effect Schema to its validated canonical JSON boundary. */
+export const compileJson = <S extends Schema.Top>(
+  schema: S,
+): Effect.Effect<CompiledJsonCodec<S>, UnsupportedSchemaError> =>
+  Effect.flatMap(compile(schema), (compiled) => {
+    const ref = new SchemaRef(compiled.schemaGraph)
+    const eligibility = ref.jsonEligibility()
+    if (!eligibility.success)
+      return Effect.fail(
+        new UnsupportedSchemaError(
+          eligibility.issues[0]?.message ?? "schema has no canonical JSON representation",
+        ),
+      )
+    return Effect.succeed({
+      schema,
+      jsonSchema: ref.toJsonSchema({ includeDraftMarker: false }),
+      decode: (value) =>
+        Effect.flatMap(
+          Effect.try({ try: () => ref.packJson(value), catch: wireSchemaError }),
+          compiled.decode,
+        ),
+      encode: (value) =>
+        Effect.flatMap(compiled.encodeAsync(value), (encoded) =>
+          Effect.try({ try: () => ref.unpackJson(encoded), catch: wireSchemaError }),
+        ),
+    })
+  })
 
 /** Decode a complete wire value while retaining ownership until validation succeeds.
  * @since 1.6.0 @category codecs

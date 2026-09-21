@@ -17,6 +17,7 @@ const typesDir = resolve(root, "golem-types")
 const distDir = resolve(root, "dist")
 const outFile = resolve(distDir, "effect-golem.d.ts")
 const middlewareOutFile = resolve(distDir, "effect-golem-middleware.d.ts")
+const aiOutFile = resolve(distDir, "effect-golem-ai.d.ts")
 const sqliteOutFile = resolve(distDir, "effect-golem-sqlite.d.ts")
 const postgresOutFile = resolve(distDir, "effect-golem-postgres.d.ts")
 const mysqlOutFile = resolve(distDir, "effect-golem-mysql.d.ts")
@@ -36,6 +37,10 @@ console.log(`wrote ${outFile}`)
 const middlewareBody = `export * from "./src/Middleware.js"\n`
 writeFileSync(middlewareOutFile, refs + "\n" + middlewareBody, "utf-8")
 console.log(`wrote ${middlewareOutFile}`)
+
+const aiBody = `export * from "./src/Ai.js"\n`
+writeFileSync(aiOutFile, refs + "\n" + aiBody, "utf-8")
+console.log(`wrote ${aiOutFile}`)
 
 const sqliteBody = `export * from "./src/Sqlite/SqliteClient.js"\n`
 writeFileSync(sqliteOutFile, refs + "\n" + sqliteBody, "utf-8")

@@ -34,6 +34,10 @@
       "types": "./dist/effect-golem-middleware.d.ts",
       "import": "./dist/middleware.mjs"
     },
+    "./ai": {
+      "types": "./dist/effect-golem-ai.d.ts",
+      "import": "./dist/ai.mjs"
+    },
     "./sqlite": {
       "types": "./dist/effect-golem-sqlite.d.ts",
       "import": "./dist/sqlite.mjs"
@@ -59,6 +63,7 @@
     "./agent-tool-middleware-guest": {
       "types": "./golem-types/agent_tool_middleware_exports.d.ts"
     },
+    "./Ai": null,
     "./internal/*": null,
     "./host/*": null,
     "./Sqlite/internal/*": null,
@@ -133,6 +138,7 @@
     "check:dts": "node ./scripts/check-dts.mjs",
     "check:contracts": "node ./scripts/check-stale-contracts.mjs",
     "check:artifacts": "node ./scripts/check-artifacts.mjs",
+    "check:ai-package": "node ./scripts/check-ai-package.mjs",
     "check:package": "node ./scripts/check-package.mjs",
     "clean": "node ./scripts/clean.mjs",
     "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
