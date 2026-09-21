@@ -285,7 +285,11 @@ pub async fn invoke_with_stdout(
       raise error
     }
   }
-  @async-core.protect_from_cancel(() => stdout.complete(None)) catch {
+  let reason = match result {
+    Ok(_) | Err(@types.ToolError::CustomError(_)) => None
+    Err(_) => Some(ToolStreamError::Failed("tool invocation failed"))
+  }
+  @async-core.protect_from_cancel(() => stdout.complete(reason)) catch {
     error =>
       match (error, result) {
         (@async-core.Cancelled::Cancelled, Ok(value)) => {
