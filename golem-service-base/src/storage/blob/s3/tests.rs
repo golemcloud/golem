@@ -480,6 +480,9 @@ const EMPTY_DELETE_RESULT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Dele
 
 const INVALID_RANGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>InvalidRange</Code><Message>The requested range is not satisfiable</Message></Error>"#;
 
+/// The body of the error of a fault of the server itself. S3 gives the code `InternalError`
+/// with the status 500, and the `PutObject` classifier of the SDK adds the code to
+/// `TRANSIENT_ERRORS`, so a 4xx that carries the code asks for one more attempt as well.
 const INTERNAL_ERROR: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>We encountered an internal error</Message></Error>"#;
 
 const NO_SUCH_KEY: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>"#;
@@ -1209,11 +1212,34 @@ async fn a_put_that_a_throttling_code_answers_goes_again() {
     assert_eq!((written.is_err(), sent(&requests).len()), (true, 3));
 }
 
+#[test]
+async fn a_put_that_an_internal_error_code_answers_goes_again() {
+    // The `PutObject` classifier of the SDK adds `InternalError` to `TRANSIENT_ERRORS`, so
+    // `RETRIABLE_SERVICE_ERROR_CODES` holds the code as well. S3 gives the code with the status
+    // 500, which keeps the retry loop by its status, and a service behind the S3 API can give
+    // the code with a 4xx, which the status rule alone would make a permanent error of. The
+    // loop makes 3 attempts and makes all 3 here. The filesystem snapshot of a worker writes to
+    // S3, so a `PutObject` that this code answers must not reach the caller as a permanent
+    // error.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(400, INTERNAL_ERROR));
+
+    let written = storage
+        .put_raw("test", "put-raw", namespace(), Path::new("blob"), b"x")
+        .await;
+
+    assert_eq!((written.is_err(), sent(&requests).len()), (true, 3));
+}
+
 /// The backend holds its own copy of the codes that the SDK sends again, because `aws-runtime`
 /// is the runtime support of the SDK and says that nothing uses it directly. The crate is a dev
 /// dependency, so this test reads the two lists and the backend does not. A code that a later
-/// version of the SDK adds fails this test, which is the one thing that keeps the copy of
-/// `RETRIABLE_SERVICE_ERROR_CODES` with the lists of the SDK.
+/// version of the SDK adds to either list fails this test.
+///
+/// The test reads the two lists and nothing else. The classifier of one operation can add a
+/// code of its own, which is in no list and is no constant: the `PutObject` classifier adds
+/// `InternalError` (`RuntimePlugin for PutObject` in the generated `aws-sdk-s3` source
+/// `src/operation/put_object.rs`). This test cannot see such a code, so a reader who wants to
+/// check `RETRIABLE_SERVICE_ERROR_CODES` against it reads that classifier.
 #[test]
 fn the_retriable_codes_hold_every_code_that_the_sdk_sends_again() {
     let missing = THROTTLING_ERRORS

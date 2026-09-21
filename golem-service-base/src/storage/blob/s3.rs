@@ -85,22 +85,35 @@ const RETRIABLE_CLIENT_ERROR_STATUSES: [u16; 2] = [408, 429];
 ///
 /// The list holds every code of `TRANSIENT_ERRORS` and of `THROTTLING_ERRORS` in
 /// `aws_runtime::retries::classifiers`, which are the codes that the SDK itself sends again,
-/// and the codes of the back-pressure of MinIO. The backend keeps every one of them retriable
-/// so that it never stops at an error that the SDK would send again. S3 gives `RequestTimeout`
+/// the code that the `PutObject` classifier of the SDK adds to `TRANSIENT_ERRORS`, and the
+/// codes of the back-pressure of MinIO. The backend keeps every one of them retriable so that
+/// it never stops at an error that the SDK would send again. S3 gives `RequestTimeout`
 /// with the status 400 and a service behind the same API can give a throttling code with
 /// another 4xx, so the status alone would make a permanent error of an answer that asks for one
 /// more attempt. MinIO gives its own back-pressure codes (`SlowDownRead`, `SlowDownWrite`,
 /// `ServerBusy` and `RequestTimeout`) with the status 503 (`cmd/api-errors.go`), which is
 /// retriable by its status.
 ///
+/// `InternalError` is the code that the `PutObject` classifier adds, and the SDK sends the
+/// request again for it, so the backend does too. S3 gives the code with the status 500, and it
+/// gives the code in the body of a response with the status 200 as well, and
+/// `is_permanent_put_object_error` keeps the loop for either status without this list. The
+/// answer that this list covers is a 4xx of a service behind the S3 API that carries the code.
+///
 /// The codes of the SDK are a copy, because `aws-runtime` is the runtime support of the SDK and
 /// says that nothing uses it directly. The crate is a dev dependency, and
 /// `the_retriable_codes_hold_every_code_that_the_sdk_sends_again` holds this list against the
-/// two constants, so a code that the SDK adds cannot go missing here without notice.
-const RETRIABLE_SERVICE_ERROR_CODES: [&str; 19] = [
+/// two constants, so a code that the SDK adds to either constant cannot go missing here without
+/// notice. The code that the classifier of one operation adds is not in a constant, and no test
+/// holds this list against it: a reader who wants to check it reads the retry classifiers that
+/// `RuntimePlugin for PutObject` builds in the generated `aws-sdk-s3` source
+/// `src/operation/put_object.rs`.
+const RETRIABLE_SERVICE_ERROR_CODES: [&str; 20] = [
     // `TRANSIENT_ERRORS`.
     "RequestTimeout",
     "RequestTimeoutException",
+    // The code that the `PutObject` classifier of the SDK adds to `TRANSIENT_ERRORS`.
+    "InternalError",
     // `THROTTLING_ERRORS`.
     "Throttling",
     "ThrottlingException",
