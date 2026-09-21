@@ -182,7 +182,8 @@ pub trait BlobStorage: Debug + Send + Sync {
     /// `create_dir` made is in the result at its own path, so a directory that sits two names
     /// below the path is in the result with both names. A directory that only holds blobs is
     /// not in the result, because the storage keeps no entry for it, and a blob that is not
-    /// directly below the path is not in it either.
+    /// directly below the path is not in it either. Each path is in the result one time, also
+    /// when a blob and a directory hold that path.
     ///
     /// Returns an empty list if the path holds nothing. A path that has nothing at it holds
     /// nothing, and so does the root of a namespace that has nothing in it.
