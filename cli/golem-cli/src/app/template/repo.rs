@@ -472,7 +472,7 @@ mod tests {
             }
         }
 
-        // 3 component templates x 2 presets x (embed + new)
-        assert_eq!(checked, 12);
+        // 1 component template x 2 presets x (embed + new)
+        assert_eq!(checked, 4);
     }
 }
