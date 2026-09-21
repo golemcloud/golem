@@ -1550,6 +1550,12 @@ fn verify_absent(path: &Path, operation: &'static str) -> Result<(), FilesystemS
     }
 }
 
+#[cfg(all(test, unix))]
+fn running_as_root() -> bool {
+    // SAFETY: `geteuid` has no preconditions.
+    unsafe { libc::geteuid() == 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
