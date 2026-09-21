@@ -110,7 +110,7 @@ function byteStream(...values: number[]): ReadableStream<Uint8Array> {
 }
 
 describe('tool runtime client', () => {
-  it('constructs exact and partial clients from their owning definitions', async () => {
+  it('constructs definition-owned and caller-defined clients', async () => {
     const definition = toolDefinition('owned').body((body) => body.returns(z.string()));
     const transport = new FakeTransport(() => ({ result: wireValue(z.string(), 'ok') }));
     await expect(definition.client({ transport }).owned({})).resolves.toBe('ok');

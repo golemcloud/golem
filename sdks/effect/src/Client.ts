@@ -229,7 +229,7 @@ export type FullClient<
     >
   }
 
-/** Exact caller definition; name and id are inseparable. @since 1.6.0 @category models */
+/** Full caller-defined static client; name and id are inseparable. @since 1.6.0 @category models */
 export interface ClientDefinition<
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,
@@ -258,7 +258,7 @@ export class ClientBindingError {
   constructor(readonly reason: string) {}
 }
 
-/** @internal Shared protocol implemented by method-only, full, exact, and reflected clients. */
+/** @internal Shared protocol implemented by method-only, full, definition-owned, and reflected clients. */
 export const bindIdentity: unique symbol = Symbol.for("effect-golem/client/bind-identity")
 
 /** A value that can bind a parsed identity without discovery. @since 1.6.0 @category models */
@@ -590,13 +590,13 @@ export function defineAgentClient(definition: {
   return Object.freeze({ ...canonical, client, agentId, ...binding, bindWithConfig })
 }
 
-/** Bind a parsed identity through a method-only, full, exact, or reflected client. @since 1.6.0 @category constructors */
+/** Bind a parsed identity through a method-only, full, definition-owned, or reflected client. @since 1.6.0 @category constructors */
 export const bind = <Client, Error, Requirements>(
   identity: Identity,
   binding: IdentityBinding<Client, Error, Requirements>,
 ): Effect.Effect<Client, Error, Requirements> => binding[bindIdentity](identity)
 
-/** @internal Build the exact binding protocol shared by `defineAgent` specs. */
+/** @internal Build the binding protocol shared by `defineAgent` specs. */
 export const bindingFor = <
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,
@@ -606,7 +606,7 @@ export const bindingFor = <
   definition: AgentMetadata<C, Methods, Mode, F>,
 ): IdentityBinding<RemoteAgent<Methods>> => bindingForDefinition(definition)
 
-/** Build a client from the exact agent-definition input: `name`, `mode`, `id`, `methods`, and optional `config`. */
+/** Build a client from the full agent-definition input: `name`, `mode`, `id`, `methods`, and optional `config`. */
 export const clientFor = <
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,

@@ -73,16 +73,16 @@ invocation. Producer and cleanup failures fail the active operation or invocatio
 than becoming clean EOF. P3 has no recoverable stream-local terminal error, so model one explicitly
 in the item type, for example `stream<result<T, E>>`, when needed.
 
-## Agent client levels and reflection
+## Agent client approaches and reflection
 
 Choose the narrowest caller surface that owns the information you have:
 
-1. A generated or `defineAgent`-owned client provides typed methods and all lifecycle factories allowed by its mode.
-2. `defineAgentClient({ methods })` is a method-only client for an existing durable canonical or phantom `ParsedAgentId`. It does not discover or create agents. `defineAgentClient({ name, id, methods, mode?, config? })` is a full client with identity construction, lifecycle factories, and declaration-aware config validation.
-3. `reflection.getReflectedAgentType` discovers immutable deployed metadata and schemas for runtime-selected types and methods.
-4. `ParsedAgentId.dynamicClient()` invokes arbitrary methods with schema-native values on an existing durable identity. It does not discover schemas or create a target.
+1. Normal RPC uses a shared source definition through the SDK's ordinary typed client and owns all lifecycle factories allowed by its mode.
+2. Caller-defined static clients use local schemas without discovery. `defineAgentClient({ methods })` binds an existing durable canonical or phantom `ParsedAgentId`; `defineAgentClient({ name, id, methods, mode?, config? })` adds identity construction, lifecycle factories, and declaration-aware config validation.
+3. Discovered clients use `reflection.getReflectedAgentType` and retain an immutable deployed metadata snapshot for runtime-selected types and methods.
+4. Fully dynamic clients use `ParsedAgentId.dynamicClient()` to transport schema-native values on an existing durable identity. They do not retain schemas or create a target.
 
-Typed and full clients encode caller-owned schemas before opening RPC. Full-client binding also checks the exact type name and constructor shape. Reflected clients apply the complete discovered input restrictions and validate output cardinality and shape. The host remains authoritative for visibility, authorization, effective configuration, identity resolution, and deployed-schema validation.
+Normal RPC and caller-defined static clients encode through their local schemas before opening RPC. Full-client binding also checks the declared type name and constructor shape. Discovered clients apply the complete snapshot input restrictions and validate output cardinality and shape. The host remains authoritative for visibility, authorization, effective configuration, identity resolution, and deployed-schema validation.
 
 Typed inputs use the schema library's normal optional-field syntax. Canonical reflected JSON records contain every field; use `null` for an absent `option<T>`. `s64` and `u64` are canonical decimal strings, duration is `{ nanoseconds: "..." }`, and quantity uses a decimal-string `mantissa`; smaller integers remain numbers. Schema-native streams and opaque capabilities require the `*Value` APIs and transfer ownership once.
 

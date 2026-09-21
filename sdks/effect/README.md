@@ -71,12 +71,12 @@ schema contains a live stream is rejected because streams require an awaited inv
 ephemeral call returns `{ metadata, value }`, and an ephemeral trigger/schedule exposes invocation
 metadata. Config overrides are passed as the second argument to `client.get`/`newPhantom`.
 
-Use `defineAgentClient` for caller-owned clients. A full client definition has an exact name,
+Use `defineAgentClient` for caller-owned clients. A full client definition has a declared name,
 constructor schema, lifecycle mode, and methods; it exposes `agentId` and `client` factories without
 registering an implementation. A method-only `{ methods }` definition has neither factory nor
 identity constructor; it binds without discovery and assumes durable result semantics. An
 unimplemented `defineAgent` spec remains usable as a shared implementation/caller definition.
-`identity.client(clientDefinition)` validates the exact name and constructor schema before opening RPC.
+`identity.client(clientDefinition)` validates the declared name and constructor schema before opening RPC.
 `Client.bind(identity, clientDefinition)` and `DynamicClient.bind(identity)` remain lower-level functions.
 
 ```ts
@@ -94,8 +94,8 @@ const calls = (inputTree: CoreTypes.SchemaValueTree) =>
   Effect.scoped(
     Effect.gen(function* () {
       const identity = yield* Target.agentId({ name: "main" })
-      const exact = yield* identity.client(Target)
-      const first = yield* exact.echo({ message: "exact" })
+      const full = yield* identity.client(Target)
+      const first = yield* full.echo({ message: "full" })
       const methods = defineAgentClient({ methods: Target.methods })
       const second = yield* (yield* identity.client(methods)).echo({ message: "method only" })
       const parsed = yield* AgentIdentity.parse(identity.encoded)
@@ -142,14 +142,16 @@ and `scheduleValue` accept native WIT schema-value trees when JSON cannot repres
 must supply the correct remote method definitions. Both APIs use scopes and fiber interruption and expose
 the same structured remote-call errors as typed clients.
 
-The four client levels are: definition-owned/generated clients for source-known targets; Level 2
-method-only or full caller-owned clients; reflected clients for runtime-selected deployed schemas;
-and dynamic schema-native clients for existing durable identities. Method-only clients do not own
+The four client approaches are: Normal RPC through the ordinary client for a shared source
+definition; method-only or full caller-defined static clients; discovered clients backed by an
+immutable deployed schema snapshot; and fully dynamic schema-native clients for existing durable
+identities. Method-only clients do not own
 identity, lifecycle, mode, or config declarations. Full clients own those declarations and the
 matching durable, phantom, or ephemeral factories. Dynamic clients neither discover nor create.
 
-Typed and full clients encode their local schemas before opening RPC; full binding also checks the
-exact name and constructor shape. Reflected clients apply all discovered restrictions and validate
+Normal RPC and caller-defined static clients encode through their local schemas before opening RPC;
+full binding also checks the declared name and constructor shape. Discovered clients apply all
+snapshot restrictions and validate
 declared result cardinality and shape. The host remains authoritative for visibility,
 authorization, effective configuration, durable identity resolution, and deployed input schemas.
 Typed inputs use `Schema.optional(...)` normally. Canonical reflected JSON records contain every

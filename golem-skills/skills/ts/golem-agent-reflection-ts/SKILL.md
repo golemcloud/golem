@@ -1,13 +1,15 @@
 ---
 name: golem-agent-reflection-ts
-description: "Discovering and calling Golem agents through runtime reflection in TypeScript. Use when agent types or methods are selected dynamically, schemas must be inspected at runtime, or only a ParsedAgentId is available."
+description: "Composing caller-defined static, discovered, and fully dynamic Golem clients in TypeScript. Use when schemas are caller-owned or discovered at runtime, or a ParsedAgentId must be rebound."
 ---
 
 # Calling Agents with Runtime Reflection (TypeScript)
 
-Use reflection when the target agent type or method is chosen at runtime. When
-the target is known while writing the component, prefer its definition client
-(`Target.client`) because it provides compile-time input and output types.
+Normal RPC is the non-reflective baseline: when producer and caller share a
+source definition, use the SDK's ordinary `Target.client` surface. Reflection
+adds caller-defined static clients, discovered clients, and fully dynamic
+clients. These surfaces compose through immutable schema snapshots and durable
+`ParsedAgentId` values.
 
 ## Discover Agent Types
 
@@ -87,9 +89,9 @@ inspect their `cause` without parsing messages.
 
 ## Choose Between Method-Only and Full Clients
 
-`defineAgentClient({ methods })` creates a Level 2 method-only client. Use it only with an existing durable canonical or phantom `ParsedAgentId`. It performs no discovery, creates no identities, and has no lifecycle mode or declaration-aware config validation.
+`defineAgentClient({ methods })` creates a caller-defined static method-only client. Use it only with an existing durable canonical or phantom `ParsedAgentId`. It performs no discovery, creates no identities, and has no lifecycle mode or declaration-aware config validation.
 
-`defineAgentClient({ name, id, methods, mode?, config? })` creates a Level 2 full client. Use it when the caller owns the complete local definition and needs identity construction plus durable, phantom, or ephemeral factories. It still performs no deployment discovery.
+`defineAgentClient({ name, id, methods, mode?, config? })` creates a caller-defined static full client. Use it when the caller owns the complete local definition and needs identity construction plus durable, phantom, or ephemeral factories. It still performs no deployment discovery.
 
 ## Bind with a Method-Only Client
 
@@ -119,7 +121,7 @@ Method-only callers can pass raw typed configuration entries as the second argum
 
 ## Construct an Agent ID with Caller-Owned Schemas
 
-A fully defined client is the Level 2 option when the target name,
+A fully defined client is the caller-defined static option when the target name,
 constructor shape, and methods are known locally but the target implementation
 is not imported. Its `agentId` helper accepts values described by any supported
 Standard Schema library:
@@ -160,7 +162,7 @@ The first form validates and packs constructor fields through the caller's
 schema library. The explicit `ParsedAgentId.create` form is for infrastructure that
 already owns a Golem `SchemaValue`; record fields must be in the target
 constructor's declared order. Binding that ID to a fully defined durable client
-checks both the exact agent name and structural conformance to the client's
+checks both the declared agent name and structural conformance to the client's
 local ID schema before creating the client. When runtime metadata is available,
 prefer `agentType.agentId(json)` or pack with `agentType.constructorInput`
 before calling `agentType.agentIdValue(value)`.
@@ -233,7 +235,7 @@ Validation happens at several boundaries:
 - The host authorizes the caller, resolves the environment-scoped identity, validates effective configuration, and checks the deployed input schema.
 - Awaited typed and reflected calls verify unit/non-unit cardinality and decode the declared result. Catch `RemoteCallError` with `isRemoteCallError(error)` and handle `error.cause` as a tagged value; do not parse messages.
 
-In typed Level 1 and Level 2 inputs, declare optional fields with the schema library, for example `z.string().optional()`, and omit them normally. Canonical reflected JSON records contain every field, so pass `null` for an absent option:
+In Normal RPC and caller-defined static inputs, declare optional fields with the schema library, for example `z.string().optional()`, and omit them normally. Canonical reflected JSON records contain every field, so pass `null` for an absent option:
 
 ```typescript
 import { getReflectedAgentType } from '@golemcloud/golem-ts-sdk';
@@ -280,6 +282,51 @@ scheduled.cancellationToken.cancel();
 ```
 
 Schema-native streams and opaque capabilities cannot be packed as JSON. Use `invokeValue`, transfer an owned input stream once, consume returned streams to EOF or call `return()` when abandoning them, and do not reuse transferred handles. For reflected tools, `startJson`/`startValue` return independent `stdout`, `result`, `collect()`, and `cancel()` handles. `collect()` settles both channels and reports a result failure before a stdout failure; always consume or cancel a started operation.
+
+## Discovery to a Fully Dynamic Agent
+
+Keep the discovered method snapshot beside the dynamic client. The dynamic
+client does not inherit validation merely because its values came from
+discovery:
+
+```typescript
+import {
+  getReflectedAgentType,
+  isRemoteCallError,
+} from '@golemcloud/golem-ts-sdk';
+
+async function callDynamically() {
+  const type = getReflectedAgentType('SearchAgent');
+  const method = type?.method('search');
+  if (!type || type.mode !== 'durable' || !method) {
+    throw new Error('SearchAgent.search is unavailable');
+  }
+
+  const input = method.input.packJson({ query: 'golem', cursor: null });
+  const inputCheck = method.input.validateValue(input);
+  if (!inputCheck.success) throw new Error(JSON.stringify(inputCheck.issues));
+
+  const id = type.agentId({ tenant: 'docs' });
+  try {
+    const result = await id.dynamicClient().method(method.name).invokeValue(input);
+    if (!method.output || result.value === undefined) {
+      throw new Error('search returned an unexpected unit result');
+    }
+    const outputCheck = method.output.validateValue(result.value);
+    if (!outputCheck.success) throw new Error(JSON.stringify(outputCheck.issues));
+    return method.output.unpackJson(result.value);
+  } catch (error) {
+    if (isRemoteCallError(error)) {
+      console.error('dynamic search failed', error.cause);
+    }
+    throw error;
+  }
+}
+```
+
+This awaited example owns no stream or cancellation handle. If a packed input
+or output contains owned streams, transfer each input once and consume or close
+every returned stream according to the cleanup rules above.
 
 ## Choosing the Client Surface
 

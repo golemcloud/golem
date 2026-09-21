@@ -1,13 +1,15 @@
 ---
 name: golem-agent-reflection-effect
-description: Discovers and invokes Golem agents through Effect-native runtime reflection. Use when agent types or methods are selected dynamically or their schemas must be inspected at runtime.
+description: Composes caller-defined static, discovered, and fully dynamic Golem clients with Effect. Use when schemas are caller-owned or discovered at runtime, or a durable identity must be rebound.
 ---
 
 # Runtime reflection with Effect
 
-Import `Reflection` from `@golemcloud/effect-golem`. Reflection operations are Effects and their
-host requirements flow through the agent dispatcher; compose them in `Effect.gen` rather than
-running them as promises.
+Normal RPC is the non-reflective baseline and uses the ordinary client from a shared source
+definition. Reflection adds caller-defined static, discovered, and fully dynamic clients. Import
+`Reflection` from `@golemcloud/effect-golem`. Reflection operations are Effects and their host
+requirements flow through the agent dispatcher; compose them in `Effect.gen` rather than running
+them as promises.
 
 ```ts
 import { Effect } from "effect"
@@ -40,9 +42,9 @@ and a `value` except for unit-returning methods, which omit it.
 
 Pass optional creation-time overrides as a second argument to reflected factories. Use `{ path, value }` entries containing canonical JSON with `get`, `getPhantom`, or `newPhantom`; use the `*Value` factory variants for schema-native values. For an existing identity, use `target.bindWithJsonConfig(identity, entries)` or `target.bindWithConfig(identity, nativeEntries)`. A fully defined client exposes `bindWithConfig(identity, { overrides })`; a method-only client exposes `bindWithEntries(identity, nativeEntries)`. These operations remain Effects and require a scope. Known declarations reject unknown paths, secret fields, and invalid values before opening RPC. An existing durable worker retains its initial configuration even if overrides are passed while binding.
 
-Use `defineAgentClient({ name, id, methods, mode?, config? })` for a Level 2 full client.
-Its `agentId(input)` creates a parsed identity, and `identity.client(clientDefinition)` checks the exact
-name and constructor schema locally before opening RPC. A Level 2 method-only
+Use `defineAgentClient({ name, id, methods, mode?, config? })` for a caller-defined static full client.
+Its `agentId(input)` creates a parsed identity, and `identity.client(clientDefinition)` checks the declared
+name and constructor schema locally before opening RPC. A caller-defined static method-only
 `defineAgentClient({ methods })` has no lifecycle factory or discovery; binding assumes durable
 result semantics. An unimplemented `defineAgent` spec is also a full client definition. Durable
 reflected types bind through the same function after schema validation. Fully defined ephemeral specs
@@ -61,8 +63,8 @@ const Echo = defineAgentClient({
 
 const program = (inputTree: CoreTypes.SchemaValueTree) => Effect.scoped(Effect.gen(function* () {
   const identity = yield* Echo.agentId({ name: "main" })
-  const exact = yield* identity.client(Echo)
-  const one = yield* exact.echo({ message: "exact" })
+  const full = yield* identity.client(Echo)
+  const one = yield* full.echo({ message: "full" })
   const methods = defineAgentClient({ methods: Echo.methods })
   const two = yield* (yield* identity.client(methods)).echo({ message: "method only" })
   const parsed = yield* AgentIdentity.parse(identity.encoded)
@@ -79,12 +81,12 @@ const program = (inputTree: CoreTypes.SchemaValueTree) => Effect.scoped(Effect.g
 
 Effect errors preserve the boundary that failed:
 
-- Client definition compilation and `agentId` encode caller-owned schemas. A full client validates exact name, constructor value, and declared config overrides before opening RPC. A method-only client owns only method schemas and raw typed config entries.
+- Client definition compilation and `agentId` encode caller-owned schemas. A full client validates the declared name, constructor value, and config overrides before opening RPC. A method-only client owns only method schemas and raw typed config entries.
 - Reflected `SchemaRef` packing and invocation apply all discovered restrictions and command constraints locally. Discovery returns immutable metadata and schema snapshots.
 - The host remains authoritative for visibility, authorization, environment-scoped identity resolution, effective configuration, and the deployed input schema.
 - Awaited calls verify unit/non-unit cardinality and declared output shape. `RemoteCallError`, `ToolRuntimeError`, custom agent errors, and custom tool payloads remain tagged values in the Effect error channel.
 
-In typed Level 1 and Level 2 inputs, use `Schema.optional(...)` in a struct and omit the property. Canonical reflected JSON records contain every field, so represent an absent `option<T>` with `null`:
+In Normal RPC and caller-defined static inputs, use `Schema.optional(...)` in a struct and omit the property. Canonical reflected JSON records contain every field, so represent an absent `option<T>` with `null`:
 
 ```ts
 import { Effect } from "effect"
@@ -122,3 +124,44 @@ const scheduled = Effect.scoped(Effect.gen(function* () {
 ```
 
 Streams and opaque capabilities have no canonical JSON form. Use the `*Value` APIs, transfer an owned handle once, and consume returned streams inside the scope. Reflected tool `startJson`/`startValue` exposes independent `stdout`, `result`, `collect`, and `cancel` Effects. `collect` waits for both result and stdout and gives the result error precedence. Scope closure releases observers and owned handles; invoke `cancel` when the remote operation itself must be cancelled.
+
+## Discovery to a fully dynamic agent
+
+Retain the discovered method snapshot and apply it explicitly around the
+dynamic call. `dynamicClient()` does not inherit the snapshot's validation
+policy:
+
+```ts
+import { Effect } from "effect"
+import { Reflection } from "@golemcloud/effect-golem"
+
+const dynamicSearch = Effect.scoped(Effect.gen(function* () {
+  const type = yield* Reflection.getAgentType("SearchAgent")
+  const method = type?.method("search")
+  if (!type || type.mode !== "durable" || !method)
+    return yield* Effect.fail("SearchAgent.search is unavailable")
+
+  const input = method.input.packJson({ query: "golem", cursor: null })
+  const inputCheck = method.input.validateValue(input)
+  if (!inputCheck.success) return yield* Effect.fail(inputCheck.issues)
+
+  const identity = yield* type.agentId({ tenant: "docs" })
+  const dynamic = yield* identity.dynamicClient()
+  const result = yield* dynamic.method(method.name).invoke(input).pipe(
+    Effect.catchAll((error) =>
+      Effect.logError("dynamic search failed", error).pipe(
+        Effect.zipRight(Effect.fail(error)),
+      ),
+    ),
+  )
+  if (!method.output || result.value === undefined)
+    return yield* Effect.fail("search returned an unexpected unit result")
+  const outputCheck = method.output.validateValue(result.value)
+  if (!outputCheck.success) return yield* Effect.fail(outputCheck.issues)
+  return method.output.unpackJson(result.value)
+}))
+```
+
+`Effect.scoped` releases the dynamic RPC connection. If packed values carry
+owned streams, transfer each input once and consume or close every returned
+stream before the scope ends.

@@ -14,7 +14,7 @@ QuickJS-backed WASI Preview 3 components.
   client with `agentId` and lifecycle factories. Its method-only `{ methods }` form has neither
   factory nor identity constructor and binds without discovery using durable results. Unimplemented
   `defineAgent` specs remain available as shared definitions. `identity.client(clientDefinition)` validates
-  exact names and constructor schemas before opening RPC.
+  declared names and constructor schemas before opening RPC.
   `DynamicClient.bind(identity)` uses schema-native values with no client definition or discovery. Full
   ephemeral specs and reflected ephemeral types reject generic existing-ID binding; use their
   `getPhantom` or `newPhantom` factories. `identity.dynamicClient()` binds schema-native values.
