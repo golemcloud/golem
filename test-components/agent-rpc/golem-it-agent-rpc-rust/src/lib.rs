@@ -649,7 +649,7 @@ pub trait EphemeralStreamingRpcTarget {
 
     fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32>;
     fn produce_siblings(&self) -> (AgentStream<String>, AgentStream<u32>);
-    fn produce_gated_siblings(&self, gate: PromiseId) -> (AgentStream<String>, AgentStream<u32>);
+    fn produce_gated_siblings(&self) -> (PromiseId, AgentStream<String>, AgentStream<u32>);
     fn produce_then_spin(&self, input: AgentStream<u32>) -> AgentStream<u32>;
     async fn hold_input(&self, input: AgentStream<u32>) -> u64;
     fn spin(&self) -> u64;
@@ -675,8 +675,10 @@ impl EphemeralStreamingRpcTarget for EphemeralStreamingRpcTargetImpl {
         self.inner.produce_siblings()
     }
 
-    fn produce_gated_siblings(&self, gate: PromiseId) -> (AgentStream<String>, AgentStream<u32>) {
-        self.inner.produce_gated_siblings(gate)
+    fn produce_gated_siblings(&self) -> (PromiseId, AgentStream<String>, AgentStream<u32>) {
+        let gate = golem_rust::create_promise();
+        let (strings, numbers) = self.inner.produce_gated_siblings(gate.clone());
+        (gate, strings, numbers)
     }
 
     fn produce_then_spin(&self, input: AgentStream<u32>) -> AgentStream<u32> {

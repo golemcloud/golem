@@ -1188,7 +1188,7 @@ async fn streaming_output_resume_restores_exact_cursors(
         .store()
         .await?;
     let idempotency_key = IdempotencyKey::fresh();
-    let (worker_agent_id, method_name, input, gate) = if restart_executor {
+    let (worker_agent_id, method_name, input, mut gate) = if restart_executor {
         let agent_id = agent_id!("StreamingRpcTarget", "output-restart");
         let worker_agent_id = executor
             .start_agent(&component.id, agent_id.clone())
@@ -1207,16 +1207,11 @@ async fn streaming_output_resume_restores_exact_cursors(
         let final_agent_id = agent_id!("EphemeralStreamingRpcTarget", "resident-output-resume")
             .with_ephemeral_invocation_phantom(&idempotency_key)
             .map_err(anyhow::Error::msg)?;
-        let gate_owner = agent_id!("StreamingRpcTarget", "resident-output-gate");
-        let gate = executor
-            .invoke_and_await_agent(&component, &gate_owner, "create_output_gate", data_value!())
-            .await?
-            .into_typed::<PromiseId>()?;
         (
             executor.start_agent(&component.id, final_agent_id).await?,
             "produce_gated_siblings",
-            data_value!(gate.clone()),
-            Some(gate),
+            data_value!(),
+            None,
         )
     };
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
@@ -1274,6 +1269,22 @@ async fn streaming_output_resume_restores_exact_cursors(
         first_state
             .validate_response(&response)
             .map_err(anyhow::Error::msg)?;
+        if !restart_executor
+            && let Some(invocation_response::Response::Result(result)) = &response.response
+        {
+            let value = match &result.result {
+                Some(invocation_session_result::Result::MethodResult(value)) => value,
+                other => anyhow::bail!("expected gated sibling result, got {other:?}"),
+            };
+            let Some(schema_value::Value::TupleValue(tuple)) = &value.value else {
+                anyhow::bail!("expected gate and sibling tuple");
+            };
+            let gate_value =
+                SchemaValue::try_from(tuple.elements[0].clone()).map_err(anyhow::Error::msg)?;
+            let promise = PromiseId::from_value(&gate_value)?;
+            assert_eq!(promise.agent_id, worker_agent_id);
+            gate = Some(promise);
+        }
         if let Some(invocation_response::Response::OutputItem(item)) = response.response {
             let value = item
                 .value
@@ -1304,6 +1315,7 @@ async fn streaming_output_resume_restores_exact_cursors(
             observed_output_items += 1;
         }
     }
+    let gate = gate.ok_or_else(|| anyhow::anyhow!("streaming output omitted its promise gate"))?;
     if restart_executor {
         executor.shutdown_and_wait_for_invocation_loops().await?;
     }
@@ -1421,9 +1433,7 @@ async fn streaming_output_resume_restores_exact_cursors(
         match response.response {
             Some(invocation_response::Response::Accepted(resumed)) => {
                 assert_eq!(resumed.epoch, accepted.epoch + 1);
-                if let Some(gate) = &gate {
-                    executor.complete_promise(gate, Vec::new()).await?;
-                }
+                executor.complete_promise(&gate, Vec::new()).await?;
             }
             Some(invocation_response::Response::Result(result)) => {
                 mapped_outputs = result.new_stream_mappings.len();
