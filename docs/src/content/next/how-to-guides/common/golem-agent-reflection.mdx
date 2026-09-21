@@ -11,8 +11,7 @@ reflection approaches that can be composed:
 | Fully dynamic clients | Infrastructure transports already packed schema-native values without retaining a schema authority | `DynamicAgentClient` binds an existing durable canonical or phantom identity; `DynamicToolClient` invokes an explicit tool name and command path | The caller owns packing and validation policy; the host still performs authorization and target-side validation |
 
 Caller-defined static agent clients have two deliberately different options: method-only and full.
-Do not describe either option as a “contract” in public APIs or diagnostics. Caller-defined static
-tool clients use caller-owned typed definitions.
+Caller-defined static tool clients use caller-owned typed definitions.
 
 Agent identity strings are environment-scoped. Reflection identities do not include a component ID: the runtime resolves the agent type's implementing component within the caller's environment. Component-bearing IDs belong to lower-level host-management APIs, not reflection clients.
 
