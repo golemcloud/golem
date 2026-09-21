@@ -125,22 +125,24 @@ object GolemReflectError {
   final case class SchemaEncode(message: String) extends GolemReflectError
   final case class SchemaDecode(message: String) extends GolemReflectError
   final case class Validation(message: String)   extends GolemReflectError
-  final case class Remote(error: AgentRpcError) extends GolemReflectError {
+  final case class Remote(error: AgentRpcError)  extends GolemReflectError {
     val message: String = error.message
   }
 }
 
 sealed trait AgentRpcError extends Product with Serializable { def message: String }
 object AgentRpcError {
-  final case class Protocol(detail: String) extends AgentRpcError { val message = s"protocol-error: $detail" }
-  final case class Denied(detail: String) extends AgentRpcError { val message = s"denied: $detail" }
-  final case class NotFound(detail: String) extends AgentRpcError { val message = s"not-found: $detail" }
-  final case class RemoteInternal(detail: String) extends AgentRpcError { val message = s"remote-internal-error: $detail" }
-  final case class InvalidInput(detail: String) extends AgentRpcError { val message = s"invalid-input: $detail" }
-  final case class InvalidMethod(detail: String) extends AgentRpcError { val message = s"invalid-method: $detail" }
-  final case class InvalidType(detail: String) extends AgentRpcError { val message = s"invalid-type: $detail" }
-  final case class InvalidAgentId(detail: String) extends AgentRpcError { val message = s"invalid-agent-id: $detail" }
-  final case class Custom(payload: TypedSchemaValue) extends AgentRpcError { val message = "custom-error" }
+  final case class Protocol(detail: String)       extends AgentRpcError { val message = s"protocol-error: $detail" }
+  final case class Denied(detail: String)         extends AgentRpcError { val message = s"denied: $detail"         }
+  final case class NotFound(detail: String)       extends AgentRpcError { val message = s"not-found: $detail"      }
+  final case class RemoteInternal(detail: String) extends AgentRpcError {
+    val message = s"remote-internal-error: $detail"
+  }
+  final case class InvalidInput(detail: String)                  extends AgentRpcError { val message = s"invalid-input: $detail"    }
+  final case class InvalidMethod(detail: String)                 extends AgentRpcError { val message = s"invalid-method: $detail"   }
+  final case class InvalidType(detail: String)                   extends AgentRpcError { val message = s"invalid-type: $detail"     }
+  final case class InvalidAgentId(detail: String)                extends AgentRpcError { val message = s"invalid-agent-id: $detail" }
+  final case class Custom(payload: TypedSchemaValue)             extends AgentRpcError { val message = "custom-error"               }
   final case class Unknown(kind: String, detail: Option[String]) extends AgentRpcError {
     val message: String = detail.fold(kind)(value => s"$kind: $value")
   }
@@ -512,7 +514,8 @@ private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient
             }
             .recover {
               case js.JavaScriptException(error) => Left(remoteError(WasmRpcApi.decodeRpcError(error)))
-              case NonFatal(error)                => Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
+              case NonFatal(error)               =>
+                Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
             }
       }
     }.recover { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }

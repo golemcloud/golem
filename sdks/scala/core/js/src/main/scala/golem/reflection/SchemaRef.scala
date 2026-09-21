@@ -80,7 +80,7 @@ private object CanonicalJson {
 
   private def schemaJson(graph: SchemaGraph, schema: SchemaType): Json = {
     def typed(name: String, extra: (String, Json)*): Json = Json.Object(("type" -> Json.String(name)) +: extra: _*)
-    def bound(value: NumericBound): BigDecimal = value match {
+    def bound(value: NumericBound): BigDecimal            = value match {
       case NumericBound.Signed(value)    => BigDecimal(value)
       case NumericBound.Unsigned(value)  => BigDecimal(BigInt(java.lang.Long.toUnsignedString(value)))
       case NumericBound.FloatBits(value) => BigDecimal.decimal(java.lang.Double.longBitsToDouble(value))
@@ -191,8 +191,9 @@ private object CanonicalJson {
         )
       case BinaryType(restrictions) =>
         def base64UrlLength(bytes: Int): Int = (bytes * 4 + 2) / 3
-        val byteRestrictions = restrictions.minBytes.map(value => "minLength" -> number(base64UrlLength(value))).toList ++
-          restrictions.maxBytes.map(value => "maxLength" -> number(base64UrlLength(value))).toList
+        val byteRestrictions                 =
+          restrictions.minBytes.map(value => "minLength" -> number(base64UrlLength(value))).toList ++
+            restrictions.maxBytes.map(value => "maxLength" -> number(base64UrlLength(value))).toList
         val mimeType = restrictions.mimeTypes match {
           case Some(values) => typed("string", "enum" -> Json.Array(values.map(Json.String): _*))
           case None         => typed("string")

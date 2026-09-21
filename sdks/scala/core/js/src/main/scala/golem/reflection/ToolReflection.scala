@@ -52,8 +52,8 @@ private[reflection] object ToolReflectionFailures {
         case Right(None)        => Future.successful(chunks.flatten.toArray)
         case Left(failure)      => Future.failed(new ToolStreamException(failure))
       }
-    val terminal = result.map(Right(_): Either[Throwable, Either[ToolError[NamedToolError], A]]).recover {
-      case error => Left(error)
+    val terminal = result.map(Right(_): Either[Throwable, Either[ToolError[NamedToolError], A]]).recover { case error =>
+      Left(error)
     }
     val output = stdout
       .fold(Future.successful(Array.emptyByteArray))(drain(_, Vector.empty))
@@ -249,7 +249,12 @@ final class ToolCommand private[reflection] (
         .packJson(input)
         .left
         .map(issue => ToolError.InvalidInput(issue.message))
-        .flatMap(value => inputSchema.validateValue(value).left.map(issues => ToolError.InvalidInput(issues.map(_.message).mkString("; "))))
+        .flatMap(value =>
+          inputSchema
+            .validateValue(value)
+            .left
+            .map(issues => ToolError.InvalidInput(issues.map(_.message).mkString("; ")))
+        )
         .flatMap(validateConstraints)
     catch { case NonFatal(error) => Left(ToolError.InvalidInput(Option(error.getMessage).getOrElse(error.toString))) }
 
@@ -343,7 +348,7 @@ final class ToolCommand private[reflection] (
 
   private[reflection] def decodeResult(value: ToolInvokeResult): Either[ToolError[Nothing], Option[SchemaValue]] =
     (result, value.result) match {
-      case (None, None)                                                       => Right(None)
+      case (None, None) => Right(None)
       case (Some(schema), Some(payload))
           if ToolGraphs.schemaShapesMatch(payload.graph, SchemaGraph(schema.graph.defs, schema.root)) =>
         schema

@@ -245,13 +245,13 @@ object SchemaRefSpec extends ZIOSpecDefault {
     },
     test("reflected config validates declared local paths before RPC creation") {
       val stringSchema = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(StringType)))
-      val countSchema = SchemaRef(
+      val countSchema  = SchemaRef(
         SchemaGraph(
           ListMap.empty,
           SchemaType(S32Type(Some(NumericRestrictions(max = Some(NumericBound.Signed(3))))))
         )
       )
-      val agentType    = new AgentType(
+      val agentType = new AgentType(
         "ConfiguredCounterAgent",
         "",
         "scala",
@@ -265,10 +265,10 @@ object SchemaRefSpec extends ZIOSpecDefault {
           ReflectedConfigDeclaration(List("apiKey"), "secret", stringSchema)
         )
       )
-      val good    = agentType.packConfigJson(List(ReflectedConfigJson(List("greeting"), Json.String("hello"))))
-      val unknown = agentType.packConfigJson(List(ReflectedConfigJson(List("unknown"), Json.String("x"))))
-      val secret  = agentType.packConfigJson(List(ReflectedConfigJson(List("apiKey"), Json.String("x"))))
-      val invalid = agentType.packConfigJson(List(ReflectedConfigJson(List("greeting"), Json.Number(BigDecimal(42)))))
+      val good       = agentType.packConfigJson(List(ReflectedConfigJson(List("greeting"), Json.String("hello"))))
+      val unknown    = agentType.packConfigJson(List(ReflectedConfigJson(List("unknown"), Json.String("x"))))
+      val secret     = agentType.packConfigJson(List(ReflectedConfigJson(List("apiKey"), Json.String("x"))))
+      val invalid    = agentType.packConfigJson(List(ReflectedConfigJson(List("greeting"), Json.Number(BigDecimal(42)))))
       val restricted = agentType.packConfigJson(List(ReflectedConfigJson(List("count"), Json.Number(BigDecimal(4)))))
       assertTrue(good.isRight, unknown.isLeft, secret.isLeft, invalid.isLeft, restricted.isLeft)
     },

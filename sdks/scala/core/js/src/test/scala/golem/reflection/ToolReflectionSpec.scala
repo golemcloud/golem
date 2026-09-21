@@ -200,9 +200,9 @@ object ToolReflectionSpec extends ZIOSpecDefault {
         ListMap(id -> SchemaTypeDef(SchemaType(RecordType(List(NamedFieldType(field, SchemaType(StringType))))))),
         SchemaType(RefType(id))
       )
-      val command      = sample(graph("Expected", "name")).command(List("run")).toOption.get
-      val sameIdWrong  = TypedSchemaValue(graph("Expected", "password"), RecordValue(List(StringValue("hello"))))
-      val otherIdSame  = TypedSchemaValue(graph("Equivalent", "name"), RecordValue(List(StringValue("hello"))))
+      val command     = sample(graph("Expected", "name")).command(List("run")).toOption.get
+      val sameIdWrong = TypedSchemaValue(graph("Expected", "password"), RecordValue(List(StringValue("hello"))))
+      val otherIdSame = TypedSchemaValue(graph("Equivalent", "name"), RecordValue(List(StringValue("hello"))))
       assertTrue(
         command.decodeResult(ToolInvokeResult(Some(sameIdWrong))).isLeft,
         command.decodeResult(ToolInvokeResult(Some(otherIdSame))).isRight
@@ -224,7 +224,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
         override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
           Future.successful(Left(ByteStreamFailure.Failed("broken")))
       }
-      val terminal = Promise[Either[ToolError[NamedToolError], Option[SchemaValue]]]()
+      val terminal   = Promise[Either[ToolError[NamedToolError], Option[SchemaValue]]]()
       val invocation = ReflectedToolInvocation(Some(broken), terminal.future, () => ())
       val collected  = invocation.collect()(using ExecutionContext.global)
       val payload    = TypedSchemaValue(stringGraph, StringValue("details"))
