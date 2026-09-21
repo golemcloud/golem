@@ -2781,14 +2781,14 @@ async fn execute_set_size<Adapter: SandboxFilesystemAdapter>(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
-        let observed = match mutation_attributes_sandbox(&generation, target.clone()).await {
-            Ok(observed) => observed,
-            Err(_) => {
-                generation.invalidate();
-                return Err(Error::RuntimeInvalidated);
+        let evidence = if error_proves_no_effect(&error) {
+            EffectEvidence::NoEffect
+        } else {
+            match mutation_attributes_sandbox(&generation, target.clone()).await {
+                Ok(observed) => resize_postcondition_evidence(before.size, observed.size, size),
+                Err(_) => mutation_failure_evidence(&error),
             }
         };
-        let evidence = resize_postcondition_evidence(before.size, observed.size, size);
         if evidence == EffectEvidence::DesiredPostconditionSatisfied {
             return Ok(());
         }
@@ -2842,15 +2842,16 @@ async fn execute_set_times<Adapter: SandboxFilesystemAdapter>(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
-        let observed = match mutation_attributes_sandbox(&generation, target.clone()).await {
-            Ok(observed) => observed,
-            Err(_) => {
-                generation.invalidate();
-                return Err(Error::RuntimeInvalidated);
+        let evidence = if error_proves_no_effect(&error) {
+            EffectEvidence::NoEffect
+        } else {
+            match mutation_attributes_sandbox(&generation, target.clone()).await {
+                Ok(observed) => {
+                    timestamp_postcondition_evidence(&before, &observed, times, (started, finished))
+                }
+                Err(_) => mutation_failure_evidence(&error),
             }
         };
-        let evidence =
-            timestamp_postcondition_evidence(&before, &observed, times, (started, finished));
         if evidence == EffectEvidence::DesiredPostconditionSatisfied {
             return Ok(());
         }

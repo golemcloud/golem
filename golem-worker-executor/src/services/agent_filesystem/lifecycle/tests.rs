@@ -2913,6 +2913,144 @@ async fn unknown_attribute_effect_invalidates_without_retry() {
 }
 
 #[test]
+async fn a_refused_size_change_fails_only_that_call() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let node = OpenNode::File(open_file(&generation_handle, &control, 26).await);
+    control.push_get_attributes(Ok(SandboxAttributes {
+        kind: SandboxObjectKind::File,
+        link_count: 1,
+        size: 0,
+        accessed: None,
+        modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
+    }));
+    // A permission refusal proves that the size did not change, so no postcondition read
+    // follows it. Nothing is programmed for one on purpose: a read here would take the
+    // empty-queue error and invalidate the generation, which is what this test guards.
+    control.push_set_size(Err(sandbox_error(
+        "set size",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+
+    let refused = set_attributes(
+        &generation_handle,
+        Target::Open(&node),
+        AttributeChanges::File {
+            size: 64,
+            times: TimeChanges {
+                accessed: TimeChange::Keep,
+                modified: TimeChange::Keep,
+            },
+        },
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(refused, Err(Error::Access(AccessError::NotPermitted))),
+        "{refused:?}"
+    );
+    assert_eq!(
+        control
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("set_size("))
+            .count(),
+        1,
+        "a proven refusal must not retry"
+    );
+    let admitted = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "after-refused-size-change").unwrap(),
+        OpenOptions::Existing {
+            expected: ObjectKind::File,
+            access: AccessMode::Read,
+            follow: Follow::Yes,
+        },
+    )
+    .expect("a refused size change invalidated the filesystem generation handle");
+    drop(admitted);
+
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_refused_time_change_fails_only_that_call() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let node = OpenNode::File(open_file(&generation_handle, &control, 27).await);
+    let accessed = std::time::UNIX_EPOCH + Duration::from_secs(10);
+    let modified = std::time::UNIX_EPOCH + Duration::from_secs(20);
+    control.push_get_attributes(Ok(SandboxAttributes {
+        kind: SandboxObjectKind::File,
+        link_count: 1,
+        size: 0,
+        accessed: None,
+        modified: None,
+        read_only: false,
+        object: SandboxObjectId::scripted(0),
+    }));
+    // As above: the refusal proves that the times did not change, so no postcondition read
+    // follows, and none is programmed.
+    control.push_set_times(Err(sandbox_error(
+        "set times",
+        std::io::ErrorKind::PermissionDenied,
+    )));
+
+    let refused = set_attributes(
+        &generation_handle,
+        Target::Open(&node),
+        AttributeChanges::Times(TimeChanges {
+            accessed: TimeChange::Set(accessed),
+            modified: TimeChange::Set(modified),
+        }),
+    )
+    .unwrap()
+    .await;
+
+    assert!(
+        matches!(refused, Err(Error::Access(AccessError::NotPermitted))),
+        "{refused:?}"
+    );
+    assert_eq!(
+        control
+            .calls()
+            .iter()
+            .filter(|call| call.starts_with("set_node_times("))
+            .count(),
+        1,
+        "a proven refusal must not retry"
+    );
+    let admitted = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "after-refused-time-change").unwrap(),
+        OpenOptions::Existing {
+            expected: ObjectKind::File,
+            access: AccessMode::Read,
+            follow: Follow::Yes,
+        },
+    )
+    .expect("a refused time change invalidated the filesystem generation handle");
+    drop(admitted);
+
+    control.push_close(Ok(()));
+    close(node).await.unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn unknown_namespace_effect_invalidates_without_retry() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -7897,11 +8035,12 @@ async fn timestamp_postconditions_preserve_keep_and_retry_only_proven_no_effect(
         object: SandboxObjectId::scripted(0),
     };
     control.push_get_attributes(Ok(attributes(Some(old_accessed), Some(old_modified))));
+    // A would-block error proves that the times did not change, so the retry follows it without
+    // a postcondition read. Only an error of unknown effect, as in the second half, reads one.
     control.push_set_times(Err(sandbox_error(
         "set times",
         std::io::ErrorKind::WouldBlock,
     )));
-    control.push_get_attributes(Ok(attributes(Some(old_accessed), Some(old_modified))));
     control.push_set_times(Ok(()));
     set_attributes(
         &generation_handle,
