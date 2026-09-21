@@ -16,7 +16,7 @@ use crate::tool_literal::{ToolLiteral, value_is_literal_to_schema_value};
 use golem_schema::schema::tool as native;
 use golem_schema::schema::tool as wire;
 use golem_schema::schema::tool::validation::ToolValidationError;
-use golem_schema::schema::validation::validate_value;
+use golem_schema::schema::validation::{is_equivalent_cross_graph, validate_value};
 
 use golem_schema::schema::{SchemaGraph, SchemaType, SchemaValue, merge_agent_graphs};
 use std::collections::{BTreeMap, BTreeSet};
@@ -571,6 +571,57 @@ impl CanonicalInputModel {
             })
             .collect())
     }
+}
+
+/// Adapts one decoded canonical input field to the schema expected by a
+/// generated implementation parameter or forwarded child command field.
+///
+/// Canonical records use an option carrier for scalar inputs that may be
+/// absent. Generated Rust methods keep their authored parameter type, so a
+/// present carrier is unwrapped when the destination is required and a bare
+/// value is wrapped when the destination retains the optional carrier.
+pub fn adapt_canonical_input_value(
+    source: CanonicalInputValue,
+    target_name: &str,
+    target_schema: &SchemaGraph,
+) -> Result<SchemaValue, String> {
+    if is_equivalent_cross_graph(
+        &source.schema,
+        &source.schema.root,
+        target_schema,
+        &target_schema.root,
+    ) {
+        return Ok(source.value);
+    }
+
+    if let SchemaType::Option { inner, .. } = &source.schema.root
+        && is_equivalent_cross_graph(&source.schema, inner, target_schema, &target_schema.root)
+    {
+        return match source.value {
+            SchemaValue::Option { inner: Some(value) } => Ok(*value),
+            SchemaValue::Option { inner: None } => Err(format!(
+                "canonical tool input field `{}` is absent but forwarded field `{target_name}` is required",
+                source.name
+            )),
+            _ => Err(format!(
+                "canonical tool input field `{}` has an invalid optional carrier",
+                source.name
+            )),
+        };
+    }
+
+    if let SchemaType::Option { inner, .. } = &target_schema.root
+        && is_equivalent_cross_graph(&source.schema, &source.schema.root, target_schema, inner)
+    {
+        return Ok(SchemaValue::Option {
+            inner: Some(Box::new(source.value)),
+        });
+    }
+
+    Err(format!(
+        "canonical tool input field `{}` has incompatible schema for forwarded field `{target_name}`",
+        source.name
+    ))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1278,7 +1329,12 @@ pub fn build_canonical_input(
             .zip(params.iter())
             .all(|(field, (name, _))| field.name.as_str() == *name)
     {
-        params.into_iter().map(|(_, value)| value).collect()
+        model
+            .fields
+            .iter()
+            .zip(params)
+            .map(|(field, (_, value))| canonical_input_carrier(field, value))
+            .collect()
     } else {
         let mut fields: Vec<SchemaValue> = Vec::with_capacity(model.fields.len());
         for field in &model.fields {
@@ -1286,7 +1342,7 @@ pub fn build_canonical_input(
                 .iter()
                 .rposition(|(name, _)| *name == field.name.as_str())
                 .ok_or_else(|| format!("missing canonical tool input field `{}`", field.name))?;
-            fields.push(params.remove(index).1);
+            fields.push(canonical_input_carrier(field, params.remove(index).1));
         }
         fields
     };
@@ -1311,11 +1367,18 @@ pub fn build_canonical_input_with_prefix(
 ) -> Result<crate::TypedSchemaValue, String> {
     let mut canonical_fields: Vec<CanonicalInputField> = inherited_prefix
         .iter()
-        .map(|value| CanonicalInputField {
-            name: value.name.clone(),
-            aliases: value.aliases.clone(),
-            short: value.short,
-            schema: value.schema.clone(),
+        .map(|value| {
+            let schema = command_fields
+                .iter()
+                .find(|field| canonical_surfaces_overlap(value, field))
+                .map(|field| field.schema.clone())
+                .unwrap_or_else(|| value.schema.clone());
+            CanonicalInputField {
+                name: value.name.clone(),
+                aliases: value.aliases.clone(),
+                short: value.short,
+                schema,
+            }
         })
         .collect();
     let inherited_names: BTreeSet<&str> = inherited_prefix
@@ -1324,31 +1387,57 @@ pub fn build_canonical_input_with_prefix(
             std::iter::once(value.name.as_str()).chain(value.aliases.iter().map(String::as_str))
         })
         .collect();
-    canonical_fields.extend(command_fields.into_iter().filter(|field| {
-        !inherited_names.contains(field.name.as_str())
-            && !field
-                .aliases
-                .iter()
-                .any(|alias| inherited_names.contains(alias.as_str()))
-    }));
+    canonical_fields.extend(
+        command_fields
+            .iter()
+            .filter(|field| {
+                !inherited_names.contains(field.name.as_str())
+                    && !field
+                        .aliases
+                        .iter()
+                        .any(|alias| inherited_names.contains(alias.as_str()))
+            })
+            .cloned(),
+    );
     let model =
         CanonicalInputModel::from_fields(canonical_fields).map_err(|error| error.to_string())?;
 
     let mut fields: Vec<SchemaValue> = inherited_prefix
         .iter()
-        .map(|value| value.value.clone())
+        .zip(model.fields.iter())
+        .map(|(value, field)| canonical_input_carrier(field, value.value.clone()))
         .collect();
     for field in model.fields.iter().skip(inherited_prefix.len()) {
         let index = params
             .iter()
             .rposition(|(name, _)| *name == field.name.as_str())
             .ok_or_else(|| format!("missing canonical tool input field `{}`", field.name))?;
-        fields.push(params.remove(index).1);
+        fields.push(canonical_input_carrier(field, params.remove(index).1));
     }
     Ok(crate::TypedSchemaValue::new(
         model.record_schema,
         SchemaValue::Record { fields },
     ))
+}
+
+fn canonical_input_carrier(field: &CanonicalInputField, value: SchemaValue) -> SchemaValue {
+    if matches!(field.schema.root, SchemaType::Option { .. })
+        && !matches!(value, SchemaValue::Option { .. })
+    {
+        SchemaValue::Option {
+            inner: Some(Box::new(value)),
+        }
+    } else {
+        value
+    }
+}
+
+fn canonical_surfaces_overlap(value: &CanonicalInputValue, field: &CanonicalInputField) -> bool {
+    value.name == field.name
+        || value.aliases.iter().any(|alias| alias == &field.name)
+        || field.aliases.iter().any(|alias| {
+            alias == &value.name || value.aliases.iter().any(|value_alias| value_alias == alias)
+        })
 }
 
 /// Maps the shared canonical/validation error type onto the SDK's
@@ -3971,16 +4060,22 @@ mod tests {
     #[test]
     fn generated_client_input_model_encodes_absent_and_supplied_optional_values() {
         let model = sample_tool().canonical_input_model(1).unwrap();
-        for verbose in [
-            SchemaValue::Option { inner: None },
-            SchemaValue::Option {
-                inner: Some(Box::new(SchemaValue::U32(3))),
-            },
+        for (verbose, expected) in [
+            (
+                SchemaValue::Option { inner: None },
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                SchemaValue::U32(3),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::U32(3))),
+                },
+            ),
         ] {
             let input = build_canonical_input(
                 &model,
                 vec![
-                    ("verbose", verbose.clone()),
+                    ("verbose", verbose),
                     ("input", SchemaValue::String("in.txt".to_string())),
                     (
                         "config",
@@ -3996,8 +4091,57 @@ mod tests {
             let SchemaValue::Record { fields } = input.value() else {
                 panic!("canonical generated-client input must be a record")
             };
-            assert_eq!(&fields[0], &verbose);
+            assert_eq!(&fields[0], &expected);
         }
+    }
+
+    #[test]
+    fn canonical_forwarding_adapts_present_optional_carriers() {
+        let bare = u32_graph();
+        let optional = option_wrapper_graph(&bare);
+        let source = CanonicalInputValue {
+            name: "count".to_string(),
+            aliases: vec!["format".to_string()],
+            short: None,
+            schema: optional.clone(),
+            value: SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(7))),
+            },
+        };
+        assert_eq!(
+            adapt_canonical_input_value(source, "format", &bare).unwrap(),
+            SchemaValue::U32(7)
+        );
+
+        let source = CanonicalInputValue {
+            name: "format".to_string(),
+            aliases: vec!["count".to_string()],
+            short: None,
+            schema: bare,
+            value: SchemaValue::U32(7),
+        };
+        assert_eq!(
+            adapt_canonical_input_value(source, "count", &optional).unwrap(),
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(7))),
+            }
+        );
+    }
+
+    #[test]
+    fn canonical_forwarding_rejects_absent_required_values() {
+        let bare = u32_graph();
+        let source = CanonicalInputValue {
+            name: "count".to_string(),
+            aliases: vec!["format".to_string()],
+            short: None,
+            schema: option_wrapper_graph(&bare),
+            value: SchemaValue::Option { inner: None },
+        };
+        assert_eq!(
+            adapt_canonical_input_value(source, "format", &bare).unwrap_err(),
+            "canonical tool input field `count` is absent but forwarded field `format` is required"
+        );
     }
 
     #[test]

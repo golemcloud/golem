@@ -52,10 +52,14 @@ mod tests {
             .expect("command path resolves");
         let model = CanonicalInputModel::from_fields(tool.canonical_input_fields(command_index))
             .expect("canonical input model builds");
-        let input = golem_rust::TypedSchemaValue::new(
-            model.record_schema,
-            golem_rust::SchemaValue::Record { fields: values },
-        );
+        let params = model
+            .fields
+            .iter()
+            .zip(values)
+            .map(|(field, value)| (field.name.as_str(), value))
+            .collect();
+        let input = golem_rust::agentic::build_canonical_input(&model, params)
+            .expect("canonical input builds");
         golem_rust::encode_typed_schema_value(&input).expect("typed schema value encodes")
     }
 
@@ -2275,7 +2279,9 @@ fn duplicate_canonical_param_uses_last_staged_value() {
 
     assert_eq!(
         fields[0],
-        golem_rust::SchemaValue::U32(2),
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(2))),
+        },
         "when two client arguments map to the same canonical inherited global, the generated client must preserve the pre-optimization BTreeMap::insert overwrite semantics",
     );
 }
@@ -2410,10 +2416,17 @@ fn duplicate_canonical_param_uses_last_staged_value_after_prior_removal() {
         panic!("expected client input to be a record");
     };
 
-    assert_eq!(fields[0], golem_rust::SchemaValue::U32(99));
+    assert_eq!(
+        fields[0],
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(99))),
+        },
+    );
     assert_eq!(
         fields[1],
-        golem_rust::SchemaValue::U32(3),
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(3))),
+        },
         "last staged duplicate canonical value must still win after packing an earlier canonical field",
     );
     assert_eq!(
