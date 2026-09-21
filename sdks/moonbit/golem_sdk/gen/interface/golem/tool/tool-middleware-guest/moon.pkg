@@ -7,6 +7,7 @@ import {
   "golemcloud/golem_sdk/interface/golem/tool/common",
   "golemcloud/golem_sdk/interface/golem/tool/streams",
   "golemcloud/golem_sdk/interface/golem/tool/underlying",
+  "golemcloud/golem_sdk/tool-middleware" @toolMiddleware,
 }
 
 supported_targets = "+wasm"
