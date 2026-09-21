@@ -1,4 +1,4 @@
-import * as middlewareSdk from '@golemcloud/golem-ts-sdk/middleware';
+import * as middlewareSdk from '@golemcloud/golem-ts-sdk';
 
 export const middleware = middlewareSdk.universalToolMiddleware({
   name: 'middleware-only',
