@@ -64,3 +64,15 @@ interface tool-middleware-guest {
     wrapped:         underlying-tool,
   ) -> result<invocation-result, tool-error>;
 }
+
+/// Runtime binding projection for invoking middleware exports from a component
+/// built against the unified agent guest world.
+world tool-middleware-runtime {
+  import golem:api/host@1.5.0;
+  import golem:agent/host@2.0.0;
+  import common;
+  import streams;
+  import host;
+  import underlying;
+  export tool-middleware-guest;
+}
