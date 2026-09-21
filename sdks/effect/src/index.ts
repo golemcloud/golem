@@ -343,7 +343,7 @@ export * as WitTypes from "./WitTypes.js"
  */
 export { defineAgent } from "./Agent.js"
 
-/** Define a caller-only contract without registering an agent. @since 1.6.0 @category dsl */
+/** Define a method-only or full client without registering an agent. @since 1.6.0 @category dsl */
 export { defineAgentClient } from "./Client.js"
 
 /**

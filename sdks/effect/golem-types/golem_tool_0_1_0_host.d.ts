@@ -88,7 +88,7 @@ declare module 'golem:tool/host@0.1.0' {
     constructor(toolName: string);
     /**
      * Creates a tool RPC resource without trapping on invalid caller input.
-     * @throws RpcError
+     * @throws ToolRpcError
      */
     static create(toolName: string): ToolRpc;
     /**

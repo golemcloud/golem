@@ -112,17 +112,17 @@ function remoteClientTypeChecks(): void {
   });
   void agentId.client(sharedContract).ping();
   void agentId.dynamicClient().method('ping');
-  // @ts-expect-error binding-only contracts cannot declare a name without an ID shape
+  // @ts-expect-error method-only clients cannot declare a name without an ID shape
   defineAgentClient({ name: 'Named', methods: sharedContract.methods });
   // @ts-expect-error lifecycle mode belongs to exact constructor definitions, not ID bindings
   defineAgentClient({ mode: 'durable', methods: sharedContract.methods });
-  // @ts-expect-error binding-only contracts cannot declare a name or lifecycle mode
+  // @ts-expect-error method-only clients cannot declare a name or lifecycle mode
   defineAgentClient({ name: 'Named', mode: 'ephemeral', methods: sharedContract.methods });
   // @ts-expect-error binding definitions expose no synthetic lifecycle mode
   void sharedContract.mode;
-  // @ts-expect-error method-only contracts do not construct exact-target identities
+  // @ts-expect-error method-only clients do not construct exact-target identities
   sharedContract.agentId({});
-  // @ts-expect-error method-only contracts do not expose constructor-based factories
+  // @ts-expect-error method-only clients do not expose constructor-based factories
   sharedContract.client.get({});
 
   const configuredContract = defineAgentClient({
@@ -143,7 +143,7 @@ function remoteClientTypeChecks(): void {
       value: { graph: compileSchema(z.string()).graph, value: v.string('hello') },
     },
   ]);
-  // @ts-expect-error binding-only contracts accept raw typed entries, not declaration-shaped objects
+  // @ts-expect-error method-only clients accept raw typed entries, not declaration-shaped objects
   agentId.client(sharedContract, { greeting: 'hello' });
   // @ts-expect-error config overrides retain their declared value types
   configuredContract.client.get({}, { greeting: 42 });
@@ -616,7 +616,7 @@ describe('RPC client', () => {
     expect(AgentTypeRegistry.exists(new AgentClassName(name))).toBe(false);
   });
 
-  it('binds one method-only contract to differently shaped existing agent identities', async () => {
+  it('binds one method-only client to differently shaped existing agent identities', async () => {
     const contract = defineAgentClient({
       methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
     });
@@ -651,7 +651,7 @@ describe('RPC client', () => {
     expect(contract).not.toHaveProperty('mode');
   });
 
-  it('forwards raw typed config entries when binding a method-only contract', () => {
+  it('forwards raw typed config entries when binding a method-only client', () => {
     const contract = defineAgentClient({
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
@@ -673,7 +673,7 @@ describe('RPC client', () => {
     ]);
   });
 
-  it('validates declared config before binding a complete contract', () => {
+  it('validates declared config before binding a full client', () => {
     const contract = defineAgentClient({
       name: 'ConfiguredExistingAgent',
       id: { name: z.string() },
@@ -704,7 +704,7 @@ describe('RPC client', () => {
     expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![3]).toHaveLength(1);
   });
 
-  it('binds a method-only contract to a durable phantom identity without discovery', () => {
+  it('binds a method-only client to a durable phantom identity without discovery', () => {
     const contract = defineAgentClient({
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
@@ -764,7 +764,7 @@ describe('RPC client', () => {
     expect(target.client(definition).ping).toBeTypeOf('function');
   });
 
-  it('rejects binding a complete contract to an incompatible constructor value', () => {
+  it('rejects binding a full client to an incompatible constructor value', () => {
     const definition = defineAgentClient({
       name: 'ExactDurableAgent',
       id: { name: z.string() },
@@ -782,7 +782,7 @@ describe('RPC client', () => {
     const creates = vi.mocked(WasmRpc.create).mock.calls.length;
 
     expect(() => target.client(definition)).toThrow(
-      "Agent client contract 'ExactDurableAgent' cannot bind ParsedAgentId 'ExactDurableAgent(42)': constructor value does not conform to the contract ID schema",
+      "Full agent client 'ExactDurableAgent' cannot bind ParsedAgentId 'ExactDurableAgent(42)': constructor value does not conform to the client ID schema",
     );
     expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
   });
@@ -811,7 +811,7 @@ describe('RPC client', () => {
     expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
   });
 
-  it('checks a complete contract name locally before creating the remote client', () => {
+  it('checks a full client name locally before creating the remote client', () => {
     const contract = defineAgentClient({
       name: 'ExpectedAgent',
       id: { name: z.string() },
@@ -829,7 +829,7 @@ describe('RPC client', () => {
     const creates = vi.mocked(WasmRpc.create).mock.calls.length;
 
     expect(() => target.client(contract)).toThrow(
-      "Agent client contract 'ExpectedAgent' cannot bind agent type 'OtherAgent'",
+      "Full agent client 'ExpectedAgent' cannot bind agent type 'OtherAgent'",
     );
     expect(WasmRpc.create).toHaveBeenCalledTimes(creates);
   });
@@ -978,9 +978,15 @@ describe('RPC client', () => {
     const client = ephemeralDef.client.newPhantom({ name: 'counter' });
     const rpc = vi.mocked(WasmRpc.create).mock.results.at(-1)!.value;
     const metadata = { agentId: 'final-agent-id', idempotencyKey: 'key' };
+    let completeInvocation!: (value: undefined) => void;
     const future = {
       subscribe: vi.fn().mockReturnValue({ promise: vi.fn().mockResolvedValue(undefined) }),
-      get: vi.fn().mockResolvedValue(undefined),
+      get: vi.fn().mockImplementation(
+        () =>
+          new Promise<undefined>((resolve) => {
+            completeInvocation = resolve;
+          }),
+      ),
       cancel: vi.fn(),
     };
     rpc.asyncInvokeAndAwait.mockReturnValue({ metadata, future });
@@ -988,9 +994,23 @@ describe('RPC client', () => {
     const receipt = { metadata, cancellationToken: { cancel: vi.fn() } };
     rpc.scheduleCancelableInvocation.mockReturnValue(receipt);
 
-    await expect(client.ping()).resolves.toEqual({ metadata, value: undefined });
-    expect(client.ping.trigger()).toBe(metadata);
-    expect(client.ping.schedule({ seconds: 1n, nanoseconds: 0 })).toBe(receipt);
+    const awaited = client.ping();
+    await vi.waitFor(() => expect(rpc.asyncInvokeAndAwait).toHaveBeenCalled());
+    metadata.agentId = 'mutated-after-start';
+    completeInvocation(undefined);
+    await expect(awaited).resolves.toEqual({
+      metadata: { agentId: 'final-agent-id', idempotencyKey: 'key' },
+      value: undefined,
+    });
+    metadata.agentId = 'final-agent-id';
+    const triggered = client.ping.trigger();
+    expect(triggered).toEqual(metadata);
+    expect(triggered).not.toBe(metadata);
+    expect(Object.isFrozen(triggered)).toBe(true);
+    const scheduled = client.ping.schedule({ seconds: 1n, nanoseconds: 0 });
+    expect(scheduled).toEqual(receipt);
+    expect(scheduled).not.toBe(receipt);
+    expect(Object.isFrozen(scheduled.metadata)).toBe(true);
     expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toBeUndefined();
     expect(vi.mocked(makeAgentId).mock.calls).toHaveLength(makeAgentIdCalls);
   });

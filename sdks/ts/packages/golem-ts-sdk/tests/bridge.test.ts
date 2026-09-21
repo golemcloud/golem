@@ -803,7 +803,10 @@ describe('public bridge runtime', () => {
     rpc.scheduleInvocation.mockReturnValue(receipt);
     const at = { seconds: 1n, nanoseconds: 0 };
 
-    expect(remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]))).toBe(receipt);
+    const scheduled = remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]));
+    expect(scheduled).toStrictEqual(receipt);
+    expect(scheduled).not.toBe(receipt);
+    expect(Object.isFrozen(scheduled.metadata)).toBe(true);
     expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything(), undefined);
   });
 

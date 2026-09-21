@@ -341,12 +341,16 @@ export class ToolCommand {
     if (this.stdout?.required) throw new TypeError('Command requires caller-readable stdout');
     if (this.stdin?.required && !stdin) throw new TypeError('Command requires stdin');
     const encoded = typedSchemaValueToWit(this.inputValue(input));
-    const rpc = ToolRpc.create(this.toolName);
-    rpc.invoke(
-      [...this.path],
-      encoded,
-      stdin ? createStdinFromStream(byteItems(stdin)) : undefined,
-    );
+    try {
+      const rpc = ToolRpc.create(this.toolName);
+      rpc.invoke(
+        [...this.path],
+        encoded,
+        stdin ? createStdinFromStream(byteItems(stdin)) : undefined,
+      );
+    } catch (error) {
+      throw this.mapFailure(error);
+    }
   }
 
   /** Admit a fire-and-forget invocation from canonical JSON. */

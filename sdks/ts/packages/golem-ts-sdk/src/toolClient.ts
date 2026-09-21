@@ -31,7 +31,7 @@ export interface ToolClientOptions {
   readonly lookupName?: string;
 }
 
-/** A caller-owned typed command contract; its commands may be a subset of the deployed tool. */
+/** A caller-owned typed command definition; its commands may be a subset of the deployed tool. */
 export interface ToolClientDefinition<Definition extends AnyToolDefinition> {
   readonly name?: string;
   readonly definition: Definition;
@@ -41,7 +41,7 @@ export interface ToolClientDefinition<Definition extends AnyToolDefinition> {
   ): ToolClient<Definition>;
 }
 
-/** Bind a partial typed tool contract without discovery or compatibility preflight. */
+/** Bind a partial typed tool definition without discovery or compatibility preflight. */
 export function toolClientDefinition<Definition extends AnyToolDefinition>(
   definition: Definition,
   name?: string,
@@ -52,7 +52,7 @@ export function toolClientDefinition<Definition extends AnyToolDefinition>(
     client(targetName?: string, options: Omit<ToolClientOptions, 'lookupName'> = {}) {
       const lookupName = name ?? targetName;
       if (!lookupName)
-        throw new TypeError('A nameless tool client contract requires a target name');
+        throw new TypeError('A nameless tool client definition requires a target name');
       return client(definition, { ...options, lookupName });
     },
   });

@@ -73,6 +73,39 @@ invocation. Producer and cleanup failures fail the active operation or invocatio
 than becoming clean EOF. P3 has no recoverable stream-local terminal error, so model one explicitly
 in the item type, for example `stream<result<T, E>>`, when needed.
 
+## Agent client levels and reflection
+
+Choose the narrowest caller surface that owns the information you have:
+
+1. A generated or `defineAgent`-owned client provides typed methods and all lifecycle factories allowed by its mode.
+2. `defineAgentClient({ methods })` is a method-only client for an existing durable canonical or phantom `ParsedAgentId`. It does not discover or create agents. `defineAgentClient({ name, id, methods, mode?, config? })` is a full client with identity construction, lifecycle factories, and declaration-aware config validation.
+3. `reflection.getReflectedAgentType` discovers immutable deployed metadata and schemas for runtime-selected types and methods.
+4. `ParsedAgentId.dynamicClient()` invokes arbitrary methods with schema-native values on an existing durable identity. It does not discover schemas or create a target.
+
+Typed and full clients encode caller-owned schemas before opening RPC. Full-client binding also checks the exact type name and constructor shape. Reflected clients apply the complete discovered input restrictions and validate output cardinality and shape. The host remains authoritative for visibility, authorization, effective configuration, identity resolution, and deployed-schema validation.
+
+Typed inputs use the schema library's normal optional-field syntax. Canonical reflected JSON records contain every field; use `null` for an absent `option<T>`. `s64` and `u64` are canonical decimal strings, duration is `{ nanoseconds: "..." }`, and quantity uses a decimal-string `mantissa`; smaller integers remain numbers. Schema-native streams and opaque capabilities require the `*Value` APIs and transfer ownership once.
+
+```ts
+import { getReflectedAgentType, isRemoteCallError } from '@golemcloud/golem-ts-sdk';
+
+const type = getReflectedAgentType('Counter');
+if (!type || type.mode !== 'durable') throw new Error('Counter is unavailable');
+const client = type.client.get({ name: 'main' });
+const add = client.method('add');
+
+try {
+  const abort = new AbortController();
+  const result = await add.invoke({ by: 1, note: null }, abort.signal);
+  console.log(result.value, result.metadata.agentId);
+  const scheduled = add.schedule({ seconds: 1n, nanoseconds: 0 }, { by: 2, note: null });
+  scheduled.cancellationToken.cancel();
+} catch (error) {
+  if (isRemoteCallError(error)) console.error(error.cause);
+  else throw error;
+}
+```
+
 ## Runtime tool reflection
 
 Use `reflection.getToolType(name)` or `reflection.getAllToolTypes()` to discover tools visible to
@@ -95,8 +128,10 @@ Canonical JSON records include every argument key; use `null` for an absent opti
 `invokeValue` accepts a schema-native value. Both forms validate against the discovered schema
 before opening RPC and check declared results after invocation. `startJson` and `startValue`
 expose stdout, result, `collect`, and cancellation for pending calls; use them when stdout is
-required. `DynamicToolClient` accepts a caller-packed typed schema value without pretending to
+required. `collect()` settles both result and stdout and reports a result failure before a stdout
+failure. Consume or cancel every started call. `DynamicToolClient` accepts a caller-packed typed schema value without pretending to
 know the deployed schema. Reflected output failures reject with `ToolRemoteOutputError`.
+
 ## External Durable Streams
 
 The SDK reads and appends existing external Durable Streams through reader and writer resources

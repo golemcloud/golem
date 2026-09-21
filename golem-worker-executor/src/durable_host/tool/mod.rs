@@ -5515,15 +5515,15 @@ impl<Ctx: WorkerCtx> HostToolRpc for DurableWorkerCtx<Ctx> {
     async fn create(
         &mut self,
         tool_name: String,
-    ) -> anyhow::Result<Result<Resource<ToolRpcEntry>, RpcError>> {
+    ) -> anyhow::Result<Result<Resource<ToolRpcEntry>, ToolRpcError>> {
         self.observe_function_call("golem::tool::host::tool-rpc", "create");
         let tool_name = match ToolName::try_from(tool_name) {
             Ok(name) => name,
-            Err(error) => return Ok(Err(RpcError::ProtocolError(error.to_string()))),
+            Err(error) => return Ok(Err(ToolRpcError::ProtocolError(error.to_string()))),
         };
         let rpc = match tool_rpc_for_current_owner(self, tool_name) {
             Ok(rpc) => rpc,
-            Err(error) => return Ok(Err(RpcError::ProtocolError(error.to_string()))),
+            Err(error) => return Ok(Err(ToolRpcError::ProtocolError(error.to_string()))),
         };
         Ok(Ok(self.table().push(rpc)?))
     }

@@ -36,7 +36,7 @@ import { SchemaRef } from './schema/ref';
 import type { MarkerKindOf } from './schema/markers';
 import { StandardSchemaV1 } from './schema/standardSchema';
 import type {
-  FullAgentClientContract,
+  FullAgentClientShape,
   MethodOnlyAgentClientDefinition,
   FullAgentClientDefinition,
   CallerInput,
@@ -268,7 +268,7 @@ function defineAgentClientImpl(spec: {
   | FullAgentClientDefinition<IdRecord, MethodsRecord, ConfigSpec, 'durable' | 'ephemeral'>
   | MethodOnlyAgentClientDefinition<MethodsRecord> {
   if (spec.name !== undefined && spec.id !== undefined) {
-    const exact: FullAgentClientContract<
+    const exact: FullAgentClientShape<
       IdRecord,
       MethodsRecord,
       ConfigSpec,
@@ -525,7 +525,7 @@ function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable'
   const parts = agentId.parts();
   if (exactName !== undefined && exactName !== parts.typeName) {
     throw new TypeError(
-      `Agent client contract '${exactName}' cannot bind agent type '${parts.typeName}'`,
+      `Full agent client '${exactName}' cannot bind agent type '${parts.typeName}'`,
     );
   }
   if (mode === 'ephemeral') {
@@ -550,7 +550,7 @@ function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable'
       })
     ) {
       throw new TypeError(
-        `Agent client contract '${exactName}' cannot bind ParsedAgentId '${agentId.value}': constructor value does not conform to the contract ID schema`,
+        `Full agent client '${exactName}' cannot bind ParsedAgentId '${agentId.value}': constructor value does not conform to the client ID schema`,
       );
     }
   }
@@ -571,7 +571,7 @@ export function buildAgentClientSurface<
   Config extends ConfigSpec,
   Mode extends 'durable' | 'ephemeral',
 >(
-  def: FullAgentClientContract<Id, Methods, Config, Mode> & {
+  def: FullAgentClientShape<Id, Methods, Config, Mode> & {
     readonly name: string;
     readonly id: Id;
   },

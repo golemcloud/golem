@@ -85,7 +85,13 @@ also return identity metadata. Client creation and invocation failures are
 reported as structured `RemoteCallError` values; use `isRemoteCallError` to
 inspect their `cause` without parsing messages.
 
-## Bind with a Method-Only Contract
+## Choose Between Method-Only and Full Clients
+
+`defineAgentClient({ methods })` creates a Level 2 method-only client. Use it only with an existing durable canonical or phantom `ParsedAgentId`. It performs no discovery, creates no identities, and has no lifecycle mode or declaration-aware config validation.
+
+`defineAgentClient({ name, id, methods, mode?, config? })` creates a Level 2 full client. Use it when the caller owns the complete local definition and needs identity construction plus durable, phantom, or ephemeral factories. It still performs no deployment discovery.
+
+## Bind with a Method-Only Client
 
 Use a method-only client when an existing durable `ParsedAgentId` supplies
 the target name and constructor value:
@@ -95,13 +101,13 @@ import { ParsedAgentId, defineAgentClient, method } from '@golemcloud/golem-ts-s
 import { z } from 'zod';
 
 const existingAgentId = new ParsedAgentId('CounterAgent("main")');
-const PingContract = defineAgentClient({
+const PingClient = defineAgentClient({
   methods: {
     ping: method({ input: {}, returns: z.string() }),
   },
 });
 
-const client = existingAgentId.client(PingContract);
+const client = existingAgentId.client(PingClient);
 const result = await client.ping();
 ```
 
@@ -109,7 +115,7 @@ A method-only client contains only `methods`; it cannot declare `name`,
 `id`, `config`, or `mode`. It performs no discovery and uses durable result
 semantics.
 
-Binding-only callers can pass raw typed configuration entries as the second argument to `existingAgentId.client(PingContract, entries)`. They must supply schema-native values and cannot validate those entries against declarations locally.
+Method-only callers can pass raw typed configuration entries as the second argument to `existingAgentId.client(PingClient, entries)`. They must supply schema-native values and cannot validate those entries against declarations locally.
 
 ## Construct an Agent ID with Caller-Owned Schemas
 
@@ -127,7 +133,7 @@ import {
 } from '@golemcloud/golem-ts-sdk';
 import { v } from '@golemcloud/golem-ts-sdk/schema';
 
-const CounterContract = defineAgentClient({
+const CounterClient = defineAgentClient({
   name: 'CounterAgent',
   id: { name: z.string() },
   methods: {
@@ -135,18 +141,18 @@ const CounterContract = defineAgentClient({
   },
 });
 
-const schemaLibraryId = CounterContract.agentId({ name: 'main' });
+const schemaLibraryId = CounterClient.agentId({ name: 'main' });
 const first = await schemaLibraryId
-  .client(CounterContract)
+  .client(CounterClient)
   .echo({ message: 'from Zod' });
 
 const constructorValue = v.record([v.string('main')]);
 const schemaValueId = ParsedAgentId.create({
-  typeName: CounterContract.name,
+  typeName: CounterClient.name,
   constructorValue,
 });
 const second = await schemaValueId
-  .client(CounterContract)
+  .client(CounterClient)
   .echo({ message: 'from SchemaValue' });
 ```
 
@@ -154,7 +160,7 @@ The first form validates and packs constructor fields through the caller's
 schema library. The explicit `ParsedAgentId.create` form is for infrastructure that
 already owns a Golem `SchemaValue`; record fields must be in the target
 constructor's declared order. Binding that ID to a fully defined durable client
-checks both the exact agent name and structural conformance to the contract's
+checks both the exact agent name and structural conformance to the client's
 local ID schema before creating the client. When runtime metadata is available,
 prefer `agentType.agentId(json)` or pack with `agentType.constructorInput`
 before calling `agentType.agentIdValue(value)`.
@@ -218,6 +224,63 @@ It does not make a final, already-invoked ephemeral agent ID reusable.
 Do not treat an ephemeral proxy as having a reusable final `ParsedAgentId`. A final
 ephemeral identity cannot accept another invocation or be resumed.
 
+## Validation, Optional Values, and Wide Integers
+
+Validation happens at several boundaries:
+
+- `defineAgentClient` compiles the caller-owned schemas. A full client validates constructor values and declared config overrides before opening RPC; a method-only client cannot validate identity or config declarations it does not own.
+- Reflected `packJson`, `validateJson`, and calls apply the complete discovered schema, including restrictions and nested values, before opening RPC.
+- The host authorizes the caller, resolves the environment-scoped identity, validates effective configuration, and checks the deployed input schema.
+- Awaited typed and reflected calls verify unit/non-unit cardinality and decode the declared result. Catch `RemoteCallError` with `isRemoteCallError(error)` and handle `error.cause` as a tagged value; do not parse messages.
+
+In typed Level 1 and Level 2 inputs, declare optional fields with the schema library, for example `z.string().optional()`, and omit them normally. Canonical reflected JSON records contain every field, so pass `null` for an absent option:
+
+```typescript
+import { getReflectedAgentType } from '@golemcloud/golem-ts-sdk';
+
+const type = getReflectedAgentType('SearchAgent');
+const search = type?.method('search');
+if (!type || !search || type.mode !== 'durable') throw new Error('SearchAgent.search unavailable');
+
+const checked = search.input.validateJson({ query: 'golem', cursor: null });
+if (!checked.success) throw new Error(JSON.stringify(checked.issues));
+const result = await type.client.get({ tenant: 'docs' }).method('search').invoke({
+  query: 'golem',
+  cursor: null,
+});
+console.log(result.value);
+```
+
+Canonical JSON represents `s64` and `u64` as decimal strings. Duration is `{ nanoseconds: "..." }`, and quantity uses a decimal-string `mantissa`. Smaller integers remain numbers. The generated JSON Schema uses matching patterns and exact range metadata.
+
+## Cancellation, Streams, and Cleanup
+
+Cancel an awaited agent call with `AbortSignal`; cancel a scheduled durable call with its token. A triggered call has no result observer:
+
+```typescript
+import { getReflectedAgentType, isRemoteCallError } from '@golemcloud/golem-ts-sdk';
+
+const type = getReflectedAgentType('CounterAgent');
+if (!type || type.mode !== 'durable') throw new Error('CounterAgent unavailable');
+const client = type.client.get({ name: 'main' });
+const add = client.method('add');
+const abort = new AbortController();
+
+try {
+  const pending = add.invoke({ by: 1 }, abort.signal);
+  // abort.abort(); // cancels observation; remote side effects may already have happened
+  console.log((await pending).value);
+} catch (error) {
+  if (isRemoteCallError(error)) console.error(error.cause);
+  else throw error;
+}
+
+const scheduled = add.schedule({ seconds: 1n, nanoseconds: 0 }, { by: 2 });
+scheduled.cancellationToken.cancel();
+```
+
+Schema-native streams and opaque capabilities cannot be packed as JSON. Use `invokeValue`, transfer an owned input stream once, consume returned streams to EOF or call `return()` when abandoning them, and do not reuse transferred handles. For reflected tools, `startJson`/`startValue` return independent `stdout`, `result`, `collect()`, and `cancel()` handles. `collect()` settles both channels and reports a result failure before a stdout failure; always consume or cancel a started operation.
+
 ## Choosing the Client Surface
 
 | Situation | Use |
@@ -225,5 +288,5 @@ ephemeral identity cannot accept another invocation or be resumed.
 | Target definition and method known in source | `Target.client` |
 | Type or method selected at runtime | `getReflectedAgentType` / `getAllAgentTypes` |
 | Existing concrete identity needs its current schema | `getAgentTypeByAgentId` |
-| Existing identity plus a caller-owned typed contract | `agentId.client(contract)` |
+| Existing identity plus a caller-owned method-only or full client | `agentId.client(clientDefinition)` |
 | Lifecycle-free invocation with schema-native values | `agentId.dynamicClient()` |

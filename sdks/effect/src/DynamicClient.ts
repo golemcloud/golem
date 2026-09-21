@@ -41,7 +41,7 @@ export interface DynamicAgentClient {
 
 /**
  * Bind directly to an agent ID without a reflection lookup. Inputs and outputs
- * are schema-value trees, so the caller owns the independent contract.
+ * are schema-value trees, so the caller owns the independent method definitions.
  * @since 1.6.0
  * @category constructors
  */

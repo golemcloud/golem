@@ -9,7 +9,8 @@ import {
   type ByteStreamItem,
   type FutureInvokeResult,
 } from 'golem:tool/host@0.1.0';
-import type { ToolError, ToolRpcError } from 'golem:core/types@2.0.0';
+export type ToolError = import('golem:core/types@2.0.0').ToolError;
+export type ToolRpcError = import('golem:core/types@2.0.0').ToolRpcError;
 import {
   preflightWitTypedSchemaValue,
   typedSchemaValueFromWit,
@@ -149,7 +150,15 @@ export function createToolClientRuntime(
 ): ToolClientRuntime {
   return {
     start(commandPath, input, stdin, stdout) {
-      const invocation = transport.start(commandPath, typedSchemaValueToWit(input), stdin, stdout);
+      let invocation: RawToolInvocation;
+      try {
+        invocation = transport.start(commandPath, typedSchemaValueToWit(input), stdin, stdout);
+      } catch (reason) {
+        return {
+          settledResult: Promise.resolve({ status: 'rejected', reason }),
+          cancel() {},
+        };
+      }
       return {
         stdout: invocation.stdout,
         settledResult: mapSettledToolResult(invocation.settledResult, (value) => ({
@@ -234,4 +243,3 @@ export function splitToolRpcError<Declared>(
     error: decodeCustomError(error.val.val.name, typedSchemaValueFromWit(error.val.val.payload)),
   };
 }
-export type { ToolRpcError, ToolError };
