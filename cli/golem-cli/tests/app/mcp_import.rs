@@ -236,6 +236,17 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
 
     let built = ctx.cli([flag::YES, cmd::BUILD]).await;
     assert!(built.success_or_dump());
+    for name in ["bearer-lookup", "basic-lookup"] {
+        let generated = generated_source_text(&ctx.cwd_path_join(format!(
+            "golem-temp/bridge-sdk/rust/internal/{name}-tool-guest-client"
+        )));
+        assert!(
+            generated.contains(name),
+            "generated client must call the canonical Golem tool name '{name}'"
+        );
+        assert!(!generated.contains("test-mcp-token"));
+        assert!(!generated.contains(&format!("127.0.0.1:{port}")));
+    }
     assert_eq!(
         *listings.lock().unwrap(),
         BTreeSet::from(["/bearer".into(), "/basic".into()])
@@ -346,4 +357,17 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
         );
     }
     assert_eq!(calls.lock().unwrap().len(), 10);
+}
+
+fn generated_source_text(root: &std::path::Path) -> String {
+    let mut result = String::new();
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            result.push_str(&generated_source_text(&path));
+        } else if let Ok(source) = std::fs::read_to_string(path) {
+            result.push_str(&source);
+        }
+    }
+    result
 }

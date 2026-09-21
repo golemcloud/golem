@@ -2188,7 +2188,7 @@ pub fn native_streaming_tool_metadata() -> golem_common::schema::tool::Tool {
         .metadata()
 }
 
-fn native_test_helper_definition(
+pub fn native_test_helper_definition(
     effects: Arc<AtomicUsize>,
 ) -> golem_native_tool::NativeToolDefinition {
     use golem_native_tool::NativeToolInvoker;

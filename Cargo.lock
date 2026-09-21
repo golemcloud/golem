@@ -4129,6 +4129,7 @@ dependencies = [
  "golem-native-tool",
  "golem-schema",
  "golem-service-base",
+ "golem-worker-executor-test-utils",
  "heck",
  "http 1.5.0",
  "http-body-util",

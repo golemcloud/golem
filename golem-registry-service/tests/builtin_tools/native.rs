@@ -15,8 +15,6 @@ use golem_common::model::tool::{
 };
 use golem_common::model::tool_middleware::ToolMiddlewareMergeMode;
 use golem_common::model::tool_release::{ToolReleaseById, ToolReleaseReference};
-use golem_common::schema::SchemaGraph;
-use golem_common::schema::tool::{CommandNode, CommandTree, Tool};
 use golem_registry_service::bootstrap::Services;
 use golem_registry_service::config::{
     ComponentCompilationConfig, LoginConfig, PrecreatedAccount, RegistryServiceConfig,
@@ -28,6 +26,23 @@ use golem_service_base::model::auth::AuthCtx;
 use std::collections::{BTreeMap, BTreeSet};
 use test_r::{test, timeout};
 use tokio::task::JoinSet;
+
+#[test]
+fn registry_native_fixture_matches_executor_registration() {
+    let name = ToolName::try_from("native-durable-helper").unwrap();
+    let descriptor = test_native_descriptor(&name, "1.0.0");
+    let executor_definition = golem_worker_executor_test_utils::native_test_helper_definition(
+        std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    );
+
+    assert_eq!(descriptor.release_name, name);
+    assert_eq!(descriptor.definition, executor_definition);
+    assert_eq!(descriptor.definition.id, "executor-native-helper");
+    assert_eq!(
+        descriptor.definition.tool.name(),
+        Some(descriptor.release_name.as_str())
+    );
+}
 
 #[test]
 #[timeout("120s")]
@@ -58,7 +73,7 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
         .authenticate_token(config.initial_accounts["root"].token.clone().unwrap())
         .await
         .unwrap();
-    let tool_name = ToolName::try_from("ambient-test").unwrap();
+    let tool_name = ToolName::try_from("native-durable-helper").unwrap();
 
     provision_test_native(&services, &owner, &tool_name, "1.0.0").await;
     let app = services
@@ -419,37 +434,10 @@ async fn provision_test_native(
     name: &ToolName,
     version: &str,
 ) {
-    let definition = Tool {
-        version: version.into(),
-        commands: CommandTree {
-            nodes: vec![CommandNode {
-                name: name.to_string(),
-                aliases: vec![],
-                doc: Default::default(),
-                globals: Default::default(),
-                subcommands: vec![],
-                body: None,
-            }],
-        },
-        schema: SchemaGraph::empty(),
-    };
     services
         .native_tool_catalog
         .provision(
-            vec![NativeToolDescriptor {
-                definition: golem_native_tool::NativeToolDefinition::new(
-                    "ambient-test",
-                    version,
-                    definition,
-                )
-                .unwrap(),
-                release_name: name.clone(),
-                provision: ToolProvisionConfig::default(),
-                environment_binding: ToolBindingInput {
-                    config_keys_readable: ConfigKeyScope::Keys(BTreeSet::new()),
-                    ..Default::default()
-                },
-            }],
+            vec![test_native_descriptor(name, version)],
             AccountSummary {
                 id: owner.id,
                 name: owner.name.clone(),
@@ -459,6 +447,29 @@ async fn provision_test_native(
         )
         .await
         .unwrap();
+}
+
+fn test_native_descriptor(name: &ToolName, version: &str) -> NativeToolDescriptor {
+    let mut definition = golem_worker_executor_test_utils::native_test_helper_definition(
+        std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    );
+    definition.implementation_version = version.to_string();
+    definition.tool.version = version.to_string();
+    definition = golem_native_tool::NativeToolDefinition::new(
+        definition.id,
+        definition.implementation_version,
+        definition.tool,
+    )
+    .unwrap();
+    NativeToolDescriptor {
+        definition,
+        release_name: name.clone(),
+        provision: ToolProvisionConfig::default(),
+        environment_binding: ToolBindingInput {
+            config_keys_readable: ConfigKeyScope::Keys(BTreeSet::new()),
+            ..Default::default()
+        },
+    }
 }
 
 fn ambient_deployment_request(

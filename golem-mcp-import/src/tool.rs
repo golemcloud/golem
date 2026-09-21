@@ -365,6 +365,35 @@ pub fn sanitize_name(name: &str) -> String {
     result.trim_end_matches('-').to_owned()
 }
 
+pub fn filter_rejection(
+    sanitized_name: &str,
+    include: Option<&[String]>,
+    exclude: Option<&[String]>,
+) -> Option<&'static str> {
+    if include.is_some_and(|patterns| {
+        !patterns
+            .iter()
+            .any(|pattern| glob_match::glob_match(pattern, sanitized_name))
+    }) {
+        Some("not selected by the import's include filter")
+    } else if exclude.is_some_and(|patterns| {
+        patterns
+            .iter()
+            .any(|pattern| glob_match::glob_match(pattern, sanitized_name))
+    }) {
+        Some("excluded by the import's exclude filter")
+    } else {
+        None
+    }
+}
+
+pub fn is_filter_rejection(reason: &str) -> bool {
+    matches!(
+        reason,
+        "not selected by the import's include filter" | "excluded by the import's exclude filter"
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub upstream_name: String,
@@ -375,6 +404,7 @@ pub struct Diagnostic {
 pub struct Batch {
     pub tools: Vec<ProjectedTool>,
     pub diagnostics: Vec<Diagnostic>,
+    pub filtered: Vec<Diagnostic>,
 }
 
 pub fn project_import(
@@ -413,19 +443,16 @@ pub fn project_import(
     let mut batch = Batch {
         tools: Vec::new(),
         diagnostics: Vec::new(),
+        filtered: Vec::new(),
     };
     for (tool, bound) in tools.iter().zip(bounded) {
         let original = tool.get("name").and_then(Value::as_str).unwrap_or_default();
         let sanitized = sanitize_name(original);
-        if include.is_some_and(|patterns| {
-            !patterns
-                .iter()
-                .any(|p| glob_match::glob_match(p, &sanitized))
-        }) || exclude.is_some_and(|patterns| {
-            patterns
-                .iter()
-                .any(|p| glob_match::glob_match(p, &sanitized))
-        }) {
+        if let Some(reason) = filter_rejection(&sanitized, include, exclude) {
+            batch.filtered.push(Diagnostic {
+                upstream_name: original.into(),
+                reason: reason.into(),
+            });
             continue;
         }
         let name = prefix

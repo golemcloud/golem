@@ -291,7 +291,13 @@ pub enum AppBuildStep {
 pub enum SubjectSource {
     Local { component_name: ComponentName },
     RemoteRelease,
-    McpImport,
+    EnvironmentTool,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct EnvironmentToolBridgeRequests {
+    pub wildcard: bool,
+    pub names: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -312,7 +318,7 @@ impl ComponentDependency {
             ComponentDependency::Agent { component_name, .. } => Some(component_name),
             ComponentDependency::Tool { source, .. } => match source {
                 SubjectSource::Local { component_name } => Some(component_name),
-                SubjectSource::RemoteRelease | SubjectSource::McpImport => None,
+                SubjectSource::RemoteRelease | SubjectSource::EnvironmentTool => None,
             },
         }
     }
@@ -327,6 +333,16 @@ pub enum BridgeSdkTargetSource {
     McpImport {
         import_index: u32,
         projection_digest: String,
+        #[serde(skip)]
+        manifest_source: PathBuf,
+    },
+    AmbientNative {
+        environment_id: golem_common::model::environment::EnvironmentId,
+        release_id: golem_common::model::tool_release::ToolReleaseId,
+        version: String,
+        metadata_version: String,
+        metadata_digest: golem_common::model::diff::Hash,
+        source_digest: golem_common::model::diff::Hash,
         #[serde(skip)]
         manifest_source: PathBuf,
     },
@@ -349,7 +365,9 @@ impl BridgeSdkTargetSource {
     pub fn component_name(&self) -> Option<&ComponentName> {
         match self {
             Self::Local { component_name } => Some(component_name),
-            Self::RemoteRelease { .. } | Self::McpImport { .. } => None,
+            Self::RemoteRelease { .. } | Self::McpImport { .. } | Self::AmbientNative { .. } => {
+                None
+            }
         }
     }
 }
@@ -910,31 +928,39 @@ impl Application {
             })
     }
 
-    pub fn requires_mcp_import_bridge_metadata(&self, selected: &BTreeSet<ComponentName>) -> bool {
-        if self
-            .mcp_imports(self.environment_name())
-            .is_none_or(Vec::is_empty)
-        {
-            return false;
-        }
-        if self
-            .bridge_sdks()
-            .for_all_used_modes()
-            .into_iter()
-            .any(|(_, _, targets)| {
-                targets.tools.is_some_and(|tools| {
-                    tools.clone().into_set().iter().any(|matcher| {
-                        matcher == "*"
-                            || (!self
-                                .tool_declarations
-                                .keys()
-                                .any(|name| name.as_str() == matcher)
-                                && !self.components.keys().any(|name| name.as_str() == matcher))
-                    })
-                })
-            })
-        {
-            return true;
+    pub fn requires_environment_tool_bridge_metadata(
+        &self,
+        selected: &BTreeSet<ComponentName>,
+        include_manifest_bridge_requests: bool,
+    ) -> bool {
+        let requests =
+            self.environment_tool_bridge_requests(selected, include_manifest_bridge_requests);
+        requests.wildcard || !requests.names.is_empty()
+    }
+
+    pub fn environment_tool_bridge_requests(
+        &self,
+        selected: &BTreeSet<ComponentName>,
+        include_manifest_bridge_requests: bool,
+    ) -> EnvironmentToolBridgeRequests {
+        let mut requests = EnvironmentToolBridgeRequests::default();
+        let application_tool_names = self.known_application_tool_names();
+        if include_manifest_bridge_requests {
+            for (_, _, targets) in self.bridge_sdks().for_all_used_modes() {
+                for matcher in targets
+                    .tools
+                    .map(|tools| tools.clone().into_set())
+                    .unwrap_or_default()
+                {
+                    if matcher == "*" {
+                        requests.wildcard = true;
+                    } else if !application_tool_names.contains(&matcher)
+                        && !self.components.keys().any(|name| name.as_str() == matcher)
+                    {
+                        requests.names.insert(matcher);
+                    }
+                }
+            }
         }
         let mut visited = BTreeSet::new();
         let mut pending = selected.iter().cloned().collect::<Vec<_>>();
@@ -943,21 +969,40 @@ impl Application {
                 continue;
             }
             for dependency in &self.component(&name).properties().dependencies {
-                if matches!(
-                    dependency,
-                    ComponentDependency::Tool {
-                        source: SubjectSource::McpImport,
-                        ..
-                    }
-                ) {
-                    return true;
+                if let ComponentDependency::Tool {
+                    source: SubjectSource::EnvironmentTool,
+                    tool_name,
+                } = dependency
+                {
+                    requests.names.insert(tool_name.to_string());
                 }
                 if let Some(provider) = dependency.component_name() {
                     pending.push(provider.clone());
                 }
             }
         }
-        false
+        requests
+    }
+
+    pub fn known_application_tool_names(&self) -> BTreeSet<String> {
+        self.tool_declarations
+            .keys()
+            .map(ToString::to_string)
+            .chain(self.components.values().flat_map(|component| {
+                component
+                    .value
+                    .0
+                    .dependencies
+                    .iter()
+                    .filter_map(|dependency| match dependency {
+                        ComponentDependency::Tool {
+                            source: SubjectSource::Local { .. },
+                            tool_name,
+                        } => Some(tool_name.to_string()),
+                        _ => None,
+                    })
+            }))
+            .collect()
     }
 
     pub fn selected_environment_source(&self) -> Option<&Path> {
@@ -4019,10 +4064,7 @@ mod app_builder {
             builder.validate_selected_preset_references(&mut validation, &component_presets);
             builder.resolve_and_validate_components(&mut validation, &component_presets);
             builder.validate_unique_sources(&mut validation);
-            builder.validate_tool_release_configuration(
-                &mut validation,
-                &component_presets.environment,
-            );
+            builder.validate_tool_release_configuration(&mut validation);
             builder.validate_http_api_deployments(&mut validation, &environments);
             builder.validate_mcp_imports(&mut validation, &environments);
 
@@ -4891,11 +4933,7 @@ mod app_builder {
                 })
         }
 
-        fn validate_tool_release_configuration(
-            &mut self,
-            validation: &mut ValidationBuilder,
-            environment: &EnvironmentName,
-        ) {
+        fn validate_tool_release_configuration(&mut self, validation: &mut ValidationBuilder) {
             let mut issues = Vec::new();
             for (name, declaration) in &self.tool_middleware_declarations {
                 if let Some(component_name) = &declaration.value.component
@@ -5010,20 +5048,7 @@ mod app_builder {
                     }
 
                     match self.tool_declarations.get(tool_name) {
-                        None if self
-                            .mcp_imports
-                            .get(environment)
-                            .is_some_and(|imports| !imports.value.is_empty()) =>
-                        {
-                            *source = SubjectSource::McpImport;
-                        }
-                        None => issues.push(ToolValidationIssue::error(
-                            ToolValidationPhase::BindingReferences,
-                            ToolValidationCode::MissingDeclaration,
-                            ToolEntityPath::tool(tool_name, "components.dependencies.tools"),
-                            Some(component.source.clone()),
-                            format!("Component {component_name} depends on undeclared tool"),
-                        )),
+                        None => *source = SubjectSource::EnvironmentTool,
                         Some(declaration) if declaration.value.release.is_none() => {
                             if let Some(dependency_component) = &declaration.value.component {
                                 if dependency_component == component_name {
@@ -5533,7 +5558,8 @@ mod test {
     use crate::fs;
     use crate::model::app::{
         Application, ApplicationPreload, ComponentDependency, ComponentLayerApplyContext,
-        ComponentPresetSelector, SubjectSource, ToolName, includes_from_yaml_file,
+        ComponentPresetSelector, EnvironmentToolBridgeRequests, SubjectSource, ToolName,
+        includes_from_yaml_file,
     };
     use crate::model::app_raw;
     use crate::model::cascade::property::Property;
@@ -6654,16 +6680,12 @@ mod test {
     }
 
     #[test]
-    fn mcp_import_dependencies_keep_native_sources_and_resolve_only_for_selected_builds() {
+    fn environment_tool_dependencies_keep_declared_sources_and_resolve_only_for_selected_builds() {
         let source = indoc! {r#"
             app: imported-tools
             environments:
               local:
                 server: local
-            mcp:
-              imports:
-                local:
-                  - url: https://tools.example/mcp
             components:
               app:provider:
                 componentWasm: provider.wasm
@@ -6700,16 +6722,101 @@ mod test {
             }
         ));
         assert!(
-            matches!(&dependencies[2], ComponentDependency::Tool { source: SubjectSource::McpImport, tool_name } if tool_name.as_str() == "imported-tool")
+            matches!(&dependencies[2], ComponentDependency::Tool { source: SubjectSource::EnvironmentTool, tool_name } if tool_name.as_str() == "imported-tool")
         );
-        assert!(app.requires_mcp_import_bridge_metadata(&BTreeSet::from([consumer])));
-        assert!(!app.requires_mcp_import_bridge_metadata(&BTreeSet::from([provider.clone()])));
+        assert!(app.requires_environment_tool_bridge_metadata(&BTreeSet::from([consumer]), true));
+        assert!(
+            !app.requires_environment_tool_bridge_metadata(
+                &BTreeSet::from([provider.clone()]),
+                true
+            )
+        );
         let (wildcard, _dir) = load_app_for_env(
             &format!("{source}\nbridge:\n  rust:\n    internal:\n      tools: ['*']\n"),
             "local",
             &[],
         );
-        assert!(wildcard.requires_mcp_import_bridge_metadata(&BTreeSet::from([provider])));
+        assert!(
+            wildcard.requires_environment_tool_bridge_metadata(
+                &BTreeSet::from([provider.clone()]),
+                true
+            )
+        );
+        assert!(
+            !wildcard.requires_environment_tool_bridge_metadata(&BTreeSet::from([provider]), false)
+        );
+    }
+
+    #[test]
+    fn environment_tool_metadata_demand_follows_transitive_local_dependencies() {
+        let (app, _dir) = load_app_for_env(
+            indoc! {r#"
+                app: transitive-environment-tool
+                environments:
+                  local:
+                    server: local
+                components:
+                  app:provider:
+                    componentWasm: provider.wasm
+                    dependencies:
+                      tools:
+                        - ambient-tool
+                  app:consumer:
+                    componentWasm: consumer.wasm
+                    dependencies:
+                      tools:
+                        - local-tool
+                tools:
+                  local-tool:
+                    component: app:provider
+            "#},
+            "local",
+            &[],
+        );
+
+        assert!(app.requires_environment_tool_bridge_metadata(
+            &BTreeSet::from([ComponentName("app:consumer".to_string())]),
+            false
+        ));
+    }
+
+    #[test]
+    fn explicit_local_tool_names_are_not_environment_requests() {
+        let (app, _dir) = load_app_for_env(
+            indoc! {r#"
+                app: local-tool-request
+                environments:
+                  local:
+                    server: local
+                components:
+                  app:provider:
+                    componentWasm: provider.wasm
+                  app:consumer:
+                    componentWasm: consumer.wasm
+                    dependencies:
+                      tools:
+                        - component: app:provider
+                          name: grep
+                bridge:
+                  rust:
+                    internal:
+                      tools: [grep]
+            "#},
+            "local",
+            &[],
+        );
+
+        assert_eq!(
+            app.known_application_tool_names(),
+            BTreeSet::from(["grep".to_string()])
+        );
+        assert_eq!(
+            app.environment_tool_bridge_requests(
+                &BTreeSet::from([ComponentName("app:consumer".to_string())]),
+                true,
+            ),
+            EnvironmentToolBridgeRequests::default()
+        );
     }
 
     #[test]
@@ -6744,7 +6851,6 @@ mod test {
             "declaration key must match",
             "cannot publish remote tool",
             "publishes undeclared tool",
-            "depends on undeclared tool",
             "name-only dependency",
         ] {
             assert!(

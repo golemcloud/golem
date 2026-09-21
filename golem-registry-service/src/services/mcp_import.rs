@@ -64,6 +64,7 @@ pub struct McpImportPreview {
     pub protocol_versions: Vec<String>,
     pub tools: Vec<(usize, ProjectedTool)>,
     pub diagnostics: Vec<(usize, Diagnostic)>,
+    pub filtered: Vec<(usize, Diagnostic)>,
 }
 
 #[derive(Clone, Debug)]
@@ -254,6 +255,17 @@ impl McpImportResolver {
             .iter()
             .map(|(version, _)| version.clone())
             .collect();
+        let filtered = observations
+            .iter()
+            .enumerate()
+            .flat_map(|(index, (_, batch))| {
+                batch
+                    .filtered
+                    .iter()
+                    .cloned()
+                    .map(move |diagnostic| (index, diagnostic))
+            })
+            .collect();
         let merged = merge_imports(
             &native_names.into_iter().collect(),
             observations.into_iter().map(|(_, batch)| batch).collect(),
@@ -262,6 +274,7 @@ impl McpImportResolver {
             protocol_versions,
             tools: merged.tools,
             diagnostics: merged.diagnostics,
+            filtered,
         })
     }
 
@@ -789,6 +802,7 @@ impl McpImportResolver {
             .map(|observation| Batch {
                 tools: observation.tools.clone(),
                 diagnostics: observation.diagnostics.clone(),
+                filtered: Vec::new(),
             })
             .collect();
         let merged = merge_imports(&native_names, batches);

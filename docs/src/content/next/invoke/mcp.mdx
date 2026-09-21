@@ -217,8 +217,9 @@ mcp:
 
 Upstream names are sanitized to kebab-case before filtering. The prefix is joined
 with `-`, so `search_items` becomes `catalog-search-items`. Use either `include` or
-`exclude`, not both. Native tool declarations take precedence over imports; among
-imports, earlier entries win. Imports do not need top-level `tools` declarations.
+`exclude`, not both. Application tools and the selected environment's ambient native
+tools take precedence over imports; among imports, earlier entries win. Imports do
+not need top-level `tools` declarations.
 The optional `version` selects the MCP protocol revision, not a tool release.
 The supported import protocol is currently `2026-07-28` Streamable HTTP.
 
@@ -240,6 +241,9 @@ consumer's tool clients. It does not use an older deployment's declarations.
 Rust, TypeScript, Effect, Scala and MoonBit use their existing tool-client APIs.
 Unavailable metadata fails client generation rather than silently generating
 stale types. A changed projection causes regeneration on the next build.
+The generated client calls the projected canonical Golem name through `tool-rpc`;
+the upstream MCP name remains runtime metadata. Generated sources contain no MCP
+endpoint, direct MCP transport, or authentication credentials.
 
 The result has a `structured` field and a `content` variant. If the upstream tool
 declares `outputSchema`, `structured` has that schema's generated type. Otherwise

@@ -22,7 +22,8 @@ use crate::app::build::gen_bridge::{
     plan_explicit_manifest_guest_bridge_generation_for_components_lenient,
     plan_manifest_external_bridge_generation_for_components_lenient,
     plan_repl_bridge_generation_lenient, validate_host_managed_bridge_targets,
-    validate_no_output_dir_collisions, validate_supported_bridge_targets, write_repl_metadata,
+    validate_no_ambient_tool_collisions, validate_no_output_dir_collisions,
+    validate_supported_bridge_targets, write_repl_metadata,
 };
 use crate::app::context::BuildContext;
 use crate::bridge_gen::BridgeMode;
@@ -186,12 +187,12 @@ fn available_remote_tool_guest_bridge_dependencies(
         let component = ctx.application().component(component_name);
         for dependency in &component.properties().dependencies {
             if let ComponentDependency::Tool {
-                source: crate::model::app::SubjectSource::McpImport,
+                source: crate::model::app::SubjectSource::EnvironmentTool,
                 tool_name,
             } = dependency
                 && ctx.should_run_step(AppBuildStep::GenBridge)
             {
-                ctx.mcp_tool(tool_name)?;
+                ctx.environment_tool(tool_name)?;
                 available.insert(dependency.clone());
             }
             if let ComponentDependency::Tool {
@@ -276,6 +277,7 @@ async fn build_components_with_dependency_ordering(
                 if component.agent_type_extraction_source_wasm().exists() {
                     let metadata =
                         extract_and_store_component_metadata(ctx, &component_name).await?;
+                    validate_no_ambient_tool_collisions(ctx, &component_name, &metadata.tools)?;
                     available_guest_bridge_dependencies.extend(
                         component_guest_bridge_dependencies_provided_by_metadata(
                             &component_name,
@@ -456,7 +458,7 @@ fn format_subject_source(source: &crate::model::app::SubjectSource) -> String {
     match source {
         crate::model::app::SubjectSource::Local { component_name } => component_name.to_string(),
         crate::model::app::SubjectSource::RemoteRelease => "remote release".to_string(),
-        crate::model::app::SubjectSource::McpImport => "MCP import".to_string(),
+        crate::model::app::SubjectSource::EnvironmentTool => "environment tool".to_string(),
     }
 }
 
@@ -1204,6 +1206,14 @@ fn validate_manifest_matchers_resolved(
             }
 
             if !tool_matchers.is_empty() {
+                for matcher in &tool_matchers {
+                    let Ok(name) = ToolName::try_from(matcher.as_str()) else {
+                        continue;
+                    };
+                    if ctx.environment_tool_diagnostic(&name).is_some() {
+                        ctx.environment_tool(&name)?;
+                    }
+                }
                 logln("");
                 log_error(format!(
                     "The following tool matchers were not found during {} bridge SDK generation: {}",
@@ -1348,8 +1358,81 @@ fn has_explicit_manifest_guest_bridge_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::app::BridgeSdkTargetSubject;
+    use crate::model::app::{
+        Application, ApplicationPreload, BridgeSdkTargetSubject, ComponentPresetSelector,
+    };
+    use crate::model::app_raw;
+    use tempfile::tempdir;
     use test_r::test;
+
+    #[test]
+    fn final_manifest_validation_reports_mcp_projection_diagnostic() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = temp_dir.path().join("golem.yaml");
+        crate::fs::write(
+            &manifest,
+            r#"
+app: rejected-import
+environments:
+  local:
+    server: local
+mcp:
+  imports:
+    local:
+      - url: https://tools.example/mcp
+bridge:
+  rust:
+    internal:
+      tools: [acme-search-files]
+"#,
+        )
+        .unwrap();
+        let raw_apps = vec![app_raw::ApplicationWithSource::from_yaml_file(&manifest).unwrap()];
+        let (preload, _, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
+        let ApplicationPreload {
+            application_name,
+            environments,
+            local_server,
+            ..
+        } = preload.unwrap();
+        let (application, _, errors) = Application::from_raw_apps(
+            temp_dir.path().to_path_buf(),
+            application_name,
+            environments,
+            local_server,
+            ComponentPresetSelector {
+                environment: "local".parse().unwrap(),
+                presets: Vec::new(),
+            },
+            raw_apps,
+        )
+        .into_product();
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
+        let app_ctx = crate::app::context::ApplicationContext::for_test(application.unwrap());
+        let build_config = crate::model::app::BuildConfig::default();
+        let environment_tools = crate::app::context::ResolvedEnvironmentTools {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            ambient_tools: Vec::new(),
+            mcp_tools: Vec::new(),
+            mcp_diagnostics: vec![crate::app::context::ResolvedMcpDiagnostic {
+                canonical_name: "acme-search-files".into(),
+                import_index: 2,
+                upstream_name: "Search Files".into(),
+                reason: "unsupported schema".into(),
+            }],
+        };
+        let ctx =
+            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+
+        let error = validate_manifest_guest_matchers_resolved(&ctx, &[], &[])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("acme-search-files"));
+        assert!(error.contains("MCP import 2"));
+        assert!(error.contains("Search Files"));
+        assert!(error.contains("unsupported schema"));
+    }
 
     #[test]
     fn dependency_guest_target_under_custom_claim_base_is_allowed() {
