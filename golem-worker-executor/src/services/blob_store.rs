@@ -1051,7 +1051,7 @@ mod tests {
     /// operation that reads a blob there gives the answer of a path that holds no blob:
     /// `get_container` gives no metadata and `get_data` finds no object, and `delete_object`
     /// removes nothing. A blob cannot be where a directory is, so `write_data` gives
-    /// `BlobNameError::NoName` (`reject_root_blob_path`), which is
+    /// `BlobNameError::NoName` (`NormalizedBlobPath::reject_root`), which is
     /// `BlobStoreError::InvalidInput`. Both errors are permanent: the executor retries neither
     /// a name that can never work nor a read of a blob that the storage does not hold.
     ///
