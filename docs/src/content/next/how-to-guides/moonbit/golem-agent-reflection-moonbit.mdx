@@ -165,6 +165,23 @@ Method-only and full clients do not discover payload schemas. The caller's
 `IntoSchema` and `FromSchema` implementations are the schema authority. They have
 two forms.
 
+For tools, wrap any caller-owned typed client factory in a named or reusable
+definition. Binding is optimistic and performs no discovery or compatibility
+preflight:
+
+```moonbit
+let named = @reflection.ToolClientDefinition::named(
+  "reports",
+  fn(name) { ReportsClient::new_for(name) },
+)
+let reports = named.client()
+
+let reusable = @reflection.ToolClientDefinition::unnamed(
+  fn(name) { ReportsClient::new_for(name) },
+)
+let staging_reports = reusable.client_for("reports-staging")
+```
+
 Method-only clients contain method codecs only. Bind a durable
 `ParsedAgentId`; its type name, constructor value, and phantom UUID supply the
 target. Do not add a standalone name to this form:

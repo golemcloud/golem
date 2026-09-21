@@ -255,6 +255,15 @@ pub(all) struct ToolArgument {
   optional_carrier : Bool
 } derive(Eq, @debug.Debug)
 
+pub(all) struct ToolClientDefinition[Client] {
+  name : String?
+  // private fields
+}
+pub fn[Client] ToolClientDefinition::client(Self[Client]) -> Client raise ReflectError
+pub fn[Client] ToolClientDefinition::client_for(Self[Client], String) -> Client raise ReflectError
+pub fn[Client] ToolClientDefinition::named(String, (String) -> Client) -> Self[Client]
+pub fn[Client] ToolClientDefinition::unnamed((String) -> Client) -> Self[Client]
+
 pub(all) struct ToolCommand {
   tool : ToolType
   path : Array[String]

@@ -59,6 +59,24 @@ fn reflected_tool_error(
 }
 
 ///|
+fn no_tool_error(error : @tool.ToolError[@tool.NoToolError]) -> String {
+  match error {
+    Rpc(error) => "rpc:\{Repr(error)}"
+    RemoteTool(error) => "remote:\{Repr(error)}"
+    Tool(error) =>
+      match error {
+
+      }
+    UnknownToolError(name, payload) => {
+      @model.drop_owned_capabilities(payload.value)
+      "unknown:\{name}"
+    }
+    InvalidInput(message) => "input:\{message}"
+    MalformedRemoteOutput(message) => "output:\{message}"
+  }
+}
+
+///|
 #derive.agent
 struct MoonBitToolReflectionCaller {
   name : String
@@ -96,6 +114,17 @@ pub async fn MoonBitToolReflectionCaller::round_trip(self : Self) -> String {
     command.path,
     { graph: command.input_schema.graph, value: packed, },
   )
+  let typed = @reflection.ToolClientDefinition::unnamed(fn(name) {
+    MoonbitReflectionTestClient::new_for(name)
+  }).client_for(tool.lookup_name) catch {
+    error => return "typed-definition:\{Repr(error)}"
+  }
+  defer typed.drop()
+  match typed.echo("moonbit") {
+    Ok("moonbit-tool:moonbit") => ()
+    Ok(value) => return "typed-value:\{value}"
+    Err(error) => return "typed-error:\{no_tool_error(error)}"
+  }
   let native_text = match native {
     Ok(Some(@model.SchemaValue::String(value))) => value
     Ok(Some(value)) => {

@@ -110,6 +110,27 @@ test "namespace-only commands expose metadata and reject invocation locally" {
 }
 
 ///|
+test "caller-owned tool definitions bind named and partial clients without discovery" {
+  let named = ToolClientDefinition::named("stable-tool", fn(name) { name })
+  let partial = ToolClientDefinition::unnamed(fn(name) { name })
+  assert_eq(named.client(), "stable-tool")
+  assert_eq(named.client_for("ignored"), "stable-tool")
+  try partial.client() catch {
+    Discovery(_) => ()
+    _ => fail("expected a missing target discovery error")
+  } noraise {
+    _ => fail("nameless definition unexpectedly created a client")
+  }
+  assert_eq(partial.client_for("deployed-tool"), "deployed-tool")
+  try partial.client_for(" ") catch {
+    Discovery(_) => ()
+    _ => fail("expected a blank target discovery error")
+  } noraise {
+    _ => fail("blank tool name unexpectedly created a client")
+  }
+}
+
+///|
 test "nested namespace lookup retains canonical child names" {
   let tool = sample_tool()
   let nodes = tool.definition.commands.nodes

@@ -54,6 +54,55 @@ pub(all) struct DynamicToolClient {
 } derive(Debug, Eq)
 
 ///|
+/// A caller-owned typed tool definition. The supplied client factory may expose
+/// any compile-time command subset and performs no deployment discovery or
+/// compatibility preflight.
+pub(all) struct ToolClientDefinition[Client] {
+  name : String?
+  priv create_client : (String) -> Client
+}
+
+///|
+pub fn[Client] ToolClientDefinition::named(
+  name : String,
+  create_client : (String) -> Client,
+) -> ToolClientDefinition[Client] {
+  { name: Some(name), create_client, }
+}
+
+///|
+pub fn[Client] ToolClientDefinition::unnamed(
+  create_client : (String) -> Client,
+) -> ToolClientDefinition[Client] {
+  { name: None, create_client, }
+}
+
+///|
+pub fn[Client] ToolClientDefinition::client(
+  self : ToolClientDefinition[Client],
+) -> Client raise ReflectError {
+  match self.name {
+    Some(name) => self.client_for(name)
+    None =>
+      raise Discovery(
+        "a nameless tool client definition requires a target name",
+      )
+  }
+}
+
+///|
+pub fn[Client] ToolClientDefinition::client_for(
+  self : ToolClientDefinition[Client],
+  target_name : String,
+) -> Client raise ReflectError {
+  let name = self.name.unwrap_or(target_name)
+  guard !name.trim().is_empty() else {
+    raise Discovery("tool client target name cannot be empty")
+  }
+  (self.create_client)(name)
+}
+
+///|
 pub fn get_all_tool_types() -> Array[ToolType] raise ReflectError {
   let result : Array[ToolType] = []
   for registered in @toolHost.get_all_tools() {

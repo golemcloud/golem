@@ -24,6 +24,7 @@ test "tool emitters generate root, leaf, registration, and typed clients" {
     @lib.generate_tool_client_code(tools),
   )
   assert_true(clients.contains("pub(all) struct GrepClient"))
+  assert_true(clients.contains("GrepClient::new_for"))
   assert_true(clients.contains("GrepClient::count"))
   assert_true(clients.contains("[\"count\"]"))
   assert_true(clients.contains("@tool.NoToolError"))
