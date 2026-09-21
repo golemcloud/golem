@@ -84,6 +84,17 @@ fully dynamic client, handles the raw tool result, and then explicitly validates
 and decodes the output:
 
 ```moonbit
+fn release_dynamic_tool_error(
+  error : @tool.ToolError[@reflection.ReflectedToolCustomError],
+) -> Unit {
+  match error {
+    Tool(custom) => @model.drop_owned_capabilities(custom.payload.value)
+    UnknownToolError(_, payload) =>
+      @model.drop_owned_capabilities(payload.value)
+    _ => ()
+  }
+}
+
 pub async fn invoke_discovered_tool_dynamically() -> String {
   let tool = @reflection.get_tool_type("moonbit-reflection-test")
   let command = tool.command(["echo"])
@@ -97,30 +108,50 @@ pub async fn invoke_discovered_tool_dynamically() -> String {
   }
 
   let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name)
-  let raw = dynamic.invoke_value(
+  let raw = match dynamic.invoke_value(
     command.path,
     { graph: command.input_schema.graph, value: packed },
-  ) catch {
-    error => return "invoke:\{Repr(error)}"
+  ) {
+    Ok(raw) => raw
+    Err(error) => {
+      let message = Repr(error)
+      release_dynamic_tool_error(error)
+      return "invoke:\{message}"
+    }
   }
 
   match (command.result, raw.result) {
     (None, None) => "ok"
     (Some(schema), Some(output)) => {
       schema.validate_value(output.value) catch {
-        error => return "output:\{Repr(error)}"
+        error => {
+          @model.drop_owned_capabilities(output.value)
+          return "output:\{Repr(error)}"
+        }
       }
-      schema.unpack_json(output.value).stringify()
+      let json = schema.unpack_json(output.value) catch {
+        error => {
+          @model.drop_owned_capabilities(output.value)
+          return "decode:\{Repr(error)}"
+        }
+      }
+      @model.drop_owned_capabilities(output.value)
+      json.stringify()
     }
-    _ => "output:missing-or-unexpected"
+    (_, Some(output)) => {
+      @model.drop_owned_capabilities(output.value)
+      "output:unexpected"
+    }
+    _ => "output:missing"
   }
 }
 ```
 
 Moving the discovered name, path, and graphs into `DynamicToolClient` does not
-transfer automatic validation policy. This non-streaming recipe owns no stream
-handles. For dynamic streaming calls, drain or close transferred streams and
-cancel a started invocation when it is abandoned.
+transfer automatic validation policy. The recipe explicitly releases custom
+error payloads and returned values after decoding. For dynamic streaming calls,
+drain or close transferred streams and cancel a started invocation when it is
+abandoned.
 
 Both reflected and direct clients support awaited, trigger, and scheduled
 calls through `invoke_value`, `trigger_value`, and `schedule_value`. Awaited

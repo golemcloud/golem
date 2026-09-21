@@ -44,8 +44,15 @@ fn reflected_tool_error(
   match error {
     Rpc(error) => "rpc:\{Repr(error)}"
     RemoteTool(error) => "remote:\{Repr(error)}"
-    Tool(error) => "tool:\{Repr(error)}"
-    UnknownToolError(name, _) => "unknown:\{name}"
+    Tool(error) => {
+      let message = "tool:\{Repr(error)}"
+      @model.drop_owned_capabilities(error.payload.value)
+      message
+    }
+    UnknownToolError(name, payload) => {
+      @model.drop_owned_capabilities(payload.value)
+      "unknown:\{name}"
+    }
     InvalidInput(message) => "input:\{message}"
     MalformedRemoteOutput(message) => "output:\{message}"
   }
@@ -91,6 +98,10 @@ pub async fn MoonBitToolReflectionCaller::round_trip(self : Self) -> String {
   )
   let native_text = match native {
     Ok(Some(@model.SchemaValue::String(value))) => value
+    Ok(Some(value)) => {
+      @model.drop_owned_capabilities(value)
+      "native-error"
+    }
     _ => "native-error"
   }
   let json_text = match encoded {
@@ -102,17 +113,31 @@ pub async fn MoonBitToolReflectionCaller::round_trip(self : Self) -> String {
       match (command.result, result.result) {
         (Some(schema), Some(value)) => {
           schema.validate_value(value.value) catch {
-            _ => return "dynamic-validation-error"
+            _ => {
+              @model.drop_owned_capabilities(value.value)
+              return "dynamic-validation-error"
+            }
           }
-          match schema.unpack_json(value.value) {
+          let decoded = schema.unpack_json(value.value) catch {
+            _ => {
+              @model.drop_owned_capabilities(value.value)
+              return "dynamic-decode-error"
+            }
+          }
+          @model.drop_owned_capabilities(value.value)
+          match decoded {
             Json::String(text) => text
             _ => "dynamic-value-error"
           }
         }
         (None, None) => "dynamic-unit"
+        (_, Some(value)) => {
+          @model.drop_owned_capabilities(value.value)
+          "dynamic-unexpected"
+        }
         _ => "dynamic-empty"
       }
-    Err(_) => "dynamic-error"
+    Err(error) => "dynamic-error:\{reflected_tool_error(error)}"
   }
   "\{native_text}|\{json_text}|\{invalid}|\{dynamic_text}"
 }
