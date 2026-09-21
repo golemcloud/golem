@@ -1711,9 +1711,7 @@ async fn delete_dir_root_path_is_safe_noop(
     let storage = test.get_blob_storage().await;
     let paths = [Path::new("keep-me"), Path::new("keep/me/too")];
 
-    // Every one of these paths is at the root of the namespace, because none of them has a name
-    // in it.
-    for root_path in ["", ".", "./", "././"] {
+    for root_path in ROOT_PATHS {
         for path in paths {
             storage
                 .put_raw(
@@ -2607,9 +2605,7 @@ async fn create_dir_at_a_root_path_leaves_nothing_behind(
         .await
         .unwrap();
 
-    // Every one of these paths is at the root of the namespace, because none of them has a name
-    // in it.
-    for root_path in ["", ".", "./", "././"] {
+    for root_path in ROOT_PATHS {
         storage
             .create_dir(
                 "create_dir_at_a_root_path_leaves_nothing_behind",
@@ -2652,11 +2648,7 @@ async fn exists_at_a_root_path_gives_a_directory(
 ) {
     let storage = test.get_blob_storage().await;
 
-    // Every one of these paths is at the root of the namespace, because none of them has a name
-    // in it.
-    let root_paths = ["", ".", "./", "././"];
-
-    for root_path in root_paths {
+    for root_path in ROOT_PATHS {
         let before = storage
             .exists(
                 "exists_at_a_root_path_gives_a_directory",
@@ -2685,7 +2677,7 @@ async fn exists_at_a_root_path_gives_a_directory(
         .await
         .unwrap();
 
-    for root_path in root_paths {
+    for root_path in ROOT_PATHS {
         let after = storage
             .exists(
                 "exists_at_a_root_path_gives_a_directory",
@@ -2826,7 +2818,7 @@ async fn list_dir_of_a_path_with_nothing_gives_an_empty_list(
     let empty: Vec<PathBuf> = Vec::new();
 
     // Nothing is written yet, so the root of the namespace holds nothing.
-    for root_path in ["", ".", "./", "././"] {
+    for root_path in ROOT_PATHS {
         let entries = storage
             .list_dir(
                 "list_dir_of_a_path_with_nothing_gives_an_empty_list",
