@@ -127,8 +127,21 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
         for {
           native  <- command.invokeValue(input)
           encoded <- command.invokeJson(json)
-          dynamic <- new DynamicToolClient("scala-reflection-test").invoke(List("echo"), dynamicInput)
-        } yield s"$native|$encoded|$invalid|${dynamic.map(_.result.map(_.value))}"
+          dynamic <- new DynamicToolClient("scala-reflection-test").invoke(command.path, dynamicInput)
+        } yield {
+          val decodedDynamic = dynamic.left.map(_.toString).flatMap { raw =>
+            (command.result, raw.result) match {
+              case (Some(schema), Some(output)) =>
+                schema
+                  .validateValue(output.value)
+                  .left
+                  .map(_.map(_.message).mkString("; "))
+                  .flatMap(_ => schema.unpackJson(output.value).left.map(_.message))
+              case _ => Left("missing or unexpected tool result")
+            }
+          }
+          s"$native|$encoded|$invalid|$decodedDynamic"
+        }
     }
   }
 

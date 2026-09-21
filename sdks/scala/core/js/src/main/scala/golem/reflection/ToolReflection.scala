@@ -437,7 +437,7 @@ final case class ReflectedToolJsonInvocation(
   }
 }
 
-/** Schema-free tool calls accept only caller-packed values. */
+/** Fully dynamic tool calls accept only caller-packed values. */
 final class DynamicToolClient(val toolName: String) {
   private implicit val ec: ExecutionContext = ToolInvokerRuntime.executionContext
 
