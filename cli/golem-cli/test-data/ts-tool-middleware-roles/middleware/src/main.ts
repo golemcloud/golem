@@ -3,7 +3,7 @@ import * as middlewareSdk from '@golemcloud/golem-ts-sdk/middleware';
 export const middleware = middlewareSdk.universalToolMiddleware({
   name: 'middleware-only',
   invoke: (request, { underlying }) =>
-    underlying.invoke(request.commandPath, request.input, request.stdin),
+    underlying.invokeAndAwait(request.commandPath, request.input, request.stdin),
 });
 
 interface EmbeddedMiddlewareGuest {

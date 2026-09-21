@@ -57,6 +57,12 @@ impl ActivityGate {
         self.state.lock().unwrap().accepting
     }
 
+    pub(crate) fn is_current(self: &Arc<Self>) -> bool {
+        CURRENT_ACTIVITY
+            .try_with(|guard| Arc::ptr_eq(&guard.0.0, self))
+            .unwrap_or(false)
+    }
+
     pub(crate) fn inherit_or_enter(self: &Arc<Self>) -> Option<ActivityGuard> {
         CURRENT_ACTIVITY
             .try_with(|guard| Arc::ptr_eq(&guard.0.0, self).then(|| guard.clone()))

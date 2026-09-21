@@ -136,6 +136,7 @@ message CreateParameters {
   optional golem.common.UUID original_phantom_id = 13;
   golem.common.UUID instance_id = 14;
   golem.component.AgentMode agent_mode = 15;
+  OwnerKind owner_kind = 16;
 }
 
 message StartParameters {
@@ -203,7 +204,18 @@ message PublicAgentInvocation {
     LoadSnapshotInvocationParameters load_snapshot = 4;
     ProcessOplogEntriesInvocationParameters process_oplog_entries = 5;
     ManualUpdateInvocationParameters manual_update = 6;
+    PublicExternalToolInvocation external_tool = 7;
   }
+}
+
+message PublicExternalToolInvocation {
+  golem.worker.IdempotencyKey idempotency_key = 1;
+  string tool_name = 2;
+  repeated string command_path = 3;
+  golem.schema.TypedSchemaValue input = 4;
+  string trace_id = 5;
+  repeated string trace_states = 6;
+  repeated golem.worker.InvocationSpan invocation_context = 7;
 }
 
 message PublicAgentInitializationInvocation {
@@ -243,7 +255,51 @@ message PublicAgentInvocationResult {
     OptionalError load_snapshot = 4;
     SnapshotData save_snapshot = 5;
     ProcessOplogEntriesResult process_oplog_entries = 6;
+    PublicExternalToolResult external_tool = 7;
   }
+}
+
+message PublicExternalToolResult {
+  oneof result {
+    PublicToolInvocationResult success = 1;
+    PublicToolRpcError error = 2;
+  }
+}
+
+message PublicToolInvocationResult {
+  optional golem.schema.TypedSchemaValue result = 1;
+}
+
+message PublicToolRpcError {
+  oneof error {
+    string protocol_error = 1;
+    string denied = 2;
+    string not_found = 3;
+    string remote_internal_error = 4;
+    PublicToolError remote_tool_error = 5;
+    golem.common.Empty cancelled = 6;
+    string resource_exhausted = 7;
+  }
+}
+
+message PublicToolError {
+  oneof error {
+    string invalid_tool_name = 1;
+    StringList invalid_command_path = 2;
+    string invalid_input = 3;
+    string constraint_violation = 4;
+    string invalid_result = 5;
+    PublicCustomToolError custom_error = 6;
+  }
+}
+
+message PublicCustomToolError {
+  string name = 1;
+  golem.schema.TypedSchemaValue payload = 2;
+}
+
+message StringList {
+  repeated string values = 1;
 }
 
 message OptionalError {

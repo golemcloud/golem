@@ -63,6 +63,7 @@ pub(all) struct AgentInitializationParameters {
 pub(all) enum AgentInvocation {
   AgentInitialization(AgentInitializationParameters)
   AgentMethodInvocation(AgentMethodInvocationParameters)
+  ExternalTool(ExternalToolInvocationParameters)
   SaveSnapshot
   LoadSnapshot(LoadSnapshotParameters)
   ProcessOplogEntries(ProcessOplogEntriesParameters)
@@ -84,6 +85,7 @@ pub(all) struct AgentInvocationOutputParameters {
 pub(all) enum AgentInvocationResult {
   AgentInitialization(AgentInvocationOutputParameters)
   AgentMethod(AgentInvocationOutputParameters)
+  ExternalTool(ExternalToolResultParameters)
   ManualUpdate
   LoadSnapshot(FallibleResultParameters)
   SaveSnapshot(SaveSnapshotResultParameters)
@@ -198,6 +200,7 @@ pub(all) struct CountBoxState {
 pub(all) struct CreateParameters {
   timestamp : @system-clock.Instant
   agent_id : @types.AgentId
+  owner_kind : OwnerKind
   agent_mode : AgentMode
   component_revision : UInt64
   env : Array[(String, String)]
@@ -276,6 +279,20 @@ pub(all) struct ErrorParameters {
 
 pub(all) struct ExternalSpanData {
   span_id : String
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ExternalToolInvocationParameters {
+  idempotency_key : String
+  tool_name : String
+  command_path : Array[String]
+  input : @types.TypedSchemaValue
+  trace_id : String
+  trace_states : Array[String]
+  invocation_context : Array[Array[SpanData]]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ExternalToolResultParameters {
+  result : Result[ToolInvocationResult, @types.ToolRpcError]
 } derive(Eq, @debug.Debug)
 
 pub(all) struct FailedUpdateParameters {
@@ -444,6 +461,13 @@ pub(all) struct OplogRegion {
   end : UInt64
 } derive(Eq, @debug.Debug)
 
+pub(all) enum OwnerKind {
+  COMPONENT_AGENT
+  EPHEMERAL_EXTERNAL_TOOL
+} derive(Eq, @debug.Debug)
+pub fn OwnerKind::from(Int) -> Self
+pub fn OwnerKind::ordinal(Self) -> Int
+
 pub(all) struct PairState {
   left : Int
   right : Int
@@ -602,6 +626,7 @@ pub(all) struct RawCompletionDiscardedParameters {
 pub(all) struct RawCreateParameters {
   timestamp : @system-clock.Instant
   agent_id : @types.AgentId
+  owner_kind : OwnerKind
   agent_mode : AgentMode
   component_revision : UInt64
   env : Array[(String, String)]
@@ -832,6 +857,10 @@ pub(all) struct SuccessfulUpdateParameters {
 
 pub(all) struct Timestamp {
   timestamp : @system-clock.Instant
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ToolInvocationResult {
+  result : @types.TypedSchemaValue?
 } derive(Eq, @debug.Debug)
 
 pub(all) enum UpdateDescription {

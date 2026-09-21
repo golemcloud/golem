@@ -19,6 +19,7 @@ use crate::base_model::invocation_context::{SpanId, TraceId};
 use crate::base_model::oplog::PublicOplogEntry;
 use crate::base_model::oplog::public_oplog_entry::{Deserialize, Serialize};
 use crate::base_model::retry_policy::{ApiPredicate, ApiRetryPolicy};
+use crate::base_model::tool::{SerializableToolInvocationResult, SerializableToolRpcError};
 use crate::base_model::{Empty, IdempotencyKey, OplogIndex, Timestamp};
 use crate::schema::TypedSchemaValue;
 use crate::{declare_structs, declare_unions};
@@ -50,6 +51,7 @@ impl PublicAgentInvocation {
                 redact_typed_value(&mut params.constructor_parameters)
             }
             Self::AgentMethodInvocation(params) => redact_typed_value(&mut params.function_input),
+            Self::ExternalTool(params) => redact_typed_value(&mut params.input),
             _ => {}
         }
     }
@@ -61,6 +63,23 @@ impl PublicAgentInvocationResult {
             Self::AgentInitialization(params) | Self::AgentMethod(params) => {
                 redact_typed_value(&mut params.output)
             }
+            Self::ExternalTool(params) => match &mut params.result {
+                PublicExternalToolResult::Success(result) => {
+                    if let Some(value) = &mut result.result {
+                        redact_typed_value(value);
+                    }
+                }
+                PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteToolError(
+                    error,
+                )) => {
+                    if let crate::base_model::tool::SerializableToolError::CustomError(value) =
+                        error.as_mut()
+                    {
+                        redact_typed_value(&mut value.payload);
+                    }
+                }
+                PublicExternalToolResult::Failure(_) => {}
+            },
             _ => {}
         }
     }
@@ -109,7 +128,12 @@ impl PublicOplogEntry {
 #[cfg(test)]
 mod host_managed_redaction_tests {
     use super::*;
-    use crate::base_model::oplog::public_oplog_entry::HostStreamFrameParams;
+    use crate::base_model::oplog::public_oplog_entry::{
+        AgentInvocationFinishedParams, HostStreamFrameParams,
+    };
+    use crate::base_model::tool::{
+        SerializableCustomToolError, SerializableToolError, SerializableToolRpcError,
+    };
     use crate::schema::{
         SchemaGraph, SchemaType, SchemaValue, SecretValuePayload, find_host_managed_value,
     };
@@ -152,6 +176,45 @@ mod host_managed_redaction_tests {
             parameters.payload.root_type(),
             SchemaType::String { .. }
         ));
+    }
+
+    #[test]
+    fn public_oplog_redacts_external_tool_custom_error() {
+        let mut entry = PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
+            timestamp: Timestamp::now_utc(),
+            result: PublicAgentInvocationResult::ExternalTool(ExternalToolResultParameters {
+                result: PublicExternalToolResult::Failure(
+                    SerializableToolRpcError::RemoteToolError(Box::new(
+                        SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                            name: "secret-error".to_string(),
+                            payload: secret(),
+                        })),
+                    )),
+                ),
+            }),
+            method_name: None,
+            consumed_fuel: 0,
+            component_revision: ComponentRevision::INITIAL,
+        });
+
+        entry.redact_host_managed_values_for_external();
+
+        let PublicOplogEntry::AgentInvocationFinished(params) = entry else {
+            unreachable!()
+        };
+        let PublicAgentInvocationResult::ExternalTool(params) = params.result else {
+            unreachable!()
+        };
+        let PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteToolError(error)) =
+            params.result
+        else {
+            unreachable!()
+        };
+        let SerializableToolError::CustomError(value) = *error else {
+            unreachable!()
+        };
+        assert_eq!(value.name, "secret-error");
+        assert!(find_host_managed_value(value.payload.value()).is_none());
     }
 }
 
@@ -498,12 +561,27 @@ pub struct ManualUpdateParameters {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalToolInvocationParameters {
+    pub idempotency_key: IdempotencyKey,
+    pub tool_name: String,
+    pub command_path: Vec<String>,
+    pub input: TypedSchemaValue,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub invocation_context: Vec<Vec<PublicSpanData>>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicAgentInvocation {
     AgentInitialization(AgentInitializationParameters),
     AgentMethodInvocation(AgentMethodInvocationParameters),
+    ExternalTool(ExternalToolInvocationParameters),
     SaveSnapshot(Empty),
     LoadSnapshot(LoadSnapshotParameters),
     ProcessOplogEntries(ProcessOplogEntriesParameters),
@@ -543,12 +621,30 @@ pub struct ProcessOplogEntriesResultParameters {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalToolResultParameters {
+    pub result: PublicExternalToolResult,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
+#[serde(tag = "type")]
+pub enum PublicExternalToolResult {
+    Success(SerializableToolInvocationResult),
+    Failure(SerializableToolRpcError),
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicAgentInvocationResult {
     AgentInitialization(AgentInvocationOutputParameters),
     AgentMethod(AgentInvocationOutputParameters),
+    ExternalTool(ExternalToolResultParameters),
     ManualUpdate(Empty),
     LoadSnapshot(FallibleResultParameters),
     SaveSnapshot(SaveSnapshotResultParameters),

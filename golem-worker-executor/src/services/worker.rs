@@ -27,7 +27,7 @@ use crate::storage::keyvalue::{
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use crate::worker::status::fold_invocation_result_entries;
 use async_trait::async_trait;
-use golem_common::base_model::durable_stream::{StreamId, StreamSessionKey};
+use golem_common::base_model::durable_stream::StreamSessionKey;
 use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
@@ -373,7 +373,7 @@ pub trait WorkerService: Send + Sync {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _key: &StreamSessionKey,
-        _stream: StreamId,
+        _reader: golem_common::model::durable_stream::LocalStreamReaderId,
         _page: u64,
     ) -> Result<Vec<OplogIndex>, String> {
         Err("durable stream consumer index is unavailable".into())
@@ -1094,11 +1094,11 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         key: &StreamSessionKey,
-        stream: StreamId,
+        reader: golem_common::model::durable_stream::LocalStreamReaderId,
         page: u64,
     ) -> Result<Vec<OplogIndex>, String> {
         self.stream_session_index
-            .read_consumer_page(owned_agent_id, key, stream, page)
+            .read_consumer_page(owned_agent_id, key, reader, page)
             .await
     }
 
@@ -1135,6 +1135,7 @@ impl WorkerService for DefaultWorkerService {
             )) => {
                 let golem_common::model::oplog::CreateParameters {
                     agent_id,
+                    owner_kind,
                     agent_mode: persisted_agent_mode,
                     component_revision,
                     env,
@@ -1148,9 +1149,13 @@ impl WorkerService for DefaultWorkerService {
                     original_phantom_id,
                     instance_id,
                 } = *parameters;
+                owner_kind
+                    .validate_instance_name(&agent_id.agent_id)
+                    .unwrap_or_else(|error| {
+                        panic!("invalid authoritative owner metadata for {owned_agent_id}: {error}")
+                    });
                 debug_assert_eq!(persisted_agent_mode, agent_mode);
                 let agent_mode = persisted_agent_mode;
-                let agent_type_name = ParsedAgentId::parse_agent_type_name(&agent_id.agent_id).ok();
                 let component_metadata = self
                     .component_service
                     .get_metadata(agent_id.component_id, Some(component_revision))
@@ -1168,11 +1173,24 @@ impl WorkerService for DefaultWorkerService {
                 let Some(component_metadata) = component_metadata else {
                     return Ok(None);
                 };
+                let agent_type_name = (matches!(
+                    owner_kind,
+                    golem_common::model::agent::OwnerKind::ComponentAgent
+                ) && component_metadata.metadata.is_agent())
+                .then(|| ParsedAgentId::parse_agent_type_name(&agent_id.agent_id))
+                .transpose()
+                .unwrap_or_else(|error| {
+                    panic!("invalid agent type in authoritative owner metadata for {owned_agent_id}: {error}")
+                });
 
                 let config = local_agent_config
                     .into_iter()
                     .map(|lac| {
-                        lac.enrich_with_type(&component_metadata.metadata, agent_type_name.as_ref())
+                        lac.enrich_with_type(
+                            &component_metadata.metadata,
+                            owner_kind,
+                            agent_type_name.as_ref(),
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap_or_else(|err| {
@@ -1181,6 +1199,7 @@ impl WorkerService for DefaultWorkerService {
 
                 let initial_worker_metadata = AgentMetadata {
                     agent_id,
+                    owner_kind,
                     env,
                     config,
                     environment_id,
@@ -1195,6 +1214,10 @@ impl WorkerService for DefaultWorkerService {
                         total_linear_memory_size: initial_total_linear_memory_size,
                         active_plugins: initial_active_plugins,
                         invocation_results: self.config.invocation_results.membership(),
+                        export_fork_admissions: golem_common::model::ExportForkAdmissions {
+                            owner_fingerprint: Some(AgentFingerprint(instance_id)),
+                            ..Default::default()
+                        },
                         agent_mode,
                         ..AgentStatusRecord::default()
                     },
@@ -1422,6 +1445,7 @@ impl WorkerService for DefaultWorkerService {
                     namespace.clone(),
                     &field,
                     current.as_deref(),
+                    &[],
                     &[(field.as_str(), encoded.as_slice())],
                 )
                 .await
@@ -2033,6 +2057,34 @@ mod tests {
 
     struct IndexTestComponentService;
 
+    fn non_agent_component(component_id: ComponentId, environment_id: EnvironmentId) -> Component {
+        Component {
+            id: component_id,
+            revision: ComponentRevision::INITIAL,
+            environment_id,
+            component_name: golem_common::model::component::ComponentName(
+                "test-component".to_string(),
+            ),
+            hash: golem_common::model::diff::Hash::empty(),
+            application_id: ApplicationId::new(),
+            account_id: AccountId::new(),
+            account_email: golem_common::model::account::AccountEmail::new("test@golem"),
+            application_name: golem_common::model::application::ApplicationName::try_from(
+                "test-app".to_string(),
+            )
+            .unwrap(),
+            environment_name: golem_common::model::environment::EnvironmentName::try_from(
+                "test-env",
+            )
+            .unwrap(),
+            component_size: 1,
+            metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
+            created_at: chrono::Utc::now(),
+            wasm_hash: golem_common::model::diff::Hash::empty(),
+            object_store_key: "test-object".to_string(),
+        }
+    }
+
     #[async_trait]
     impl ComponentService for IndexTestComponentService {
         async fn get(
@@ -2046,10 +2098,10 @@ mod tests {
 
         async fn get_metadata(
             &self,
-            _component_id: ComponentId,
+            component_id: ComponentId,
             _forced_revision: Option<ComponentRevision>,
         ) -> Result<Component, WorkerExecutorError> {
-            unreachable!()
+            Ok(non_agent_component(component_id, EnvironmentId::new()))
         }
 
         async fn resolve_component(
@@ -2158,6 +2210,53 @@ mod tests {
         };
         let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
         (service, oplog, owned_agent_id)
+    }
+
+    #[test]
+    async fn get_recovers_uuid_named_non_agent_component_worker() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let agent_id = AgentId {
+            component_id,
+            agent_id: Uuid::new_v4().to_string(),
+        };
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let create = OplogEntry::Create {
+            timestamp: Timestamp::now_utc(),
+            parameters: Box::new(golem_common::model::oplog::CreateParameters {
+                agent_id: agent_id.clone(),
+                owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
+                agent_mode: AgentMode::Durable,
+                component_revision: ComponentRevision::INITIAL,
+                env: Vec::new(),
+                environment_id,
+                created_by: AccountId::new(),
+                parent: None,
+                component_size: 1,
+                initial_total_linear_memory_size: 0,
+                initial_active_plugins: HashSet::new(),
+                local_agent_config: Vec::new(),
+                original_phantom_id: None,
+                instance_id: Uuid::new_v4(),
+            }),
+        };
+        let shard_service = Arc::new(ShardServiceDefault::new());
+        shard_service.register(4, &HashMap::new(), None, ShardLeaseRevision::default());
+        let service = DefaultWorkerService::new(
+            Arc::new(InMemoryKeyValueStorage::new()),
+            shard_service,
+            Arc::new(IndexTestOplogService::new(BTreeMap::from([(
+                OplogIndex::INITIAL,
+                create,
+            )]))),
+            Arc::new(IndexTestComponentService),
+            Arc::new(GolemConfig::default()),
+        );
+
+        let result = service.get(&owned_agent_id).await.unwrap().unwrap();
+
+        assert_eq!(result.initial_worker_metadata.agent_id, agent_id);
+        assert!(result.last_known_status.is_some());
     }
 
     #[test]
@@ -2898,8 +2997,8 @@ mod tests {
     #[test]
     fn tracks_idle_worker_with_pending_caller_side_stream_cancellation() {
         use golem_common::model::durable_stream::{
-            StreamCancelReason, StreamCancelRole, StreamConsumerCancelIntentRecord,
-            StreamInvocationId,
+            LocalStreamId, StreamCancelReason, StreamCancelRole, StreamConsumerCancelIntentRecord,
+            StreamInvocationId, StreamRecordReference,
         };
 
         let mut status = AgentStatusRecord::default();
@@ -2907,16 +3006,20 @@ mod tests {
             .pending_durable_stream_cancellations
             .insert(StreamConsumerCancelIntentRecord {
                 format_version: 1,
-                session_key: StreamInvocationId {
-                    callee_environment_id: EnvironmentId::new(),
-                    callee: AgentId {
-                        component_id: ComponentId::new(),
-                        agent_id: "remote".into(),
-                    },
-                    callee_fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
-                    idempotency_key: IdempotencyKey::new("caller-side".into()),
-                },
-                stream_id: StreamId(uuid::Uuid::new_v4()),
+                session_key:
+                    golem_common::model::durable_stream::StreamRegistrationInvocation::Remote(
+                        StreamInvocationId {
+                            callee_environment_id: EnvironmentId::new(),
+                            callee: AgentId {
+                                component_id: ComponentId::new(),
+                                agent_id: "remote".into(),
+                            },
+                            callee_fingerprint: AgentFingerprint(uuid::Uuid::new_v4()),
+                            idempotency_key: IdempotencyKey::new("caller-side".into()),
+                        },
+                    ),
+                consumer_invocation: IdempotencyKey::new("consumer".into()),
+                source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(2))),
                 epoch: 1,
                 role: StreamCancelRole::OutputConsumer,
                 reason: StreamCancelReason::Cancelled,

@@ -83,6 +83,12 @@ async fn revert_successful_invocations(
     executor
         .invoke_and_await_agent(&component, &agent_id2, "inc_by", data_value!(1u64))
         .await?;
+    let retained_index = executor
+        .get_oplog(&worker_id2, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .unwrap()
+        .oplog_index;
 
     // counter2.inc_by(2)
     executor
@@ -103,6 +109,30 @@ async fn revert_successful_invocations(
             }),
         )
         .await?;
+
+    // Reverting twice to the same live tail is valid even though its successor is deleted.
+    for _ in 0..2 {
+        executor
+            .revert(
+                &worker_id2,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: retained_index,
+                }),
+            )
+            .await?;
+    }
+    assert!(
+        executor
+            .revert(
+                &worker_id2,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: retained_index.next(),
+                }),
+            )
+            .await
+            .is_err(),
+        "a deleted entry cannot be the retained tail"
+    );
 
     // counter1.get_value() -> 5 (unchanged)
     let result1 = executor

@@ -1074,17 +1074,15 @@ impl CursorTx<'_> {
 
     /// Returns the guest-delivery marker for the durable call starting at `start_index`, if one
     /// exists and lies outside any deleted region. A marker in a reverted/jumped-away region
-    /// belongs to an abandoned timeline, so a still-visible `End` uses the legacy immediate
-    /// delivery behavior.
+    /// belongs to an abandoned timeline; without a replacement marker, a still-visible accessor
+    /// `End` uses replay-tail delivery.
     ///
-    /// The `discarded_completions` map is populated only from entries at or before the replay
+    /// The `completion_markers` map is populated only from entries at or before the replay
     /// target (the construction scan is bounded by the initial target and target growth rescans
     /// exactly the newly visible range, see [`ReplayState::set_replay_target`]), so a returned
-    /// marker never encodes knowledge of oplog entries beyond the target. A target that falls
-    /// *between* an `End` and its marker is an invalid replay configuration — the delivery
-    /// status of that `End` is not decidable from the visible prefix — and is rejected at
-    /// delivery time ([`ReplayState::await_resolution_outcome`]) as well as up front by debug
-    /// target validation and cut-point (fork/revert) validation.
+    /// marker never encodes knowledge beyond the target. Debug targets still validate delivery
+    /// boundaries, whereas fork/revert remove the future marker and recover from the retained
+    /// prefix.
     pub(super) fn completion_marker(&self, start_index: OplogIndex) -> Option<CompletionMarker> {
         let marker = *self
             .cursor
@@ -1355,13 +1353,14 @@ impl CursorTx<'_> {
         Ok(StartClaimAttempt::Missing)
     }
 
-    /// Checks whether a `Start` matching this claim belongs to a jump-deleted region. An incomplete
+    /// Returns the latest `Start` matching this claim in a jump-deleted region. An incomplete
     /// entity Store uses this to continue live locally while sibling Stores finish replaying the
-    /// surviving owner-oplog tail.
+    /// surviving owner-oplog tail; the latest match ensures an earlier abandoned attempt cannot
+    /// hide another attempt beyond a retained atomic-region boundary.
     pub(super) async fn deleted_region_contains_start(
         &self,
         claim: &StartClaim,
-    ) -> Result<bool, WorkerExecutorError> {
+    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
         let replay_target = self.cursor.replay_target();
         let regions = self
             .st
@@ -1369,6 +1368,7 @@ impl CursorTx<'_> {
             .regions()
             .cloned()
             .collect::<Vec<_>>();
+        let mut latest_match = None;
         for region in regions {
             if region.start > replay_target {
                 break;
@@ -1383,7 +1383,7 @@ impl CursorTx<'_> {
                     .read_exact(next, CHUNK_SIZE.min(available))
                     .await;
                 let last_read = *entries.last_key_value().unwrap().0;
-                for (_, entry) in entries {
+                for (index, entry) in entries {
                     if !claim.matches_start_identity(&entry) {
                         continue;
                     }
@@ -1413,13 +1413,13 @@ impl CursorTx<'_> {
                         None => true,
                     };
                     if request_matches {
-                        return Ok(true);
+                        latest_match = Some(index);
                     }
                 }
                 next = last_read.next();
             }
         }
-        Ok(false)
+        Ok(latest_match)
     }
 
     /// Claims the `Start` entry described by `claim`: builds the identity predicate from the
@@ -1699,8 +1699,13 @@ impl ReplayState {
     ) -> Result<Self, WorkerExecutorError> {
         let next_skipped_region = skipped_regions.find_next_deleted_region(OplogIndex::NONE);
         let last_oplog_index = oplog.current_oplog_index().await;
-        let completion_markers =
-            Self::scan_completion_markers(&oplog, OplogIndex::INITIAL, last_oplog_index).await?;
+        let completion_markers = Self::scan_completion_markers(
+            &oplog,
+            OplogIndex::INITIAL,
+            last_oplog_index,
+            &skipped_regions,
+        )
+        .await?;
         let concurrent_resolver = ConcurrentReplayResolver::default();
         let reconstruction_claims = concurrent_resolver.reconstruction_claims();
         let cursor = ReplayCursor {
@@ -1751,13 +1756,14 @@ impl ReplayState {
         })
     }
 
-    /// Scans `[from, to]` for successful-completion delivery markers. Exactly one of
-    /// `CompletionDelivered` or `CompletionDiscarded` may reference a `Start`; duplicates or a
-    /// conflicting pair are oplog corruption.
+    /// Scans the non-deleted entries of `[from, to]` for successful-completion delivery markers.
+    /// Exactly one visible `CompletionDelivered` or `CompletionDiscarded` may reference a
+    /// `Start`; duplicates or a conflicting pair are oplog corruption.
     pub(super) async fn scan_completion_markers(
         oplog: &Arc<dyn Oplog>,
         from: OplogIndex,
         to: OplogIndex,
+        skipped_regions: &DeletedRegions,
     ) -> Result<HashMap<OplogIndex, CompletionMarker>, WorkerExecutorError> {
         const CHUNK_SIZE: u64 = 1024;
         let mut markers = HashMap::new();
@@ -1769,6 +1775,9 @@ impl ReplayState {
             for (marker_idx, entry) in entries {
                 if marker_idx > to {
                     break;
+                }
+                if skipped_regions.is_in_deleted_region(marker_idx) {
+                    continue;
                 }
                 let marker = match entry {
                     OplogEntry::CompletionDelivered { start_index, .. } => {
@@ -1983,6 +1992,7 @@ impl ReplayState {
         .await
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     async fn wait_for_reconstruction_fences(&self) -> Result<(), WorkerExecutorError> {
         tokio::select! {
             biased;
@@ -2295,6 +2305,119 @@ impl ReplayState {
         false
     }
 
+    /// Projects history abandoned by this entity's earliest uncommitted atomic block. Called
+    /// before body reconstruction, so none of the affected descendants has a replay claim yet.
+    pub(crate) async fn entity_atomic_rollback_regions(
+        &self,
+        entity_start_index: OplogIndex,
+    ) -> Vec<OplogRegion> {
+        let replay_target = self.replay_target();
+        let skipped_regions = {
+            let state = self.cursor.state.lock().await;
+            state.skipped_regions.clone()
+        };
+        let mut projection = OplogScopeProjection::new(entity_start_index);
+        let mut open_regions = std::collections::BTreeSet::new();
+        let mut owned_indices = Vec::new();
+        let mut next = entity_start_index;
+        while next <= replay_target {
+            let available = u64::from(replay_target) - u64::from(next) + 1;
+            let entries = self
+                .cursor
+                .oplog
+                .read_exact(next, CHUNK_SIZE.min(available))
+                .await;
+            let last_read = *entries.last_key_value().unwrap().0;
+            for (index, entry) in entries {
+                if index > replay_target {
+                    break;
+                }
+                // A crash can persist only some rollback Jumps. Deleted Starts still establish
+                // ownership of descendants whose discontiguous regions have not been deleted yet.
+                let included = projection.includes(index, &entry);
+                if skipped_regions.is_in_deleted_region(index) {
+                    continue;
+                }
+                match &entry {
+                    OplogEntry::BeginAtomicRegion {
+                        entity_parent_start_index: Some(parent),
+                        ..
+                    } if *parent == entity_start_index => {
+                        open_regions.insert(index);
+                    }
+                    OplogEntry::EndAtomicRegion { begin_index, .. } => {
+                        open_regions.remove(begin_index);
+                    }
+                    _ => {}
+                }
+                let entity_terminal = terminal_start_index(&entry) == Some(entity_start_index);
+                if included && !entity_terminal && !matches!(entry, OplogEntry::Jump { .. }) {
+                    owned_indices.push(index);
+                }
+            }
+            next = last_read.next();
+        }
+
+        let Some(begin_index) = open_regions.first() else {
+            return Vec::new();
+        };
+        let mut regions: Vec<OplogRegion> = Vec::new();
+        for index in owned_indices
+            .into_iter()
+            .filter(|index| index > begin_index)
+        {
+            match regions.last_mut() {
+                Some(region) if region.end.next() == index => region.end = index,
+                _ => regions.push(OplogRegion {
+                    start: index,
+                    end: index,
+                }),
+            }
+        }
+        regions
+    }
+
+    /// Makes entity-local rollback Jumps effective, skipping a deleted cursor head while retaining
+    /// surviving sibling history and its resolver awaiters.
+    pub(crate) async fn register_entity_atomic_rollback(
+        &self,
+        regions: Vec<OplogRegion>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            state
+                .with_tx(async |tx| {
+                    for region in regions {
+                        tx.st.skipped_regions.add(region);
+                    }
+                    let head = tx.cursor.last_replayed_index().next();
+                    tx.st.next_skipped_region = tx
+                        .st
+                        .skipped_regions
+                        .regions()
+                        .find(|region| region.end >= head)
+                        .map(|region| OplogRegion {
+                            start: region.start.max(head),
+                            end: region.end,
+                        });
+                    if tx
+                        .st
+                        .next_skipped_region
+                        .as_ref()
+                        .is_some_and(|region| region.start == head)
+                    {
+                        tx.move_replay_idx(head.previous()).await;
+                        tx.skip_forward().await?;
+                        tx.st.skip_hints_after_delivery = false;
+                    }
+                    Ok(())
+                })
+                .await?;
+            state.cursor.progress.notify_waiters();
+            Ok(())
+        })
+        .await
+    }
+
     /// Returns the replay-visible terminal for `start_index` without advancing the positional
     /// cursor. Tool replay uses the terminal's body-execution decision before allocating a
     /// transient Store; the ordinary reconstruction path subsequently consumes the same terminal.
@@ -2525,6 +2648,7 @@ impl ReplayState {
                         &cursor.oplog,
                         old_target.next(),
                         new_target,
+                        &tx.st.skipped_regions,
                     )
                     .await?;
                     if !additions.is_empty() {

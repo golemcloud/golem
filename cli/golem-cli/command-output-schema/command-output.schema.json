@@ -232,6 +232,12 @@
     { "$ref": "#/definitions/tool.middleware.grant.delete" },
     { "$ref": "#/definitions/tool.middleware.grant.restore" },
     {
+      "$ref": "#/definitions/tool.invoke"
+    },
+    {
+      "$ref": "#/definitions/tool.invoke-session"
+    },
+    {
       "$ref": "#/definitions/deploy.environment-setup-plan"
     },
     {
@@ -2997,10 +3003,12 @@
         "build",
         "customCommands",
         "clean",
+        "configSchema",
         "config",
         "env",
         "plugins",
-        "files"
+        "files",
+        "toolBindings"
       ],
       "properties": {
         "appliedLayers": { "type": "array", "items": { "type": "string" } },
@@ -3012,6 +3020,7 @@
         "build": { "$ref": "#/definitions/ComponentLayerBuildCommandVecProperty" },
         "customCommands": { "$ref": "#/definitions/ComponentLayerCustomCommandsMapProperty" },
         "clean": { "$ref": "#/definitions/ComponentLayerStringVecProperty" },
+        "configSchema": { "$ref": "#/definitions/ComponentLayerConfigSchemaProperty" },
         "config": { "$ref": "#/definitions/ComponentLayerJsonProperty" },
         "envMergeMode": { "$ref": "#/definitions/MapMergeMode" },
         "env": { "$ref": "#/definitions/ComponentLayerStringMapProperty" },
@@ -3019,7 +3028,72 @@
         "plugins": { "$ref": "#/definitions/ComponentLayerManifestPluginVecProperty" },
         "filesMergeMode": { "$ref": "#/definitions/VecMergeMode" },
         "files": { "$ref": "#/definitions/ComponentLayerManifestFileVecProperty" },
-        "initialCard": { "$ref": "#/definitions/ComponentLayerManifestInitialCardProperty" }
+        "initialCard": { "$ref": "#/definitions/ComponentLayerManifestInitialCardProperty" },
+        "toolBindings": { "$ref": "#/definitions/ComponentLayerToolBindingsProperty" }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerConfigSchemaProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/definitions/ComponentConfigSchema" }
+          ]
+        },
+        "trace": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ComponentLayerConfigSchemaTraceElem" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerConfigSchemaTraceElem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "id", "value"],
+          "properties": {
+            "type": { "const": "override" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" },
+            "value": { "$ref": "#/definitions/ComponentConfigSchema" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "id"],
+          "properties": {
+            "type": { "const": "skip" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ComponentConfigSchema": {
+      "type": "object",
+      "required": ["schema"],
+      "properties": {
+        "schema": { "$ref": "#/definitions/SchemaGraph" },
+        "declarations": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/AgentConfigDeclarationSchema" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "AgentConfigDeclarationSchema": {
+      "type": "object",
+      "required": ["source", "path", "value_type"],
+      "properties": {
+        "source": { "type": "string", "enum": ["Local", "Secret"] },
+        "path": { "type": "array", "items": { "type": "string" } },
+        "value_type": { "$ref": "#/definitions/SchemaType" }
       },
       "additionalProperties": false
     },
@@ -3492,6 +3566,148 @@
       },
       "additionalProperties": false
     },
+    "ComponentLayerToolBindingsProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolBindingState" }
+        },
+        "trace": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ComponentLayerToolBindingsTraceElem" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerToolBindingsTraceElem": {
+      "oneOf": [
+        { "$ref": "#/definitions/ComponentLayerToolBindingsUpsertTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerToolBindingsReplaceTraceElem" },
+        { "$ref": "#/definitions/ComponentLayerToolBindingsRemoveTraceElem" }
+      ]
+    },
+    "ComponentLayerToolBindingsUpsertTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "bindings"],
+      "properties": {
+        "type": { "const": "upsert" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ManifestToolBinding" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerToolBindingsReplaceTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "bindings"],
+      "properties": {
+        "type": { "const": "replace" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ManifestToolBinding" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerToolBindingsRemoveTraceElem": {
+      "type": "object",
+      "required": ["type", "id", "removedNames"],
+      "properties": {
+        "type": { "const": "remove" },
+        "id": { "$ref": "#/definitions/ComponentLayerId" },
+        "selection": { "type": "string" },
+        "removedNames": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "ToolBindingState": {
+      "type": "object",
+      "required": [
+        "version",
+        "parameters",
+        "account",
+        "configKeysReadable",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "filesystemAccess",
+        "middleware",
+        "middlewareMergeMode"
+      ],
+      "properties": {
+        "version": { "type": ["string", "null"] },
+        "parameters": { "type": "object" },
+        "account": { "type": ["string", "null"] },
+        "configKeysReadable": { "type": "array", "items": { "$ref": "#/definitions/ManifestConfigKeyScope" } },
+        "secretKeysReadable": { "type": "array", "items": { "$ref": "#/definitions/ManifestSecretKeyScope" } },
+        "secretKeysRevealable": { "type": "array", "items": { "$ref": "#/definitions/ManifestSecretKeyScope" } },
+        "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" },
+        "middleware": {
+          "oneOf": [
+            { "type": "array", "items": { "$ref": "#/definitions/ManifestToolMiddlewareInstallation" } },
+            { "type": "null" }
+          ]
+        },
+        "middlewareMergeMode": {
+          "oneOf": [
+            { "$ref": "#/definitions/ToolMiddlewareMergeMode" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ManifestToolBinding": {
+      "type": "object",
+      "properties": {
+        "version": { "type": "string" },
+        "parametersMergeMode": { "$ref": "#/definitions/MapMergeMode" },
+        "parameters": { "type": "object" },
+        "account": { "type": "string" },
+        "secretKeysReadableMergeMode": { "const": "intersect" },
+        "secretKeysReadable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
+        "secretKeysRevealableMergeMode": { "const": "intersect" },
+        "secretKeysRevealable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
+        "middleware": { "type": "array", "items": { "$ref": "#/definitions/ManifestToolMiddlewareInstallation" } },
+        "middlewareMergeMode": { "$ref": "#/definitions/ToolMiddlewareMergeMode" }
+      },
+      "additionalProperties": false
+    },
+    "ManifestToolMiddlewareInstallation": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["name", "parameters", "filesystemAccess"],
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": "string" },
+            "parameters": { "$ref": "#/definitions/JsonValue" },
+            "account": { "type": "string" },
+            "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ManifestSecretKeyScope": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
+    "ManifestConfigKeyScope": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    },
     "ComponentLayerJsonProperty": {
       "type": "object",
       "required": ["value", "trace"],
@@ -3778,7 +3994,7 @@
     },
     "ToolDeploymentMetadata": {
       "type": "object",
-      "required": ["definition", "provision", "environmentBinding", "agentBindings"],
+      "required": ["definition", "provision", "environmentBinding", "componentBindings", "agentBindings"],
       "properties": {
         "definition": { "$ref": "#/definitions/Tool" },
         "provision": { "$ref": "#/definitions/ToolProvisionConfig" },
@@ -3787,6 +4003,10 @@
             { "$ref": "#/definitions/ToolBindingInput" },
             { "type": "null" }
           ]
+        },
+        "componentBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolBindingInput" }
         },
         "agentBindings": {
           "type": "object",
@@ -4827,11 +5047,12 @@
     },
     "PublicOplogEntryCreate": {
       "type": "object",
-      "required": ["type", "timestamp", "agentId", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId"],
+      "required": ["type", "timestamp", "agentId", "ownerKind", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId"],
       "properties": {
         "type": { "const": "Create" },
         "timestamp": { "type": "string" },
         "agentId": { "$ref": "#/definitions/AgentId" },
+        "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool"] },
         "agentMode": { "$ref": "#/definitions/AgentMode" },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -5233,6 +5454,7 @@
       "oneOf": [
         { "$ref": "#/definitions/PublicAgentInvocationAgentInitialization" },
         { "$ref": "#/definitions/PublicAgentInvocationAgentMethodInvocation" },
+        { "$ref": "#/definitions/PublicAgentInvocationExternalTool" },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "SaveSnapshot" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "LoadSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "idempotencyKey"], "properties": { "type": { "const": "ProcessOplogEntries" }, "idempotencyKey": { "type": "string" } }, "additionalProperties": false },
@@ -5251,14 +5473,27 @@
       "properties": { "type": { "const": "AgentMethodInvocation" }, "idempotencyKey": { "type": "string" }, "methodName": { "type": "string" }, "functionInput": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
       "additionalProperties": false
     },
+    "PublicAgentInvocationExternalTool": {
+      "type": "object",
+      "required": ["type", "idempotencyKey", "toolName", "commandPath", "input", "traceId", "traceStates", "invocationContext"],
+      "properties": { "type": { "const": "ExternalTool" }, "idempotencyKey": { "type": "string" }, "toolName": { "type": "string" }, "commandPath": { "type": "array", "items": { "type": "string" } }, "input": { "$ref": "#/definitions/TypedSchemaValue" }, "traceId": { "type": "string" }, "traceStates": { "type": "array", "items": { "type": "string" } }, "invocationContext": { "$ref": "#/definitions/PublicInvocationContext" } },
+      "additionalProperties": false
+    },
     "PublicAgentInvocationResult": {
       "oneOf": [
         { "type": "object", "required": ["type", "output"], "properties": { "type": { "const": "AgentInitialization" }, "output": { "$ref": "#/definitions/TypedSchemaValue" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "output"], "properties": { "type": { "const": "AgentMethod" }, "output": { "$ref": "#/definitions/TypedSchemaValue" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "result"], "properties": { "type": { "const": "ExternalTool" }, "result": { "$ref": "#/definitions/PublicExternalToolResult" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "ManualUpdate" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "LoadSnapshot" }, "error": { "type": ["string", "null"] } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "snapshot"], "properties": { "type": { "const": "SaveSnapshot" }, "snapshot": { "$ref": "#/definitions/PublicSnapshotData" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "ProcessOplogEntries" }, "error": { "type": ["string", "null"] } }, "additionalProperties": false }
+      ]
+    },
+    "PublicExternalToolResult": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "result"], "properties": { "type": { "const": "Success" }, "result": { "anyOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Failure" }, "value": {} }, "additionalProperties": false }
       ]
     },
     "PublicInvocationContext": { "type": "array", "items": { "type": "array", "items": { "$ref": "#/definitions/PublicSpanData" } } },
@@ -5456,6 +5691,7 @@
         "metadataVersion",
         "metadataDigest",
         "provision",
+        "componentBindings",
         "bindings"
       ],
       "properties": {
@@ -5467,6 +5703,10 @@
         "metadataVersion": { "type": "string" },
         "metadataDigest": { "type": "string" },
         "provision": { "$ref": "#/definitions/ToolProvisionConfig" },
+        "componentBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/EffectiveToolBindingDiffPayload" }
+        },
         "bindings": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/EffectiveToolBindingDiffPayload" }
@@ -5503,15 +5743,27 @@
     },
     "ComponentDiffPayload": {
       "type": "object",
-      "required": ["wasmChanged"],
+      "required": ["wasmChanged", "componentConfigChanged"],
       "properties": {
         "wasmChanged": { "type": "boolean" },
+        "componentConfigChanged": { "type": "boolean" },
         "agentTypeProvisionConfigChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfigDiffPayload" }
+          "additionalProperties": { "$ref": "#/definitions/AgentTypeProvisionConfigDiffMapValue" }
+        },
+        "toolDeploymentConfigChanges": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolDeploymentConfigDiffMapValue" }
         }
       },
       "additionalProperties": false
+    },
+    "AgentTypeProvisionConfigDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/AgentTypeProvisionConfigDiffPayload" }
+      ]
     },
     "AgentTypeProvisionConfigDiffPayload": {
       "type": "object",
@@ -5526,14 +5778,56 @@
         },
         "fileChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/AgentFileDiffPayload" }
+          "additionalProperties": { "$ref": "#/definitions/AgentFileDiffMapValue" }
         },
         "pluginChanges": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/definitions/PluginInstallationDiffPayload" }
-        }
+          "additionalProperties": { "$ref": "#/definitions/PluginInstallationDiffMapValue" }
+        },
+        "initialPermissionChanged": { "type": "boolean" }
       },
       "additionalProperties": false
+    },
+    "ToolDeploymentConfigDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/ToolDeploymentConfigDiffPayload" }
+      ]
+    },
+    "ToolDeploymentConfigDiffPayload": {
+      "type": "object",
+      "required": ["definitionChanged", "configChanged", "environmentBindingChanged"],
+      "properties": {
+        "definitionChanged": { "type": "boolean" },
+        "configChanged": { "type": "boolean" },
+        "envChanges": { "type": "object", "additionalProperties": { "type": "string" } },
+        "fileChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/AgentFileDiffMapValue" } },
+        "pluginChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/PluginInstallationDiffMapValue" } },
+        "environmentBindingChanged": { "type": "boolean" },
+        "componentBindingChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/ToolBindingDiffMapValue" } },
+        "agentBindingChanges": { "type": "object", "additionalProperties": { "$ref": "#/definitions/ToolBindingDiffMapValue" } }
+      },
+      "additionalProperties": false
+    },
+    "AgentFileDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/HashDiffPayload" },
+        { "$ref": "#/definitions/AgentFileDiffPayload" }
+      ]
+    },
+    "PluginInstallationDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/PluginInstallationDiffPayload" }
+      ]
+    },
+    "ToolBindingDiffMapValue": {
+      "oneOf": [
+        { "type": "string", "enum": ["create", "delete"] },
+        { "$ref": "#/definitions/ToolBindingInput" }
+      ]
     },
     "AgentFileDiffPayload": {
       "type": "object",
@@ -5546,12 +5840,10 @@
     },
     "PluginInstallationDiffPayload": {
       "type": "object",
+      "required": ["priorityChanged", "parametersChanged"],
       "properties": {
         "priorityChanged": { "type": "boolean" },
-        "parametersChanged": { "type": "boolean" },
-        "pluginRegistrationIdChanged": { "type": "boolean" },
-        "pluginNameChanged": { "type": "boolean" },
-        "pluginVersionChanged": { "type": "boolean" }
+        "parametersChanged": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -5583,7 +5875,27 @@
         "agentsChanges": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/McpDeploymentAgentOptionsDiffPayload" }
+        },
+        "toolsChanges": {
+          "type": "object",
+          "additionalProperties": {
+            "oneOf": [
+              { "enum": ["create", "delete"] },
+              { "$ref": "#/definitions/McpDeploymentToolOptionsDiffPayload" }
+            ]
+          }
         }
+      },
+      "additionalProperties": false
+    },
+    "McpDeploymentToolOptionsDiffPayload": {
+      "type": "object",
+      "required": ["ownerComponentChanged", "securitySchemeChanged", "includeChanged", "excludeChanged"],
+      "properties": {
+        "ownerComponentChanged": { "type": "boolean" },
+        "securitySchemeChanged": { "type": "boolean" },
+        "includeChanged": { "type": "boolean" },
+        "excludeChanged": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -6362,6 +6674,101 @@
         }
       },
       "additionalProperties": false
+    },
+    "tool.invoke": {
+      "type": "object",
+      "description": "Native external-tool invocation result, including its idempotency key and schema-typed success or custom error.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool invoke",
+      "required": ["$type", "response"],
+      "properties": {
+        "$type": { "const": "tool.invoke" },
+        "response": {
+          "type": "object",
+          "required": ["agentId", "idempotencyKey", "result", "status", "componentRevision", "agentFingerprint", "oplogIndex"],
+          "properties": {
+            "agentId": { "type": "object" },
+            "idempotencyKey": { "type": "string" },
+            "result": { "type": ["object", "null"] },
+            "status": {},
+            "componentRevision": {},
+            "agentFingerprint": {},
+            "oplogIndex": {}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "tool.invoke-session": {
+      "type": "object",
+      "description": "Result of a live native external-tool invocation session, with its resolved target and idempotency key.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "tool invoke",
+      "required": ["$type", "target", "idempotencyKey", "result"],
+      "properties": {
+        "$type": { "const": "tool.invoke-session" },
+        "target": { "$ref": "#/definitions/PublicNativeToolTarget" },
+        "idempotencyKey": { "type": "string" },
+        "result": { "$ref": "#/definitions/PublicToolInvocationResult" }
+      },
+      "additionalProperties": false
+    },
+    "PublicNativeToolTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "componentId", "agentId"],
+          "properties": {
+            "kind": { "const": "agent" },
+            "componentId": { "type": "string", "format": "uuid" },
+            "agentId": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "componentId"],
+          "properties": {
+            "kind": { "const": "component" },
+            "componentId": { "type": "string", "format": "uuid" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "PublicTypedValue": {
+      "type": "object",
+      "required": ["schema", "value"],
+      "properties": {
+        "schema": { "$ref": "#/definitions/SchemaGraph" },
+        "value": {}
+      },
+      "additionalProperties": false
+    },
+    "PublicToolInvocationResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "result"],
+          "properties": {
+            "kind": { "const": "toolsuccess" },
+            "result": { "oneOf": [{ "$ref": "#/definitions/PublicTypedValue" }, { "type": "null" }] }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "code", "message", "custom_error"],
+          "properties": {
+            "kind": { "const": "toolfailure" },
+            "code": { "type": "string" },
+            "message": { "type": ["string", "null"] },
+            "custom_error": { "oneOf": [{ "$ref": "#/definitions/PublicTypedValue" }, { "type": "null" }] }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "EnvironmentToolMiddlewareGrantView": {
       "type": "object",
@@ -8574,6 +8981,14 @@
     { "type": "tool.middleware.grant.list", "rustType": "EnvironmentToolMiddlewareGrantListView" },
     { "type": "tool.middleware.grant.delete", "rustType": "EnvironmentToolMiddlewareGrantDeleteView" },
     { "type": "tool.middleware.grant.restore", "rustType": "EnvironmentToolMiddlewareGrantRestoreView" },
+    {
+      "type": "tool.invoke",
+      "rustType": "ToolInvokeView"
+    },
+    {
+      "type": "tool.invoke-session",
+      "rustType": "ToolInvocationSessionView"
+    },
     {
       "type": "deploy.environment-setup-plan",
       "rustType": "EnvironmentSetupPlanView"

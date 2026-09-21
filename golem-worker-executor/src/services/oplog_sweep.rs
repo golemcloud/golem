@@ -955,7 +955,7 @@ mod tests {
     use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace, ScanCursor};
     use async_trait::async_trait;
     use golem_common::model::account::{AccountEmail, AccountId};
-    use golem_common::model::agent::Principal;
+    use golem_common::model::agent::{OwnerKind, Principal};
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
     use golem_common::model::component_metadata::ComponentMetadata;
@@ -989,6 +989,7 @@ mod tests {
     fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry {
         OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
             agent_id: agent_id.clone(),
+            owner_kind: OwnerKind::ComponentAgent,
             agent_mode: AgentMode::Ephemeral,
             component_revision: ComponentRevision::new(1).unwrap(),
             env: Vec::new(),
@@ -1670,6 +1671,7 @@ mod tests {
     fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata {
         AgentMetadata {
             agent_id: agent_id.clone(),
+            owner_kind: OwnerKind::ComponentAgent,
             env: vec![],
             environment_id,
             created_by: AccountId::new(),
@@ -1880,6 +1882,24 @@ mod tests {
             _component_revision: Option<ComponentRevision>,
             _worker_parent: Option<AgentId>,
             _worker_creation_principal: Principal,
+        ) -> Result<(), WorkerExecutorError> {
+            unreachable!("the sweep never enqueues invocations")
+        }
+
+        async fn enqueue_exact_existing(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_worker_fingerprint: AgentFingerprint,
+            _invocation: AgentInvocation,
+        ) -> Result<bool, WorkerExecutorError> {
+            unreachable!("the sweep never enqueues invocations")
+        }
+
+        async fn enqueue_ephemeral_external_tool(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _invocation: AgentInvocation,
+            _component_revision: ComponentRevision,
         ) -> Result<(), WorkerExecutorError> {
             unreachable!("the sweep never enqueues invocations")
         }

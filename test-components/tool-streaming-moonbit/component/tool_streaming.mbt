@@ -3,7 +3,9 @@
 struct MoonBitStreaming {}
 
 ///|
-pub async fn MoonBitStreaming::stdout_only(stdout : @tool.ProviderStdout) -> UInt64 {
+pub async fn MoonBitStreaming::stdout_only(
+  stdout : @tool.ProviderStdout,
+) -> UInt64 {
   guard stdout.write_all_bytes(b"stdout-only:\x00\xff") else {
     abort("MoonBit stdout-only write failed")
   }

@@ -1,0 +1,8 @@
+{
+  "name": "golem-durable-streams-reference-server-tests",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@durable-streams/server": "0.3.9"
+  }
+}

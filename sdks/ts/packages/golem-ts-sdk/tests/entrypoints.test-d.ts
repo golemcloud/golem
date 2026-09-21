@@ -26,6 +26,39 @@ import {
 import { ComponentId as ReflectionComponentId, getAgentType } from '../dist/reflection.mjs';
 import { z } from 'zod';
 import { v } from '../dist/schema.mjs';
+import * as durableStreams from 'golem:agent/durable-streams@2.0.0';
+import * as agentHost from 'golem:agent/host@2.0.0';
+
+const reader = new durableStreams.DurableStreamReader(
+  { url: 'https://streams.example', mode: 'json', timeoutMs: 30000n },
+  undefined,
+);
+const writer = new durableStreams.DurableStreamWriter(
+  {
+    url: 'https://streams.example',
+    contentType: 'application/json',
+    producerId: 'typed',
+    producerEpoch: 0n,
+    timeoutMs: 30000n,
+  },
+  undefined,
+);
+const readBatch = reader.read({ checkpoint: { offset: '-1' }, transport: 'catch-up' });
+const appendReceipt = writer.append({
+  payload: { tag: 'json', val: ['17'] },
+  sequence: 0n,
+  close: false,
+});
+readBatch satisfies Promise<durableStreams.DurableStreamBatch>;
+appendReceipt satisfies Promise<durableStreams.DurableStreamAppendReceipt>;
+// @ts-expect-error Durable Streams operations require a resource
+durableStreams.readDurableStreamBatch;
+// @ts-expect-error Durable Streams operations require a resource
+durableStreams.appendDurableStreamBatch;
+// @ts-expect-error Durable Streams operations belong to their dedicated interface
+agentHost.readDurableStreamBatch;
+// @ts-expect-error Durable Streams operations belong to their dedicated interface
+agentHost.appendDurableStreamBatch;
 
 const componentId = new ComponentId(new Uuid(1n, 2n));
 const reflectionComponentId: ReflectionComponentId = componentId;

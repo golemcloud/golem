@@ -664,13 +664,16 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
         agent_id: target_agent_id.to_string(),
     };
 
-    // Verify the forked worker's oplog has the same last entry as the source
+    // Compare the retained cut entry; fork provenance is appended after the copied prefix.
     let forked_oplog = user
         .get_oplog(&target_agent_id, OplogIndex::INITIAL)
         .await?;
 
     let source_last = oplog.last().unwrap();
-    let forked_last = forked_oplog.last().unwrap();
+    let forked_last = forked_oplog
+        .iter()
+        .find(|entry| entry.oplog_index == source_last.oplog_index)
+        .expect("Forked worker must retain the entry at the cut index");
 
     assert!(
         matches!(

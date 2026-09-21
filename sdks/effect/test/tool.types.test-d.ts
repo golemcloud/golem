@@ -28,11 +28,14 @@ const expected = toolDefinition("expected").body((body) =>
 )
 typed({
   name: "adapter",
+  parameters: Schema.Struct({ prefix: Schema.String }),
   presented,
   expected,
   handler: {
-    presented: ({ message }, { underlying }) =>
-      underlying({ value: message.length }).pipe(Effect.map((value) => value.length)),
+    presented: ({ message }, { underlying, parameters }) =>
+      underlying({ value: message.length + parameters.prefix.length }).pipe(
+        Effect.map((value) => value.length),
+      ),
   },
 })
 
@@ -87,6 +90,7 @@ implemented.implement({
 })
 typed({
   name: "invalid-adapter",
+  parameters: Schema.Struct({}),
   presented,
   expected,
   handler: {
@@ -100,6 +104,7 @@ const inferred = toolDefinition("inferred").body((body) =>
 )
 typed({
   name: "inferred-adapter",
+  parameters: Schema.Struct({}),
   presented: inferred,
   handler: {
     inferred: (_input, { underlying }) => {
@@ -116,6 +121,7 @@ const kebab = toolDefinition("root-tool").command("child-command", (command) =>
 type KebabImplementation = import("../src/Middleware.js").TypedImplementation<typeof kebab>
 typed({
   name: "kebab-adapter",
+  parameters: Schema.Struct({}),
   presented: kebab,
   handler: {
     rootTool: {

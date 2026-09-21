@@ -3568,6 +3568,83 @@ async fn marker_in_deleted_region_delivers_end_normally() {
 }
 
 #[test]
+async fn reverted_completion_marker_can_be_replaced_and_reconstructed() {
+    for old_marker in [delivered_for(2), discarded_for(2)] {
+        for delivered in [true, false] {
+            for grow_target in [false, true] {
+                let oplog: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+                for entry in [noop(), start_now(), end_for(2, 42)] {
+                    oplog.add(entry).await;
+                }
+                let dropped_region = OplogRegion {
+                    start: OplogIndex::from_u64(4),
+                    end: OplogIndex::from_u64(4),
+                };
+                let suffix = [
+                    old_marker.clone(),
+                    OplogEntry::revert(dropped_region.clone()),
+                    if delivered {
+                        delivered_for(2)
+                    } else {
+                        discarded_for(2)
+                    },
+                ];
+                if !grow_target {
+                    for entry in &suffix {
+                        oplog.add(entry.clone()).await;
+                    }
+                }
+                let rs = test_replay_state(
+                    test_agent_id(),
+                    oplog.clone(),
+                    DeletedRegions::from_regions([dropped_region]),
+                    None,
+                )
+                .await
+                .expect("a deleted marker must not conflict with its replacement");
+                if grow_target {
+                    for entry in suffix {
+                        oplog.add(entry).await;
+                    }
+                    rs.set_replay_target(OplogIndex::from_u64(6))
+                        .await
+                        .expect("target growth must ignore deleted completion markers");
+                }
+                let handle = rs
+                    .claim_concurrent_start(
+                        &HostFunctionName::MonotonicClockNow,
+                        &DurableFunctionType::ReadLocal,
+                    )
+                    .await
+                    .unwrap();
+                match rs.await_resolution(handle).await.unwrap() {
+                    Resolution::Completed {
+                        end_idx,
+                        delivery_marker,
+                        response,
+                        ..
+                    } if delivered => {
+                        assert_eq!(end_idx, OplogIndex::from_u64(3));
+                        assert_eq!(delivery_marker, Some(OplogIndex::from_u64(6)));
+                        assert!(response.is_some());
+                    }
+                    Resolution::CompletedButDiscarded {
+                        end_idx,
+                        marker_idx,
+                        response,
+                    } if !delivered => {
+                        assert_eq!(end_idx, OplogIndex::from_u64(3));
+                        assert_eq!(marker_idx, OplogIndex::from_u64(6));
+                        assert!(response.is_some());
+                    }
+                    other => panic!("expected the replacement completion, got {other:?}"),
+                }
+            }
+        }
+    }
+}
+
+#[test]
 async fn delivered_marker_with_deleted_start_is_skipped_as_orphan() {
     // The deleted Start/End belong to an abandoned timeline. Their surviving delivery marker is
     // therefore an orphan hint and must not strand positional replay before the next kept entry.
@@ -4582,6 +4659,297 @@ async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
             .has_visible_scope_descendant(OplogIndex::from_u64(2))
             .await,
         "a nested Start proves the historical entity body began execution"
+    );
+}
+
+#[test]
+async fn entity_atomic_rollback_projects_only_owned_interleaved_regions() {
+    let mut begin = begin_atomic_region();
+    let OplogEntry::BeginAtomicRegion {
+        entity_parent_start_index,
+        ..
+    } = &mut begin
+    else {
+        unreachable!()
+    };
+    *entity_parent_start_index = Some(OplogIndex::from_u64(2));
+
+    let replay_state = replay_state_over(vec![
+        noop(),               // 1
+        start_now(),          // 2: entity root
+        start_with_parent(2), // 3: retained completed entity call
+        start_with_parent(2), // 4: pre-atomic call whose terminal is rolled back
+        end_for(3, 30),       // 5: retained entity terminal
+        begin,                // 6
+        start_with_parent(2), // 7: atomic entity child
+        start_now(),          // 8: sibling
+        end_for(8, 80),       // 9: sibling terminal
+        end_for(4, 40),       // 10: owned terminal for a pre-atomic Start
+        delivered_for(8),     // 11: sibling observation boundary
+        end_for(7, 70),       // 12: atomic entity child terminal
+        delivered_for(7),     // 13: atomic entity observation boundary
+        end_for(2, 20),       // 14: entity invocation terminal, retained
+    ])
+    .await;
+
+    let regions = replay_state
+        .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
+        .await;
+
+    assert_eq!(
+        regions,
+        vec![
+            OplogRegion::from_range(7..=7),
+            OplogRegion::from_range(10..=10),
+            OplogRegion::from_range(12..=13),
+        ]
+    );
+    assert!(
+        regions
+            .iter()
+            .all(|region| !region.contains(OplogIndex::from_u64(9))
+                && !region.contains(OplogIndex::from_u64(11))
+                && !region.contains(OplogIndex::from_u64(14))),
+        "sibling completion gates and the entity invocation terminal must survive"
+    );
+}
+
+#[test]
+async fn entity_atomic_rollback_skips_newly_deleted_cursor_head() {
+    for consumed in [1, 2] {
+        let rs = replay_state_over(vec![noop(), noop(), start_now(), noop()]).await;
+        if consumed == 2 {
+            assert_eq!(
+                rs.get_oplog_entry().await.unwrap().0,
+                OplogIndex::from_u64(2)
+            );
+        }
+        rs.register_entity_atomic_rollback(vec![OplogRegion::from_range(2..=3)])
+            .await
+            .unwrap();
+        assert_eq!(
+            rs.get_oplog_entry().await.unwrap().0,
+            OplogIndex::from_u64(4),
+            "registration must skip a deleted region starting at or containing the next cursor position"
+        );
+    }
+}
+
+#[test]
+async fn entity_atomic_rollback_recovers_descendants_after_partial_jump_commit() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        noop(),      // 1
+        start_now(), // 2: entity root
+        OplogEntry::BeginAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: Some(OplogIndex::from_u64(2)),
+        }, // 3
+        start_with_parent(2), // 4: parent deleted by the first committed Jump
+        start_now(), // 5: foreign sibling
+        start_with_parent(4), // 6: descendant still needs rollback
+        end_for(6, 61), // 7
+        delivered_for(6), // 8
+        end_for(5, 53), // 9: foreign completion
+        OplogEntry::jump(
+            Some(OplogIndex::from_u64(2)),
+            OplogRegion::from_range(4..=4),
+        ),
+    ] {
+        oplog.add(entry).await;
+    }
+    let rs = test_replay_state(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::from_regions([OplogRegion::from_range(4..=4)]),
+        None,
+    )
+    .await
+    .unwrap();
+    let regions = rs
+        .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
+        .await;
+    assert!(
+        regions
+            .iter()
+            .any(|region| region.contains(OplogIndex::from_u64(6)))
+    );
+    assert!(
+        regions
+            .iter()
+            .any(|region| region.contains(OplogIndex::from_u64(8)))
+    );
+    assert!(
+        regions
+            .iter()
+            .all(|region| !region.contains(OplogIndex::from_u64(9)))
+    );
+    assert_eq!(regions, vec![OplogRegion::from_range(6..=8)]);
+    rs.register_entity_atomic_rollback(regions).await.unwrap();
+    assert!(
+        rs.entity_atomic_rollback_regions(OplogIndex::from_u64(2))
+            .await
+            .is_empty(),
+        "a subsequent restart must not roll back the prior Jump"
+    );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn entity_atomic_rollback_masks_pre_begin_completions_before_claiming() {
+    for end_before_begin in [true, false] {
+        let begin = OplogEntry::BeginAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: Some(OplogIndex::from_u64(2)),
+        };
+        let mut entries = vec![noop(), start_now(), start_with_parent(2)];
+        if end_before_begin {
+            entries.extend([end_for(3, 37), begin]);
+        } else {
+            entries.extend([begin, end_for(3, 37)]);
+        }
+        entries.extend([delivered_for(3), noop()]);
+        let rs = replay_state_over(entries).await;
+        let regions = rs
+            .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
+            .await;
+        assert_eq!(
+            regions,
+            vec![OplogRegion::from_range(if end_before_begin {
+                6..=6
+            } else {
+                5..=6
+            })]
+        );
+        rs.register_entity_atomic_rollback(regions).await.unwrap();
+        rs.get_oplog_entry().await.unwrap(); // entity Start
+        let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+            .claim_start_or_replay_end(StartClaim::owned(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(2),
+            ))
+            .await
+            .unwrap()
+        else {
+            panic!("pre-B Start must survive");
+        };
+        if end_before_begin {
+            assert!(matches!(
+                rs.await_resolution_outcome(handle).await.unwrap(),
+                ResolutionOutcome::Resolved(Resolution::Completed {
+                    delivery_marker: None,
+                    ..
+                })
+            ));
+        } else {
+            let mut resolution = Box::pin(rs.await_resolution_outcome(handle));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(20), resolution.as_mut())
+                    .await
+                    .is_err()
+            );
+            assert!(matches!(
+                rs.get_oplog_entry().await.unwrap().1,
+                OplogEntry::BeginAtomicRegion { .. }
+            ));
+            rs.get_oplog_entry().await.unwrap(); // surviving foreign tail
+            assert!(matches!(
+                resolution.await.unwrap(),
+                ResolutionOutcome::Incomplete
+            ));
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn entity_atomic_rollback_deleted_claim_waits_for_retained_begin() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        OplogEntry::BeginAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: Some(OplogIndex::from_u64(2)),
+        },
+        start_with_parent(2),
+        noop(),
+    ])
+    .await;
+    let regions = rs
+        .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
+        .await;
+    rs.register_entity_atomic_rollback(regions).await.unwrap();
+    rs.get_oplog_entry().await.unwrap(); // entity Start
+    let mut claim = Box::pin(rs.claim_start_or_replay_end(StartClaim::owned(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+        OplogIndex::from_u64(2),
+    )));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), claim.as_mut())
+            .await
+            .is_err(),
+        "autonomous host subtasks must not flip entity liveness before Begin"
+    );
+    assert!(matches!(
+        rs.get_oplog_entry().await.unwrap().1,
+        OplogEntry::BeginAtomicRegion { .. }
+    ));
+    assert!(matches!(
+        claim.await.unwrap(),
+        ReplayStartClaimOutcome::DeletedRegion
+    ));
+    assert_eq!(
+        rs.get_oplog_entry().await.unwrap().0,
+        OplogIndex::from_u64(5)
+    );
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn entity_atomic_rollback_deleted_claim_uses_latest_matching_start() {
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_with_parent(2),
+        OplogEntry::BeginAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: Some(OplogIndex::from_u64(2)),
+        },
+        start_with_parent(2),
+        noop(),
+    ])
+    .await;
+    rs.register_entity_atomic_rollback(vec![
+        OplogRegion::from_range(3..=3),
+        OplogRegion::from_range(5..=5),
+    ])
+    .await
+    .unwrap();
+    rs.get_oplog_entry().await.unwrap(); // entity Start
+    let mut claim = Box::pin(rs.claim_start_or_replay_end(StartClaim::owned(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+        OplogIndex::from_u64(2),
+    )));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), claim.as_mut())
+            .await
+            .is_err(),
+        "the deleted Start behind the cursor must not hide the matching Start after Begin"
+    );
+    assert!(matches!(
+        rs.get_oplog_entry().await.unwrap().1,
+        OplogEntry::BeginAtomicRegion { .. }
+    ));
+    assert!(matches!(
+        claim.await.unwrap(),
+        ReplayStartClaimOutcome::DeletedRegion
+    ));
+    assert_eq!(
+        rs.get_oplog_entry().await.unwrap().0,
+        OplogIndex::from_u64(6)
     );
 }
 

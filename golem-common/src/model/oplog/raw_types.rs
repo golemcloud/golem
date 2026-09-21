@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::account::AccountId;
-use crate::base_model::agent::AgentMode;
+use crate::base_model::agent::{AgentMode, OwnerKind};
 use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::base_model::{AgentId, OplogIndex};
 use crate::model::Timestamp;
@@ -35,6 +35,7 @@ use uuid::Uuid;
 #[desert(evolution())]
 pub struct CreateParameters {
     pub agent_id: AgentId,
+    pub owner_kind: OwnerKind,
     pub agent_mode: AgentMode,
     pub component_revision: ComponentRevision,
     pub env: Vec<(String, String)>,

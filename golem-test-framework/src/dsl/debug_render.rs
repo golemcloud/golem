@@ -117,6 +117,16 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     let _ = writeln!(result, "{pad}method:            {}", inner.method_name);
                     let _ = writeln!(result, "{pad}idempotency key:   {}", inner.idempotency_key,);
                 }
+                PublicAgentInvocation::ExternalTool(inner) => {
+                    let _ = writeln!(result, "{pad}type:              external tool");
+                    let _ = writeln!(result, "{pad}tool:              {}", inner.tool_name);
+                    let _ = writeln!(
+                        result,
+                        "{pad}path:              {}",
+                        inner.command_path.join("/")
+                    );
+                    let _ = writeln!(result, "{pad}idempotency key:   {}", inner.idempotency_key);
+                }
                 PublicAgentInvocation::SaveSnapshot(_) => {
                     let _ = writeln!(result, "{pad}type:              save snapshot");
                 }
@@ -213,6 +223,20 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     result,
                     "{pad}idempotency key:   {}",
                     inner_params.idempotency_key,
+                );
+            }
+            PublicAgentInvocation::ExternalTool(inner_params) => {
+                let _ = writeln!(result, "ENQUEUED EXTERNAL TOOL {}", inner_params.tool_name);
+                let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+                let _ = writeln!(
+                    result,
+                    "{pad}path:              {}",
+                    inner_params.command_path.join("/")
+                );
+                let _ = writeln!(
+                    result,
+                    "{pad}idempotency key:   {}",
+                    inner_params.idempotency_key
                 );
             }
             PublicAgentInvocation::SaveSnapshot(_) => {

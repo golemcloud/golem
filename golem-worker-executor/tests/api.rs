@@ -3518,28 +3518,14 @@ async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
     };
     let service = worker.oplog_service();
     let target_guard = service.lock_lifecycle(&target).await;
+    let (copy_entered, release_copy) = executor.gate_next_oplog_read(&source, OplogIndex::INITIAL);
     let fork = tokio::spawn({
         let executor = executor.clone();
         let source = source.clone();
         let target = target.clone();
         async move { executor.fork_worker(&source, &target.agent_id, cut).await }
     });
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if tokio::time::timeout(Duration::from_millis(10), service.lock_lifecycle(&source))
-                .await
-                .is_err()
-            {
-                break;
-            }
-            assert!(
-                !fork.is_finished(),
-                "fork exited before holding its source guard"
-            );
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
+    tokio::time::timeout(Duration::from_secs(10), copy_entered).await??;
     let hook = Arc::new(DeletionStageHook::new(
         owned.clone(),
         Some(WorkerDeletionStage::DurableStateRemoved),
@@ -3559,9 +3545,12 @@ async fn fork_source_lifecycle_blocks_deletion_until_history_copy_finishes(
             .is_err()
     );
     assert_eq!(hook.calls(WorkerDeletionStage::CacheRemoved), 0);
+    release_copy.send(()).unwrap();
+    // Once the hidden copy is complete, deletion must not wait for target publication.
+    tokio::time::timeout(Duration::from_secs(10), deleting).await???;
+    assert!(!fork.is_finished());
     drop(target_guard);
     fork.await??;
-    deleting.await??;
     assert!(executor.get_worker_metadata(&source).await.is_err());
     assert_eq!(
         executor
