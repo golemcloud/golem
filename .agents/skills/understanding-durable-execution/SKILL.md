@@ -682,6 +682,12 @@ A failed durable call has two recovery paths (`durable_host/durability.rs`):
   `try_trigger_host_trap_retry`): the invocation traps, `on_invocation_failure` produces a
   `RetryDecision`, and the whole worker is reconstructed and replayed to `retry_from`.
 
+For a selected policy containing a `TimeBox`, the persisted retry state also carries the
+sequence's first-decision timestamp and a monotonic elapsed high-water mark. Policy evaluation
+uses `max(previous_elapsed, now - started_at)`, so restart/replay and a backward wall-clock step
+cannot reset the elapsed budget. The first decision sees zero elapsed, and the canonical
+`elapsed >= limit` boundary gives up. Policies without a `TimeBox` retain their existing state.
+
 In-function retry is the large optimisation over trap-based reconstruction; a new or changed
 durable function must pick its `DurableFunctionType` with that eligibility in mind. Decision
 table and tests: `reference/retries.md`.

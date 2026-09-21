@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use golem_common::model::{AgentStatus, RetryConfig};
+use golem_common::model::{AgentStatus, NamedRetryPolicy, Predicate, RetryConfig, RetryPolicy};
 use golem_common::{data_value, phantom_agent_id};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
@@ -52,6 +52,24 @@ async fn start_always_failing_http_server() -> u16 {
     );
 
     port
+}
+
+fn time_box_retry_overrides() -> TestExecutorOverrides {
+    TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.max_in_function_retry_delay = Duration::from_millis(1);
+        })),
+        retry_policies: Some(vec![NamedRetryPolicy {
+            name: "time-box-recovery".to_string(),
+            priority: 100,
+            predicate: Predicate::True,
+            policy: RetryPolicy::TimeBox {
+                limit: Duration::from_millis(500),
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(2))),
+            },
+        }]),
+        ..Default::default()
+    }
 }
 
 fn delayed_recovery_retry_overrides() -> TestExecutorOverrides {
@@ -125,6 +143,60 @@ async fn interrupt_worker_during_delayed_recovery_retry(
             .to_string()
             .contains("Interrupted via the Golem API")
     );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("90s")]
+async fn time_box_elapsed_budget_survives_reconstruction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, time_box_retry_overrides()).await?;
+    let port = start_always_failing_http_server().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let agent_id = phantom_agent_id!("HttpClient", uuid::Uuid::new_v4());
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let invocation = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(&component_clone, &agent_id_clone, "run", data_value!())
+                .await
+        }
+        .in_current_span(),
+    );
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Retrying, Duration::from_secs(20))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(750)).await;
+    executor.simulated_crash(&worker_id).await?;
+
+    // A reset budget would authorize another attempt after the configured two-second delay.
+    // Completing sooner proves reconstruction gave up against the original elapsed budget.
+    let result = tokio::time::timeout(Duration::from_millis(1_500), invocation).await??;
+    assert!(
+        result.is_err(),
+        "the failing invocation must exhaust its time box"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     Ok(())
 }

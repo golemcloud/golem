@@ -1345,7 +1345,8 @@ where
                             AsyncRetryDecision::RetryAfterDelay(delay) => {
                                 tokio::time::sleep(delay).await;
                             }
-                            AsyncRetryDecision::FallBackToTrap | AsyncRetryDecision::Exhausted => {
+                            AsyncRetryDecision::FallBackToTrap(_)
+                            | AsyncRetryDecision::Exhausted => {
                                 break;
                             }
                         }

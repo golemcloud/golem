@@ -688,7 +688,7 @@ where
                                 }
                             }
                         }
-                        AsyncRetryDecision::FallBackToTrap => {
+                        AsyncRetryDecision::FallBackToTrap(semantic_override) => {
                             let status = response.status().as_u16();
                             let properties = http_retry_properties(
                                 store,
@@ -704,13 +704,23 @@ where
                                     "HTTP status {status} matched retry policy but exceeded the in-function retry delay threshold"
                                 ),
                             });
-                            if let Err(err) = try_trigger_host_trap_retry(
-                                &mut retry_task_ctx,
-                                failure,
-                                properties,
-                            )
-                            .await
-                            {
+                            let trap = if let Some(payload) = semantic_override {
+                                Some(anyhow::Error::new(
+                                    crate::durable_host::durability::SemanticTrapRetryOverrideMarker {
+                                        payload,
+                                        inner: failure,
+                                    },
+                                ))
+                            } else {
+                                try_trigger_host_trap_retry(
+                                    &mut retry_task_ctx,
+                                    failure,
+                                    properties,
+                                )
+                                .await
+                                .err()
+                            };
+                            if let Some(err) = trap {
                                 poison_p3_pooled_connection(&pooled_connection);
                                 return Err(HttpError::trap(wasmtime::Error::from_anyhow(
                                     handle.trap(err),
@@ -764,7 +774,7 @@ where
                     AsyncRetryDecision::RetryAfterDelay(_) => {
                         break Err(error_code);
                     }
-                    AsyncRetryDecision::FallBackToTrap | AsyncRetryDecision::Exhausted => {
+                    AsyncRetryDecision::FallBackToTrap(_) | AsyncRetryDecision::Exhausted => {
                         break Err(error_code);
                     }
                 }
