@@ -24,6 +24,7 @@ use futures::stream::BoxStream;
 use futures::{Stream, TryStreamExt};
 use golem_common::model::Timestamp;
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     pin::Pin,
 };
@@ -324,23 +325,25 @@ impl BlobStorage for InMemoryBlobStorage {
             format!("{dir}/")
         };
 
-        let mut entries = Vec::new();
+        // A blob and a directory can hold one path, and then the storage has a key for the blob
+        // and a key for the directory. The set gives the path one time.
+        let mut entries = HashSet::new();
         self.data
             .iter_async(|key, _| {
                 if key.namespace == namespace {
                     if key.dir == dir {
                         if let Some(file) = &key.file {
-                            entries.push(path.join(file));
+                            entries.insert(path.join(file));
                         }
                     } else if key.file.is_none() && key.dir.starts_with(&nested) {
-                        entries.push(PathBuf::from(&key.dir));
+                        entries.insert(PathBuf::from(&key.dir));
                     }
                 }
                 true
             })
             .await;
 
-        Ok(entries)
+        Ok(entries.into_iter().collect())
     }
 
     async fn list_blobs_below(

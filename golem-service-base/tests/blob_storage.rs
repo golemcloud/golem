@@ -1057,6 +1057,48 @@ async fn list_dir_gives_a_created_directory_below_the_path_at_any_depth(
 
 #[test]
 #[tracing::instrument]
+async fn list_dir_gives_a_blob_and_the_directory_of_its_path_one_time(
+    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    // A blob and a directory that `create_dir` made can hold one path. The in-memory backend
+    // then holds two keys for the path, and the S3 backend holds the blob and the marker of the
+    // directory. `list_dir` gives the path one time.
+    let storage = test.get_blob_storage().await;
+    let label = "list_dir_gives_a_blob_and_the_directory_of_its_path_one_time";
+
+    storage
+        .create_dir(label, "create-dir", namespace.clone(), Path::new("a"))
+        .await
+        .unwrap();
+    put_blobs(&storage, namespace, &[("a", 5)]).await;
+
+    assert_eq!(
+        storage
+            .list_dir(label, "list-root", namespace.clone(), Path::new(""))
+            .await
+            .unwrap(),
+        vec![PathBuf::from("a")]
+    );
+
+    // A delete of the blob removes no marker and no key of a directory, so the directory is
+    // still there and the path stays in the list.
+    storage
+        .delete(label, "delete-blob", namespace.clone(), Path::new("a"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .list_dir(label, "list-root", namespace.clone(), Path::new(""))
+            .await
+            .unwrap(),
+        vec![PathBuf::from("a")]
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn list_dir_same_prefix(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
