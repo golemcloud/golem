@@ -332,8 +332,14 @@ fn LocalPolicyCompiler::parse_policy_node(
   }
   match node {
     @retry.PolicyNode::Periodic(delay) => LocalPolicy::Periodic(delay)
-    @retry.PolicyNode::Exponential(config) =>
+    @retry.PolicyNode::Exponential(config) => {
+      if !is_finite(config.factor) || config.factor <= 0.0 {
+        raise invalid_policy(
+          "Exponential factor must be finite and greater than 0",
+        )
+      }
       LocalPolicy::Exponential(config.base_delay, config.factor)
+    }
     @retry.PolicyNode::Fibonacci(config) =>
       LocalPolicy::Fibonacci(config.first, config.second)
     @retry.PolicyNode::Immediate => LocalPolicy::Immediate
@@ -363,11 +369,17 @@ fn LocalPolicyCompiler::parse_policy_node(
         config.delay,
         self.parse_policy_node(nodes, config.inner, depth + 1),
       )
-    @retry.PolicyNode::Jitter(config) =>
+    @retry.PolicyNode::Jitter(config) => {
+      if !is_finite(config.factor) || config.factor < 0.0 {
+        raise invalid_policy(
+          "Jitter factor must be finite and greater than or equal to 0",
+        )
+      }
       LocalPolicy::Jitter(
         config.factor,
         self.parse_policy_node(nodes, config.inner, depth + 1),
       )
+    }
     @retry.PolicyNode::FilteredOn(config) =>
       LocalPolicy::Filtered(
         self.parse_predicate(config.predicate, depth + 1),

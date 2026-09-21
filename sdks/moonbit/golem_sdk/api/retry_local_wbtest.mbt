@@ -537,22 +537,25 @@ test "shared raw nodes compile to independent branch state below the limit" {
 }
 
 ///|
-test "raw factors outside builder constraints follow evaluator semantics" {
+test "raw exponential factor validation follows the strict contract" {
+  let nan = 0.0 / 0.0
+  let infinity = 1.0 / 0.0
+  for _, factor in [0.0, -1.0, nan, infinity, -infinity] {
+    assert_invalid(
+      raw_policy([@retry.PolicyNode::Exponential({ base_delay: 10, factor, })]),
+      "Exponential factor must be finite and greater than 0",
+    )
+  }
+}
+
+///|
+test "raw jitter factor validation follows the strict contract" {
+  let nan = 0.0 / 0.0
+  let infinity = 1.0 / 0.0
   debug_inspect(
     step_delays(
       raw_policy([
-        @retry.PolicyNode::Exponential({ base_delay: 10, factor: 0.0, }),
-      ]),
-      [0, 0, 0],
-      [no_properties(), no_properties(), no_properties()],
-      0.0,
-    ),
-    content="[Some(10), Some(0), Some(0)]",
-  )
-  debug_inspect(
-    step_delays(
-      raw_policy([
-        @retry.PolicyNode::Jitter({ factor: -0.1, inner: 1, }),
+        @retry.PolicyNode::Jitter({ factor: 0.0, inner: 1, }),
         @retry.PolicyNode::Periodic(7),
       ]),
       [0],
@@ -561,6 +564,15 @@ test "raw factors outside builder constraints follow evaluator semantics" {
     ),
     content="[Some(7)]",
   )
+  for _, factor in [-1.0, nan, infinity, -infinity] {
+    assert_invalid(
+      raw_policy([
+        @retry.PolicyNode::Jitter({ factor, inner: 1, }),
+        @retry.PolicyNode::Periodic(7),
+      ]),
+      "Jitter factor must be finite and greater than or equal to 0",
+    )
+  }
 }
 
 ///|
