@@ -14,10 +14,13 @@
 
 use super::{InMemorySnapshotStore, Stored};
 use crate::filesystem_snapshot::contract::{self, OpenStore, new_scope};
-use crate::filesystem_snapshot::{FilesystemSnapshotStore, SnapshotInfo, SnapshotName};
+use crate::filesystem_snapshot::{
+    FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotStoreError,
+};
 use golem_common::model::Timestamp;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+use tempfile::TempDir;
 use test_r::core::DynamicTestRegistration;
 use test_r::{test, test_gen};
 
@@ -68,6 +71,54 @@ async fn a_save_after_a_snapshot_from_a_clock_that_is_ahead_gets_a_later_time() 
                 .collect::<Vec<_>>()
         ),
         (true, vec!["p-next", "p-ahead"])
+    );
+}
+
+/// Gives a tree that holds `file.txt` with the text `marker`, and a larger file that makes the
+/// read of the tree take some time.
+fn tree_with(marker: &str) -> TempDir {
+    let tree = tempfile::tempdir().unwrap();
+    std::fs::write(tree.path().join("file.txt"), marker).unwrap();
+    std::fs::write(tree.path().join("large.bin"), vec![7u8; 4 * 1024 * 1024]).unwrap();
+    tree
+}
+
+/// Two stores over one storage save one name at the same time. Each save finds the name free
+/// when it starts. The store checks the name again when it publishes a snapshot, so only one
+/// save wins. The contract does not give a winner for two saves of one name, so this is a test of
+/// this store only.
+#[test]
+async fn of_two_saves_of_one_name_at_the_same_time_one_wins() {
+    let first = InMemorySnapshotStore::new();
+    let second = first.clone();
+    let scope = new_scope();
+    let name = SnapshotName::new("p-same").unwrap();
+    let first_tree = tree_with("first tree");
+    let second_tree = tree_with("second tree");
+
+    let (first_saved, second_saved) = futures::join!(
+        first.save(&scope, &name, first_tree.path()),
+        second.save(&scope, &name, second_tree.path())
+    );
+    let into = tempfile::tempdir().unwrap();
+    first.restore(&scope, &name, into.path()).await.unwrap();
+    let restored = std::fs::read_to_string(into.path().join("file.txt")).unwrap();
+
+    let outcome = |saved: &Result<SnapshotInfo, SnapshotStoreError>| match saved {
+        Ok(_) => "saved",
+        Err(SnapshotStoreError::AlreadyExists) => "already exists",
+        Err(_) => "another error",
+    };
+    let winner = if first_saved.is_ok() {
+        "first tree"
+    } else {
+        "second tree"
+    };
+    let mut outcomes = [outcome(&first_saved), outcome(&second_saved)];
+    outcomes.sort();
+    assert_eq!(
+        (outcomes, restored.as_str()),
+        (["already exists", "saved"], winner)
     );
 }
 
