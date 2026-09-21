@@ -106,6 +106,10 @@ const CASES: &[(&str, Case)] = &[
         |open| a_restore_during_a_delete_of_another_name_gives_the_whole_tree(open).boxed(),
     ),
     (
+        "a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time",
+        |open| a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open).boxed(),
+    ),
+    (
         "a_deleted_scope_is_as_unused_as_before_its_first_save",
         |open| a_deleted_scope_is_as_unused_as_before_its_first_save(open).boxed(),
     ),
@@ -658,6 +662,43 @@ async fn a_restore_during_a_delete_of_another_name_gives_the_whole_tree(open: Op
 
     deleted.unwrap();
     assert_eq!(restore.unwrap().0, listing(tree.path()));
+}
+
+async fn a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open: OpenStore) {
+    // The scope holds two snapshots first. Then a save of a third name, a restore of the first
+    // name and a delete of the second name run at the same time.
+    let store = open();
+    let scope = new_scope();
+    let first = new_tree(&fixture());
+    let second = new_tree(&one_file("second"));
+    let third = new_tree(&one_file("third"));
+    let (first_name, second_name, third_name) = (name("p-1"), name("p-2"), name("p-3"));
+    store.save(&scope, &first_name, first.path()).await.unwrap();
+    store
+        .save(&scope, &second_name, second.path())
+        .await
+        .unwrap();
+
+    let (saved, restore, deleted) = futures::join!(
+        store.save(&scope, &third_name, third.path()),
+        restored(&*store, &scope, &first_name),
+        store.delete(&scope, &second_name)
+    );
+
+    saved.unwrap();
+    deleted.unwrap();
+    assert_eq!(
+        (
+            restore.unwrap().0,
+            listed_names(&*store, &scope).await,
+            restored_listing(&*store, &scope, &third_name).await
+        ),
+        (
+            listing(first.path()),
+            vec!["p-3".to_string(), "p-1".to_string()],
+            listing(third.path())
+        )
+    );
 }
 
 async fn a_deleted_scope_is_as_unused_as_before_its_first_save(open: OpenStore) {
