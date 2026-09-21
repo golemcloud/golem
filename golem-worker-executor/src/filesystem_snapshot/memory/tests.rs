@@ -13,18 +13,13 @@
 // limitations under the License.
 
 use super::{InMemorySnapshotStore, Stored};
-use crate::filesystem_snapshot::contract::{self, OpenStore};
-use crate::filesystem_snapshot::{
-    FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
-};
-use golem_common::model::component::ComponentId;
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, OwnedAgentId, Timestamp};
+use crate::filesystem_snapshot::contract::{self, OpenStore, new_scope};
+use crate::filesystem_snapshot::{FilesystemSnapshotStore, SnapshotInfo, SnapshotName};
+use golem_common::model::Timestamp;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use test_r::core::DynamicTestRegistration;
 use test_r::{test, test_gen};
-use uuid::Uuid;
 
 #[test_gen]
 fn in_memory_store_keeps_the_contract(r: &mut DynamicTestRegistration) {
@@ -42,13 +37,7 @@ fn in_memory_store_keeps_the_contract(r: &mut DynamicTestRegistration) {
 #[test]
 async fn a_save_after_a_snapshot_from_a_clock_that_is_ahead_gets_a_later_time() {
     let store = InMemorySnapshotStore::new();
-    let scope = SnapshotScope::agent(&OwnedAgentId::new(
-        EnvironmentId(Uuid::new_v4()),
-        &AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "counter(\"clock\")".to_string(),
-        },
-    ));
+    let scope = new_scope();
     let ahead = Timestamp::from(Timestamp::now_utc().to_millis() + 3_600_000);
     store.scopes().insert(
         scope.clone(),
@@ -84,17 +73,13 @@ async fn a_save_after_a_snapshot_from_a_clock_that_is_ahead_gets_a_later_time() 
 
 #[cfg(unix)]
 mod unix {
+    use crate::filesystem_snapshot::contract::new_scope;
     use crate::filesystem_snapshot::{
-        FilesystemSnapshotStore, InMemorySnapshotStore, SnapshotName, SnapshotScope,
-        SnapshotStoreError,
+        FilesystemSnapshotStore, InMemorySnapshotStore, SnapshotName, SnapshotStoreError,
     };
-    use golem_common::model::component::ComponentId;
-    use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::{AgentId, OwnedAgentId};
     use std::io::ErrorKind;
     use std::os::unix::net::UnixListener;
     use test_r::test;
-    use uuid::Uuid;
 
     /// A socket is not a regular file, a directory or a symlink, so it is outside the contract.
     /// The store must not open such an entry, because the read of a FIFO waits for a writer that
@@ -106,13 +91,7 @@ mod unix {
         std::fs::write(tree.path().join("file"), b"file").unwrap();
         let _listener = UnixListener::bind(tree.path().join("s")).unwrap();
         let store = InMemorySnapshotStore::new();
-        let scope = SnapshotScope::agent(&OwnedAgentId::new(
-            EnvironmentId(Uuid::new_v4()),
-            &AgentId {
-                component_id: ComponentId(Uuid::new_v4()),
-                agent_id: "counter(\"socket\")".to_string(),
-            },
-        ));
+        let scope = new_scope();
         let name = SnapshotName::new("p-socket").unwrap();
 
         let saved = store.save(&scope, &name, tree.path()).await;

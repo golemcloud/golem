@@ -160,8 +160,8 @@ pub(crate) fn register(
     });
 }
 
-/// Gives a scope that no other case uses.
-fn new_scope() -> SnapshotScope {
+/// Gives a scope that no other test uses.
+pub(super) fn new_scope() -> SnapshotScope {
     SnapshotScope::agent(&OwnedAgentId::new(
         EnvironmentId(Uuid::new_v4()),
         &AgentId {
