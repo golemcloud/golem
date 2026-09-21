@@ -1319,6 +1319,8 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), Error> {
         let bucket = self.bucket_of(&namespace);
 
+        // The key of every path is made before the first request goes, because a path that
+        // breaks a rule of a name removes no blob.
         let to_delete = paths
             .iter()
             .map(|path| {

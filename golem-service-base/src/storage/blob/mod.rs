@@ -148,6 +148,13 @@ pub trait BlobStorage: Debug + Send + Sync {
     ///
     /// A path that has no blob changes nothing. A directory has no blob at its path, and a root
     /// path is a directory.
+    ///
+    /// The backend reads every path before it removes the first blob, so a path that breaks a
+    /// rule of a name gives a [`BlobNameError`] and the call removes no blob at all. The rule
+    /// holds for the names and for nothing else: an error of the backend part way through the
+    /// paths leaves the blobs that the backend removed before that error removed, and the S3
+    /// backend sends the keys in more than one request when they do not fit in one, so the
+    /// removal is not one operation.
     async fn delete_many(
         &self,
         target_label: &'static str,
@@ -155,6 +162,10 @@ pub trait BlobStorage: Debug + Send + Sync {
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
     ) -> Result<(), Error> {
+        for path in paths {
+            normalized_blob_path(path)?;
+        }
+
         for path in paths {
             self.delete(target_label, op_label, namespace.clone(), path)
                 .await?;

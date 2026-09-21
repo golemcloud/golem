@@ -884,6 +884,55 @@ async fn delete_many(
 
 #[test]
 #[tracing::instrument]
+async fn delete_many_reads_every_path_before_it_removes_a_blob(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    // The S3 backend makes the key of every path before it sends a request, so a path that
+    // breaks a rule of a name removes no blob there. A backend that removes the blob of one
+    // path at a time has to give the same answer, because the in-memory backend stands in for
+    // S3 in the tests of other crates. The good path comes first, so a backend that reads each
+    // path only when it removes its blob removes that blob and then gives the error.
+    let storage = test.get_blob_storage().await;
+    let label = "delete_many_reads_every_path_before_it_removes_a_blob";
+    let good = Path::new("good");
+    let bad = Path::new("../bad");
+
+    storage
+        .put_raw(label, "put-raw", namespace.clone(), good, b"payload")
+        .await
+        .unwrap();
+
+    let rule = storage
+        .delete_many(
+            label,
+            "delete-many",
+            namespace.clone(),
+            &[good.to_path_buf(), bad.to_path_buf()],
+        )
+        .await
+        .err()
+        .and_then(name_error);
+
+    assert_eq!(
+        (
+            rule,
+            storage
+                .get_raw(label, "get-raw", namespace.clone(), good)
+                .await
+                .unwrap()
+        ),
+        (
+            Some(BlobNameError::ParentDir {
+                path: bad.to_path_buf()
+            }),
+            Some(b"payload".to_vec())
+        )
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn list_dir_root(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
