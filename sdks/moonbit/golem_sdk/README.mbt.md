@@ -407,6 +407,32 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 - **Logging** — structured logging via `@logging.with_name("my-agent")` with level filtering
 - **Tracing** — span-based tracing via `@context.with_span(...)` with attributes
 - **Host API** - exports Golem's host API
+- **Semantic retries** — install policies in the host or interpret them around user code locally
+
+### Local semantic retries
+
+`@api.retry_local` interprets a Golem `RetryPolicy` around arbitrary asynchronous code without
+installing it as an executor policy. The property callback runs for every failure, and the final
+operation error is returned unchanged when the policy gives up:
+
+```moonbit nocheck
+///|
+let policy = try! @api.Policy::exponential(@api.Duration::millis(100), 2.0)
+  .max_retries(4)
+  .only_when(
+    @api.Predicate::eq(@api.Props::error_type(), @api.Value::text("transient")),
+  )
+  .to_raw()
+
+///|
+let result = @api.retry_local(policy, () => call_remote_service(), properties=error => {
+  [("error-type", @api.PredicateValue::Text(error.kind()))]
+})
+```
+
+Unlike retry policies installed with `set_named_policy`, local retries are ordinary user-space
+attempts. They do not create executor `RetryAttempt` oplog entries and do not survive recovery as
+one host-managed retry sequence.
 
 ## Packages
 
