@@ -7432,14 +7432,14 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
 /// A stop that reaches a generation already given up must leave the generation that replaced it
 /// alone.
 ///
-/// A relinquished agent passes through the stop's removal more than once - from its own loop and
-/// again from the relinquish that waited for it - and a handle kept past its generation can stop it
+/// A given-up agent passes through the stop's removal more than once - from its own loop and
+/// again from the give-up that waited for it - and a handle kept past its generation can stop it
 /// once more. Removal used to be keyed by agent id only, so any of those passes evicted whatever
 /// was cached under that id by then: here, the newer generation the shard's return created.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
-async fn a_stop_through_a_relinquished_generation_leaves_the_next_generation_cached(
+async fn a_stop_through_a_given_up_generation_leaves_the_next_generation_cached(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -7489,13 +7489,13 @@ async fn a_stop_through_a_relinquished_generation_leaves_the_next_generation_cac
         "the shard's return must have created a new generation, or this test proves nothing"
     );
 
-    // The stale generation is already unloaded and relinquished, so this goes straight to the
+    // The stale generation is already unloaded and given up, so this goes straight to the
     // removal.
     stale.test_stop().await;
 
     assert!(
         executor.worker_is_cached(&owned_agent_id).await,
-        "a stop through the relinquished generation evicted the generation that replaced it"
+        "a stop through the given-up generation evicted the generation that replaced it"
     );
     let cached = executor
         .active_agent(&owned_agent_id)
@@ -7515,7 +7515,7 @@ async fn a_stop_through_a_relinquished_generation_leaves_the_next_generation_cac
 /// A retry scheduled before the shard moved must not resume the agent afterwards.
 ///
 /// A crash schedules the loop's own restart. If the shard is revoked in that window, the agent has
-/// been given up, and the loop's backstop (`is_relinquished()` ahead of the retry decision,
+/// been given up, and the loop's backstop (`is_given_up()` ahead of the retry decision,
 /// invocation_loop.rs) has to take the given-up exit instead: no restart here, no `Resumed` written
 /// to an oplog the new owner is taking over, and the caller told to reroute. Without the backstop
 /// the retry would win the race and resume an agent this executor no longer owns.
@@ -7603,7 +7603,7 @@ async fn a_retry_scheduled_before_a_revoke_does_not_resume_the_agent(
 /// is untouched.
 #[test]
 #[tracing::instrument]
-async fn a_start_through_a_relinquished_generation_is_refused(
+async fn a_start_through_a_given_up_generation_is_refused(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -7660,7 +7660,7 @@ async fn a_start_through_a_relinquished_generation_is_refused(
             "a start through a given-up generation must be answered with something the caller can \
              retry on the new owner, got {other}"
         ),
-        Ok(_) => panic!("a start through a relinquished generation was allowed"),
+        Ok(_) => panic!("a start through a given-up generation was allowed"),
     }
 
     let cached = executor
@@ -7682,9 +7682,9 @@ async fn a_start_through_a_relinquished_generation_is_refused(
 /// to reroute.
 ///
 /// A fence found in a host call surfaces as a `ShardLost` trap: the agent marks itself
-/// relinquished and its loop stops without failing anyone. The executor's own assignment still
+/// given up and its loop stops without failing anyone. The executor's own assignment still
 /// names the shard - this is the zombie, and nobody has told it - so the waiter's ownership
-/// re-check keeps passing. Two things can answer the caller: the relinquish spawned when the loop's
+/// re-check keeps passing. Two things can answer the caller: the give-up spawned when the loop's
 /// exit commit is refused, and the loop's own stop. The spawned one misses the caller whenever the
 /// loop removes the agent before it looks, and nothing in a test can hold it back, so this pins
 /// the outcome rather than that ordering.
@@ -7823,7 +7823,7 @@ async fn a_caller_waiting_on_an_invocation_fenced_inside_a_host_call_is_told_to_
 /// Enqueueing buffers the pending-invocation entry and commits it through the status actor, and
 /// that commit is where the takeover is found. The refusal used to be folded into "status
 /// unchanged", so the enqueue reported success for a key that never reached the status. Neither the
-/// relinquish the refusal spawns nor the stop's removal fails keys the status does not hold, so
+/// give-up the refusal spawns nor the stop's removal fails keys the status does not hold, so
 /// nothing ever answered the caller.
 #[test]
 #[tracing::instrument]
@@ -7858,7 +7858,7 @@ async fn an_invocation_enqueued_onto_a_fenced_oplog_is_refused_rather_than_accep
     take_agent_oplog_over_at_epoch(deps, &context, &owned_agent_id, 1).await?;
 
     // The refusal has to come from the enqueue's own commit. Had anything written to the idle
-    // agent first, the relinquish that write spawned could evict it, and the invocation would then
+    // agent first, the give-up that write spawned could evict it, and the invocation would then
     // be refused at a fresh generation's open instead, which proves nothing about the enqueue.
     let cached = executor
         .active_agent(&owned_agent_id)

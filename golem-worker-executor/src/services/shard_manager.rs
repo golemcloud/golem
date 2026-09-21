@@ -127,7 +127,7 @@ async fn sleep_or_park(delay: RenewalDelay) {
 /// Coordinates the announcements made from the renewal loop, so a slow one cannot stall lease
 /// renewal.
 ///
-/// Relinquishing a still-loading agent waits for its whole component load and replay with no
+/// Giving up a still-loading agent waits for its whole component load and replay with no
 /// timeout, so a set-changing renewal that awaited [`GrpcShardManagerService::announce_assignment_changed`]
 /// inline would send no further renewal RPCs until that sweep finished, and the lease lapses for
 /// the whole executor - the bug this exists to fix. At most one announcement runs at a time; a
@@ -1320,7 +1320,7 @@ mod tests {
     }
 
     #[test]
-    // F29: relinquishing a still-loading agent waits for its whole component load and replay,
+    // F29: giving up a still-loading agent waits for its whole component load and replay,
     // with no timeout. If the renewal loop awaited the assignment-changed hook inline, that sweep
     // would hold every later renewal RPC back and the lease would lapse for the whole executor
     // while a single agent is loading. The hook here blocks on a flag the test controls, standing

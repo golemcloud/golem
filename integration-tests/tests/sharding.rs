@@ -428,7 +428,7 @@ mod tests {
         assert!(
             owner_changed,
             "no agent's shard changed owner during the test, so the run exercised neither the \
-             relinquish nor the fence"
+             give-up nor the fence"
         );
 
         assert_every_started_executor_serves(cluster_control, "while the invocations finished")

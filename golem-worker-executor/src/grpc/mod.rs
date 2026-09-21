@@ -38,8 +38,8 @@ use crate::services::{
     HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::{
-    ExportStreamControlResult as DomainExportResult, RelinquishReason, Worker, WorkerUpdateMode,
-    relinquished_by_assignment,
+    ExportStreamControlResult as DomainExportResult, GiveUpReason, Worker, WorkerUpdateMode,
+    given_up_by_assignment,
 };
 pub use crate::worker::{
     PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
@@ -1217,7 +1217,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // shards' new owners.
         let shard_service = self.shard_service();
         self.active_agents()
-            .relinquish_matching(RelinquishReason::ShardRevoked, |agent_id| {
+            .give_up_matching(GiveUpReason::ShardRevoked, |agent_id| {
                 shard_service.check_worker(agent_id).is_err()
             })
             .await;
@@ -1315,8 +1315,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .collect();
         let assignment = this.shard_service().try_get_current_assignment();
         this.active_agents()
-            .relinquish_matching(RelinquishReason::ShardNotAssigned, |agent_id| {
-                relinquished_by_assignment(
+            .give_up_matching(GiveUpReason::ShardNotAssigned, |agent_id| {
+                given_up_by_assignment(
                     assignment.as_ref(),
                     agent_id,
                     held_epochs.get(agent_id).copied().flatten(),

@@ -63,8 +63,7 @@ use crate::worker::instance::{
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
 use crate::worker::{
-    EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, RelinquishReason,
-    UnloadRequest,
+    EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, GiveUpReason, UnloadRequest,
 };
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -947,7 +946,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     }
 
     /// [`Self::remove_worker`] with an explicit reason for tearing the agent's entity bodies down.
-    /// A relinquished agent must not report itself as interrupted through the Golem API: it was
+    /// A given-up agent must not report itself as interrupted through the Golem API: it was
     /// not, its shard moved. A deletion owner tears nothing down here, whatever the reason.
     pub(crate) async fn remove_worker_with(
         &self,
@@ -1017,8 +1016,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// [`Self::remove_worker_with`] for a caller holding the generation by reference: tears the
     /// entry down and drops it only while it still holds `worker`. Returns whether it did.
     ///
-    /// A relinquished agent reaches its removal more than once - from its own loop's stop, again
-    /// from the relinquish that waited for it, or from a stop through a handle kept past its
+    /// A given-up agent reaches its removal more than once - from its own loop's stop, again
+    /// from the give-up that waited for it, or from a stop through a handle kept past its
     /// generation - and by then a newer generation may be cached under the same id. Keyed by id
     /// alone, such a pass evicts that generation and fences its entity bodies while its loop keeps
     /// running.
@@ -1125,7 +1124,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     ///
     /// Concurrent rather than sequential, unlike [`Self::unload_environment`]: a revoke can name
     /// many agents and each stop waits for that agent's invocation loop to exit. No acknowledgement
-    /// channel is awaited either - [`Worker::relinquish`] never subscribes to one - so an agent
+    /// channel is awaited either - [`Worker::give_up`] never subscribes to one - so an agent
     /// that is already stopping cannot panic the sweep, which is what the old
     /// `set_interrupting(..).recv().await.unwrap()` shape risked.
     ///
@@ -1133,9 +1132,9 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     /// machine has an arm for each, so none is skipped. An agent still being resolved is not in
     /// it, as a creation in progress never was: see `shard_epoch_to_assert` for why its oplog
     /// cannot open unfenced on a shard that has already left the assignment.
-    pub(crate) async fn relinquish_matching(
+    pub(crate) async fn give_up_matching(
         &self,
-        reason: RelinquishReason,
+        reason: GiveUpReason,
         select: impl Fn(&AgentId) -> bool,
     ) {
         let selected: Vec<Arc<Worker<Ctx>>> = self
@@ -1156,7 +1155,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
 
         futures::future::join_all(selected.into_iter().map(|worker| {
             let reason = reason.clone();
-            async move { worker.relinquish(reason).await }
+            async move { worker.give_up(reason).await }
         }))
         .await;
     }

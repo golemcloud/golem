@@ -984,7 +984,7 @@ mod tests {
     /// retriable failure. Classifying it as `ShardLost` would hand an agent to another executor
     /// over a blip that retrying would have cleared.
     #[test]
-    fn a_transient_oplog_storage_failure_does_not_relinquish_the_agent() {
+    fn a_transient_oplog_storage_failure_does_not_give_up_the_agent() {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::anyhow!(WorkerExecutorError::from(
                 crate::services::oplog::OplogError::Storage("connection reset".to_string())

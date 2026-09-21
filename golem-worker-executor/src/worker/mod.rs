@@ -638,7 +638,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     cache_retirement_in_progress: AtomicBool,
     /// Set once this executor has given the agent up. One-shot: the first reason wins, and the
     /// agent is never revived here.
-    relinquishment: std::sync::OnceLock<RelinquishReason>,
+    given_up_reason: std::sync::OnceLock<GiveUpReason>,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
@@ -996,12 +996,12 @@ fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
 ///
 /// `latched` is the fence the oplog holds, for a refusal that reached its caller flattened into
 /// some other error; the classified shapes are recognised without one.
-pub(crate) fn shard_lost_relinquishment(
+pub(crate) fn shard_lost_give_up_reason(
     error: &WorkerExecutorError,
     latched: Option<OplogFence>,
-) -> Option<RelinquishReason> {
+) -> Option<GiveUpReason> {
     match latched {
-        Some(fence) => Some(RelinquishReason::Fenced(Some(Box::new(fence)))),
+        Some(fence) => Some(GiveUpReason::Fenced(Some(Box::new(fence)))),
         None if matches!(
             error,
             WorkerExecutorError::OplogFenced { .. }
@@ -1010,7 +1010,7 @@ pub(crate) fn shard_lost_relinquishment(
                 }
         ) =>
         {
-            Some(RelinquishReason::Fenced(None))
+            Some(GiveUpReason::Fenced(None))
         }
         None => None,
     }
@@ -1115,9 +1115,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Synchronous and lock-free on purpose: the stop path calls it while holding the worker
     /// lifecycle lock, where anything that could take that lock again would deadlock. Logging takes
     /// no worker lifecycle lock.
-    pub(crate) fn mark_relinquished(&self, reason: RelinquishReason) -> bool {
-        let first = self.relinquishment.set(reason).is_ok();
-        if first && let Some(reason) = self.relinquishment.get() {
+    pub(crate) fn mark_given_up(&self, reason: GiveUpReason) -> bool {
+        let first = self.given_up_reason.set(reason).is_ok();
+        if first && let Some(reason) = self.given_up_reason.get() {
             // Debug rather than warn: the oplog that latched a fence has already warned with both
             // epochs, and a revoke or reassignment is logged by the sweep that gives agents up.
             debug!(
@@ -1129,20 +1129,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         first
     }
 
-    pub(crate) fn is_relinquished(&self) -> bool {
-        self.relinquishment.get().is_some()
+    pub(crate) fn is_given_up(&self) -> bool {
+        self.given_up_reason.get().is_some()
     }
 
     /// Marks the agent given up when `error` means its shard was lost, per
-    /// [`shard_lost_relinquishment`]. Returns whether the agent is given up, by this failure or
+    /// [`shard_lost_give_up_reason`]. Returns whether the agent is given up, by this failure or
     /// for an earlier reason: either way the caller must neither record the failure nor retry in
-    /// place. Marked rather than stopped, for the same reason as [`Self::mark_relinquished`]: the
+    /// place. Marked rather than stopped, for the same reason as [`Self::mark_given_up`]: the
     /// callers unwind to a stop, some of them while holding the worker lifecycle lock.
-    pub(crate) fn relinquish_if_shard_lost(&self, error: &WorkerExecutorError) -> bool {
-        if let Some(reason) = shard_lost_relinquishment(error, self.oplog.fence()) {
-            self.mark_relinquished(reason);
+    pub(crate) fn give_up_if_shard_lost(&self, error: &WorkerExecutorError) -> bool {
+        if let Some(reason) = shard_lost_give_up_reason(error, self.oplog.fence()) {
+            self.mark_given_up(reason);
         }
-        self.is_relinquished()
+        self.is_given_up()
     }
 
     /// Stops this worker through this handle, whichever generation it is. Nothing public reaches
@@ -1163,10 +1163,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .await;
     }
 
-    /// [`RelinquishReason::to_error`] for the reason recorded for this agent, or
+    /// [`GiveUpReason::to_error`] for the reason recorded for this agent, or
     /// `ShardingNotReady` when none is recorded yet.
-    pub(crate) fn relinquish_error(&self) -> WorkerExecutorError {
-        self.relinquishment
+    pub(crate) fn give_up_error(&self) -> WorkerExecutorError {
+        self.given_up_reason
             .get()
             .map_or(WorkerExecutorError::ShardingNotReady, |reason| {
                 reason.to_error()
@@ -1175,10 +1175,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     /// What entity bodies are torn down with once this agent has been given up; `None` while it is
     /// still this executor's.
-    pub(crate) fn relinquished_owner_failure(&self) -> Option<OwnerFailureWinner> {
-        self.relinquishment
-            .get()
-            .map(RelinquishReason::owner_failure)
+    pub(crate) fn given_up_owner_failure(&self) -> Option<OwnerFailureWinner> {
+        self.given_up_reason.get().map(GiveUpReason::owner_failure)
     }
 
     /// Give the agent up: stop it here without writing to its oplog or its status, and drop it
@@ -1186,9 +1184,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// Never a restart in place - that would reopen the oplog with the same stale epoch and let
     /// this executor keep writing to an agent it no longer owns.
-    pub(crate) async fn relinquish(&self, reason: RelinquishReason) {
-        self.mark_relinquished(reason);
-        let error = self.relinquish_error();
+    pub(crate) async fn give_up(&self, reason: GiveUpReason) {
+        self.mark_given_up(reason);
+        let error = self.give_up_error();
         // Signalled before the stop so a running guest actually leaves wasmtime; the loop then
         // exits through `stop_internal`, which is where the agent is dropped. The ack is
         // deliberately not awaited: a caller that blocks on it would panic if the worker was
@@ -1224,15 +1222,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Drops this generation from `ActiveAgents`. A newer generation cached under the same id is
-    /// left alone: a relinquished agent passes through here more than once, and no repeat pass may
+    /// left alone: a given-up agent passes through here more than once, and no repeat pass may
     /// evict the generation that replaced it.
     ///
-    /// Takes `&self` rather than the `Arc`, because the stop path that removes a relinquished
+    /// Takes `&self` rather than the `Arc`, because the stop path that removes a given-up
     /// generation holds only a reference; the cache supplies the `Arc` it checks identity against.
     pub(crate) async fn remove_from_active_agents(&self) {
-        // A relinquished agent's entity bodies are torn down as `ShardLost`: it was not
+        // A given-up agent's entity bodies are torn down as `ShardLost`: it was not
         // interrupted through the Golem API, its shard moved.
-        let owner_failure = self.relinquished_owner_failure().unwrap_or_else(|| {
+        let owner_failure = self.given_up_owner_failure().unwrap_or_else(|| {
             OwnerFailureWinner::Lifecycle(InterruptKind::Interrupt(Timestamp::now_utc()))
         });
         self.deps
@@ -1255,7 +1253,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// An agent given up before or during retirement (its shard moved) is not retired here:
     /// [`Self::quiesce_for_owner_retirement`] writes and caches nothing for it, sends its waiters
-    /// to the shard's new owner and returns the relinquish error, and the relinquish that marked it
+    /// to the shard's new owner and returns the give-up error, and the give-up that marked it
     /// removes the generation.
     pub(crate) async fn interrupt_and_retire(
         self: &Arc<Self>,
@@ -1327,9 +1325,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         // Given up before this retirement: the oplog is the shard's new owner's. No terminal is
         // claimed, written or cached, and the waiters and the caller are sent to the owner.
-        if self.is_relinquished() {
-            self.fail_pending_invocations(self.relinquish_error()).await;
-            return Err(self.relinquish_error());
+        if self.is_given_up() {
+            self.fail_pending_invocations(self.give_up_error()).await;
+            return Err(self.give_up_error());
         }
         if interrupt.is_some() {
             let pending = self.interrupt_signal.lock().await.claim_pending_terminal();
@@ -1353,8 +1351,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         // is cached for the invocation the new owner resumes, and its waiters are
                         // sent there before anything removes this generation.
                         if self.add_and_commit_oplog(entry).await.is_err() {
-                            self.fail_pending_invocations(self.relinquish_error()).await;
-                            return Err(self.relinquish_error());
+                            self.fail_pending_invocations(self.give_up_error()).await;
+                            return Err(self.give_up_error());
                         }
                         if matches!(pending.kind, InterruptKind::Interrupt(_))
                             && let Some(key) = &status.current_idempotency_key
@@ -2050,7 +2048,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 EphemeralInvocationState::Available
             }),
             cache_retirement_in_progress: AtomicBool::new(false),
-            relinquishment: std::sync::OnceLock::new(),
+            given_up_reason: std::sync::OnceLock::new(),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
@@ -2372,8 +2370,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // start would take permits, could append `Resumed` to an oplog the new owner now writes,
         // and a failure in it would publish, by agent id, to the waiters of the generation that
         // replaced this one.
-        if this.is_relinquished() {
-            return Err(this.relinquish_error());
+        if this.is_given_up() {
+            return Err(this.give_up_error());
         }
 
         {
@@ -2547,8 +2545,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         // An agent given up here is archived by the shard's new owner. Moving its entries or
         // dropping its cached status from this executor would write to state it no longer owns.
-        if self.is_relinquished() {
-            return Err(self.relinquish_error());
+        if self.is_given_up() {
+            return Err(self.give_up_error());
         }
         if !self.active_agents().contains_worker_generation(self).await {
             return Err(WorkerExecutorError::runtime(
@@ -3043,19 +3041,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// its waiters are told to retry on the shard's new owner. Without this a stop that reports a
     /// generic "stopped before startup completed", or the recovery error a lost shard caused,
     /// would hand them a failure they surface instead of retrying.
-    fn relinquished_startup_result(
+    fn given_up_startup_result(
         &self,
         result: Result<(), WorkerExecutorError>,
     ) -> Result<(), WorkerExecutorError> {
-        if self.is_relinquished() {
-            Err(self.relinquish_error())
+        if self.is_given_up() {
+            Err(self.give_up_error())
         } else {
             result
         }
     }
 
     fn publish_startup_result(&self, start_attempt: Uuid, result: Result<(), WorkerExecutorError>) {
-        let result = self.relinquished_startup_result(result);
+        let result = self.given_up_startup_result(result);
         if !self.startup_attempt.complete(start_attempt, &result) {
             return;
         }
@@ -3101,7 +3099,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // agent. Under a fence the append is refused anyway; this also covers a shard revoked or
         // reassigned without one.
         if is_active
-            && !self.is_relinquished()
+            && !self.is_given_up()
             && self
                 .get_non_detached_last_known_status()
                 .await
@@ -3122,7 +3120,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 result = Err(WorkerExecutorError::ShardingNotReady);
             }
         }
-        let result = self.relinquished_startup_result(result);
+        let result = self.given_up_startup_result(result);
 
         let completed = match &result {
             Ok(()) => self
@@ -3145,7 +3143,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // this, and that stop is where the agent is dropped. An agent given up for a reason that
         // never reached this error - a revoked or reassigned shard - is not recorded either: the
         // oplog would still accept the entry, at the epoch the agent no longer owns in spirit.
-        if self.relinquish_if_shard_lost(error) {
+        if self.give_up_if_shard_lost(error) {
             return;
         }
 
@@ -4072,7 +4070,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         update_description: UpdateDescription,
     ) -> Result<bool, WorkerExecutorError> {
         let instance_guard = self.instance.lock().await;
-        if self.stopping_or_relinquished(&instance_guard) {
+        if self.stopping_or_given_up(&instance_guard) {
             return Ok(false);
         }
         self.enqueue_update_locked(&instance_guard, update_description)
@@ -4083,11 +4081,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Whether the runtime is stopping - on its own or inside a deletion, which wraps the runtime
     /// it stops - or the agent has been given up. Checked under the worker lifecycle lock by the
     /// loop-side operations, which must not wait for a stop that waits for the loop.
-    fn stopping_or_relinquished(&self, instance_guard: &MutexGuard<'_, WorkerInstance>) -> bool {
+    fn stopping_or_given_up(&self, instance_guard: &MutexGuard<'_, WorkerInstance>) -> bool {
         matches!(
             instance_guard.deletion_runtime(),
             WorkerInstance::Stopping(_)
-        ) || self.is_relinquished()
+        ) || self.is_given_up()
     }
 
     async fn enqueue_update_locked(
@@ -4771,7 +4769,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         loop {
             let delta = growth.delta.swap(0, Ordering::AcqRel);
             if delta > 0 {
-                self.add_to_oplog_or_relinquish(OplogEntry::grow_memory(delta))
+                self.add_to_oplog_or_give_up(OplogEntry::grow_memory(delta))
                     .await;
             }
 
@@ -5708,7 +5706,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 match streams.activate_foreign_mapping(mapping.clone(), 1).await {
                     Ok(()) => break,
                     // A refusal is permanent. Retrying it would hold the worker lifecycle lock
-                    // forever, and the relinquish that has to take that lock could never stop the
+                    // forever, and the give-up that has to take that lock could never stop the
                     // agent.
                     Err(_) if self.oplog.fence().is_some() => {
                         return Err(self.runtime_error_unless_fenced(
@@ -5716,8 +5714,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         ));
                     }
                     // A revoke writes nothing, so no fence latches: the mark is all there is, and
-                    // `relinquish` is already waiting for this lock.
-                    Err(_) if self.is_relinquished() => return Err(self.relinquish_error()),
+                    // `give_up` is already waiting for this lock.
+                    Err(_) if self.is_given_up() => return Err(self.give_up_error()),
                     Err(error) => {
                         warn!(
                             session = %prepared.attempt.session_key.idempotency_key,
@@ -5747,7 +5745,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .expect("legacy durable session has a commit notification"),
                 )
                 .await
-                .map_err(|fence| self.relinquished_by(fence))?;
+                .map_err(|fence| self.given_up_by(fence))?;
             self.state_actor.notify_status_changed();
         }
         if !already_attached && let WorkerInstance::Running(running) = &*instance_guard {
@@ -6457,7 +6455,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 };
                 // A refusal is not reported through this closure: the producer reads it
                 // back from the oplog's latch, which the refused append set before the
-                // status actor replied, and the actor has spawned the relinquish.
+                // status actor replied, and the actor has spawned the give-up.
                 if let Ok((_, true)) = committed {
                     state_actor.notify_status_changed();
                 }
@@ -7061,7 +7059,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         // Given up here: the shard's new owner recovers and reconciles the
                         // agent's streams, and a session record appended from this executor
                         // would land in an oplog that is no longer its to write.
-                        if worker.is_relinquished() {
+                        if worker.is_given_up() {
                             break;
                         }
                         if worker.cache_retirement_in_progress() {
@@ -7113,21 +7111,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Appends an entry on a path that has no way to report the failure to its caller.
     ///
     /// A fenced write means the shard moved while this agent was resident. The agent is marked
-    /// relinquished so the stop that follows drops it from this executor rather than writing to an
+    /// given up so the stop that follows drops it from this executor rather than writing to an
     /// oplog another executor owns now, and `OplogIndex::NONE` is returned for the entry that was
     /// not written - the same "no index" value a debugging session's discarded write returns.
     ///
     /// Marked rather than stopped here on purpose: these callers run under the worker lifecycle
-    /// lock and inside the wasm store, where `relinquish` would deadlock on the lock it already
+    /// lock and inside the wasm store, where `give_up` would deadlock on the lock it already
     /// holds. The fence latches on the oplog, so the invocation's next write is refused too and
     /// unwinds the loop, which is where the stop belongs.
     ///
     /// Every other storage failure keeps the fail-stop behaviour it has always had.
-    pub async fn add_to_oplog_or_relinquish(&self, entry: OplogEntry) -> OplogIndex {
+    pub async fn add_to_oplog_or_give_up(&self, entry: OplogEntry) -> OplogIndex {
         match self.oplog.add(entry).await {
             Ok(index) => index,
             Err(OplogError::Fenced(fence)) => {
-                self.mark_relinquished(RelinquishReason::Fenced(Some(Box::new(fence))));
+                self.mark_given_up(GiveUpReason::Fenced(Some(Box::new(fence))));
                 OplogIndex::NONE
             }
             Err(error) => panic!("oplog write: {error}"),
@@ -7137,11 +7135,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Commits the buffered entries and folds them into the published status.
     ///
     /// A commit the storage refused is returned as `OplogError::Fenced`, and the agent is marked
-    /// relinquished. It has to be reported rather than folded into "nothing changed": below the
+    /// given up. It has to be reported rather than folded into "nothing changed": below the
     /// commit threshold an add only buffers, so this commit is where a takeover is found, and a
     /// caller about to run a side effect, publish a result or acknowledge a request must not do
     /// it for entries that never reached the storage. The status actor has already spawned the
-    /// relinquish that drops the agent from this executor.
+    /// give-up that drops the agent from this executor.
     pub async fn commit_oplog_and_update_state(
         &self,
         commit_level: CommitLevel,
@@ -7159,7 +7157,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 Ok(index)
             }
-            Err(fence) => Err(self.relinquished_by(fence)),
+            Err(fence) => Err(self.given_up_by(fence)),
         }
     }
 
@@ -7167,7 +7165,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// [`Self::commit_oplog_and_update_state`]).
     ///
     /// Every other storage failure keeps the fail-stop behaviour of
-    /// [`Self::add_to_oplog_or_relinquish`].
+    /// [`Self::add_to_oplog_or_give_up`].
     pub async fn add_and_commit_oplog(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
         let index = self.add_to_oplog_or_fenced(entry).await?;
         self.commit_oplog_and_update_state(CommitLevel::Always)
@@ -7176,11 +7174,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Appends an entry, reporting a refusal as `OplogError::Fenced` and marking the agent
-    /// relinquished; any other storage failure is fatal, as it always has been.
+    /// given up; any other storage failure is fatal, as it always has been.
     async fn add_to_oplog_or_fenced(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
         match self.oplog.add(entry).await {
             Ok(index) => Ok(index),
-            Err(OplogError::Fenced(fence)) => Err(self.relinquished_by(fence)),
+            Err(OplogError::Fenced(fence)) => Err(self.given_up_by(fence)),
             Err(error) => panic!("oplog write: {error}"),
         }
     }
@@ -7190,15 +7188,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// internal error.
     fn runtime_error_unless_fenced(&self, error: String) -> WorkerExecutorError {
         match self.oplog.fence() {
-            Some(fence) => self.relinquished_by(fence).into(),
+            Some(fence) => self.given_up_by(fence).into(),
             None => WorkerExecutorError::runtime(error),
         }
     }
 
     /// Marks the agent given up because its oplog refused a write, and returns the refusal for the
     /// caller to propagate.
-    pub(crate) fn relinquished_by(&self, fence: OplogFence) -> OplogError {
-        self.mark_relinquished(RelinquishReason::Fenced(Some(Box::new(fence.clone()))));
+    pub(crate) fn given_up_by(&self, fence: OplogFence) -> OplogError {
+        self.mark_given_up(GiveUpReason::Fenced(Some(Box::new(fence.clone()))));
         OplogError::Fenced(fence)
     }
 
@@ -7356,7 +7354,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .state_actor
             .commit_and_update_state(CommitLevel::Always)
             .await
-            .map_err(|fence| self.relinquished_by(fence))?;
+            .map_err(|fence| self.given_up_by(fence))?;
 
         if changed
             && let Some(wakeup) = wakeup
@@ -7475,7 +7473,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: IdempotencyKey,
     ) -> Result<bool, WorkerExecutorError> {
         let instance_guard = self.instance.lock().await;
-        if self.stopping_or_relinquished(&instance_guard) {
+        if self.stopping_or_given_up(&instance_guard) {
             return Ok(false);
         }
         self.cancel_invocation_locked(&instance_guard, idempotency_key)
@@ -7776,8 +7774,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Given up here, so no result for the key will be published on this executor. The
                 // retry answer is published when the agent is given up but not cached, and a
                 // receiver that lagged past it, or subscribed after it, finds it here instead.
-                LookupResult::New | LookupResult::Pending if self.is_relinquished() => {
-                    break Ok(LookupResult::Complete(Err(self.relinquish_error())));
+                LookupResult::New | LookupResult::Pending if self.is_given_up() => {
+                    break Ok(LookupResult::Complete(Err(self.give_up_error())));
                 }
                 LookupResult::New | LookupResult::Pending => {
                     let waiting = subscription.wait_for(|event| match event {
@@ -7814,7 +7812,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             // A key the give-up did not know about yet (enqueued, not yet folded
                             // into the status it failed from) gets no retry answer published.
                             // The lookup at the top of the loop answers it.
-                            if self.is_relinquished() {
+                            if self.is_given_up() {
                                 continue;
                             }
 
@@ -8041,7 +8039,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.handle_stop_result(stop_result).await;
 
         // The removal point. Every loop exit and every external stop passes through here, so a
-        // relinquished agent arrives more than once: from its own loop, again from the relinquish
+        // given-up agent arrives more than once: from its own loop, again from the give-up
         // that waited for that loop, and from any stop that arrives through a handle kept past its
         // generation. Everything below is scoped to this generation; a pass that finds the entry
         // gone or holding a newer generation does nothing. It runs only after the loop has gone, so
@@ -8050,14 +8048,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // Waiters are failed here as well, in memory only. An agent given up from inside its own
         // loop - a fence refused in a host call traps with `ShardLost` - stops without failing
         // anyone, and while this executor's assignment still names the shard their ownership
-        // re-check keeps passing. The relinquish spawned by the loop's exit commit answers them
+        // re-check keeps passing. The give-up spawned by the loop's exit commit answers them
         // only if it still finds this generation cached, and the loop's own removal can get there
         // first. Failing them before the removal, while this generation still holds the entry,
         // keeps the failure away from a newer generation's waiters, which match by agent id. Keys
         // that already have a result keep it. A generation that left the cache some other way
         // first (an idle expiry, an environment unload) is not reached here.
-        if self.is_relinquished() && self.deps.active_agents().is_cached_generation(self).await {
-            self.fail_pending_invocations(self.relinquish_error()).await;
+        if self.is_given_up() && self.deps.active_agents().is_cached_generation(self).await {
+            self.fail_pending_invocations(self.give_up_error()).await;
             self.remove_from_active_agents().await;
         }
 
@@ -8196,10 +8194,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let fenced = match self.oplog.commit(CommitLevel::Always).await {
                     Ok(_) => false,
                     Err(OplogError::Fenced(fence)) => {
-                        // The shard has a new owner. `mark_relinquished` is synchronous and takes
+                        // The shard has a new owner. `mark_given_up` is synchronous and takes
                         // no lock, so it is safe under the worker lifecycle lock this arm holds -
-                        // calling `relinquish` here would deadlock on that same lock.
-                        self.mark_relinquished(RelinquishReason::Fenced(Some(Box::new(fence))));
+                        // calling `give_up` here would deadlock on that same lock.
+                        self.mark_given_up(GiveUpReason::Fenced(Some(Box::new(fence))));
                         true
                     }
                     Err(error) => {
@@ -8390,16 +8388,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {
-        // A relinquished agent's pending invocations are not failed, they move: the shard's new
+        // A given-up agent's pending invocations are not failed, they move: the shard's new
         // owner runs them. So their waiters are told to retry there, whatever stopped this
         // generation, and no result is cached. A cached failure would outlive the stop: a later
         // lookup would answer the key with an `InvocationFailed` the caller does not retry, and
         // the invocation loop, finding the key complete, would cancel the pending invocation -
         // waiting on this very stop to do it, or, with nothing fenced yet, cancelling work the new
         // owner still has to run.
-        let relinquished = self.is_relinquished();
-        let error = if relinquished {
-            self.relinquish_error()
+        let given_up = self.is_given_up();
+        let error = if given_up {
+            self.give_up_error()
         } else {
             error
         };
@@ -8436,7 +8434,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             {
                 continue;
             }
-            if relinquished {
+            if given_up {
                 self.publish_completion(idempotency_key, Err(error.clone()));
                 origins.remove(idempotency_key);
                 continue;
@@ -9289,7 +9287,7 @@ pub(crate) fn epoch_superseded(held: Option<ShardEpoch>, assigned: Option<ShardE
 ///
 /// Membership and epochs only, never the lease. A lapsed lease refuses new work and leaves running
 /// work alone.
-pub(crate) fn relinquished_by_assignment(
+pub(crate) fn given_up_by_assignment(
     assignment: Option<&ShardAssignment>,
     agent_id: &AgentId,
     held: Option<ShardEpoch>,
@@ -9307,10 +9305,10 @@ pub(crate) fn relinquished_by_assignment(
 /// Why this executor is giving an agent up: it no longer owns the agent's shard.
 ///
 /// Distinct from [`UnloadReason`], which says why an agent left memory. An agent can be unloaded
-/// for memory pressure and be back a moment later; a relinquished one is gone from this executor
+/// for memory pressure and be back a moment later; a given-up one is gone from this executor
 /// and belongs to the shard's new owner.
 #[derive(Clone, Debug)]
-pub(crate) enum RelinquishReason {
+pub(crate) enum GiveUpReason {
     /// A write to the agent's oplog was refused by the storage. Carries the fence when the write
     /// path had it to hand; `None` when the loop only saw the classified interrupt.
     Fenced(Option<Box<OplogFence>>),
@@ -9322,22 +9320,22 @@ pub(crate) enum RelinquishReason {
     ShardNotAssigned,
 }
 
-impl RelinquishReason {
+impl GiveUpReason {
     /// What anyone waiting on the agent is told. Every variant is one the worker service answers
     /// by refreshing its routing table and retrying, so the invocation lands on the new owner
     /// instead of failing.
     pub(crate) fn to_error(&self) -> WorkerExecutorError {
         match self {
-            RelinquishReason::Fenced(Some(fence)) => WorkerExecutorError::oplog_fenced(
+            GiveUpReason::Fenced(Some(fence)) => WorkerExecutorError::oplog_fenced(
                 fence.agent_id.clone(),
                 fence.expected_epoch.0,
                 fence.actual_epoch.map(|epoch| epoch.0),
             ),
             // The loop saw the classified interrupt without the fence details, or the shard was
             // taken back explicitly. Either way the caller's move is the same.
-            RelinquishReason::Fenced(None)
-            | RelinquishReason::ShardRevoked
-            | RelinquishReason::ShardNotAssigned => WorkerExecutorError::ShardingNotReady,
+            GiveUpReason::Fenced(None)
+            | GiveUpReason::ShardRevoked
+            | GiveUpReason::ShardNotAssigned => WorkerExecutorError::ShardingNotReady,
         }
     }
 
@@ -10823,7 +10821,7 @@ mod tests {
     }
 
     #[test]
-    fn a_delivery_relinquishes_agents_off_its_shards_or_behind_their_shards_epoch() {
+    fn a_delivery_gives_up_agents_off_its_shards_or_behind_their_shards_epoch() {
         let agent = AgentId {
             component_id: ComponentId(Uuid::new_v4()),
             agent_id: "swept".to_string(),
@@ -10836,8 +10834,8 @@ mod tests {
         // Membership: no assignment, or one without the shard, gives the agent up whatever its
         // oplog asserts.
         for held in [None, Some(ShardEpoch(0))] {
-            assert!(relinquished_by_assignment(None, &agent, held));
-            assert!(relinquished_by_assignment(
+            assert!(given_up_by_assignment(None, &agent, held));
+            assert!(given_up_by_assignment(
                 Some(&ShardAssignment::unexpiring(1, [])),
                 &agent,
                 held
@@ -10845,27 +10843,23 @@ mod tests {
         }
 
         // A kept shard gives the agent up only when its epoch rose past the one the oplog asserts.
-        assert!(!relinquished_by_assignment(
+        assert!(!given_up_by_assignment(
             Some(&at_epoch(1)),
             &agent,
             Some(ShardEpoch(1))
         ));
-        assert!(relinquished_by_assignment(
+        assert!(given_up_by_assignment(
             Some(&at_epoch(1)),
             &agent,
             Some(ShardEpoch(0))
         ));
-        assert!(!relinquished_by_assignment(
+        assert!(!given_up_by_assignment(
             Some(&at_epoch(0)),
             &agent,
             Some(ShardEpoch(1))
         ));
         // An agent asserting nothing, such as one still being created, is judged by membership.
-        assert!(!relinquished_by_assignment(
-            Some(&at_epoch(1)),
-            &agent,
-            None
-        ));
+        assert!(!given_up_by_assignment(Some(&at_epoch(1)), &agent, None));
     }
 
     #[test]
@@ -10991,29 +10985,29 @@ mod tests {
         // A latched fence wins over whatever the refusal was flattened into on its way out, and
         // its details are kept for the error the waiters are given.
         assert!(matches!(
-            shard_lost_relinquishment(
+            shard_lost_give_up_reason(
                 &WorkerExecutorError::runtime("durable stream commit failed"),
                 Some(fence.clone())
             ),
-            Some(RelinquishReason::Fenced(Some(latched))) if *latched == fence
+            Some(GiveUpReason::Fenced(Some(latched))) if *latched == fence
         ));
         assert!(matches!(
-            shard_lost_relinquishment(
+            shard_lost_give_up_reason(
                 &WorkerExecutorError::oplog_fenced(agent_id, 2, Some(3)),
                 None
             ),
-            Some(RelinquishReason::Fenced(None))
+            Some(GiveUpReason::Fenced(None))
         ));
         // Without a latched fence: a shard revoked or reassigned interrupts the agent with
         // `ShardLost` and writes nothing, so no fence ever latches.
         assert!(matches!(
-            shard_lost_relinquishment(
+            shard_lost_give_up_reason(
                 &WorkerExecutorError::Interrupted {
                     kind: InterruptKind::ShardLost
                 },
                 None
             ),
-            Some(RelinquishReason::Fenced(None))
+            Some(GiveUpReason::Fenced(None))
         ));
 
         // Every other failure is still the agent's own, to be recorded or retried.
@@ -11024,12 +11018,12 @@ mod tests {
             InterruptKind::Jump,
         ] {
             assert!(
-                shard_lost_relinquishment(&WorkerExecutorError::Interrupted { kind }, None)
+                shard_lost_give_up_reason(&WorkerExecutorError::Interrupted { kind }, None)
                     .is_none(),
                 "{kind:?} is not a lost shard"
             );
         }
-        assert!(shard_lost_relinquishment(&WorkerExecutorError::runtime("boom"), None).is_none());
+        assert!(shard_lost_give_up_reason(&WorkerExecutorError::runtime("boom"), None).is_none());
     }
 
     #[test]
@@ -11836,10 +11830,10 @@ mod tests {
     }
 
     #[test]
-    fn a_relinquished_agent_reports_an_error_its_caller_can_retry() {
+    fn a_given_up_agent_reports_an_error_its_caller_can_retry() {
         let agent_id = AgentId {
             component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "relinquished".to_string(),
+            agent_id: "given_up".to_string(),
         };
         let fence = OplogFence {
             agent_id,
@@ -11851,7 +11845,7 @@ mod tests {
         // A fence the write path saw in full names both epochs, so an operator reading the log
         // can tell which generation lost.
         assert!(matches!(
-            RelinquishReason::Fenced(Some(Box::new(fence))).to_error(),
+            GiveUpReason::Fenced(Some(Box::new(fence))).to_error(),
             WorkerExecutorError::OplogFenced {
                 expected_epoch: 3,
                 actual_epoch: Some(4),
@@ -11863,9 +11857,9 @@ mod tests {
         // refreshes its routing table and retries on the owner. None of them may look like a
         // plain invocation failure, or the caller would give up instead of moving.
         for reason in [
-            RelinquishReason::Fenced(None),
-            RelinquishReason::ShardRevoked,
-            RelinquishReason::ShardNotAssigned,
+            GiveUpReason::Fenced(None),
+            GiveUpReason::ShardRevoked,
+            GiveUpReason::ShardNotAssigned,
         ] {
             assert!(
                 matches!(reason.to_error(), WorkerExecutorError::ShardingNotReady),
@@ -11879,9 +11873,9 @@ mod tests {
         // Entity bodies are torn down as `ShardLost`, not `Interrupt`: the agent was not
         // interrupted through the Golem API, its shard moved.
         for reason in [
-            RelinquishReason::Fenced(None),
-            RelinquishReason::ShardRevoked,
-            RelinquishReason::ShardNotAssigned,
+            GiveUpReason::Fenced(None),
+            GiveUpReason::ShardRevoked,
+            GiveUpReason::ShardNotAssigned,
         ] {
             assert!(matches!(
                 reason.owner_failure(),

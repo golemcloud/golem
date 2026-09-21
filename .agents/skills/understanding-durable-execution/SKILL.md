@@ -38,7 +38,7 @@ and entity bodies) and `retries.md` (in-function versus trap-based retries).
    `Interrupted`, `Restart`) change status and scheduling policy, not the recovery mechanism.
    Losing the shard does not reconstruct here at all: every oplog write asserts this executor's
    shard epoch inside the storage transaction, and once another executor holds the shard, the
-   write is refused (`OplogError::Fenced`) instead of accepted. The agent then *relinquishes*
+   write is refused (`OplogError::Fenced`) instead of accepted. The agent is then *given up*
    (`InterruptKind::ShardLost`) — stopped with nothing more written, dropped from this executor,
    never restarted in place — and it is the new owner that builds the `Store` and replays. See
    "Resharding, revocation and the oplog epoch fence" below and `crash-matrix.md`.
@@ -105,7 +105,7 @@ inside the storage transaction, and storage that has recorded a newer epoch retu
 `add_and_commit_oplog` surface that refusal rather than swallowing it, so a refused
 `PendingAgentInvocation` commit is not acknowledged as accepted and a refused
 `AgentInvocationFinished` commit is not published to waiters. The first refusal latches — every
-later add on that oplog is refused too — and the agent relinquishes instead of retrying.
+later add on that oplog is refused too — and the agent is given up instead of retried.
 
 `worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
 commit and ignores receipt entries already folded into the published status. Primary/ephemeral
@@ -159,7 +159,7 @@ each recorded invocation in `InvocationMode::Replay`, and when there is no furth
 automatic recovery, `Suspend` unloads and resumes on demand — each of these three reconstructs on
 this same executor. `ShardLost` does not: it means this executor lost the agent's shard (a
 revoked/reassigned shard, or an oplog write refused on the shard epoch), and instead of
-reconstructing, the agent relinquishes — stopped without writing to its oplog or status, dropped
+reconstructing, the agent is given up — stopped without writing to its oplog or status, dropped
 from this executor, and left for the new owner to reconstruct.
 
 Eviction (`EvictionClass::{LoadedIdle, WarmRunnable}`) never unloads a
@@ -279,38 +279,38 @@ agents retain their clean fail-stop lifecycle and never append it.
 ### Resharding, revocation and the oplog epoch fence
 
 Two triggers give an agent up rather than reconstructing it here, and both end in the same place,
-`RelinquishReason` and `InterruptKind::ShardLost`:
+`GiveUpReason` and `InterruptKind::ShardLost`:
 
 - **Assignment change.** The shard manager's `RevokeShards` and `AssignShards` gRPC calls
   (`grpc/mod.rs::revoke_shards_internal`, `::assign_shards_internal` via
-  `apply_shard_assignment_effects`) relinquish every agent whose shard this executor no longer
+  `apply_shard_assignment_effects`) give up every agent whose shard this executor no longer
   holds, or whose held epoch fell behind the delivered one (another executor may have written to
-  it meanwhile) — `RelinquishReason::ShardRevoked` for the former, `ShardNotAssigned` for the
+  it meanwhile) — `GiveUpReason::ShardRevoked` for the former, `ShardNotAssigned` for the
   latter. `apply_shard_assignment_effects` then calls the *other* `on_shard_assignment_changed`
   (`durable_host/mod.rs`, the `WorkerCtx` hook) to recover agents on shards newly held, the
-  opposite direction from relinquish.
+  opposite direction from a give-up.
 - **Oplog epoch fence.** Every indexed-storage oplog write asserts this executor's current shard
   epoch inside the storage transaction (`storage/indexed/{postgres,sqlite}.rs`, surfaced through
   `services/oplog/primary.rs`); a shard manager mints a new, higher epoch for the new owner when it
   takes over, so a write from an executor that has lost the shard is refused rather than written
   (`OplogError::Fenced` / `OplogFence`, carrying the asserted and, when known, the actual epoch).
   This is what protects an assignment change this executor has not yet heard about, and a revoked
-  lease it is still trying to renew: `RelinquishReason::Fenced`. Once one write is refused the
+  lease it is still trying to renew: `GiveUpReason::Fenced`. Once one write is refused the
   fence *latches* — every later append or commit on that oplog is refused too, without a second
   round trip to storage — so nothing further is ever written by this executor for that agent. Only
   Postgres and the SQLite-backed indexed storages can fence a write this way
   (`IndexedStorage::supports_epoch_fencing`); an executor configured with Redis and a real shard
   manager refuses to start rather than run unfenced.
 
-Either way, `Worker::relinquish` (`worker/mod.rs`) stops the agent without writing to its oplog or
+Either way, `Worker::give_up` (`worker/mod.rs`) stops the agent without writing to its oplog or
 status, drops it from this executor's `ActiveAgents`, and hands its invocation waiters a retriable
 error (`ShardingNotReady`, or the fenced-specific variant) rather than an in-place restart — the
 oplog is left exactly as it was, for the shard's new owner to reconstruct from when the worker
 service routes a request there. An invocation still pending in this executor's queue when it
-relinquishes is failed the same way: with a retriable error and no cached result, never with a
+gives up is failed the same way: with a retriable error and no cached result, never with a
 result the queue happened to already hold, so a client retry runs it exactly once, on the new
 owner. See `crash-matrix.md` for the fence's failure modes and `services/active_agents/mod.rs` for
-the sweep that relinquishes on an assignment change.
+the sweep that gives agents up on an assignment change.
 
 ## Oplog model
 
@@ -654,7 +654,7 @@ satisfies one does not imply the others.
 | "Cursor reached the end, so I can do the live effect now." | Liveness is `store_is_live(...)`: the primary needs `switch_to_live` to publish after reconstruction fences; an entity Store needs its own `local_live_tail`. Cursor exhaustion is neither. | `pending_replay_to_live_is_fail_closed_until_finished`, `entity_store_liveness_is_scoped_to_its_invocation_mode` |
 | "The voluntary-suspension predicate gates interruption or recovery." | It only defers proactive yielding while live work progresses; explicit interruption and arbitrary Store loss still use ordinary reconstruction. | Simulated-crash tests at arbitrary points (`simulated_crash`, `interrupt`) |
 | "Restart differs from suspend." | Both discard the `Store` and reconstruct. | `counter_resource_test_2_with_restart` (state continues across an executor restart), `reacquire_permits_restart_preserves_accepted_queued_live_invocation` |
-| "Losing a shard reconstructs the agent, like a restart." | It relinquishes instead: stopped here without writing to its oplog or status, dropped, never rebuilt on this executor. Only the new owner reconstructs. | `oplog_fencing_guard_tests` (`lib.rs`), fence tests in `services/oplog/{primary,tests}.rs` |
+| "Losing a shard reconstructs the agent, like a restart." | It is given up instead: stopped here without writing to its oplog or status, dropped, never rebuilt on this executor. Only the new owner reconstructs. | `oplog_fencing_guard_tests` (`lib.rs`), fence tests in `services/oplog/{primary,tests}.rs` |
 | "A retried RPC attempt executed the target again." | Same key ⇒ same target invocation; count target mutations, not attempts. | Provider-side counter tests in `tests/rpc.rs` |
 | "Atomic rollback should generate a fresh RPC key." | Logical counter is owned by the outermost atomic region; keys survive `Jump`. | `tests/transactions.rs`, `tests/revert.rs` |
 | "Equal return values prove deduplication." | Deterministic echoes are equal even with duplicate execution; count side effects. | Counter-based RPC tests |

@@ -611,7 +611,7 @@ impl DurableStreamStore {
         Ok(())
     }
 
-    /// The worker's commit swallows a refusal: it only spawns the relinquish. The refused append
+    /// The worker's commit swallows a refusal: it only spawns the give-up. The refused append
     /// has latched the fence before the commit resolves, so the latch is what tells a persisted
     /// write from one that must not be indexed, retained or published. A below-threshold add
     /// answers `Ok` on a latched oplog, so no earlier result can stand in for this check.

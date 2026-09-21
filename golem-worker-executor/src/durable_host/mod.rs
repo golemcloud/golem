@@ -4983,7 +4983,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 )
                 .await
                 .map_err(|err| match err {
-                    OplogError::Fenced(fence) => self.public_state.worker().relinquished_by(fence),
+                    OplogError::Fenced(fence) => self.public_state.worker().given_up_by(fence),
                     err => panic!(
                         "could not encode agent invocation on {}: {err}",
                         self.agent_id()
@@ -5014,17 +5014,17 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
         // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and
-        // a relinquished agent's oplog belongs to another executor now. Nothing further is
+        // a given-up agent's oplog belongs to another executor now. Nothing further is
         // written for it - not the drain, not an `Error` entry, not a status change - whatever
         // the trap was: a revoke latches no fence, so the mark is all that says so, and the shard's
         // new owner replays the invocation and records its outcome itself.
         let worker = self.public_state.worker();
         let given_up = if matches!(trap_type, TrapType::Interrupt(InterruptKind::ShardLost)) {
-            worker.relinquish_if_shard_lost(&WorkerExecutorError::Interrupted {
+            worker.give_up_if_shard_lost(&WorkerExecutorError::Interrupted {
                 kind: InterruptKind::ShardLost,
             })
         } else {
-            worker.is_relinquished()
+            worker.is_given_up()
         };
         if given_up {
             return RetryDecision::None;
@@ -5043,7 +5043,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             // restarted in place.
             self.public_state
                 .worker()
-                .relinquish_if_shard_lost(&err.source);
+                .give_up_if_shard_lost(&err.source);
             return RetryDecision::None;
         }
 
@@ -5120,9 +5120,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     // The shard moved while this failure was being recorded. Give the agent up
                     // exactly as the `ShardLost` arm above does: nothing further may be written
                     // to an oplog that belongs to another executor now.
-                    self.public_state.worker().mark_relinquished(
-                        crate::worker::RelinquishReason::Fenced(Some(Box::new(fence))),
-                    );
+                    self.public_state
+                        .worker()
+                        .mark_given_up(crate::worker::GiveUpReason::Fenced(Some(Box::new(fence))));
                     return RetryDecision::None;
                 }
                 Err(error) => panic!("oplog write: {error}"),
@@ -5352,7 +5352,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 )
                 .await
                 .map_err(|err| match err {
-                    OplogError::Fenced(fence) => self.public_state.worker().relinquished_by(fence),
+                    OplogError::Fenced(fence) => self.public_state.worker().given_up_by(fence),
                     err => {
                         panic!("could not encode function result for {full_function_name}: {err}")
                     }
@@ -5441,7 +5441,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
             );
             self.public_state
                 .worker()
-                .add_to_oplog_or_relinquish(entry)
+                .add_to_oplog_or_give_up(entry)
                 .await;
         }
         id
@@ -5459,7 +5459,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
                 );
                 self.public_state
                     .worker()
-                    .add_to_oplog_or_relinquish(entry)
+                    .add_to_oplog_or_give_up(entry)
                     .await;
             }
         }
@@ -5506,8 +5506,8 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         // A given-up agent's update is settled by the shard's new owner. A revoke latches no
         // fence, so the storage would still accept this entry, and it would drop the update there.
         let worker = self.public_state.worker();
-        if worker.is_relinquished() {
-            return Err(worker.relinquish_error());
+        if worker.is_given_up() {
+            return Err(worker.give_up_error());
         }
         let entry = OplogEntry::failed_update(target_revision, details.clone());
         worker.add_and_commit_oplog(entry).await?;
@@ -5531,8 +5531,8 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         info!("Worker update to {} finished successfully", target_revision);
         let worker = self.public_state.worker();
         // As for a failed update: the outcome is the shard's new owner's to record.
-        if worker.is_relinquished() {
-            return Err(worker.relinquish_error());
+        if worker.is_given_up() {
+            return Err(worker.give_up_error());
         }
         worker
             .persist_successful_update(
@@ -6072,7 +6072,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 // Every arm below dispatches on the kind. Left an `Error`, a fence
                                 // whose type was lost on the way would abandon the snapshot or break
                                 // with `InvocationFailed` into a recovery failure, which unloads the
-                                // agent as failed instead of relinquishing it.
+                                // agent as failed instead of giving it up.
                                 .map(|trap_type| {
                                     store
                                         .as_context()
@@ -6123,7 +6123,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                 // so a lost shard is given up here: its `None`
                                                 // decision alone would stop the agent as an
                                                 // ordinary one, left cached to restart in place.
-                                                worker.relinquish_if_shard_lost(&WorkerExecutorError::Interrupted { kind });
+                                                worker.give_up_if_shard_lost(&WorkerExecutorError::Interrupted { kind });
                                                 Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind))
                                             }
                                             TrapType::Exit => break Err(WorkerExecutorError::runtime("Process exited during snapshot replay")),
@@ -6144,7 +6144,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             // resumes that invocation.
                                             if uses_streams
                                                 && store.as_context().data().durable_ctx().is_live()
-                                                && !worker.is_relinquished()
+                                                && !worker.is_given_up()
                                             {
                                                 let _ = worker
                                                     .fail_durable_streaming_session(

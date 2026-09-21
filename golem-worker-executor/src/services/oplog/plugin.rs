@@ -2101,7 +2101,7 @@ impl ForwardingOplogState {
     /// `Err` means the agent's oplog was fenced: its shard has a new owner, so nothing more may be
     /// written and forwarding stops. Giving the agent up is deliberately not this layer's call - a
     /// storage decorator has no business stopping agents - and it does not need to be: the fence
-    /// latches on the oplog, so the worker's own commit path is refused too and relinquishes it.
+    /// latches on the oplog, so the worker's own commit path is refused too and gives it up.
     ///
     /// Any other storage failure keeps the fail-stop behaviour it has always had.
     async fn write_checkpoint(

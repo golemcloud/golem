@@ -32,8 +32,8 @@ use crate::worker::invocation::{
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
-    CreateWorkerInstanceError, FinalWorkerState, PendingLiveInvocationDisposition,
-    PendingWorkerInterrupt, QueuedWorkerInvocation, RelinquishReason, RetryDecision, RunningAgent,
+    CreateWorkerInstanceError, FinalWorkerState, GiveUpReason, PendingLiveInvocationDisposition,
+    PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningAgent,
     RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest, Worker, WorkerCommand,
     WorkerInterruptState, WorkerRunningAgent, WorkerTrace,
 };
@@ -259,7 +259,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             self.release_terminal_interrupt().await;
             // Never a new instance for an agent given up here, whichever path led back to this
             // point: it would reopen the oplog at an epoch this executor no longer holds.
-            if self.parent.is_relinquished() {
+            if self.parent.is_given_up() {
                 self.release_concurrent_agent_permit();
                 self.stop_startup_given_up().await;
                 break;
@@ -638,7 +638,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 .await
             {
                 let owner_failure = exit_owner_failure(
-                    self.parent.relinquished_owner_failure(),
+                    self.parent.given_up_owner_failure(),
                     final_interrupt,
                     recovery_failure.as_ref(),
                 );
@@ -672,7 +672,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
             // Whatever was decided, an agent given up here is not restarted, retried later or
             // parked for a resume on this executor: the shard's new owner resumes it.
-            if self.parent.is_relinquished() {
+            if self.parent.is_given_up() {
                 debug!(
                     %agent_id,
                     ?final_decision,
@@ -762,7 +762,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                         // the new owner's to write, so no lifecycle entry and no
                                         // failure is recorded for an invocation it runs.
                                         if matches!(kind, InterruptKind::ShardLost)
-                                            || self.parent.is_relinquished()
+                                            || self.parent.is_given_up()
                                         {
                                             self.stop_startup_given_up().await;
                                             break 'outer;
@@ -886,13 +886,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Stops a generation this executor has given up, because its shard was lost or its oplog
     /// refused a lifecycle entry: the waiters are told to look for the shard's new owner.
     ///
-    /// A fence found by a host call during instantiation arrives without `relinquish()` having
+    /// A fence found by a host call during instantiation arrives without `give_up()` having
     /// run, so the agent is marked given up here: the stop then tears its entity bodies down as
     /// `ShardLost`, fails its waiters and removes only this generation. A reason already recorded
     /// is kept.
     async fn stop_startup_given_up(&self) {
-        self.parent
-            .mark_relinquished(RelinquishReason::Fenced(None));
+        self.parent.mark_given_up(GiveUpReason::Fenced(None));
         self.stop_unloaded(None).await;
     }
 
@@ -912,7 +911,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         // Given up, before or by this interrupt: the oplog is the new owner's to write, so no
         // lifecycle entry and no failure is recorded for an invocation it runs, and nothing waits
         // on here for a permit to restart it.
-        if matches!(kind, InterruptKind::ShardLost) || self.parent.is_relinquished() {
+        if matches!(kind, InterruptKind::ShardLost) || self.parent.is_given_up() {
             self.stop_startup_given_up().await;
             return true;
         }
@@ -978,10 +977,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     async fn stop_unloaded(&self, startup_failure: Option<WorkerExecutorError>) {
         // A generation this executor has given up keeps the retry answer as its startup failure,
-        // like `Worker::relinquish` does, whichever exit stopped it: otherwise a readiness waiter
+        // like `Worker::give_up` does, whichever exit stopped it: otherwise a readiness waiter
         // resolved by the stop, or a handle kept past this generation, is told it may proceed.
-        let startup_failure = if self.parent.is_relinquished() {
-            Some(self.parent.relinquish_error())
+        let startup_failure = if self.parent.is_given_up() {
+            Some(self.parent.give_up_error())
         } else {
             startup_failure
         };
@@ -998,7 +997,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .await
         {
             let failure = exit_owner_failure(
-                self.parent.relinquished_owner_failure(),
+                self.parent.given_up_owner_failure(),
                 None,
                 startup_failure.as_ref(),
             );
@@ -1203,8 +1202,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     };
                     // A generation given up keeps the error that sends its callers to the shard's
                     // new owner, whatever failed on the way out.
-                    let err = if self.parent.is_relinquished() {
-                        self.parent.relinquish_error()
+                    let err = if self.parent.is_given_up() {
+                        self.parent.give_up_error()
                     } else {
                         err
                     };
@@ -1583,7 +1582,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         // Given up by a path that queues no interrupt, such as a write refused
                         // outside the guest. Nothing more is taken from the queue: the shard's
                         // new owner runs it.
-                        if self.parent.is_relinquished() {
+                        if self.parent.is_given_up() {
                             break CommandOutcome::BreakInnerLoop(RetryDecision::None);
                         }
 
@@ -1821,7 +1820,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// first pending_updates, then pending_invocations
     async fn drain_pending_from_status(&mut self) -> CommandOutcome {
         loop {
-            if self.parent.is_relinquished() {
+            if self.parent.is_given_up() {
                 break CommandOutcome::BreakInnerLoop(RetryDecision::None);
             }
             let status = self.parent.get_non_detached_last_known_status().await;
@@ -2374,7 +2373,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn external_invocation(&mut self, inner: TimestampedAgentInvocation) -> CommandOutcome {
         // Rechecked here as well as where the invocation was taken: hydrating it and waiting for
         // the store both leave room for the agent to be given up in between.
-        if self.parent.is_relinquished() {
+        if self.parent.is_given_up() {
             return CommandOutcome::BreakInnerLoop(RetryDecision::None);
         }
         match inner.invocation {
@@ -2401,7 +2400,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                             Ok(true) => CommandOutcome::Continue,
                             // A stop is waiting for this loop to exit.
                             Ok(false) => CommandOutcome::BreakInnerLoop(RetryDecision::None),
-                            Err(_) if self.parent.is_relinquished() => {
+                            Err(_) if self.parent.is_given_up() => {
                                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
                             }
                             Err(error) => {
@@ -2751,7 +2750,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         tracing::error!(%error, "Failed to complete durable streaming session");
                         // An in-place retry would reopen the oplog at an epoch this executor no
                         // longer holds, so a lost shard gives the agent up instead.
-                        if self.parent.relinquish_if_shard_lost(&error) {
+                        if self.parent.give_up_if_shard_lost(&error) {
                             self.store
                                 .data_mut()
                                 .on_invocation_failure(
@@ -2842,7 +2841,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// terminal record, would end an invocation the shard's new owner resumes.
     fn given_up_outcome(&self) -> Option<CommandOutcome> {
         self.parent
-            .is_relinquished()
+            .is_given_up()
             .then_some(CommandOutcome::BreakInnerLoop(RetryDecision::None))
     }
 
@@ -3093,7 +3092,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 // Marked before `fail_update` checks the mark: a `ShardLost` interrupt is a lost
                 // shard whether or not anything marked the agent on its way here.
                 self.parent
-                    .relinquish_if_shard_lost(&WorkerExecutorError::Interrupted {
+                    .give_up_if_shard_lost(&WorkerExecutorError::Interrupted {
                         kind: interrupt_kind,
                     });
                 self.fail_update(
@@ -3189,7 +3188,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         // A `FailedUpdate` drops the pending manual update from the status, so written for an
         // agent given up here it would keep the shard's new owner from ever applying it. Nothing
         // is written; the update stays pending and runs there.
-        if self.parent.is_relinquished() {
+        if self.parent.is_given_up() {
             return CommandOutcome::BreakInnerLoop(RetryDecision::None);
         }
         // Refused, the agent has been given up: it stops rather than carrying on at a revision
@@ -3440,17 +3439,17 @@ fn successful_agent_invocation_outcome(
 
 /// The failure a loop's exit tears the agent's entity bodies down with.
 ///
-/// A relinquished agent's shard moved, and that wins over any lifecycle interrupt still queued and
+/// A given-up agent's shard moved, and that wins over any lifecycle interrupt still queued and
 /// over a recovery failure: the bodies must not report an API interrupt or a fault for an agent
-/// that simply has a new owner. A relinquishment first discovered by the stop's own commit, which
+/// that simply has a new owner. A give-up first discovered by the stop's own commit, which
 /// runs after this choice, cannot be reflected, because by then the bodies are already torn down;
 /// the fence still holds, and that stop still fails the waiters and removes the generation.
 fn exit_owner_failure(
-    relinquished: Option<OwnerFailureWinner>,
+    given_up: Option<OwnerFailureWinner>,
     final_interrupt: Option<InterruptKind>,
     recovery_failure: Option<&WorkerExecutorError>,
 ) -> OwnerFailureWinner {
-    relinquished
+    given_up
         .or_else(|| final_interrupt.map(OwnerFailureWinner::Lifecycle))
         .or_else(|| {
             recovery_failure
@@ -3619,7 +3618,7 @@ mod tests {
     }
 
     #[test]
-    fn exit_owner_failure_prefers_relinquishment() {
+    fn exit_owner_failure_prefers_giving_up() {
         let shard_lost = || Some(OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost));
         let recovery_failure = WorkerExecutorError::unknown("recovery failed");
 
@@ -3638,7 +3637,7 @@ mod tests {
             OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
         ));
 
-        // Without a relinquishment the previous order stands: the queued interrupt, then the
+        // Without a give-up the previous order stands: the queued interrupt, then the
         // recovery failure, then an interrupt stamped now.
         assert!(matches!(
             exit_owner_failure(

@@ -55,7 +55,7 @@ use super::status::{
 };
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
 use super::{
-    PendingMemoryGrowth, RelinquishReason, UnloadReason, Worker, WorkerCommand, WorkerInstance,
+    GiveUpReason, PendingMemoryGrowth, UnloadReason, Worker, WorkerCommand, WorkerInstance,
     WorkerStatusMetric,
 };
 use crate::services::linear_memory::LinearMemoryTracker;
@@ -348,7 +348,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     // The shard has a new owner: give the agent up and leave no
                                     // further trace in an oplog that is no longer ours.
                                     Err(OplogError::Fenced(fence)) => {
-                                        state.relinquish_fenced_agent(fence.clone());
+                                        state.give_up_fenced_agent(fence.clone());
                                         Err(OplogError::Fenced(fence))
                                     }
                                     Err(error) => panic!("oplog write: {error}"),
@@ -383,7 +383,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 // retries on `false`, and a fenced oplog refuses every retry.
                                 if let Err(error) = state.oplog.add(*entry).await {
                                     if let OplogError::Fenced(fence) = &error {
-                                        state.relinquish_fenced_agent(fence.clone());
+                                        state.give_up_fenced_agent(fence.clone());
                                     }
                                     return Err(error);
                                 }
@@ -513,7 +513,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 
     /// Commits the oplog and folds the new entries into the published status. Returns the
     /// current oplog index after the commit and whether the status changed, or the fence when the
-    /// storage refused the commit; the refusal has already spawned the agent's relinquish.
+    /// storage refused the commit; the refusal has already spawned the agent's give-up.
     ///
     /// If the caller's future is dropped while awaiting the reply, the commit still runs to
     /// completion on the status task (the same semantics as the oplog actor's own jobs).
@@ -735,16 +735,16 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     ///
     /// Spawned rather than awaited: this runs on the status task, which must never take the
     /// worker's instance lock (callers holding that lock await status jobs), and the stop inside
-    /// [`Worker::relinquish`] does take it. Handing the stop to an independent task keeps that
+    /// [`Worker::give_up`] does take it. Handing the stop to an independent task keeps that
     /// discipline while still dropping the agent from this executor - which a bare
-    /// `mark_relinquished` would not do, because on a background path nothing else is unwinding
+    /// `mark_given_up` would not do, because on a background path nothing else is unwinding
     /// to carry the stop out.
     ///
     /// Only the generation this actor belongs to is given up, identified by the status cell the
     /// two share. By the time the task runs that generation may be gone and a newer one cached
     /// under the same id, which is left alone: at a stale epoch its own open latches the fence and
     /// gives it up, and at a re-granted epoch it is legitimately this executor's.
-    fn relinquish_fenced_agent(&self, fence: OplogFence) {
+    fn give_up_fenced_agent(&self, fence: OplogFence) {
         let active_agents = self.deps.active_agents();
         let owned_agent_id = self.owned_agent_id.clone();
         let status_cell = self.last_known_status.clone();
@@ -753,7 +753,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 && worker.shares_status_cell(&status_cell)
             {
                 worker
-                    .relinquish(RelinquishReason::Fenced(Some(Box::new(fence))))
+                    .give_up(GiveUpReason::Fenced(Some(Box::new(fence))))
                     .await;
             }
         });
@@ -782,7 +782,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 // Nothing was committed and nothing more can be. The `committed` sender is
                 // dropped rather than signalled: a fenced commit is not a commit, and every
                 // awaiter already reads a dropped sender as "no commit observed".
-                self.relinquish_fenced_agent(fence.clone());
+                self.give_up_fenced_agent(fence.clone());
                 return Err(fence);
             }
             Err(error) => panic!("oplog write: {error}"),
