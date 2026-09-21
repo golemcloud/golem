@@ -3967,6 +3967,7 @@ impl DesignLabScene {
     fn parse(name: &str) -> anyhow::Result<Self> {
         match name {
             "shell-default" => Ok(Self::ShellDefault),
+            "shell-compact" => Ok(Self::ShellDefault),
             "shell-scrollbar" => Ok(Self::ShellScrollable),
             "content-density" => Ok(Self::ContentDensity),
             "content-long" => Ok(Self::ContentLong),

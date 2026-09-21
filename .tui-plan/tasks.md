@@ -148,7 +148,7 @@ This is the active TUI backlog. Keep it goal-sized and synchronized with `progre
 - [~] Review pane data tables across decoration, long/panned content, selected
   details, and column-chooser stories; implementation is awaiting visual
   selection among minimal, cell-rule, and odd/even treatments.
-- [ ] Add the compact shell case after the normal-sized foundation is coherent
+- [~] Add the compact shell case after the normal-sized foundation is coherent
   and use it as the responsive acceptance gate.
 - [ ] Inventory user goals after the foundation is accepted and redefine
   navigation, workspace grouping, and workflows before adding flow stories.

@@ -34,6 +34,10 @@ a separate explicit decision and never creates a user-selectable theme.
 - Exit: select the pane-table decoration or record a concrete table-level
   change before responsive reduction begins.
 
+The `shell-compact` case is available for the queued responsive review. It
+reuses the default shell content at 50×16 so compact behavior can be evaluated
+without introducing another workflow or visual direction.
+
 ## Sources Of Truth
 
 - Durable product, visual, and interaction rules belong in `ui-system.md`.
