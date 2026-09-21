@@ -6,6 +6,18 @@ pub suberror LocalRetryError {
 } derive(Debug, Eq)
 
 ///|
+let max_compiled_nodes : Int = 4096
+
+///|
+let max_compiled_payload_bytes : Int = 1048576
+
+///|
+let max_policy_depth : Int = 256
+
+///|
+let predicate_value_payload_bytes : Int = 16
+
+///|
 priv enum LocalPredicate {
   Eq(String, PredicateValue)
   Neq(String, PredicateValue)
@@ -65,25 +77,177 @@ fn invalid_policy(message : String) -> LocalRetryError {
 }
 
 ///|
-fn parse_predicate(
+priv struct LocalPolicyCompiler {
+  mut compiled_nodes : Int
+  mut compiled_payload_bytes : Int
+  policy_visiting : Array[Bool]
+}
+
+///|
+fn policy_too_complex() -> LocalRetryError {
+  invalid_policy("Retry policy is too complex")
+}
+
+///|
+fn LocalPolicyCompiler::enter(
+  self : LocalPolicyCompiler,
+  depth : Int,
+) -> Unit raise LocalRetryError {
+  self.compiled_nodes += 1
+  if depth > max_policy_depth || self.compiled_nodes > max_compiled_nodes {
+    raise policy_too_complex()
+  }
+}
+
+///|
+fn LocalPolicyCompiler::add_payload(
+  self : LocalPolicyCompiler,
+  payload_bytes : Int,
+) -> Unit raise LocalRetryError {
+  self.compiled_payload_bytes = capped_payload_add(
+    self.compiled_payload_bytes,
+    payload_bytes,
+  )
+  if self.compiled_payload_bytes > max_compiled_payload_bytes {
+    raise policy_too_complex()
+  }
+}
+
+///|
+fn capped_payload_add(left : Int, right : Int) -> Int {
+  if right > max_compiled_payload_bytes ||
+    left > max_compiled_payload_bytes - right {
+    max_compiled_payload_bytes + 1
+  } else {
+    left + right
+  }
+}
+
+///|
+fn utf8_length_up_to(value : String, limit : Int) -> Int {
+  let mut size = 0
+  for char in value {
+    let codepoint = char.to_int()
+    let width = if codepoint <= 0x7f {
+      1
+    } else if codepoint <= 0x7ff {
+      2
+    } else if codepoint <= 0xffff {
+      3
+    } else {
+      4
+    }
+    if size > limit - width {
+      return limit + 1
+    }
+    size += width
+  }
+  size
+}
+
+///|
+fn add_string_payload(size : Int, value : String) -> Int {
+  if size > max_compiled_payload_bytes {
+    size
+  } else {
+    capped_payload_add(
+      size,
+      utf8_length_up_to(value, max_compiled_payload_bytes - size),
+    )
+  }
+}
+
+///|
+fn add_predicate_value_payload(size : Int, value : PredicateValue) -> Int {
+  match value {
+    PredicateValue::Text(value) => add_string_payload(size, value)
+    PredicateValue::Integer(_) | PredicateValue::Boolean(_) => size
+  }
+}
+
+///|
+fn comparison_payload(comparison : @retry.PropertyComparison) -> Int {
+  add_predicate_value_payload(
+    add_string_payload(0, comparison.property_name),
+    comparison.value,
+  )
+}
+
+///|
+fn pattern_payload(pattern : @retry.PropertyPattern) -> Int {
+  add_string_payload(
+    add_string_payload(0, pattern.property_name),
+    pattern.pattern,
+  )
+}
+
+///|
+fn predicate_node_payload(node : @retry.PredicateNode) -> Int {
+  match node {
+    @retry.PredicateNode::PropEq(value)
+    | @retry.PredicateNode::PropNeq(value)
+    | @retry.PredicateNode::PropGt(value)
+    | @retry.PredicateNode::PropGte(value)
+    | @retry.PredicateNode::PropLt(value)
+    | @retry.PredicateNode::PropLte(value) => comparison_payload(value)
+    @retry.PredicateNode::PropExists(name) => add_string_payload(0, name)
+    @retry.PredicateNode::PropIn(check) => {
+      if check.values.length() >
+        max_compiled_payload_bytes / predicate_value_payload_bytes {
+        return max_compiled_payload_bytes + 1
+      }
+      let mut size = add_string_payload(
+        check.values.length() * predicate_value_payload_bytes,
+        check.property_name,
+      )
+      for _, value in check.values {
+        if size > max_compiled_payload_bytes {
+          return size
+        }
+        size = add_predicate_value_payload(size, value)
+      }
+      size
+    }
+    @retry.PredicateNode::PropMatches(value)
+    | @retry.PredicateNode::PropStartsWith(value)
+    | @retry.PredicateNode::PropContains(value) => pattern_payload(value)
+    @retry.PredicateNode::PredAnd(_)
+    | @retry.PredicateNode::PredOr(_)
+    | @retry.PredicateNode::PredNot(_)
+    | @retry.PredicateNode::PredTrue
+    | @retry.PredicateNode::PredFalse => 0
+  }
+}
+
+///|
+fn LocalPolicyCompiler::parse_predicate(
+  self : LocalPolicyCompiler,
   raw : @retry.RetryPredicate,
+  depth : Int,
 ) -> LocalPredicate raise LocalRetryError {
   if raw.nodes.is_empty() {
     raise invalid_policy("Retry predicate has no root node")
   }
+  if raw.nodes.length() > max_compiled_nodes {
+    raise policy_too_complex()
+  }
   let visiting = Array::make(raw.nodes.length(), false)
-  parse_predicate_node(raw.nodes, 0, visiting)
+  self.parse_predicate_node(raw.nodes, 0, visiting, depth)
 }
 
 ///|
-fn parse_predicate_node(
+fn LocalPolicyCompiler::parse_predicate_node(
+  self : LocalPolicyCompiler,
   nodes : Array[@retry.PredicateNode],
   index : Int,
   visiting : Array[Bool],
+  depth : Int,
 ) -> LocalPredicate raise LocalRetryError {
   guard nodes.get(index) is Some(node) else {
     raise invalid_policy("Predicate node index out of bounds: \{index}")
   }
+  self.enter(depth)
+  self.add_payload(predicate_node_payload(node))
   if visiting[index] {
     raise invalid_policy("Cycle in retry predicate at node \{index}")
   }
@@ -115,16 +279,18 @@ fn parse_predicate_node(
       LocalPredicate::Contains(v.property_name, v.pattern)
     @retry.PredicateNode::PredAnd((left, right)) =>
       LocalPredicate::And(
-        parse_predicate_node(nodes, left, visiting),
-        parse_predicate_node(nodes, right, visiting),
+        self.parse_predicate_node(nodes, left, visiting, depth + 1),
+        self.parse_predicate_node(nodes, right, visiting, depth + 1),
       )
     @retry.PredicateNode::PredOr((left, right)) =>
       LocalPredicate::Or(
-        parse_predicate_node(nodes, left, visiting),
-        parse_predicate_node(nodes, right, visiting),
+        self.parse_predicate_node(nodes, left, visiting, depth + 1),
+        self.parse_predicate_node(nodes, right, visiting, depth + 1),
       )
     @retry.PredicateNode::PredNot(inner) =>
-      LocalPredicate::Not(parse_predicate_node(nodes, inner, visiting))
+      LocalPredicate::Not(
+        self.parse_predicate_node(nodes, inner, visiting, depth + 1),
+      )
     @retry.PredicateNode::PredTrue => LocalPredicate::True
     @retry.PredicateNode::PredFalse => LocalPredicate::False
   }
@@ -135,25 +301,34 @@ fn parse_policy(raw : RetryPolicy) -> LocalPolicy raise LocalRetryError {
   if raw.nodes.is_empty() {
     raise invalid_policy("Retry policy has no root node")
   }
-  let visiting = Array::make(raw.nodes.length(), false)
-  parse_policy_node(raw.nodes, 0, visiting)
+  if raw.nodes.length() > max_compiled_nodes {
+    raise policy_too_complex()
+  }
+  let compiler : LocalPolicyCompiler = {
+    compiled_nodes: 0,
+    compiled_payload_bytes: 0,
+    policy_visiting: Array::make(raw.nodes.length(), false),
+  }
+  compiler.parse_policy_node(raw.nodes, 0, 0)
 }
 
 ///|
-fn parse_policy_node(
+fn LocalPolicyCompiler::parse_policy_node(
+  self : LocalPolicyCompiler,
   nodes : Array[@retry.PolicyNode],
   index : Int,
-  visiting : Array[Bool],
+  depth : Int,
 ) -> LocalPolicy raise LocalRetryError {
   guard nodes.get(index) is Some(node) else {
     raise invalid_policy("Policy node index out of bounds: \{index}")
   }
-  if visiting[index] {
+  self.enter(depth)
+  if self.policy_visiting[index] {
     raise invalid_policy("Cycle in retry policy at node \{index}")
   }
-  visiting[index] = true
+  self.policy_visiting[index] = true
   defer {
-    visiting[index] = false
+    self.policy_visiting[index] = false
   }
   match node {
     @retry.PolicyNode::Periodic(delay) => LocalPolicy::Periodic(delay)
@@ -166,12 +341,12 @@ fn parse_policy_node(
     @retry.PolicyNode::CountBox(config) =>
       LocalPolicy::CountBox(
         config.max_retries,
-        parse_policy_node(nodes, config.inner, visiting),
+        self.parse_policy_node(nodes, config.inner, depth + 1),
       )
     @retry.PolicyNode::TimeBox(config) =>
       LocalPolicy::TimeBox(
         config.limit,
-        parse_policy_node(nodes, config.inner, visiting),
+        self.parse_policy_node(nodes, config.inner, depth + 1),
       )
     @retry.PolicyNode::ClampDelay(config) => {
       if config.min_delay > config.max_delay {
@@ -180,38 +355,38 @@ fn parse_policy_node(
       LocalPolicy::Clamp(
         config.min_delay,
         config.max_delay,
-        parse_policy_node(nodes, config.inner, visiting),
+        self.parse_policy_node(nodes, config.inner, depth + 1),
       )
     }
     @retry.PolicyNode::AddDelay(config) =>
       LocalPolicy::AddDelay(
         config.delay,
-        parse_policy_node(nodes, config.inner, visiting),
+        self.parse_policy_node(nodes, config.inner, depth + 1),
       )
     @retry.PolicyNode::Jitter(config) =>
       LocalPolicy::Jitter(
         config.factor,
-        parse_policy_node(nodes, config.inner, visiting),
+        self.parse_policy_node(nodes, config.inner, depth + 1),
       )
     @retry.PolicyNode::FilteredOn(config) =>
       LocalPolicy::Filtered(
-        parse_predicate(config.predicate),
-        parse_policy_node(nodes, config.inner, visiting),
+        self.parse_predicate(config.predicate, depth + 1),
+        self.parse_policy_node(nodes, config.inner, depth + 1),
       )
     @retry.PolicyNode::AndThen((left, right)) =>
       LocalPolicy::AndThen(
-        parse_policy_node(nodes, left, visiting),
-        parse_policy_node(nodes, right, visiting),
+        self.parse_policy_node(nodes, left, depth + 1),
+        self.parse_policy_node(nodes, right, depth + 1),
       )
     @retry.PolicyNode::PolicyUnion((left, right)) =>
       LocalPolicy::Union(
-        parse_policy_node(nodes, left, visiting),
-        parse_policy_node(nodes, right, visiting),
+        self.parse_policy_node(nodes, left, depth + 1),
+        self.parse_policy_node(nodes, right, depth + 1),
       )
     @retry.PolicyNode::PolicyIntersect((left, right)) =>
       LocalPolicy::Intersect(
-        parse_policy_node(nodes, left, visiting),
-        parse_policy_node(nodes, right, visiting),
+        self.parse_policy_node(nodes, left, depth + 1),
+        self.parse_policy_node(nodes, right, depth + 1),
       )
   }
 }

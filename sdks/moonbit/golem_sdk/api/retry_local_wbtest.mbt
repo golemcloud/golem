@@ -334,6 +334,11 @@ fn assert_invalid(raw : RetryPolicy, expected : String) -> Unit raise {
 }
 
 ///|
+fn assert_too_complex(raw : RetryPolicy) -> Unit raise {
+  assert_invalid(raw, "Retry policy is too complex")
+}
+
+///|
 test "malformed and cyclic raw policies are rejected before execution" {
   assert_invalid(raw_policy([]), "Retry policy has no root node")
   assert_invalid(
@@ -360,6 +365,174 @@ test "malformed and cyclic raw policies are rejected before execution" {
       @retry.PolicyNode::Immediate,
     ]),
     "Clamp min_delay must not exceed max_delay",
+  )
+}
+
+///|
+test "raw policy depth expansion and predicate payload are bounded" {
+  assert_too_complex(
+    raw_policy(Array::make(max_compiled_nodes + 1, @retry.PolicyNode::Never)),
+  )
+  assert_too_complex(
+    raw_policy([
+      @retry.PolicyNode::FilteredOn({
+        predicate: {
+          nodes: Array::make(
+            max_compiled_nodes + 1,
+            @retry.PredicateNode::PredTrue,
+          ),
+        },
+        inner: 1,
+      }),
+      @retry.PolicyNode::Immediate,
+    ]),
+  )
+
+  let deepest_valid = Array::make(
+    max_policy_depth + 1,
+    @retry.PolicyNode::Immediate,
+  )
+  for index in 0..<max_policy_depth {
+    deepest_valid[index] = @retry.PolicyNode::AddDelay({
+      delay: 0,
+      inner: index + 1,
+    })
+  }
+  ignore(try! parse_policy(raw_policy(deepest_valid)))
+  let deep_nodes = Array::make(max_policy_depth + 2, @retry.PolicyNode::Never)
+  for index in 0..<=max_policy_depth {
+    deep_nodes[index] = @retry.PolicyNode::AddDelay({
+      delay: 0,
+      inner: index + 1,
+    })
+  }
+  assert_too_complex(raw_policy(deep_nodes))
+
+  let valid_expansion : Array[@retry.PolicyNode] = [
+    @retry.PolicyNode::AddDelay({ delay: 0, inner: 1, }),
+  ]
+  for index in 1..<12 {
+    valid_expansion.push(@retry.PolicyNode::PolicyUnion((index + 1, index + 1)))
+  }
+  valid_expansion.push(@retry.PolicyNode::Immediate)
+  ignore(try! parse_policy(raw_policy(valid_expansion)))
+  let invalid_expansion : Array[@retry.PolicyNode] = [
+    @retry.PolicyNode::AddDelay({ delay: 0, inner: 1, }),
+    @retry.PolicyNode::AddDelay({ delay: 0, inner: 2, }),
+  ]
+  for index in 2..<13 {
+    invalid_expansion.push(
+      @retry.PolicyNode::PolicyUnion((index + 1, index + 1)),
+    )
+  }
+  invalid_expansion.push(@retry.PolicyNode::Immediate)
+  assert_too_complex(raw_policy(invalid_expansion))
+
+  ignore(
+    try! parse_policy(
+      raw_policy([
+        @retry.PolicyNode::FilteredOn({
+          predicate: {
+            nodes: [
+              @retry.PredicateNode::PropExists(
+                String::make(max_compiled_payload_bytes, 'a'),
+              ),
+            ],
+          },
+          inner: 1,
+        }),
+        @retry.PolicyNode::Immediate,
+      ]),
+    ),
+  )
+  assert_too_complex(
+    raw_policy([
+      @retry.PolicyNode::FilteredOn({
+        predicate: {
+          nodes: [
+            @retry.PredicateNode::PropMatches({
+              property_name: "",
+              pattern: String::make(max_compiled_payload_bytes / 2 + 1, 'é'),
+            }),
+          ],
+        },
+        inner: 1,
+      }),
+      @retry.PolicyNode::Immediate,
+    ]),
+  )
+  assert_too_complex(
+    raw_policy([
+      @retry.PolicyNode::FilteredOn({
+        predicate: {
+          nodes: [
+            @retry.PredicateNode::PropIn({
+              property_name: "value",
+              values: Array::make(
+                max_compiled_payload_bytes / predicate_value_payload_bytes + 1,
+                PredicateValue::Integer(0),
+              ),
+            }),
+          ],
+        },
+        inner: 1,
+      }),
+      @retry.PolicyNode::Immediate,
+    ]),
+  )
+  let repeated_text = PredicateValue::Text(
+    String::make(max_compiled_payload_bytes, 'x'),
+  )
+  assert_too_complex(
+    raw_policy([
+      @retry.PolicyNode::FilteredOn({
+        predicate: {
+          nodes: [
+            @retry.PredicateNode::PropIn({
+              property_name: "",
+              values: Array::make(
+                max_compiled_payload_bytes / predicate_value_payload_bytes,
+                repeated_text,
+              ),
+            }),
+          ],
+        },
+        inner: 1,
+      }),
+      @retry.PolicyNode::Immediate,
+    ]),
+  )
+  let half_payload = String::make(max_compiled_payload_bytes / 2 + 1, 'a')
+  assert_too_complex(
+    raw_policy([
+      @retry.PolicyNode::PolicyUnion((1, 3)),
+      @retry.PolicyNode::FilteredOn({
+        predicate: { nodes: [@retry.PredicateNode::PropExists(half_payload)], },
+        inner: 2,
+      }),
+      @retry.PolicyNode::Immediate,
+      @retry.PolicyNode::FilteredOn({
+        predicate: { nodes: [@retry.PredicateNode::PropExists(half_payload)], },
+        inner: 4,
+      }),
+      @retry.PolicyNode::Immediate,
+    ]),
+  )
+}
+
+///|
+test "shared raw nodes compile to independent branch state below the limit" {
+  debug_inspect(
+    step_delays(
+      raw_policy([
+        @retry.PolicyNode::PolicyUnion((1, 1)),
+        @retry.PolicyNode::Exponential({ base_delay: 20, factor: 2.0, }),
+      ]),
+      [0, 0],
+      [no_properties(), no_properties()],
+      0.0,
+    ),
+    content="[Some(20), Some(40)]",
   )
 }
 
