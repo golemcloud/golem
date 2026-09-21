@@ -550,6 +550,9 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (tail, initial_requests_checked) = validated_request_tail(inbound, state.clone());
         let result = match initial {
             invocation_request::Request::Start(mut start) => {
+                if !trusted_internal_caller {
+                    start.origin_invocation = None;
+                }
                 start.freshness_disposition = match sanitize_invocation_freshness_disposition(
                     start.freshness_disposition,
                     trusted_internal_caller,
@@ -1335,6 +1338,7 @@ mod protocol_tests {
     fn start() -> InvocationRequest {
         InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
+                method_name: Some("run".to_string()),
                 input: Some(SchemaValue {
                     value: Some(schema_value::Value::U8Value(1)),
                 }),

@@ -18,9 +18,47 @@ import {
 }
 
 // Values
+pub fn cabi_realloc(Int, Int, Int, Int) -> Int
+
 pub fn collect_app_config_overrides(AppConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
 
 pub fn collect_database_config_overrides(DatabaseConfigOverride, Array[String]) -> Array[@common.TypedAgentConfigValue] raise @common.AgentError
+
+pub fn wasmExportAsyncInitialize(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvokeGolemAgentGuest(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvokeGolemToolGuest(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncLoad(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
+
+pub fn wasmExportDiscoverAgentTypes() -> Int
+
+pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
+
+pub fn wasmExportDiscoverTools() -> Int
+
+pub fn wasmExportDiscoverToolsPostReturn(Int) -> Unit
+
+pub fn wasmExportGetDefinition() -> Int
+
+pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
+
+pub fn wasmExportGetTool(Int, Int) -> Int
+
+pub fn wasmExportGetToolPostReturn(Int) -> Unit
+
+pub fn wasmExportInitialize(Int) -> Int
+
+pub fn wasmExportInvokeGolemAgentGuest(Int) -> Int
+
+pub fn wasmExportInvokeGolemToolGuest(Int) -> Int
+
+pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
+
+pub fn wasmExportSave() -> Int
 
 // Errors
 
@@ -134,7 +172,7 @@ pub async fn CanonicalGitStashClient::pop(Self, String?, UInt?) -> Result[Unit, 
 pub async fn CanonicalGitStashClient::stash(Self, String, Bool) -> Result[Unit, @tool.ToolError[CanonicalStashError]]
 
 type CanonicalGrep
-pub fn CanonicalGrep::canonical_grep(Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte], @tool-core.ProviderStdout) -> Result[Array[CanonicalGrepHit], CanonicalGrepError]
+pub fn CanonicalGrep::canonical_grep(Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte], @tool.ProviderStdout) -> Result[Array[CanonicalGrepHit], CanonicalGrepError]
 pub fn CanonicalGrep::replace(Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, CanonicalGrepError]
 
 pub(all) struct CanonicalGrepClient {
@@ -270,7 +308,7 @@ pub(all) struct DatabaseConfigOverride {
 pub fn DatabaseConfigOverride::empty() -> Self
 
 type MoonBitStreaming
-pub async fn MoonBitStreaming::stream(String, @async-core.Stream[Byte], @tool-core.ProviderStdout) -> UInt64
+pub async fn MoonBitStreaming::stream(String, @async-core.Stream[Byte], @tool.ProviderStdout) -> UInt64
 
 type MoonBitToolStreamingCaller
 pub async fn MoonBitToolStreamingCaller::marker_before_eof(Self, Bytes) -> UInt64

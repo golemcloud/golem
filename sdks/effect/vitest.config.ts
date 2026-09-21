@@ -12,6 +12,10 @@ const mockDir = resolve(here, "test/mocks")
  * specifier to a hand-written mock under `test/mocks/`.
  */
 const golemAliases = [
+  {
+    find: "golem:agent/durable-streams@2.0.0",
+    replacement: resolve(mockDir, "golem-durable-streams.ts"),
+  },
   { find: "golem:agent/host@2.0.0", replacement: resolve(mockDir, "golem-agent-host.ts") },
   { find: "golem:agent/common@2.0.0", replacement: resolve(mockDir, "golem-agent-common.ts") },
   { find: "golem:core/types@2.0.0", replacement: resolve(mockDir, "golem-core-types.ts") },

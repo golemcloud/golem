@@ -2,7 +2,7 @@
 /// Enumerate every middleware definition exported by this component.
 pub fn discover_tool_middlewares() -> Result[
   Array[@common.ToolMiddleware],
-  @common.ToolError,
+  @types.ToolError,
 ] {
   Ok(@toolMiddleware.discover_tool_middlewares())
 }
@@ -11,7 +11,7 @@ pub fn discover_tool_middlewares() -> Result[
 /// Look up one middleware definition by canonical name.
 pub fn get_tool_middleware(
   name : String,
-) -> Result[@common.ToolMiddleware, @common.ToolError] {
+) -> Result[@common.ToolMiddleware, @types.ToolError] {
   @toolMiddleware.get_registered_tool_middleware(name)
 }
 
@@ -21,18 +21,22 @@ pub async fn invoke_tool_middleware(
   middleware_name : String,
   tool_name : String,
   tool_metadata : @common.Tool,
+  parameters : @types.TypedSchemaValue,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @async-core.Stream[Byte]?,
+  stdin : @async-core.Stream[
+    Result[FixedArray[Byte], @streams.ByteStreamFailure],
+  ]?,
+  stdout : @streams.ToolStdoutWriter?,
   principal : @common0.Principal,
-  wrapped : @common.UnderlyingTool,
+  wrapped : @underlying.UnderlyingTool,
   background_group : @async-core.TaskGroup[Unit],
-) -> Result[@common.InvocationResult, @common.ToolError] {
+) -> Result[@common.InvocationResult, @types.ToolError] {
   let underlying = @toolMiddleware.UnderlyingTool::from_wit(
     wrapped, background_group,
   )
-  @toolMiddleware.invoke_registered_tool_middleware(
-    middleware_name, tool_name, tool_metadata, command_path, input, stdin, principal,
-    underlying,
+  @toolMiddleware.invoke_registered_tool_middleware_wire(
+    middleware_name, tool_name, tool_metadata, parameters, command_path, input, stdin,
+    stdout, principal, underlying,
   )
 }

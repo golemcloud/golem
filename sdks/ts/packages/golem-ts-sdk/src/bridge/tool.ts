@@ -8,9 +8,8 @@ import {
   type ByteStreamFailure,
   type ByteStreamItem,
   type FutureInvokeResult,
-  type RpcError,
-  type ToolError,
 } from 'golem:tool/host@0.1.0';
+import type { ToolError, ToolRpcError } from 'golem:core/types@2.0.0';
 import {
   preflightWitTypedSchemaValue,
   typedSchemaValueFromWit,
@@ -160,7 +159,7 @@ export function createToolClientRuntime(
 }
 
 export type ToolRuntimeError<Declared> =
-  | { readonly tag: 'rpc'; readonly error: RpcError }
+  | { readonly tag: 'rpc'; readonly error: ToolRpcError }
   | { readonly tag: 'tool'; readonly error: Declared };
 
 function implementationObject(value: unknown): value is Record<string, unknown> {
@@ -204,7 +203,7 @@ function isToolError(value: unknown): value is ToolError {
       return false;
   }
 }
-export function isRpcError(value: unknown): value is RpcError {
+export function isRpcError(value: unknown): value is ToolRpcError {
   if (!implementationObject(value) || typeof value.tag !== 'string') return false;
   switch (value.tag) {
     case 'cancelled':
@@ -222,7 +221,7 @@ export function isRpcError(value: unknown): value is RpcError {
   }
 }
 export function splitToolRpcError<Declared>(
-  error: RpcError,
+  error: ToolRpcError,
   decodeCustomError: (name: string, payload: TypedSchemaValue) => Declared,
 ): ToolRuntimeError<Declared> {
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error')
@@ -232,4 +231,4 @@ export function splitToolRpcError<Declared>(
     error: decodeCustomError(error.val.val.name, typedSchemaValueFromWit(error.val.val.payload)),
   };
 }
-export type { RpcError, ToolError };
+export type { ToolRpcError, ToolError };

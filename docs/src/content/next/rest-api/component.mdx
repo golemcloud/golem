@@ -53,6 +53,123 @@ Path|Method|Protected
         ],
         "rootPackageName": "string",
         "rootPackageVersion": "string",
+        "configSchema": {
+          "schema": {
+            "root": {
+              "kind": "record",
+              "value": {
+                "fields": []
+              }
+            }
+          }
+        },
+        "componentProvisionConfig": {
+          "initialPermissions": {
+            "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+            "parentIds": [
+              "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+            ],
+            "lowerPositive": [
+              "string"
+            ],
+            "lowerNegative": [
+              "string"
+            ],
+            "upperPositive": [
+              "string"
+            ],
+            "upperNegative": [
+              "string"
+            ],
+            "createdAt": "2019-08-24T14:15:22Z",
+            "expiresAt": "2019-08-24T14:15:22Z",
+            "systemCard": true
+          },
+          "env": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "config": [
+            {
+              "path": [
+                "string"
+              ],
+              "value": {
+                "graph": {
+                  "defs": [
+                    {
+                      "id": "string",
+                      "name": "string",
+                      "body": {
+                        "kind": "ref",
+                        "value": {
+                          "id": "string",
+                          "metadata": {
+                            "doc": "string",
+                            "aliases": [
+                              null
+                            ],
+                            "examples": [
+                              null
+                            ],
+                            "deprecated": "string",
+                            "role": {}
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "root": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                },
+                "value": {
+                  "kind": "bool",
+                  "value": true
+                }
+              }
+            }
+          ],
+          "plugins": [
+            {
+              "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+              "priority": 0,
+              "parameters": {
+                "property1": "string",
+                "property2": "string"
+              },
+              "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+              "pluginName": "string",
+              "pluginVersion": "string",
+              "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+              "oplogProcessorComponentRevision": 0
+            }
+          ],
+          "files": [
+            {
+              "contentHash": "string",
+              "path": "string",
+              "permissions": "read-only",
+              "size": 0
+            }
+          ]
+        },
         "agentTypes": [],
         "agentMethodStreams": {
           "property1": {
@@ -103,6 +220,32 @@ The request body is encoded as multipart/form-data containing metadata and the W
 ```json copy
 {
   "componentName": "string",
+  "configSchema": {
+    "schema": {
+      "root": {
+        "kind": "record",
+        "value": {
+          "fields": []
+        }
+      }
+    }
+  },
+  "componentProvisionConfig": {
+    "config": [],
+    "env": {},
+    "files": {},
+    "initialPermissions": {
+      "lowerBound": {
+        "negative": [],
+        "positive": []
+      },
+      "upperBound": {
+        "negative": [],
+        "positive": []
+      }
+    },
+    "pluginInstallations": []
+  },
   "agentTypes": [],
   "agentTypeProvisionConfigs": {},
   "tools": [],
@@ -161,6 +304,125 @@ The request body is encoded as multipart/form-data containing metadata and the W
     ],
     "rootPackageName": "string",
     "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
     "agentTypes": [],
     "agentMethodStreams": {
       "property1": {
@@ -244,6 +506,125 @@ Path|Method|Protected
     ],
     "rootPackageName": "string",
     "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
     "agentTypes": [],
     "agentMethodStreams": {
       "property1": {
@@ -329,6 +710,123 @@ Path|Method|Protected
         ],
         "rootPackageName": "string",
         "rootPackageVersion": "string",
+        "configSchema": {
+          "schema": {
+            "root": {
+              "kind": "record",
+              "value": {
+                "fields": []
+              }
+            }
+          }
+        },
+        "componentProvisionConfig": {
+          "initialPermissions": {
+            "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+            "parentIds": [
+              "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+            ],
+            "lowerPositive": [
+              "string"
+            ],
+            "lowerNegative": [
+              "string"
+            ],
+            "upperPositive": [
+              "string"
+            ],
+            "upperNegative": [
+              "string"
+            ],
+            "createdAt": "2019-08-24T14:15:22Z",
+            "expiresAt": "2019-08-24T14:15:22Z",
+            "systemCard": true
+          },
+          "env": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "config": [
+            {
+              "path": [
+                "string"
+              ],
+              "value": {
+                "graph": {
+                  "defs": [
+                    {
+                      "id": "string",
+                      "name": "string",
+                      "body": {
+                        "kind": "ref",
+                        "value": {
+                          "id": "string",
+                          "metadata": {
+                            "doc": "string",
+                            "aliases": [
+                              null
+                            ],
+                            "examples": [
+                              null
+                            ],
+                            "deprecated": "string",
+                            "role": {}
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "root": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                },
+                "value": {
+                  "kind": "bool",
+                  "value": true
+                }
+              }
+            }
+          ],
+          "plugins": [
+            {
+              "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+              "priority": 0,
+              "parameters": {
+                "property1": "string",
+                "property2": "string"
+              },
+              "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+              "pluginName": "string",
+              "pluginVersion": "string",
+              "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+              "oplogProcessorComponentRevision": 0
+            }
+          ],
+          "files": [
+            {
+              "contentHash": "string",
+              "path": "string",
+              "permissions": "read-only",
+              "size": 0
+            }
+          ]
+        },
         "agentTypes": [],
         "agentMethodStreams": {
           "property1": {
@@ -414,6 +912,125 @@ Path|Method|Protected
     ],
     "rootPackageName": "string",
     "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
     "agentTypes": [],
     "agentMethodStreams": {
       "property1": {
@@ -497,6 +1114,125 @@ Path|Method|Protected
     ],
     "rootPackageName": "string",
     "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
     "agentTypes": [],
     "agentMethodStreams": {
       "property1": {
@@ -557,6 +1293,97 @@ The request body is encoded as multipart/form-data containing metadata and the W
 ```json copy
 {
   "currentRevision": 0,
+  "configSchema": {
+    "schema": {
+      "defs": [
+        {
+          "id": "string",
+          "name": "string",
+          "body": {
+            "kind": "ref",
+            "value": {
+              "id": "string",
+              "metadata": {
+                "doc": "string",
+                "aliases": [
+                  "string"
+                ],
+                "examples": [
+                  "string"
+                ],
+                "deprecated": "string",
+                "role": {
+                  "tag": "multimodal"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "root": {
+        "kind": "ref",
+        "value": {
+          "id": "string",
+          "metadata": {
+            "doc": "string",
+            "aliases": [
+              "string"
+            ],
+            "examples": [
+              "string"
+            ],
+            "deprecated": "string",
+            "role": {
+              "tag": "multimodal"
+            }
+          }
+        }
+      }
+    },
+    "declarations": [
+      {
+        "source": "Local",
+        "path": [
+          "string"
+        ],
+        "value_type": {
+          "kind": "ref",
+          "value": {
+            "id": "string",
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "componentProvisionConfig": {
+    "initialPermissions": {
+      "lowerBound": {
+        "negative": [],
+        "positive": []
+      },
+      "upperBound": {
+        "negative": [],
+        "positive": []
+      }
+    },
+    "env": {},
+    "config": [],
+    "pluginInstallations": [],
+    "files": {}
+  },
   "agentTypes": [
     {
       "type_name": "string",
@@ -1536,6 +2363,58 @@ The request body is encoded as multipart/form-data containing metadata and the W
           "middlewareMergeMode": "Prepend"
         }
       },
+      "componentBindings": {
+        "property1": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "Prepend"
+        },
+        "property2": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "Prepend"
+        }
+      },
       "agentBindings": {
         "property1": {
           "version": "string",
@@ -1604,6 +2483,58 @@ The request body is encoded as multipart/form-data containing metadata and the W
       "environmentBinding": {
         "op": "set",
         "value": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "Prepend"
+        }
+      },
+      "componentBindings": {
+        "property1": {
+          "version": "string",
+          "parameters": {},
+          "account": "string",
+          "configKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysReadable": {
+            "kind": "all"
+          },
+          "secretKeysRevealable": {
+            "kind": "all"
+          },
+          "filesystemAccess": "unset",
+          "middleware": [
+            {
+              "name": "string",
+              "version": "string",
+              "parameters": {},
+              "account": "string",
+              "filesystemAccess": "unset"
+            }
+          ],
+          "middlewareMergeMode": "Prepend"
+        },
+        "property2": {
           "version": "string",
           "parameters": {},
           "account": "string",
@@ -2404,6 +3335,52 @@ The request body is encoded as multipart/form-data containing metadata and the W
             }
           }
         }
+      },
+      "parameter_schema": {
+        "defs": [
+          {
+            "id": "string",
+            "name": "string",
+            "body": {
+              "kind": "ref",
+              "value": {
+                "id": "string",
+                "metadata": {
+                  "doc": "string",
+                  "aliases": [
+                    "string"
+                  ],
+                  "examples": [
+                    "string"
+                  ],
+                  "deprecated": "string",
+                  "role": {
+                    "tag": "multimodal"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "root": {
+          "kind": "ref",
+          "value": {
+            "id": "string",
+            "metadata": {
+              "doc": "string",
+              "aliases": [
+                "string"
+              ],
+              "examples": [
+                "string"
+              ],
+              "deprecated": "string",
+              "role": {
+                "tag": "multimodal"
+              }
+            }
+          }
+        }
       }
     }
   ],
@@ -2484,6 +3461,125 @@ The request body is encoded as multipart/form-data containing metadata and the W
     ],
     "rootPackageName": "string",
     "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
     "agentTypes": [],
     "agentMethodStreams": {
       "property1": {
@@ -2567,6 +3663,125 @@ Path|Method|Protected
     ],
     "rootPackageName": "string",
     "rootPackageVersion": "string",
+    "configSchema": {
+      "schema": {
+        "root": {
+          "kind": "record",
+          "value": {
+            "fields": []
+          }
+        }
+      }
+    },
+    "componentProvisionConfig": {
+      "initialPermissions": {
+        "cardId": "f16ba382-eb42-481a-b08f-c57bdc9aae24",
+        "parentIds": [
+          "497f6eca-6276-4993-bfeb-53cbbbba6f08"
+        ],
+        "lowerPositive": [
+          "string"
+        ],
+        "lowerNegative": [
+          "string"
+        ],
+        "upperPositive": [
+          "string"
+        ],
+        "upperNegative": [
+          "string"
+        ],
+        "createdAt": "2019-08-24T14:15:22Z",
+        "expiresAt": "2019-08-24T14:15:22Z",
+        "systemCard": true
+      },
+      "env": {
+        "property1": "string",
+        "property2": "string"
+      },
+      "config": [
+        {
+          "path": [
+            "string"
+          ],
+          "value": {
+            "graph": {
+              "defs": [
+                {
+                  "id": "string",
+                  "name": "string",
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "string",
+                      "metadata": {
+                        "doc": "string",
+                        "aliases": [
+                          "string"
+                        ],
+                        "examples": [
+                          "string"
+                        ],
+                        "deprecated": "string",
+                        "role": {
+                          "tag": "multimodal"
+                        }
+                      }
+                    }
+                  }
+                }
+              ],
+              "root": {
+                "kind": "ref",
+                "value": {
+                  "id": "string",
+                  "metadata": {
+                    "doc": "string",
+                    "aliases": [
+                      "string"
+                    ],
+                    "examples": [
+                      "string"
+                    ],
+                    "deprecated": "string",
+                    "role": {
+                      "tag": "multimodal"
+                    }
+                  }
+                }
+              }
+            },
+            "value": {
+              "kind": "bool",
+              "value": true
+            }
+          }
+        }
+      ],
+      "plugins": [
+        {
+          "environmentPluginGrantId": "5db98835-58e8-4101-8179-99ca47494b8d",
+          "priority": 0,
+          "parameters": {
+            "property1": "string",
+            "property2": "string"
+          },
+          "pluginRegistrationId": "a9a2014c-42b6-44bd-ae1f-d0cdfce42b62",
+          "pluginName": "string",
+          "pluginVersion": "string",
+          "oplogProcessorComponentId": "b811b378-62ba-48d8-b00f-0701d4484807",
+          "oplogProcessorComponentRevision": 0
+        }
+      ],
+      "files": [
+        {
+          "contentHash": "string",
+          "path": "string",
+          "permissions": "read-only",
+          "size": 0
+        }
+      ]
+    },
     "agentTypes": [],
     "agentMethodStreams": {
       "property1": {

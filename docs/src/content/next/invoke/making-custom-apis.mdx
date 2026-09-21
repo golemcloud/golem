@@ -489,13 +489,23 @@ golem deploy
 
 ## OpenAPI Specification
 
-Golem automatically generates an OpenAPI specification from the code-first route definitions. Each deployment exposes an `openapi.yaml` endpoint:
+Golem automatically generates an OpenAPI specification from the code-first route definitions. Each deployment exposes `openapi.yaml` and `openapi.json` endpoints:
 
 ```shell
 curl http://app-name.localhost:9006/openapi.yaml
 ```
 
-This returns a standard OpenAPI 3.0 specification describing all the deployed endpoints, including path parameters, request/response schemas, and more.
+This returns an OpenAPI 3.1 specification describing the deployed endpoints, including path parameters and request/response schemas. Download this deployment-specific document when generating an HTTP client; the Golem management API specification does not describe your agents' routes.
+
+Methods with stream parameters or results appear as Durable Streams URL families:
+
+- `PUT {base}` creates a server-assigned session and returns its URL in `Location`.
+- `PUT`, `GET`, `HEAD`, and `DELETE` on `{base}/invocations/{session}` create, inspect, or cooperatively cancel a session.
+- Each stream has a concrete path under `{base}/invocations/{session}/streams/`. Input streams support `POST` for appending; output streams do not. `DELETE` cancels and tombstones an individual stream.
+
+The document includes the schema and direction of every slot, with `x-golem-route-mode: durable-streams` and `x-golem-stream-slot` metadata. The direct result slot is spelled `%24result` in the OpenAPI path. JSON reads return arrays of the element type; byte streams use `application/octet-stream`. Reads also support long-poll and SSE through the `live` query parameter. SSE returns `text/event-stream`, so clients need an SSE parser rather than a JSON response parser.
+
+Non-stream arguments belong to session creation and retain their path, query, header, or body bindings. Create the session before appending when the method requires body or header arguments. Append operations document producer retry headers and `Stream-Closed` for atomic closure. JSON array bodies are batches; an array-valued message needs an outer batch array. Empty append bodies are valid only when closing the stream.
 
 ## Troubleshooting
 See the [troubleshooting page](/next/invoke/making-custom-apis/troubleshooting) for some common issues and their solutions.

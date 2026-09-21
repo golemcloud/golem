@@ -301,10 +301,12 @@ fn add_durable_stream_route_family(
         (&stream_path, HttpMethod::Delete(Empty {})),
         (&stream_path, HttpMethod::Post(Empty {})),
     ];
+    let base_endpoint_count = endpoints.len();
+    const FORK_ENDPOINT_COUNT: usize = 7;
     let next_route_id = current_route_id
-        .checked_add(endpoints.len() as i32)
+        .checked_add((base_endpoint_count + FORK_ENDPOINT_COUNT) as i32)
         .ok_or("HTTP route ID capacity exceeded")?;
-    for (route_id, (path, method)) in (*current_route_id..next_route_id).zip(endpoints) {
+    for (route_id, (path, method)) in (*current_route_id..).zip(endpoints) {
         routes.push(UnboundCompiledRoute {
             domain: base.domain.clone(),
             route_id,
@@ -315,6 +317,55 @@ fn add_durable_stream_route_family(
             security: base.security.clone(),
             cors: base.cors.clone(),
         });
+    }
+    let mut fork_path = base.path.clone();
+    fork_path.extend([
+        PathSegment::Literal {
+            value: "forks".into(),
+        },
+        PathSegment::Variable {
+            display_name: "fork".into(),
+        },
+        PathSegment::Literal {
+            value: "invocations".into(),
+        },
+        PathSegment::Variable {
+            display_name: "session".into(),
+        },
+    ]);
+    let mut fork_route_id = *current_route_id + base_endpoint_count as i32;
+    for stream in [false, true] {
+        if stream {
+            fork_path.extend([
+                PathSegment::Literal {
+                    value: "streams".into(),
+                },
+                PathSegment::Variable {
+                    display_name: "slot".into(),
+                },
+            ]);
+        }
+        let mut methods = vec![HttpMethod::Head(Empty {}), HttpMethod::Get(Empty {})];
+        if stream {
+            methods.extend([
+                HttpMethod::Put(Empty {}),
+                HttpMethod::Post(Empty {}),
+                HttpMethod::Delete(Empty {}),
+            ]);
+        }
+        for method in methods {
+            routes.push(UnboundCompiledRoute {
+                domain: base.domain.clone(),
+                route_id: fork_route_id,
+                method,
+                path: fork_path.clone(),
+                body: base.body.clone(),
+                behaviour: RouteBehaviour::CallAgent(behaviour.clone()),
+                security: base.security.clone(),
+                cors: base.cors.clone(),
+            });
+            fork_route_id += 1;
+        }
     }
     *current_route_id = next_route_id;
     routes.push(base);
@@ -470,6 +521,8 @@ const DURABLE_STREAM_REQUEST_HEADERS: &[&str] = &[
     "stream-ttl",
     "stream-expires-at",
     "stream-forked-from",
+    "stream-fork-offset",
+    "stream-fork-sub-offset",
     "stream-closed",
     "producer-id",
     "producer-epoch",
@@ -1071,9 +1124,11 @@ mod tests {
         ]);
         let (routes, errors) = compile_test_routes(&agent);
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(routes.len(), 10);
+        assert_eq!(routes.len(), 17);
         let session = "notes/invocations/{session}";
         let slot = "notes/invocations/{session}/streams/{slot}";
+        let fork_session = "notes/forks/{fork}/invocations/{session}";
+        let fork_slot = "notes/forks/{fork}/invocations/{session}/streams/{slot}";
         assert_eq!(
             routes
                 .iter()
@@ -1093,6 +1148,13 @@ mod tests {
                 (7, "GET", slot),
                 (8, "DELETE", slot),
                 (9, "POST", slot),
+                (10, "HEAD", fork_session),
+                (11, "GET", fork_session),
+                (12, "HEAD", fork_slot),
+                (13, "GET", fork_slot),
+                (14, "PUT", fork_slot),
+                (15, "POST", fork_slot),
+                (16, "DELETE", fork_slot),
                 (0, "PUT", "notes"),
             ]
             .map(|(id, method, path)| (id, method.to_owned(), path.to_owned()))
@@ -1135,6 +1197,10 @@ mod tests {
             "POST".into(),
             "notes/invocations/{session}/streams/{slot}".into()
         )));
+        assert!(identities.contains(&(
+            "PUT".into(),
+            "notes/forks/{fork}/invocations/{session}/streams/{slot}".into()
+        )));
         assert!(!identities.contains(&("GET".into(), "notes".into())));
         let rest = compiled_call_agent_behaviour(AgentMode::Durable, false);
         assert_eq!(rest.route_mode, AgentRouteMode::Rest);
@@ -1147,7 +1213,7 @@ mod tests {
         streaming.methods[0].output_schema =
             OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::string()))));
 
-        for (agent, count) in [(&rest, 1), (&streaming, 10)] {
+        for (agent, count) in [(&rest, 1), (&streaming, 17)] {
             let (routes, errors) = compile_test_routes_from(agent, i32::MAX - count);
             assert!(errors.is_empty(), "{errors:?}");
             assert_eq!(routes.len(), count as usize);
@@ -1188,7 +1254,7 @@ mod tests {
         ];
         let (routes, errors) = compile_test_routes(&agent);
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(routes.len(), 10);
+        assert_eq!(routes.len(), 17);
         for route in routes {
             let headers = collect_allowed_request_headers(&route);
             assert_eq!(

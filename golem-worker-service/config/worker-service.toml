@@ -26,6 +26,11 @@ component_cache_max_capacity = 1024
 long_poll_timeout = "30s"
 max_append_body_bytes = 1048576
 
+[durable_streams.forks]
+max_copied_bytes = 67108864
+max_forks_per_second = 4
+max_forks_per_session = 128
+
 [durable_streams.load]
 max_append_requests_per_second_per_stream = 100
 max_catch_up_requests_per_second_per_stream = 100
