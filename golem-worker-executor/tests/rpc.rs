@@ -1177,6 +1177,8 @@ async fn streaming_output_resume_restores_exact_cursors(
             config.invocation_results.recent_capacity = 0;
             config.invocation_results.bloom_bits = 1;
             config.invocation_results.bloom_hashes = 1;
+            // Keep the promise gate valid beyond this test's two-minute deadline.
+            config.suspend.ephemeral_max_sleep = Duration::from_secs(180);
         })),
         ..Default::default()
     };
@@ -1205,11 +1207,16 @@ async fn streaming_output_resume_restores_exact_cursors(
         let final_agent_id = agent_id!("EphemeralStreamingRpcTarget", "resident-output-resume")
             .with_ephemeral_invocation_phantom(&idempotency_key)
             .map_err(anyhow::Error::msg)?;
+        let gate_owner = agent_id!("StreamingRpcTarget", "resident-output-gate");
+        let gate = executor
+            .invoke_and_await_agent(&component, &gate_owner, "create_output_gate", data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
         (
             executor.start_agent(&component.id, final_agent_id).await?,
-            "produce_siblings",
-            data_value!(),
-            None,
+            "produce_gated_siblings",
+            data_value!(gate.clone()),
+            Some(gate),
         )
     };
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
@@ -1301,7 +1308,7 @@ async fn streaming_output_resume_restores_exact_cursors(
         executor.shutdown_and_wait_for_invocation_loops().await?;
     }
     drop(requests);
-    let resident_response_lease = (!restart_executor).then_some(responses);
+    drop(responses);
     let executor = if restart_executor {
         drop(executor);
         start_with_overrides(deps, &context, overrides).await?
@@ -1334,6 +1341,36 @@ async fn streaming_output_resume_restores_exact_cursors(
         })
         .await
         .map_err(|_| anyhow::anyhow!("ephemeral output session did not detach before resume"))??;
+        assert!(
+            executor
+                .worker_is_loaded(&OwnedAgentId::new(
+                    context.default_environment_id,
+                    &worker_agent_id
+                ))
+                .await,
+            "the gated ephemeral invocation must still be resident before resume"
+        );
+        let oplog = executor
+            .get_oplog(&worker_agent_id, OplogIndex::INITIAL)
+            .await?;
+        assert!(
+            !oplog.into_iter().any(|entry| matches!(
+                entry.entry,
+                PublicOplogEntry::StreamSession(session)
+                    if matches!(
+                        StreamSessionRecord::from_value(session.record.value()),
+                        Ok(StreamSessionRecord::Finished(_))
+                    )
+            )),
+            "the gated invocation must remain unfinished until resume acceptance"
+        );
+        assert_eq!(
+            executor
+                .get_worker_metadata(&worker_agent_id)
+                .await?
+                .fingerprint,
+            metadata.fingerprint
+        );
     }
     let Some(invocation_request::Request::Start(start)) = start_request.request.as_ref() else {
         anyhow::bail!("streaming output request is not Start");
@@ -1373,7 +1410,6 @@ async fn streaming_output_resume_restores_exact_cursors(
         .invoke_agent_session(ReceiverStream::new(receiver))
         .await?
         .into_inner();
-    drop(resident_response_lease);
     let mut mapped_outputs = 0;
     let mut output_items = 0;
     let mut output_ends = 0;
