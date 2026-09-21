@@ -414,7 +414,7 @@ async function sessionCancellation() {
   }
   assert.equal(
     await (await request(`${s.agent}/mark/37`, 200, { method: "PUT" })).json(),
-    37,
+    "37",
   );
 }
 
