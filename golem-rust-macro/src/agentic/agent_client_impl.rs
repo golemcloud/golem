@@ -329,6 +329,7 @@ fn expand(
         let trigger_ident = format_ident!("trigger_{}", method_ident);
         let pending_ident = format_ident!("pending_{}", method_ident);
         let schedule_ident = format_ident!("schedule_{}", method_ident);
+        let scheduled_time_ident = fresh_param_ident(&params, "at");
         for generated in [&trigger_ident, &pending_ident, &schedule_ident] {
             if method_names.contains(&generated.to_string()) {
                 return Err(syn::Error::new_spanned(
@@ -385,11 +386,11 @@ fn expand(
                 self.inner.method::<#input_ident, #output_type>(#method_name)?.pending(&input)
             }
 
-            pub fn #schedule_ident(&self, at: #golem_rust::ScheduledTime, #(#params),*)
+            pub fn #schedule_ident(&self, #scheduled_time_ident: #golem_rust::ScheduledTime, #(#params),*)
                 -> Result<#golem_rust::ScheduledInvocation, #golem_rust::GolemReflectError>
             {
                 let input = #input;
-                self.inner.method::<#input_ident, #output_type>(#method_name)?.schedule(at, &input)
+                self.inner.method::<#input_ident, #output_type>(#method_name)?.schedule(#scheduled_time_ident, &input)
             }
         });
     }
@@ -427,4 +428,23 @@ fn expand(
             #(#client_methods)*
         }
     })
+}
+
+fn fresh_param_ident(params: &[(Ident, Type)], preferred_name: &str) -> Ident {
+    let occupied = params
+        .iter()
+        .map(|(ident, _)| ident.to_string())
+        .collect::<HashSet<_>>();
+    let mut suffix = 0;
+    loop {
+        let candidate = if suffix == 0 {
+            preferred_name.to_string()
+        } else {
+            format!("{preferred_name}{suffix}")
+        };
+        if !occupied.contains(&candidate) {
+            return format_ident!("{candidate}");
+        }
+        suffix += 1;
+    }
 }

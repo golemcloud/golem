@@ -15,6 +15,7 @@ struct SearchConfig {
 trait SearchApi {
     fn status(&self) -> String;
     fn search(&self, query: Query, limit: u32) -> Vec<String>;
+    fn reschedule(&self, at: String);
     fn transform(&self, input: AgentStream<String>) -> AgentStream<String>;
     fn invalidate(&self, key: String);
 }
