@@ -28,7 +28,7 @@ import scala.collection.mutable
  * options/flags/tails, `value-is` comparand construction and compatibility,
  * structural graph checks, and the shape-matching used by de-projection.
  */
-private[tool] object ToolGraphs {
+private[golem] object ToolGraphs {
 
   /**
    * The whole collected value type of an option (used to validate an option's
