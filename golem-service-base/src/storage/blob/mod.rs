@@ -780,7 +780,8 @@ mod normalized_path {
     /// to say that it must not.
     ///
     /// The form borrows the path of the caller when that path is already in its one form, so
-    /// the common path of every operation allocates nothing.
+    /// this form of such a path allocates nothing. The operation that follows still builds the
+    /// key of its backend from the form.
     ///
     /// The type gives the path itself to a caller that reads it, and that caller has a
     /// `&Path` (`Deref`). A caller that makes a key has to name the type, and the four
@@ -1061,9 +1062,9 @@ mod tests {
         );
     }
 
-    /// A path that is already in its one form is the one form, and the result borrows it. Each
-    /// operation of each backend makes this form of the path that it gets, so the common path
-    /// allocates nothing.
+    /// A path that is already in its one form is the one form, and the result borrows it, so
+    /// this form of such a path allocates nothing. Each operation of each backend makes this
+    /// form of the path that it gets, and then builds the key of its backend from the form.
     #[test]
     fn the_one_form_of_a_path_that_is_already_in_it_borrows_that_path() {
         let path = Path::new("dir/blob");
