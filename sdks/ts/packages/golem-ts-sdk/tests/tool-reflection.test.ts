@@ -81,6 +81,44 @@ describe('native tool reflection', () => {
     expect(command.validateJson({ maybe: 'other' }).success).toBe(false);
   });
 
+  it('applies schema restrictions through command-level packing and validation', () => {
+    const definition = toolDefinition('restricted-reflection').body((body) =>
+      body.positional('count', z.number().min(10)),
+    );
+    const command = new ToolType(
+      {
+        lookupName: 'restricted-reflection',
+        definition: encodeTool(getExtendedToolDefinition(definition)),
+        implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
+      },
+      { start: vi.fn() } as unknown as ToolClientRuntime,
+    ).client.command([]);
+    expect(command.validateJson({ count: 9 }).success).toBe(false);
+    expect(() => command.packJson({ count: 9 })).toThrow(/invalid tool input/i);
+    expect(command.validateJson({ count: 10 }).success).toBe(true);
+  });
+
+  it('owns a deeply immutable discovery snapshot', () => {
+    const definition = toolDefinition('immutable-reflection').body((body) =>
+      body
+        .flag('enabled', { default: true, negatable: true })
+        .constraint(c.requiresAll([c.present('enabled')])),
+    );
+    const wire = encodeTool(getExtendedToolDefinition(definition));
+    const command = new ToolType(
+      {
+        lookupName: 'immutable-reflection',
+        definition: wire,
+        implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
+      },
+      { start: vi.fn() } as unknown as ToolClientRuntime,
+    ).client.command([]);
+    const constraints = wire.commands.nodes[0].body!.constraints as unknown as unknown[];
+    constraints[0] = { tag: 'requires-all', val: [{ tag: 'present', val: 'missing' }] };
+    expect(command.validateJson({ enabled: false }).success).toBe(true);
+    expect(Object.isFrozen(command.constraints[0])).toBe(true);
+  });
+
   it('renders discriminator conditions without replacing the branch schema', () => {
     const root = schemaType({
       tag: 'union',

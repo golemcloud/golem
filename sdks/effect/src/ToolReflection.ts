@@ -206,6 +206,8 @@ export class ToolCommand {
   packJson(input: JsonValue): Core.SchemaValueTree {
     if (!this.inputSchema) throw new ToolReflectionError("input", "command has no body")
     const value = this.inputSchema.packJson(input)
+    if (!this.inputSchema.validateValue(value).success)
+      throw new ToolReflectionError("input", "invalid tool input")
     this.validateConstraints(value)
     return value
   }
@@ -539,7 +541,8 @@ export class ToolType {
   readonly client: ReflectedToolClient
 
   constructor(registered: import("golem:tool/host@0.1.0").RegisteredTool) {
-    const raw = registered.definition
+    const snapshot = immutableSnapshot(registered)
+    const raw = snapshot.definition
     if (raw.commands.nodes.length === 0) throw new TypeError("tool has no root command")
     this.name = raw.commands.nodes[0].name
     this.lookupName = registered.lookupName
@@ -601,7 +604,18 @@ export class ToolType {
   }
 }
 
-/** A schema-free client bound only to an ambient tool name. @since 1.6.0 @category models */
+const immutableSnapshot = <T>(value: T): T => {
+  if (Array.isArray(value)) return Object.freeze(value.map(immutableSnapshot)) as T
+  if (value !== null && typeof value === "object") {
+    const copy = Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, immutableSnapshot(child)]),
+    )
+    return Object.freeze(copy) as T
+  }
+  return value
+}
+
+/** A fully dynamic client bound only to an ambient tool name. @since 1.6.0 @category models */
 export class DynamicToolClient {
   constructor(readonly name: string) {}
 

@@ -186,6 +186,7 @@ export class ToolCommand {
   packJson(input: JsonValue): SchemaValue {
     if (!this.inputSchema) throw new TypeError(`Command '${this.path.join(' ')}' has no body`);
     const value = this.inputSchema.packJson(input);
+    if (!this.inputSchema.validateValue(value).success) throw new TypeError('Invalid tool input');
     this.validateConstraints(value);
     return value;
   }
@@ -408,7 +409,8 @@ export class ToolType {
   readonly client: ReflectedToolClient;
 
   constructor(registered: RegisteredTool, runtime?: ToolClientRuntime) {
-    const raw = registered.definition;
+    const snapshot = immutableSnapshot(registered);
+    const raw = snapshot.definition;
     if (raw.commands.nodes.length === 0) throw new TypeError('Tool has no root command');
     this.name = raw.commands.nodes[0].name;
     this.lookupName = registered.lookupName;
@@ -483,6 +485,17 @@ export class ToolType {
   }
 }
 
+function immutableSnapshot<T>(value: T): T {
+  if (Array.isArray(value)) return Object.freeze(value.map(immutableSnapshot)) as T;
+  if (value !== null && typeof value === 'object') {
+    const copy = Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, immutableSnapshot(child)]),
+    );
+    return Object.freeze(copy) as T;
+  }
+  return value;
+}
+
 /** Strict callable lookup for a discovered tool. */
 export interface ReflectedToolClient {
   command(path: readonly string[]): ToolCommand;
@@ -499,7 +512,7 @@ export function getToolType(name: string): ToolType | undefined {
   return tool === undefined ? undefined : new ToolType(tool);
 }
 
-/** A schema-free client that sends caller-owned packed values. */
+/** A fully dynamic client that sends caller-owned packed values. */
 export class DynamicToolClient {
   private readonly runtime: ToolClientRuntime;
   constructor(
