@@ -106,6 +106,7 @@ object SourceDiscovery {
     presentedToolType: String,
     expectedToolType: String,
     transparent: Boolean,
+    parameterType: Option[String],
     parentType: String,
     imports: Map[String, String],
     wildcardImports: List[WildcardImport],
@@ -121,6 +122,7 @@ object SourceDiscovery {
     middlewareName: String,
     aliases: List[String],
     description: Option[String],
+    parameterType: Option[String],
     parentType: String,
     imports: Map[String, String],
     wildcardImports: List[WildcardImport],
@@ -849,6 +851,7 @@ object SourceDiscovery {
     presented: GeneratedToolRef,
     expected: GeneratedToolRef,
     transparent: Boolean,
+    parameterType: Option[String],
     syntax: String
   )
 
@@ -1106,6 +1109,7 @@ object SourceDiscovery {
         presentedToolType = presentedTool,
         expectedToolType = expectedTool,
         transparent = parsed.transparent,
+        parameterType = parsed.parameterType,
         parentType = parsed.syntax,
         imports = imports,
         wildcardImports = wildcardImports,
@@ -1167,6 +1171,7 @@ object SourceDiscovery {
         middlewareName = middlewareName,
         aliases = aliases,
         description = description,
+        parameterType = universalMiddlewareParameterType(parents.head.tpe),
         parentType = parentType,
         imports = imports,
         wildcardImports = wildcardImports,
@@ -1231,7 +1236,18 @@ object SourceDiscovery {
           presented = presentedTool,
           expected = expectedTool,
           transparent = false,
+          parameterType = None,
           syntax = tpe.syntax
+        )
+      case Type.Apply.After_4_6_0(Type.Select(presented, Type.Name("AdapterWithParameters")), args)
+          if args.values.size == 2 =>
+        for {
+          presentedTool <- generatedToolRef(presented.syntax, "Middleware", imports)
+          expectedTool  <- generatedToolRef(args.values.head.syntax, "Underlying", imports)
+        } yield ParsedMiddlewareParent(presentedTool, expectedTool, false, Some(args.values(1).syntax), tpe.syntax)
+      case Type.Apply.After_4_6_0(Type.Select(presented, Type.Name("WithParameters")), args) if args.values.size == 1 =>
+        generatedToolRef(presented.syntax, "Middleware", imports).map(ref =>
+          ParsedMiddlewareParent(ref, ref, true, Some(args.values.head.syntax), tpe.syntax)
         )
       case _ =>
         generatedToolRef(tpe.syntax, "Middleware", imports).map { presented =>
@@ -1239,6 +1255,7 @@ object SourceDiscovery {
             presented = presented,
             expected = presented,
             transparent = true,
+            parameterType = None,
             syntax = tpe.syntax
           )
         }
@@ -1309,12 +1326,21 @@ object SourceDiscovery {
     val rooted     = raw.startsWith("_root_.")
     val normalized = normalizeTypeRef(raw)
     val expanded   = if (rooted) normalized else expandImportedTypeRef(normalized, imports)
-    expanded == "golem.tool.UniversalToolMiddleware" ||
+    expanded == "golem.tool.UniversalToolMiddleware" || expanded.startsWith(
+      "golem.tool.UniversalToolMiddleware.WithParameters["
+    ) ||
     (expanded == "UniversalToolMiddleware" &&
       wildcardImports.exists(wildcard =>
         wildcard.pkg == "golem.tool" && !wildcard.excludes.contains("UniversalToolMiddleware")
       ))
   }
+
+  private def universalMiddlewareParameterType(tpe: Type): Option[String] =
+    tpe match {
+      case Type.Apply.After_4_6_0(Type.Select(_, Type.Name("WithParameters")), args) if args.values.size == 1 =>
+        Some(args.values.head.syntax)
+      case _ => None
+    }
 
   private def expandImportedTypeRef(tpe: String, imports: Map[String, String]): String = {
     val dot = tpe.indexOf('.')

@@ -13,10 +13,12 @@
 // limitations under the License.
 
 use crate::base_model::agent::AgentTypeName;
+use crate::base_model::component::ComponentName;
 use crate::base_model::diff;
 use crate::base_model::domain_registration::Domain;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::security_scheme::SecuritySchemeName;
+use crate::base_model::tool::ToolName;
 use crate::{declare_revision, declare_structs, newtype_uuid};
 use chrono::DateTime;
 use std::collections::BTreeMap;
@@ -32,14 +34,24 @@ declare_structs! {
         pub security_scheme: Option<SecuritySchemeName>,
     }
 
+    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    pub struct McpDeploymentToolOptions {
+        pub owner_component: ComponentName,
+        pub security_scheme: Option<SecuritySchemeName>,
+        pub include: Option<Vec<String>>,
+        pub exclude: Option<Vec<String>>,
+    }
+
     pub struct McpDeploymentCreation {
         pub domain: Domain,
         pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
+        pub tools: BTreeMap<ToolName, McpDeploymentToolOptions>,
     }
 
     pub struct McpDeploymentUpdate {
         pub current_revision: McpDeploymentRevision,
         pub agents: Option<BTreeMap<AgentTypeName, McpDeploymentAgentOptions>>,
+        pub tools: Option<BTreeMap<ToolName, McpDeploymentToolOptions>>,
     }
 
     pub struct McpDeployment {
@@ -49,6 +61,7 @@ declare_structs! {
         pub domain: Domain,
         pub hash: diff::Hash,
         pub agents: BTreeMap<AgentTypeName, McpDeploymentAgentOptions>,
+        pub tools: BTreeMap<ToolName, McpDeploymentToolOptions>,
         pub created_at: DateTime<chrono::Utc>,
     }
 }

@@ -141,8 +141,8 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
     let mut linker: Linker<Host> = Linker::new(&engine);
     linker.allow_shadowing(true);
 
-    let mut host = linker.instance("golem:tool/host@0.1.0")?;
-    host.resource(
+    let mut streams = linker.instance("golem:tool/streams@0.1.0")?;
+    streams.resource(
         "tool-stdout-writer",
         ResourceType::host::<StdoutWriter>(),
         |mut store, rep| {
@@ -159,19 +159,7 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
             Ok(())
         },
     )?;
-    for name in [
-        "tool-stdin-writer",
-        "tool-stdin",
-        "tool-stdin-closed",
-        "tool-stdout",
-        "tool-rpc",
-        "future-invoke-result",
-    ] {
-        host.resource(name, ResourceType::host::<UnusedResource>(), |_store, _| {
-            Ok(())
-        })?;
-    }
-    host.func_wrap_concurrent(
+    streams.func_wrap_concurrent(
         "[method]tool-stdout-writer.write",
         |accessor, (writer, bytes): (Resource<StdoutWriter>, Vec<u8>)| {
             Box::pin(async move {
@@ -187,7 +175,7 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
             })
         },
     )?;
-    host.func_wrap_concurrent(
+    streams.func_wrap_concurrent(
         "[method]tool-stdout-writer.finish",
         |accessor, (writer,): (Resource<StdoutWriter>,)| {
             Box::pin(async move {
@@ -203,7 +191,7 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
             })
         },
     )?;
-    host.func_wrap_concurrent(
+    streams.func_wrap_concurrent(
         "[method]tool-stdout-writer.fail",
         |accessor, (writer, failure): (Resource<StdoutWriter>, ByteStreamFailure)| {
             Box::pin(async move {
@@ -219,6 +207,20 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
             })
         },
     )?;
+
+    let mut host = linker.instance("golem:tool/host@0.1.0")?;
+    for name in [
+        "tool-stdin-writer",
+        "tool-stdin",
+        "tool-stdin-closed",
+        "tool-stdout",
+        "tool-rpc",
+        "future-invoke-result",
+    ] {
+        host.resource(name, ResourceType::host::<UnusedResource>(), |_store, _| {
+            Ok(())
+        })?;
+    }
     let tool_host = component
         .component_type()
         .imports(&engine)
@@ -248,7 +250,10 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
         let ComponentItem::ComponentInstance(interface) = item.ty else {
             continue;
         };
-        if interface_name == "golem:tool/host@0.1.0" {
+        if matches!(
+            interface_name,
+            "golem:tool/host@0.1.0" | "golem:tool/streams@0.1.0"
+        ) {
             continue;
         }
         let mut linker_interface = linker.instance(interface_name)?;

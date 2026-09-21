@@ -63,7 +63,7 @@ use crate::schema::metadata::TypeId;
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 use crate::schema::validation::value::{ValueError, validate_value};
-use crate::schema::validation::well_formedness::{SchemaError, validate_root_type};
+use crate::schema::validation::well_formedness::{SchemaError, validate_graph, validate_root_type};
 use regex::Regex;
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
@@ -275,6 +275,8 @@ pub enum ToolMiddlewareValidationError {
     EmptyVersion,
     InvalidIdentifier { kind: &'static str, value: String },
     DuplicateIdentity { value: String },
+    InvalidParameterSchema(Vec<SchemaError>),
+    ForbiddenParameterType(&'static str),
     InvalidPresentedTool(Vec<ToolValidationError>),
     InvalidExpectedTool(Vec<ToolValidationError>),
 }
@@ -286,6 +288,15 @@ impl Display for ToolMiddlewareValidationError {
             Self::InvalidIdentifier { kind, value } => write!(f, "invalid {kind}: {value:?}"),
             Self::DuplicateIdentity { value } => {
                 write!(f, "duplicate tool middleware name or alias: {value:?}")
+            }
+            Self::InvalidParameterSchema(errors) => {
+                write!(f, "invalid tool middleware parameter schema: {errors:?}")
+            }
+            Self::ForbiddenParameterType(kind) => {
+                write!(
+                    f,
+                    "tool middleware parameter schema contains forbidden type {kind}"
+                )
             }
             Self::InvalidPresentedTool(errors) => {
                 write!(f, "invalid presented tool descriptor: {errors:?}")
@@ -327,6 +338,17 @@ pub fn validate_tool_middleware(
         }
     }
 
+    if let Err(schema_errors) = validate_graph(&middleware.parameter_schema) {
+        errors.push(ToolMiddlewareValidationError::InvalidParameterSchema(
+            schema_errors,
+        ));
+    }
+    for ty in std::iter::once(&middleware.parameter_schema.root)
+        .chain(middleware.parameter_schema.defs.iter().map(|def| &def.body))
+    {
+        collect_forbidden_parameter_types(ty, &mut errors);
+    }
+
     if let ToolMiddlewareScope::Monomorphic(scope) = &middleware.scope {
         if let Err(tool_errors) = validate_tool(&scope.presented) {
             errors.push(ToolMiddlewareValidationError::InvalidPresentedTool(
@@ -346,6 +368,83 @@ pub fn validate_tool_middleware(
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+fn collect_forbidden_parameter_types(
+    ty: &SchemaType,
+    errors: &mut Vec<ToolMiddlewareValidationError>,
+) {
+    match ty {
+        SchemaType::Secret { .. } => errors.push(
+            ToolMiddlewareValidationError::ForbiddenParameterType("secret"),
+        ),
+        SchemaType::QuotaToken { .. } => errors.push(
+            ToolMiddlewareValidationError::ForbiddenParameterType("quota-token"),
+        ),
+        SchemaType::PermissionCard { .. } => errors.push(
+            ToolMiddlewareValidationError::ForbiddenParameterType("permission-card"),
+        ),
+        SchemaType::Future { .. } => errors.push(
+            ToolMiddlewareValidationError::ForbiddenParameterType("future"),
+        ),
+        SchemaType::Stream { .. } => errors.push(
+            ToolMiddlewareValidationError::ForbiddenParameterType("stream"),
+        ),
+        SchemaType::Record { fields, .. } => fields
+            .iter()
+            .for_each(|field| collect_forbidden_parameter_types(&field.body, errors)),
+        SchemaType::Variant { cases, .. } => cases.iter().for_each(|case| {
+            if let Some(payload) = &case.payload {
+                collect_forbidden_parameter_types(payload, errors);
+            }
+        }),
+        SchemaType::Tuple { elements, .. } => elements
+            .iter()
+            .for_each(|element| collect_forbidden_parameter_types(element, errors)),
+        SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+            collect_forbidden_parameter_types(element, errors)
+        }
+        SchemaType::Map { key, value, .. } => {
+            collect_forbidden_parameter_types(key, errors);
+            collect_forbidden_parameter_types(value, errors);
+        }
+        SchemaType::Option { inner, .. } => collect_forbidden_parameter_types(inner, errors),
+        SchemaType::Result { spec, .. } => {
+            if let Some(ok) = &spec.ok {
+                collect_forbidden_parameter_types(ok, errors);
+            }
+            if let Some(err) = &spec.err {
+                collect_forbidden_parameter_types(err, errors);
+            }
+        }
+        SchemaType::Union { spec, .. } => spec
+            .branches
+            .iter()
+            .for_each(|branch| collect_forbidden_parameter_types(&branch.body, errors)),
+        SchemaType::Ref { .. }
+        | SchemaType::Bool { .. }
+        | SchemaType::S8 { .. }
+        | SchemaType::S16 { .. }
+        | SchemaType::S32 { .. }
+        | SchemaType::S64 { .. }
+        | SchemaType::U8 { .. }
+        | SchemaType::U16 { .. }
+        | SchemaType::U32 { .. }
+        | SchemaType::U64 { .. }
+        | SchemaType::F32 { .. }
+        | SchemaType::F64 { .. }
+        | SchemaType::Char { .. }
+        | SchemaType::String { .. }
+        | SchemaType::Enum { .. }
+        | SchemaType::Flags { .. }
+        | SchemaType::Text { .. }
+        | SchemaType::Binary { .. }
+        | SchemaType::Path { .. }
+        | SchemaType::Url { .. }
+        | SchemaType::Datetime { .. }
+        | SchemaType::Duration { .. }
+        | SchemaType::Quantity { .. } => {}
     }
 }
 

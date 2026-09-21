@@ -107,6 +107,7 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
         expected: Option<&[u8]>,
+        deletes: &[&str],
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError> {
         let _guard = self.kvs_lock.write().await;
@@ -119,6 +120,11 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
             .unwrap_or(expected.is_none());
         if !matches {
             return Ok(false);
+        }
+        for field_key in deletes {
+            self.kvs
+                .remove_async(&Self::composite_key(&namespace, field_key))
+                .await;
         }
         for (field_key, value) in pairs {
             self.kvs

@@ -180,7 +180,7 @@ fn synthesize_leaf_method(
         let started_ty = started_result_type(&cmd.output);
         let start = start_call(&cmd.output, stdin_expr);
         return quote! {
-            pub fn #method_ident(&self, #(#input_args),*) -> #started_ty {
+            pub async fn #method_ident(&self, #(#input_args),*) -> #started_ty {
                 #(#value_inserts)*
 
                 let __can_use_static_input_model = self.inherited_prefix.is_empty() && self.schema_path.is_empty();
@@ -188,7 +188,7 @@ fn synthesize_leaf_method(
                 let mut __schema_path = self.schema_path.clone();
                 #command_path_part
                 let __input = #input_expr;
-                #start
+                #start.await
             }
         };
     }
@@ -293,7 +293,7 @@ fn synthesize_leaf_method_dynamic(
         let result_ty = started_result_type(&cmd.output);
         let start = start_call(&cmd.output, stdin_expr);
         return quote! {
-            pub fn #method_ident(&self #input_args) -> #result_ty {
+            pub async fn #method_ident(&self #input_args) -> #result_ty {
                 let mut #param_values: ::std::vec::Vec<(&'static str, golem_rust::SchemaValue)> =
                     ::std::vec::Vec::new();
                 #value_inserts
@@ -303,7 +303,7 @@ fn synthesize_leaf_method_dynamic(
                 let mut __schema_path = self.schema_path.clone();
                 #command_path_part
                 let __input = #input_expr;
-                #start
+                #start.await
             }
         };
     }
