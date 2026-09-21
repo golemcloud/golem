@@ -41,7 +41,7 @@ steps:
       `ParsedAgentId` and invoke `echo` with `"method only"`; do not reuse the
       full client for this call.
 
-      Use the parsed identity's schema-free `dynamicClient()` with a packed
+      Use the parsed identity's fully dynamic `dynamicClient()` with a packed
       `SchemaValue` to invoke `echo` with `"dynamic"`.
 
       Construct the target's concrete AgentId from the reflected type, resolve its
@@ -108,15 +108,15 @@ steps:
 
       Define a full caller-owned `defineAgentClient` spec named `ReflectionTarget`
       with the same string ID and `echo` method, then use its `agentId` and
-      `identity.client` to call `"exact"`. Independently define a method-only
+      `identity.client` to call `"full"`. Independently define a method-only
       `defineAgentClient({ methods: { echo: ... } })`, bind that parsed identity
       with `identity.client`, and call `"method only"`. Finally bind it through
-      the schema-free `identity.dynamicClient()` and invoke with packed `SchemaValue`
+      the fully dynamic `identity.dynamicClient()` and invoke with packed `SchemaValue`
       input to return `"dynamic"`. These calls must not import or implement
       the target's implementation in the caller module.
 
       Return `{ listed, typeName, methodName, value, resolvedName, reflected,
-      exact, methodOnly, dynamic, identityMatches }`, comparing both encoded
+      full, methodOnly, dynamic, identityMatches }`, comparing both encoded
       identities for `identityMatches`. Keep all operations Effect-native and
       inside `Effect.scoped`; preserve typed error channels. Guard the reflected
       type's discriminated `mode` before using its durable-only factory. Build
@@ -148,8 +148,8 @@ steps:
           equals: "ReflectionTarget"
         - path: "$.ok.reflected"
           equals: "again"
-        - path: "$.ok.exact"
-          equals: "exact"
+        - path: "$.ok.full"
+          equals: "full"
         - path: "$.ok.methodOnly"
           equals: "method only"
         - path: "$.ok.dynamic"

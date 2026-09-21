@@ -283,7 +283,7 @@ describe("native tool reflection", () => {
     await expect(Effect.runPromise(call)).resolves.toMatchObject({ phase: "output" })
   })
 
-  it("constructs exact and partial typed clients from their definitions", () => {
+  it("constructs definition-owned and caller-defined typed clients", () => {
     const transport = ToolTransport.of({ start: () => Effect.die("unused") })
     expect(typeof definition.client({ transport })).toBe("function")
     expect(typeof toolClientDefinition(definition).client("another-tool", { transport })).toBe(

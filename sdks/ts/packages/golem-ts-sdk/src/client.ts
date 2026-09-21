@@ -14,7 +14,7 @@
 
 // Wasm-RPC clients attached to agent definitions. `def.client.get(id)` returns a
 // typed proxy that calls a remote agent declared with the same definition. The wire encoding
-// is built from the LOCAL def's `SchemaCodec`s — the exact codecs the exported
+// is built from the LOCAL def's `SchemaCodec`s — the same codecs the exported
 // component uses to decode (see runtime.ts `invoke`) — so the two sides are
 // symmetric by construction. Reuses the host `WasmRpc` resource (no decorator
 // `Type.Type`/metadata).
@@ -268,19 +268,15 @@ function defineAgentClientImpl(spec: {
   | FullAgentClientDefinition<IdRecord, MethodsRecord, ConfigSpec, 'durable' | 'ephemeral'>
   | MethodOnlyAgentClientDefinition<MethodsRecord> {
   if (spec.name !== undefined && spec.id !== undefined) {
-    const exact: FullAgentClientShape<
-      IdRecord,
-      MethodsRecord,
-      ConfigSpec,
-      'durable' | 'ephemeral'
-    > = {
-      name: spec.name,
-      id: spec.id,
-      methods: spec.methods,
-      config: spec.config,
-      mode: spec.mode ?? 'durable',
-    };
-    return Object.freeze({ ...exact, ...buildAgentClientSurface(exact, true) });
+    const full: FullAgentClientShape<IdRecord, MethodsRecord, ConfigSpec, 'durable' | 'ephemeral'> =
+      {
+        name: spec.name,
+        id: spec.id,
+        methods: spec.methods,
+        config: spec.config,
+        mode: spec.mode ?? 'durable',
+      };
+    return Object.freeze({ ...full, ...buildAgentClientSurface(full, true) });
   }
   if (
     spec.name !== undefined ||
@@ -514,7 +510,7 @@ function buildAgentIdBinding<Methods extends MethodsRecord>(
 }
 
 function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable' | 'ephemeral'>(
-  exactName: string | undefined,
+  declaredName: string | undefined,
   idCodecs: NamedCodec[] | undefined,
   methodCodecs: CompiledRemoteMethod[],
   fallible: boolean,
@@ -523,9 +519,9 @@ function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable'
   config: readonly AgentConfigEntry[],
 ): RemoteClient<Methods, Mode> {
   const parts = agentId.parts();
-  if (exactName !== undefined && exactName !== parts.typeName) {
+  if (declaredName !== undefined && declaredName !== parts.typeName) {
     throw new TypeError(
-      `Full agent client '${exactName}' cannot bind agent type '${parts.typeName}'`,
+      `Full agent client '${declaredName}' cannot bind agent type '${parts.typeName}'`,
     );
   }
   if (mode === 'ephemeral') {
@@ -550,7 +546,7 @@ function bindExistingAgent<Methods extends MethodsRecord, Mode extends 'durable'
       })
     ) {
       throw new TypeError(
-        `Full agent client '${exactName}' cannot bind ParsedAgentId '${agentId.value}': constructor value does not conform to the client ID schema`,
+        `Full agent client '${declaredName}' cannot bind ParsedAgentId '${agentId.value}': constructor value does not conform to the client ID schema`,
       );
     }
   }

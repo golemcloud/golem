@@ -73,33 +73,33 @@ const managementId: AgentId = { componentId, agentId: id.value };
 managementId.componentId satisfies ComponentId;
 // @ts-expect-error management IDs do not provide reflection client helpers
 managementId.client;
-const contract = defineAgentClient({
+const definition = defineAgentClient({
   methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
 });
-id.client(contract).ping({ message: 'hello' });
+id.client(definition).ping({ message: 'hello' });
 id.dynamicClient().method('ping').invokeValue(v.record([]));
 
-const exactContract = defineAgentClient({
+const fullDefinition = defineAgentClient({
   name: 'ExampleAgent',
   id: { name: z.string() },
   methods: { ping: method({ input: { message: z.string() }, returns: z.string() }) },
 });
-const schemaLibraryId = exactContract.agentId({ name: 'example' });
+const schemaLibraryId = fullDefinition.agentId({ name: 'example' });
 const schemaValueId = ParsedAgentId.create({
-  typeName: exactContract.name,
+  typeName: fullDefinition.name,
   constructorValue: v.record([v.string('example')]),
 });
-schemaLibraryId.client(exactContract).ping({ message: 'schema library' });
-schemaValueId.client(exactContract).ping({ message: 'schema value' });
+schemaLibraryId.client(fullDefinition).ping({ message: 'schema library' });
+schemaValueId.client(fullDefinition).ping({ message: 'schema value' });
 schemaValueId.value satisfies string;
 
-const ephemeralContract = defineAgentClient({
+const ephemeralDefinition = defineAgentClient({
   name: 'EphemeralExampleAgent',
   mode: 'ephemeral',
   id: { name: z.string() },
   methods: { ping: method({ input: {}, returns: z.string() }) },
 });
-ephemeralContract.client
+ephemeralDefinition.client
   .newPhantom({ name: 'example' })
   .ping()
   .then(({ metadata, value }) => {
@@ -108,9 +108,9 @@ ephemeralContract.client
     value satisfies string;
   });
 
-// @ts-expect-error lifecycle mode requires a complete exact name + id definition
-defineAgentClient({ mode: 'ephemeral', methods: contract.methods });
+// @ts-expect-error lifecycle mode requires a complete name + id definition
+defineAgentClient({ mode: 'ephemeral', methods: definition.methods });
 // @ts-expect-error method-only clients cannot declare a name without an ID shape
-defineAgentClient({ name: 'NamedContract', methods: contract.methods });
+defineAgentClient({ name: 'NamedContract', methods: definition.methods });
 // @ts-expect-error method-only clients cannot declare a name or lifecycle mode
-defineAgentClient({ name: 'NamedContract', mode: 'durable', methods: contract.methods });
+defineAgentClient({ name: 'NamedContract', mode: 'durable', methods: definition.methods });

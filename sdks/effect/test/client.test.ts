@@ -665,8 +665,8 @@ describe("Client 1.6 config and ephemeral receipts", () => {
           id: Counter.id,
           methods: Counter.methods,
         })
-        const exact = yield* identity.client(complete)
-        expect(yield* exact.value({})).toBe(42)
+        const full = yield* identity.client(complete)
+        expect(yield* full.value({})).toBe(42)
         expect(yield* (yield* complete.client.get({ initial: 7 })).value({})).toBe(42)
         expect((yield* complete.agentId({ initial: 7 })).encoded).toBe(identity.encoded)
 
@@ -698,8 +698,8 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         expect(
           identity.constructorValue.valueNodes.filter((node) => node.tag === "record-value"),
         ).toHaveLength(1)
-        const exact = yield* Client.bind(identity, PrincipalTarget)
-        expect(yield* exact.value({})).toBe("ok")
+        const full = yield* Client.bind(identity, PrincipalTarget)
+        expect(yield* full.value({})).toBe("ok")
         const factory = yield* PrincipalTarget.client.get({ name: "main" })
         expect(yield* factory.value({})).toBe("ok")
       }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(runtime.layer, host)))
@@ -708,7 +708,7 @@ describe("Client 1.6 config and ephemeral receipts", () => {
     }),
   )
 
-  it.effect("rejects exact mismatches and ephemeral generic binding before opening RPC", () =>
+  it.effect("rejects full-client mismatches and ephemeral generic binding before opening RPC", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime()
       const host = Layer.succeed(AgentHostClient, {
