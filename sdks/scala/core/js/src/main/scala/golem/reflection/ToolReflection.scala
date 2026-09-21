@@ -153,40 +153,42 @@ final class ToolType private[reflection] (
       }
     }
     resolved match {
-      case Some((index, indices)) if nodes(index).body.nonEmpty =>
-        val body       = nodes(index).body.get
-        val localNames = (body.positionals.fixed.map(_.name) ++ body.positionals.tail.map(_.name) ++
-          body.options.flatMap(o => o.long :: o.aliases) ++ body.flags.flatMap(f => f.long :: f.aliases)).toSet
-        val globals = (0 :: indices).flatMap { nodeIndex =>
-          val node = nodes(nodeIndex)
-          node.globals.options.map(argument) ++ node.globals.flags.map(argument)
-        }.filterNot(arg => (arg.name :: arg.aliases).exists(localNames.contains))
-        val positionals = body.positionals.fixed.map { item =>
-          ToolArgument(
-            "positional",
-            item.name,
-            Nil,
-            None,
-            item.required,
-            item.default.map(SchemaWire.schemaValueFromWit),
-            schemaAt(item.tpe),
-            !item.required && item.default.isEmpty
-          )
+      case Some((index, indices)) =>
+        val body = nodes(index).body
+        val arguments = body.toList.flatMap { callable =>
+          val localNames = (callable.positionals.fixed.map(_.name) ++ callable.positionals.tail.map(_.name) ++
+            callable.options.flatMap(o => o.long :: o.aliases) ++ callable.flags.flatMap(f => f.long :: f.aliases)).toSet
+          val globals = (0 :: indices).flatMap { nodeIndex =>
+            val node = nodes(nodeIndex)
+            node.globals.options.map(argument) ++ node.globals.flags.map(argument)
+          }.filterNot(arg => (arg.name :: arg.aliases).exists(localNames.contains))
+          val positionals = callable.positionals.fixed.map { item =>
+            ToolArgument(
+              "positional",
+              item.name,
+              Nil,
+              None,
+              item.required,
+              item.default.map(SchemaWire.schemaValueFromWit),
+              schemaAt(item.tpe),
+              !item.required && item.default.isEmpty
+            )
+          }
+          val tail = callable.positionals.tail.toList.map { item =>
+            val inner = schemaAt(item.itemType)
+            ToolArgument(
+              "tail",
+              item.name,
+              Nil,
+              None,
+              item.min > 0,
+              None,
+              SchemaRef(inner.graph, SchemaType(ListType(inner.root))),
+              optionalCarrier = false
+            )
+          }
+          globals ++ positionals ++ tail ++ callable.options.map(argument) ++ callable.flags.map(argument)
         }
-        val tail = body.positionals.tail.toList.map { item =>
-          val inner = schemaAt(item.itemType)
-          ToolArgument(
-            "tail",
-            item.name,
-            Nil,
-            None,
-            item.min > 0,
-            None,
-            SchemaRef(inner.graph, SchemaType(ListType(inner.root))),
-            optionalCarrier = false
-          )
-        }
-        val arguments = globals ++ positionals ++ tail ++ body.options.map(argument) ++ body.flags.map(argument)
         val inputRoot = record(arguments.map { arg =>
           arg.name -> (if (arg.optionalCarrier) SchemaType(OptionType(arg.schema.root)) else arg.schema.root)
         })
@@ -196,6 +198,7 @@ final class ToolType private[reflection] (
             this,
             canonicalPath,
             body,
+            nodes(index).subcommands.map(nodes(_).name),
             arguments,
             SchemaRef(SchemaGraph(graph.defs, inputRoot)),
             SchemaGraph(graph.defs, inputRoot)
@@ -227,21 +230,59 @@ final class ReflectedToolClient private[reflection] (val tool: ToolType) {
 }
 
 /**
+ * A caller-owned typed tool definition. The generated client may describe a
+ * subset of the deployed tool; binding performs no discovery or compatibility
+ * preflight.
+ */
+final class ToolClientDefinition[Client] private (
+  val name: Option[String],
+  createClient: String => Client
+) {
+  def client: Either[GolemReflectError, Client] =
+    name match {
+      case Some(lookupName) => create(lookupName)
+      case None             => Left(GolemReflectError.Discovery("a nameless tool client definition requires a target name"))
+    }
+
+  def client(targetName: String): Either[GolemReflectError, Client] =
+    create(name.getOrElse(targetName))
+
+  private def create(lookupName: String): Either[GolemReflectError, Client] =
+    if (lookupName.trim.isEmpty)
+      Left(GolemReflectError.Discovery("tool client target name cannot be empty"))
+    else
+      try Right(createClient(lookupName))
+      catch {
+        case NonFatal(error) =>
+          Left(GolemReflectError.Discovery(Option(error.getMessage).getOrElse(error.toString)))
+      }
+}
+
+object ToolClientDefinition {
+  def named[Client](name: String)(createClient: String => Client): ToolClientDefinition[Client] =
+    new ToolClientDefinition(Some(name), createClient)
+
+  def unnamed[Client](createClient: String => Client): ToolClientDefinition[Client] =
+    new ToolClientDefinition(None, createClient)
+}
+
+/**
  * A discovered command with a selected graph root for each declared surface.
  */
 final class ToolCommand private[reflection] (
   val tool: ToolType,
   val path: List[String],
-  val body: WitCommandBody,
+  val body: Option[WitCommandBody],
+  val subcommands: List[String],
   val arguments: List[ToolArgument],
   val inputSchema: SchemaRef,
   private val wireInput: SchemaGraph
 ) {
   private implicit val ec: ExecutionContext = ToolInvokerRuntime.executionContext
 
-  val result: Option[SchemaRef]                 = body.result.map(spec => tool.resultSchema(spec.tpe))
+  val result: Option[SchemaRef]                 = body.flatMap(_.result).map(spec => tool.resultSchema(spec.tpe))
   val errors: List[(String, Option[SchemaRef])] =
-    body.errors.map(error => error.name -> error.payload.map(tool.resultSchema))
+    body.toList.flatMap(_.errors).map(error => error.name -> error.payload.map(tool.resultSchema))
 
   def packJson(input: Json): Either[ToolError[Nothing], SchemaValue] =
     try
@@ -308,7 +349,7 @@ final class ToolCommand private[reflection] (
       }
     }
     def quant(refs: List[WitRef], all: Boolean): Boolean = if (all) refs.forall(matches) else refs.exists(matches)
-    val okay                                             = body.constraints.forall {
+    val okay                                             = body.toList.flatMap(_.constraints).forall {
       case WitConstraint.RequiresAll(refs) => quant(refs, all = true)
       case WitConstraint.RequiresAny(refs) => quant(refs, all = false)
       case WitConstraint.AllOrNone(refs)   =>
@@ -363,7 +404,9 @@ final class ToolCommand private[reflection] (
     value: SchemaValue,
     stdin: Option[ToolInputStream] = None
   ): Future[Either[ToolError[NamedToolError], Option[SchemaValue]]] = {
-    if (body.stdout.exists(_.required))
+    if (body.isEmpty)
+      return Future.successful(Left(ToolError.InvalidInput("selected command is a namespace and cannot be invoked")))
+    if (body.exists(_.stdout.exists(_.required)))
       return Future.successful(Left(ToolError.InvalidInput("command requires caller-readable stdout")))
     startValue(value, stdin) match {
       case Left(error)    => Future.successful(Left(error))
@@ -389,13 +432,15 @@ final class ToolCommand private[reflection] (
     value: SchemaValue,
     stdin: Option[ToolInputStream] = None
   ): Either[ToolError[NamedToolError], ReflectedToolInvocation] = ToolReflectionFailures.attempt {
-    if (body.stdin.exists(_.required) && stdin.isEmpty)
+    if (body.isEmpty)
+      Left(ToolError.InvalidInput("selected command is a namespace and cannot be invoked"))
+    else if (body.exists(_.stdin.exists(_.required)) && stdin.isEmpty)
       Left(ToolError.InvalidInput("command requires stdin"))
     else
       for {
         input     <- checkedInput(value)
         transport <- ToolRpcClient.tryTransport(tool.lookupName).left.map(mapFailure)
-        started   <- transport.start(path, input, stdin, body.stdout.nonEmpty).left.map(mapFailure)
+        started   <- transport.start(path, input, stdin, body.exists(_.stdout.nonEmpty)).left.map(mapFailure)
       } yield ReflectedToolInvocation(
         started.stdout,
         ToolReflectionFailures.recover(started.result.map(_.left.map(mapFailure).flatMap(decodeResult))),
@@ -423,9 +468,11 @@ final class ToolCommand private[reflection] (
     value: SchemaValue,
     stdin: Option[ToolInputStream] = None
   ): Either[ToolError[NamedToolError], Unit] = ToolReflectionFailures.attempt {
-    if (body.stdout.exists(_.required))
+    if (body.isEmpty)
+      Left(ToolError.InvalidInput("selected command is a namespace and cannot be invoked"))
+    else if (body.exists(_.stdout.exists(_.required)))
       Left(ToolError.InvalidInput("command requires caller-readable stdout"))
-    else if (body.stdin.exists(_.required) && stdin.isEmpty)
+    else if (body.exists(_.stdin.exists(_.required)) && stdin.isEmpty)
       Left(ToolError.InvalidInput("command requires stdin"))
     else
       checkedInput(value).flatMap(input =>

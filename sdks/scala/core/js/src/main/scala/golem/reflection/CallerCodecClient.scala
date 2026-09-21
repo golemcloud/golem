@@ -45,7 +45,7 @@ object AgentConfigCodec {
     }
 }
 
-/** A discovery-free, caller-authored typed agent contract. */
+/** A discovery-free, caller-owned static agent client definition. */
 final class AgentClientDefinition[Capability <: AgentClientCapability, Constructor, Config] private (
   private[reflection] val contractName: Option[String],
   private[reflection] val contractMode: Option[AgentMode],
@@ -89,7 +89,7 @@ final class AgentClientDefinition[Capability <: AgentClientCapability, Construct
                Either.cond(
                  parts.typeName == name,
                  (),
-                 GolemReflectError.Identity(s"Agent client contract '$name' cannot bind '${parts.typeName}'")
+                 GolemReflectError.Identity(s"Agent client definition '$name' cannot bind '${parts.typeName}'")
                )
            }
       _ <- contractMode match {

@@ -65,6 +65,50 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       val command = sample().command(List("r")).toOption.get
       assertTrue(command.path == List("run"), command.arguments.map(_.name) == List("message"))
     },
+    test("namespace-only commands remain inspectable and reject invocation locally") {
+      val namespace = sample().command(Nil).toOption.get
+      assertTrue(
+        namespace.path.isEmpty,
+        namespace.body.isEmpty,
+        namespace.subcommands == List("run"),
+        namespace.startValue(RecordValue(Nil)).left.toOption.exists(_.isInstanceOf[ToolError.InvalidInput])
+      )
+    },
+    test("nested namespace metadata exposes canonical child names") {
+      val original = sample()
+      val nodes    = original.definition.commands.nodes
+      val nested = new ToolType(
+        original.lookupName,
+        original.definition.copy(commands =
+          original.definition.commands.copy(nodes =
+            Vector(
+              nodes(0).copy(subcommands = List(1)),
+              nodes(0).copy(name = "group", aliases = List("g"), subcommands = List(2)),
+              nodes(1)
+            )
+          )
+        ),
+        original.implementedBy
+      )
+      val namespace = nested.command(List("g")).toOption.get
+      val command   = nested.command(List("g", "r")).toOption.get
+      assertTrue(
+        namespace.path == List("group"),
+        namespace.body.isEmpty,
+        namespace.subcommands == List("run"),
+        command.path == List("group", "run")
+      )
+    },
+    test("caller-owned tool definitions bind named and partial clients without discovery") {
+      val named   = ToolClientDefinition.named("stable-tool")(identity[String])
+      val partial = ToolClientDefinition.unnamed(identity[String])
+      assertTrue(
+        named.client == Right("stable-tool"),
+        named.client("ignored") == Right("stable-tool"),
+        partial.client.isLeft,
+        partial.client("deployed-tool") == Right("deployed-tool")
+      )
+    },
     test("optional fields use the canonical option carrier") {
       val original = sample()
       val nodes    = original.definition.commands.nodes
