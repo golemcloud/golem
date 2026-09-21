@@ -4073,7 +4073,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 trace_states,
                 invocation_context,
                 wallet_pin,
-                shard_epoch,
                 ..
             } => Entry::AgentInvocationStarted(RawAgentInvocationStartedParameters {
                 idempotency_key: Some(idempotency_key.into()),
@@ -4085,7 +4084,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .map(span_data_to_proto)
                     .collect(),
                 wallet_pin: wallet_pin.map(invocation_wallet_pin_to_proto),
-                shard_epoch,
             }),
             OplogEntry::AgentInvocationFinished {
                 result,
@@ -4663,7 +4661,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         .wallet_pin
                         .map(invocation_wallet_pin_from_proto)
                         .transpose()?,
-                    shard_epoch: p.shard_epoch,
                 })
             }
             Entry::AgentInvocationFinished(p) => {

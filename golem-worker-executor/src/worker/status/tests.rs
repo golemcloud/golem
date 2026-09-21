@@ -438,7 +438,6 @@ async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
                 wallet_pin: None,
-                shard_epoch: None,
             },
             {
                 let idempotency_key = idempotency_key.clone();
@@ -747,7 +746,6 @@ fn recovery_errors_are_not_invocation_results() {
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
                 wallet_pin: None,
-                shard_epoch: None,
             },
         ),
         (
@@ -1824,7 +1822,6 @@ impl TestCaseBuilder {
                 trace_states: vec![],
                 invocation_context: vec![],
                 wallet_pin: None,
-                shard_epoch: None,
             },
             move |mut status| {
                 status.current_idempotency_key = Some(idempotency_key);

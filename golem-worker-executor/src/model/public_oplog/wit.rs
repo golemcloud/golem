@@ -1244,7 +1244,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     invocation_context,
                     wallet_pin: None,
                     // Raw-only, and absent from the WIT record by design.
-                    shard_epoch: None,
                 })
             }
             oplog::OplogEntry::AgentInvocationFinished(params) => {
@@ -2026,7 +2025,6 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 trace_states,
                 invocation_context,
                 wallet_pin: _,
-                shard_epoch: _,
             } => Ok(Self::AgentInvocationStarted(
                 oplog::RawAgentInvocationStartedParameters {
                     timestamp: timestamp.into(),
@@ -2582,7 +2580,6 @@ mod tests {
                 pinned_card_ids: pinned_card_ids.clone(),
                 scope_card_id: Some(scope_card_id),
             }),
-            shard_epoch: None,
         };
 
         let encoded = oplog::OplogEntry::try_from(raw_entry).unwrap();

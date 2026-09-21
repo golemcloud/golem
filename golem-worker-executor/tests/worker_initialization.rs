@@ -685,7 +685,6 @@ async fn prepare_session(
                 trace_states,
                 invocation_context,
                 wallet_pin: None,
-                shard_epoch: None,
             })
             .await
             .unwrap();

@@ -2084,7 +2084,6 @@ mod tests {
                 trace_states: Vec::new(),
                 invocation_context: Vec::new(),
                 wallet_pin: None,
-                shard_epoch: None,
             },
         );
         entries.insert(

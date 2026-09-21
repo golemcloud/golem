@@ -1098,7 +1098,6 @@ pub trait OplogOps: Oplog {
             trace_states: ctx.trace_states,
             invocation_context,
             wallet_pin: Some(wallet_pin),
-            shard_epoch: self.shard_epoch().map(|epoch| epoch.0),
         })
     }
 

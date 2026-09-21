@@ -823,19 +823,13 @@ fn rewrite_forked_oplog_entry(
 ) -> OplogEntry {
     match &mut entry {
         OplogEntry::AgentInvocationStarted {
-            wallet_pin,
-            shard_epoch,
+            wallet_pin: Some(wallet_pin),
             ..
         } => {
-            // The source's epoch names a generation of the source's shard. The copy lands in an
-            // oplog opened without an epoch to assert, which the field records as `None`.
-            *shard_epoch = None;
-            if let Some(wallet_pin) = wallet_pin {
-                wallet_pin.wallet_token.wallet_id_hash = CardHolder::Agent(AgentCardHolder {
-                    agent_id: target_agent_id.clone(),
-                })
-                .wallet_id_hash();
-            }
+            wallet_pin.wallet_token.wallet_id_hash = CardHolder::Agent(AgentCardHolder {
+                agent_id: target_agent_id.clone(),
+            })
+            .wallet_id_hash();
         }
         OplogEntry::CardEventQueued {
             event: QueuedCardEvent::TransferStarted(event),
@@ -1078,53 +1072,17 @@ mod tests {
                 pinned_card_ids: Vec::new(),
                 scope_card_id: None,
             }),
-            shard_epoch: Some(7),
         };
 
         match rewrite_forked_oplog_entry(entry, &source, &target) {
             OplogEntry::AgentInvocationStarted {
                 wallet_pin: Some(wallet_pin),
-                shard_epoch,
                 ..
-            } => {
-                assert_eq!(
-                    wallet_pin.wallet_token.wallet_id_hash,
-                    CardHolder::Agent(AgentCardHolder { agent_id: target }).wallet_id_hash()
-                );
-                assert_eq!(shard_epoch, None);
-            }
+            } => assert_eq!(
+                wallet_pin.wallet_token.wallet_id_hash,
+                CardHolder::Agent(AgentCardHolder { agent_id: target }).wallet_id_hash()
+            ),
             other => panic!("expected pinned invocation start, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn fork_clears_the_source_shard_epoch_from_copied_invocations() {
-        let source = agent_id("source");
-        let target = agent_id("target");
-        let entry = OplogEntry::AgentInvocationStarted {
-            timestamp: Timestamp::now_utc(),
-            idempotency_key: IdempotencyKey::new("fork-shard-epoch".to_string()),
-            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
-                method_name: "test".to_string(),
-                input: SchemaValue::Record { fields: Vec::new() },
-                principal: Principal::anonymous(),
-                scope_card: None,
-            })),
-            trace_id: TraceId::generate(),
-            trace_states: Vec::new(),
-            invocation_context: Vec::new(),
-            wallet_pin: None,
-            shard_epoch: Some(7),
-        };
-
-        // The source's epoch belongs to the source's shard; the target's copy asserts none.
-        match rewrite_forked_oplog_entry(entry, &source, &target) {
-            OplogEntry::AgentInvocationStarted {
-                wallet_pin: None,
-                shard_epoch,
-                ..
-            } => assert_eq!(shard_epoch, None),
-            other => panic!("expected unpinned invocation start, got {other:?}"),
         }
     }
 
