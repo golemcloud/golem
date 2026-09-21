@@ -25,6 +25,10 @@ const UINT32_MAX = 0xffff_ffff;
 const UINT64_MAX = (1n << 64n) - 1n;
 const DURATION_MAX = UINT64_MAX * 1_000_000_000n + 999_999_999n;
 const MAX_TIMER_DELAY_MS = 0x7fff_ffff;
+const MAX_RAW_NODES = 4_096;
+const MAX_COMPILED_NODES = 4_096;
+const MAX_COMPILED_PAYLOAD_BYTES = 1_048_576;
+const MAX_POLICY_DEPTH = 256;
 
 export type RetryProperties =
   | Readonly<Record<string, PredicateValueInput>>
@@ -91,6 +95,23 @@ type PolicyState =
 
 type Verdict = { tag: 'retry'; delay: bigint } | { tag: 'give-up' };
 
+interface Compilation<T> {
+  value: T;
+  nodes: number;
+  payloadBytes: number;
+  height: number;
+}
+
+interface Compiler {
+  policyCache: Map<number, Compilation<CompiledPolicy>>;
+  policyVisiting: Set<number>;
+  predicateCaches: WeakMap<object, Map<number, Compilation<CompiledPredicate>>>;
+  predicateVisiting: WeakMap<object, Set<number>>;
+  registeredPredicates: WeakSet<object>;
+  rawNodes: number;
+  allocatedPayloadBytes: number;
+}
+
 /**
  * Runs arbitrary user code using a Golem semantic retry policy entirely in user space.
  *
@@ -143,128 +164,240 @@ function compilePolicy(policy: RetryPolicy): CompiledPolicy {
     throw invalid('policy must contain a root node at index 0');
   }
 
-  return compilePolicyNode(policy.nodes, 0, new Set());
+  const compiler: Compiler = {
+    policyCache: new Map(),
+    policyVisiting: new Set(),
+    predicateCaches: new WeakMap(),
+    predicateVisiting: new WeakMap(),
+    registeredPredicates: new WeakSet(),
+    rawNodes: policy.nodes.length,
+    allocatedPayloadBytes: 0,
+  };
+  if (compiler.rawNodes > MAX_RAW_NODES) throw tooComplex();
+  for (const node of policy.nodes) {
+    if (isObject(node) && node.tag === 'filtered-on' && isObject(node.val)) {
+      registerRawPredicate(compiler, node.val.predicate);
+    }
+  }
+
+  return compilePolicyNode(compiler, policy.nodes, 0, 0).value;
 }
 
 function compilePolicyNode(
+  compiler: Compiler,
   nodes: PolicyNode[],
   index: number,
-  ancestors: Set<number>,
-): CompiledPolicy {
+  depth: number,
+): Compilation<CompiledPolicy> {
   const node = indexedNode(nodes, index, 'policy');
-  if (ancestors.has(index)) throw invalid(`policy contains a cycle at node ${index}`);
-  const nextAncestors = new Set(ancestors).add(index);
+  if (compiler.policyVisiting.has(index)) throw invalid(`policy contains a cycle at node ${index}`);
+  const cached = compiler.policyCache.get(index);
+  if (cached !== undefined) {
+    ensureDepth(depth, cached.height);
+    return cached;
+  }
+  ensureDepth(depth, 0);
+  compiler.policyVisiting.add(index);
   const inner = (child: unknown) =>
-    compilePolicyNode(nodes, validIndex(child, 'policy child'), nextAncestors);
-  const pair = (value: unknown): [CompiledPolicy, CompiledPolicy] => {
+    compilePolicyNode(compiler, nodes, validIndex(child, 'policy child'), depth + 1);
+  const pair = (value: unknown): [Compilation<CompiledPolicy>, Compilation<CompiledPolicy>] => {
     const [left, right] = validPair(value, 'policy children');
     return [inner(left), inner(right)];
   };
 
+  let result: Compilation<CompiledPolicy>;
   switch (node.tag) {
     case 'immediate':
     case 'never':
-      return { tag: node.tag };
+      result = leaf({ tag: node.tag });
+      break;
     case 'periodic':
-      return { tag: node.tag, delay: validDuration(node.val, 'periodic delay') };
+      result = leaf({ tag: node.tag, delay: validDuration(node.val, 'periodic delay') });
+      break;
     case 'exponential': {
       const value = validObject(node.val, 'exponential config');
-      return {
+      result = leaf({
         tag: node.tag,
         baseDelay: validDuration(value.baseDelay, 'exponential base delay'),
-        factor: validNumber(value.factor, 'exponential factor'),
-      };
+        factor: validPositiveFactor(value.factor, 'exponential factor'),
+      });
+      break;
     }
     case 'fibonacci': {
       const value = validObject(node.val, 'fibonacci config');
-      return {
+      result = leaf({
         tag: node.tag,
         first: validDuration(value.first, 'fibonacci first delay'),
         second: validDuration(value.second, 'fibonacci second delay'),
-      };
+      });
+      break;
     }
     case 'count-box': {
       const value = validObject(node.val, 'count-box config');
-      return {
-        tag: node.tag,
-        maxRetries: validUint32(value.maxRetries, 'count-box max retries'),
-        inner: inner(value.inner),
-      };
+      const compiledInner = inner(value.inner);
+      result = parent(
+        {
+          tag: node.tag,
+          maxRetries: validUint32(value.maxRetries, 'count-box max retries'),
+          inner: compiledInner.value,
+        },
+        compiledInner,
+      );
+      break;
     }
     case 'time-box': {
       const value = validObject(node.val, 'time-box config');
-      return {
-        tag: node.tag,
-        limit: validDuration(value.limit, 'time-box limit'),
-        inner: inner(value.inner),
-      };
+      const compiledInner = inner(value.inner);
+      result = parent(
+        {
+          tag: node.tag,
+          limit: validDuration(value.limit, 'time-box limit'),
+          inner: compiledInner.value,
+        },
+        compiledInner,
+      );
+      break;
     }
     case 'clamp-delay': {
       const value = validObject(node.val, 'clamp-delay config');
       const minDelay = validDuration(value.minDelay, 'clamp minimum delay');
       const maxDelay = validDuration(value.maxDelay, 'clamp maximum delay');
       if (minDelay > maxDelay) throw invalid('clamp minimum delay must not exceed maximum delay');
-      return { tag: node.tag, minDelay, maxDelay, inner: inner(value.inner) };
+      const compiledInner = inner(value.inner);
+      result = parent(
+        { tag: node.tag, minDelay, maxDelay, inner: compiledInner.value },
+        compiledInner,
+      );
+      break;
     }
     case 'add-delay': {
       const value = validObject(node.val, 'add-delay config');
-      return {
-        tag: node.tag,
-        delay: validDuration(value.delay, 'additional delay'),
-        inner: inner(value.inner),
-      };
+      const compiledInner = inner(value.inner);
+      result = parent(
+        {
+          tag: node.tag,
+          delay: validDuration(value.delay, 'additional delay'),
+          inner: compiledInner.value,
+        },
+        compiledInner,
+      );
+      break;
     }
     case 'jitter': {
       const value = validObject(node.val, 'jitter config');
-      return {
-        tag: node.tag,
-        factor: validNonNegativeFactor(value.factor, 'jitter factor'),
-        inner: inner(value.inner),
-      };
+      const compiledInner = inner(value.inner);
+      result = parent(
+        {
+          tag: node.tag,
+          factor: validNonNegativeFactor(value.factor, 'jitter factor'),
+          inner: compiledInner.value,
+        },
+        compiledInner,
+      );
+      break;
     }
     case 'filtered-on': {
       const value = validObject(node.val, 'filtered-on config');
-      return {
-        tag: node.tag,
-        predicate: compilePredicate(value.predicate),
-        inner: inner(value.inner),
-      };
+      const predicate = compilePredicate(compiler, value.predicate, depth + 1);
+      const compiledInner = inner(value.inner);
+      result = combineCompilation(
+        {
+          tag: node.tag,
+          predicate: predicate.value,
+          inner: compiledInner.value,
+        },
+        predicate,
+        compiledInner,
+      );
+      break;
     }
     case 'and-then':
     case 'policy-union':
     case 'policy-intersect': {
       const [left, right] = pair(node.val);
-      return { tag: node.tag, left, right };
+      result = combineCompilation(
+        { tag: node.tag, left: left.value, right: right.value },
+        left,
+        right,
+      );
+      break;
     }
     default:
       throw invalid(`unsupported policy node '${String((node as { tag?: unknown }).tag)}'`);
   }
+  compiler.policyVisiting.delete(index);
+  ensureComplexity(result);
+  compiler.policyCache.set(index, result);
+  return result;
 }
 
-function compilePredicate(predicate: unknown): CompiledPredicate {
+function compilePredicate(
+  compiler: Compiler,
+  predicate: unknown,
+  depth: number,
+): Compilation<CompiledPredicate> {
   if (!isObject(predicate) || !Array.isArray(predicate.nodes) || predicate.nodes.length === 0) {
     throw invalid('predicate must contain a root node at index 0');
   }
-  return compilePredicateNode(predicate.nodes as PredicateNode[], 0, new Set());
+  registerRawPredicate(compiler, predicate);
+  let cache = compiler.predicateCaches.get(predicate);
+  let visiting = compiler.predicateVisiting.get(predicate);
+  if (cache === undefined || visiting === undefined) {
+    cache = new Map();
+    visiting = new Set();
+    compiler.predicateCaches.set(predicate, cache);
+    compiler.predicateVisiting.set(predicate, visiting);
+  }
+  return compilePredicateNode(
+    compiler,
+    predicate.nodes as PredicateNode[],
+    0,
+    depth,
+    cache,
+    visiting,
+  );
 }
 
 function compilePredicateNode(
+  compiler: Compiler,
   nodes: PredicateNode[],
   index: number,
-  ancestors: Set<number>,
-): CompiledPredicate {
+  depth: number,
+  cache: Map<number, Compilation<CompiledPredicate>>,
+  visiting: Set<number>,
+): Compilation<CompiledPredicate> {
   const node = indexedNode(nodes, index, 'predicate');
-  if (ancestors.has(index)) throw invalid(`predicate contains a cycle at node ${index}`);
-  const nextAncestors = new Set(ancestors).add(index);
+  if (visiting.has(index)) throw invalid(`predicate contains a cycle at node ${index}`);
+  const cached = cache.get(index);
+  if (cached !== undefined) {
+    ensureDepth(depth, cached.height);
+    return cached;
+  }
+  ensureDepth(depth, 0);
+  visiting.add(index);
   const inner = (child: unknown) =>
-    compilePredicateNode(nodes, validIndex(child, 'predicate child'), nextAncestors);
+    compilePredicateNode(
+      compiler,
+      nodes,
+      validIndex(child, 'predicate child'),
+      depth + 1,
+      cache,
+      visiting,
+    );
 
+  let result: Compilation<CompiledPredicate>;
   switch (node.tag) {
     case 'pred-true':
     case 'pred-false':
-      return { tag: node.tag };
-    case 'prop-exists':
-      return { tag: node.tag, property: validString(node.val, 'property name') };
+      result = leaf({ tag: node.tag });
+      break;
+    case 'prop-exists': {
+      const property = validString(node.val, 'property name');
+      const payloadBytes = stringBytes(property);
+      chargePayload(compiler, payloadBytes);
+      result = leaf({ tag: node.tag, property }, payloadBytes);
+      break;
+    }
     case 'prop-eq':
     case 'prop-neq':
     case 'prop-gt':
@@ -272,41 +405,188 @@ function compilePredicateNode(
     case 'prop-lt':
     case 'prop-lte': {
       const value = validObject(node.val, `${node.tag} config`);
-      return {
-        tag: node.tag,
-        property: validString(value.propertyName, 'property name'),
-        value: validPredicateValue(value.value),
-      };
+      const property = validString(value.propertyName, 'property name');
+      const payloadBytes = saturatingNumberAdd(
+        stringBytes(property),
+        predicateValueInputBytes(value.value),
+      );
+      chargePayload(compiler, payloadBytes);
+      const predicateValue = validPredicateValue(value.value);
+      result = leaf(
+        {
+          tag: node.tag,
+          property,
+          value: predicateValue,
+        },
+        payloadBytes,
+      );
+      break;
     }
     case 'prop-in': {
       const value = validObject(node.val, 'prop-in config');
       if (!Array.isArray(value.values)) throw invalid('prop-in values must be an array');
-      return {
-        tag: node.tag,
-        property: validString(value.propertyName, 'property name'),
-        values: value.values.map(validPredicateValue),
-      };
+      const property = validString(value.propertyName, 'property name');
+      let payloadBytes = stringBytes(property);
+      chargePayload(compiler, payloadBytes);
+      const values: PredicateValue[] = [];
+      for (const item of value.values) {
+        const itemBytes = saturatingNumberAdd(16, predicateValueInputBytes(item));
+        chargePayload(compiler, itemBytes);
+        const predicateValue = validPredicateValue(item);
+        payloadBytes = saturatingNumberAdd(payloadBytes, itemBytes);
+        values.push(predicateValue);
+      }
+      result = leaf(
+        {
+          tag: node.tag,
+          property,
+          values,
+        },
+        payloadBytes,
+      );
+      break;
     }
     case 'prop-matches':
     case 'prop-starts-with':
     case 'prop-contains': {
       const value = validObject(node.val, `${node.tag} config`);
-      return {
-        tag: node.tag,
-        property: validString(value.propertyName, 'property name'),
-        pattern: validString(value.pattern, 'property pattern'),
-      };
+      const property = validString(value.propertyName, 'property name');
+      const pattern = validString(value.pattern, 'property pattern');
+      const payloadBytes = saturatingNumberAdd(stringBytes(property), stringBytes(pattern));
+      chargePayload(compiler, payloadBytes);
+      result = leaf(
+        {
+          tag: node.tag,
+          property,
+          pattern,
+        },
+        payloadBytes,
+      );
+      break;
     }
     case 'pred-and':
     case 'pred-or': {
       const [left, right] = validPair(node.val, 'predicate children');
-      return { tag: node.tag, left: inner(left), right: inner(right) };
+      const compiledLeft = inner(left);
+      const compiledRight = inner(right);
+      result = combineCompilation(
+        { tag: node.tag, left: compiledLeft.value, right: compiledRight.value },
+        compiledLeft,
+        compiledRight,
+      );
+      break;
     }
-    case 'pred-not':
-      return { tag: node.tag, inner: inner(node.val) };
+    case 'pred-not': {
+      const compiledInner = inner(node.val);
+      result = parent({ tag: node.tag, inner: compiledInner.value }, compiledInner);
+      break;
+    }
     default:
       throw invalid(`unsupported predicate node '${String((node as { tag?: unknown }).tag)}'`);
   }
+  visiting.delete(index);
+  ensureComplexity(result);
+  cache.set(index, result);
+  return result;
+}
+
+function registerRawPredicate(compiler: Compiler, predicate: unknown): void {
+  if (!isObject(predicate) || compiler.registeredPredicates.has(predicate)) return;
+  compiler.registeredPredicates.add(predicate);
+  if (Array.isArray(predicate.nodes)) {
+    compiler.rawNodes = saturatingNumberAdd(compiler.rawNodes, predicate.nodes.length);
+    if (compiler.rawNodes > MAX_RAW_NODES) throw tooComplex();
+  }
+}
+
+function leaf<T>(value: T, payloadBytes = 0): Compilation<T> {
+  return { value, nodes: 1, payloadBytes, height: 0 };
+}
+
+function parent<T, U>(value: T, child: Compilation<U>): Compilation<T> {
+  return {
+    value,
+    nodes: saturatingNumberAdd(1, child.nodes),
+    payloadBytes: child.payloadBytes,
+    height: child.height + 1,
+  };
+}
+
+function combineCompilation<T, U, V>(
+  value: T,
+  left: Compilation<U>,
+  right: Compilation<V>,
+): Compilation<T> {
+  return {
+    value,
+    nodes: saturatingNumberAdd(1, saturatingNumberAdd(left.nodes, right.nodes)),
+    payloadBytes: saturatingNumberAdd(left.payloadBytes, right.payloadBytes),
+    height: Math.max(left.height, right.height) + 1,
+  };
+}
+
+function ensureDepth(depth: number, height: number): void {
+  if (depth + height > MAX_POLICY_DEPTH) throw tooComplex();
+}
+
+function ensureComplexity(compilation: Compilation<unknown>): void {
+  ensureDepth(0, compilation.height);
+  if (
+    compilation.nodes > MAX_COMPILED_NODES ||
+    compilation.payloadBytes > MAX_COMPILED_PAYLOAD_BYTES
+  ) {
+    throw tooComplex();
+  }
+}
+
+function chargePayload(compiler: Compiler, bytes: number): void {
+  compiler.allocatedPayloadBytes = saturatingNumberAdd(compiler.allocatedPayloadBytes, bytes);
+  if (compiler.allocatedPayloadBytes > MAX_COMPILED_PAYLOAD_BYTES) throw tooComplex();
+}
+
+function predicateValueInputBytes(value: unknown): number {
+  if (!isObject(value)) throw invalid('predicate value must be a tagged value');
+  if (value.tag === 'text' && typeof value.val === 'string') return stringBytes(value.val);
+  if (value.tag === 'boolean' && typeof value.val === 'boolean') return 0;
+  if (
+    value.tag === 'integer' &&
+    typeof value.val === 'bigint' &&
+    value.val >= -(1n << 63n) &&
+    value.val <= (1n << 63n) - 1n
+  ) {
+    return 0;
+  }
+  throw invalid('predicate value does not match its WIT tag');
+}
+
+function stringBytes(value: string): number {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x7f) bytes += 1;
+    else if (code <= 0x7ff) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < value.length) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+    if (bytes > MAX_COMPILED_PAYLOAD_BYTES) return bytes;
+  }
+  return bytes;
+}
+
+function saturatingNumberAdd(left: number, right: number): number {
+  return Math.min(Number.MAX_SAFE_INTEGER, left + right);
+}
+
+function tooComplex(): RetryPolicyError {
+  return invalid('policy is too deeply nested or expansive');
 }
 
 function initialState(policy: CompiledPolicy): PolicyState {
@@ -784,9 +1064,9 @@ function validUint32(value: unknown, context: string): number {
   return value as number;
 }
 
-function validNumber(value: unknown, context: string): number {
-  if (typeof value !== 'number') {
-    throw invalid(`${context} must be a number`);
+function validPositiveFactor(value: unknown, context: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw invalid(`${context} must be a finite number greater than 0`);
   }
   return value;
 }
@@ -800,15 +1080,19 @@ function validNonNegativeFactor(value: unknown, context: string): number {
 
 function validPredicateValue(value: unknown): PredicateValue {
   if (!isObject(value)) throw invalid('predicate value must be a tagged value');
-  if (value.tag === 'text' && typeof value.val === 'string') return value as PredicateValue;
-  if (value.tag === 'boolean' && typeof value.val === 'boolean') return value as PredicateValue;
+  if (value.tag === 'text' && typeof value.val === 'string') {
+    return { tag: 'text', val: value.val };
+  }
+  if (value.tag === 'boolean' && typeof value.val === 'boolean') {
+    return { tag: 'boolean', val: value.val };
+  }
   if (
     value.tag === 'integer' &&
     typeof value.val === 'bigint' &&
     value.val >= -(1n << 63n) &&
     value.val <= (1n << 63n) - 1n
   ) {
-    return value as PredicateValue;
+    return { tag: 'integer', val: value.val };
   }
   throw invalid('predicate value does not match its WIT tag');
 }

@@ -82,10 +82,9 @@ describe('user-space retry execution', () => {
     expect(fibonacciTimes).toEqual([0, 5, 15, 30]);
   });
 
-  it('matches Rust floating-duration rounding and accepts a raw zero exponential factor', async () => {
+  it('matches canonical floating-duration rounding', async () => {
     const roundedTimes: number[] = [];
     const belowTieTimes: number[] = [];
-    const zeroFactorTimes: number[] = [];
 
     await withFakeTime(async () => {
       await retry(
@@ -111,23 +110,60 @@ describe('user-space retry execution', () => {
       );
     });
 
-    const rawZeroFactor = {
+    expect(roundedTimes).toEqual([0, 1001, 1002]);
+    expect(belowTieTimes).toEqual([0, 1001, 1002]);
+  });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -2],
+    ['NaN', Number.NaN],
+    ['positive infinity', Number.POSITIVE_INFINITY],
+    ['negative infinity', Number.NEGATIVE_INFINITY],
+  ])('rejects a raw %s exponential factor', async (_name, factor) => {
+    const operation = vi.fn();
+    const raw = {
+      nodes: [{ tag: 'exponential' as const, val: { baseDelay: 2_000_000n, factor } }],
+    };
+
+    await expect(retry(raw, operation)).rejects.toThrow('finite number greater than 0');
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['negative', -1],
+    ['NaN', Number.NaN],
+    ['positive infinity', Number.POSITIVE_INFINITY],
+    ['negative infinity', Number.NEGATIVE_INFINITY],
+  ])('rejects a raw %s jitter factor', async (_name, factor) => {
+    const operation = vi.fn();
+    const raw = {
+      nodes: [{ tag: 'jitter' as const, val: { factor, inner: 1 } }, { tag: 'immediate' as const }],
+    };
+
+    await expect(retry(raw, operation)).rejects.toThrow('finite non-negative number');
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it('accepts a raw zero jitter factor as a no-op', async () => {
+    const raw = {
       nodes: [
-        { tag: 'count-box' as const, val: { maxRetries: 2, inner: 1 } },
-        { tag: 'exponential' as const, val: { baseDelay: 2_000_000n, factor: 0 } },
+        { tag: 'count-box' as const, val: { maxRetries: 1, inner: 1 } },
+        { tag: 'jitter' as const, val: { factor: 0, inner: 2 } },
+        { tag: 'periodic' as const, val: 2_000_000n },
       ],
     };
+    const times: number[] = [];
+
     await withFakeTime(async () => {
-      await retry(rawZeroFactor, (attempt) => {
-        zeroFactorTimes.push(Date.now());
-        if (attempt === 2) return;
+      await retry(raw, (attempt) => {
+        times.push(Date.now());
+        if (attempt === 1) return;
         throw new Error('failure');
       });
     });
 
-    expect(roundedTimes).toEqual([0, 1001, 1002]);
-    expect(belowTieTimes).toEqual([0, 1001, 1002]);
-    expect(zeroFactorTimes).toEqual([0, 2, 2]);
+    expect(times).toEqual([0, 2]);
   });
 
   it('applies clamping, delay addition, and deterministic positive jitter in nesting order', async () => {
@@ -355,6 +391,283 @@ describe('user-space retry execution', () => {
       await expect(retry(raw as RetryPolicy, operation)).rejects.toBeInstanceOf(RetryPolicyError);
     }
     expect(operation).not.toHaveBeenCalled();
+  });
+
+  it('bounds raw nodes, expanded DAGs, nesting depth, and predicate payloads', async () => {
+    const operation = vi.fn();
+    const tooManyRawNodes = { nodes: Array.from({ length: 4_097 }, () => ({ tag: 'immediate' })) };
+
+    const expandedDagNodes: Array<
+      { tag: 'policy-union'; val: [number, number] } | { tag: 'immediate' }
+    > = [];
+    for (let index = 0; index < 12; index += 1) {
+      expandedDagNodes.push({ tag: 'policy-union', val: [index + 1, index + 1] });
+    }
+    expandedDagNodes.push({ tag: 'immediate' });
+
+    const deepNodes: Array<
+      { tag: 'count-box'; val: { maxRetries: number; inner: number } } | { tag: 'immediate' }
+    > = [];
+    for (let index = 0; index < 257; index += 1) {
+      deepNodes.push({ tag: 'count-box', val: { maxRetries: 1, inner: index + 1 } });
+    }
+    deepNodes.push({ tag: 'immediate' });
+
+    const oversizedPayload = {
+      nodes: [
+        {
+          tag: 'filtered-on',
+          val: {
+            inner: 1,
+            predicate: {
+              nodes: [
+                {
+                  tag: 'prop-contains',
+                  val: { propertyName: 'message', pattern: 'x'.repeat(1_048_577) },
+                },
+              ],
+            },
+          },
+        },
+        { tag: 'immediate' },
+      ],
+    };
+
+    for (const raw of [
+      tooManyRawNodes,
+      { nodes: expandedDagNodes },
+      { nodes: deepNodes },
+      oversizedPayload,
+    ]) {
+      await expect(retry(raw as RetryPolicy, operation)).rejects.toThrow(
+        'too deeply nested or expansive',
+      );
+    }
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it('accepts the depth boundary and keeps memoized DAG policy states independent', async () => {
+    const boundaryNodes: Array<
+      { tag: 'count-box'; val: { maxRetries: number; inner: number } } | { tag: 'immediate' }
+    > = [];
+    for (let index = 0; index < 256; index += 1) {
+      boundaryNodes.push({ tag: 'count-box', val: { maxRetries: 1, inner: index + 1 } });
+    }
+    boundaryNodes.push({ tag: 'immediate' });
+
+    await expect(
+      retry({ nodes: boundaryNodes } as RetryPolicy, (attempt) => {
+        if (attempt === 0) throw new Error('first');
+        return 'ok';
+      }),
+    ).resolves.toBe('ok');
+
+    const sharedExponential = {
+      nodes: [
+        { tag: 'policy-union' as const, val: [1, 2] as [number, number] },
+        { tag: 'count-box' as const, val: { maxRetries: 1, inner: 2 } },
+        { tag: 'exponential' as const, val: { baseDelay: 10_000_000n, factor: 2 } },
+      ],
+    };
+    const times: number[] = [];
+    await withFakeTime(async () => {
+      await retry(sharedExponential, (attempt) => {
+        times.push(Date.now());
+        if (attempt === 2) return;
+        throw new Error('failure');
+      });
+    });
+    expect(times).toEqual([0, 10, 30]);
+  });
+
+  it('enforces raw, expanded, payload, and combined-depth boundaries', async () => {
+    const predicatePolicy = (predicateNodes: unknown[]) => ({
+      nodes: [
+        {
+          tag: 'filtered-on',
+          val: { inner: 1, predicate: { nodes: predicateNodes } },
+        },
+        { tag: 'immediate' },
+      ],
+    });
+    const acceptedRawBoundary = predicatePolicy([
+      { tag: 'pred-true' },
+      ...Array.from({ length: 4_093 }, () => ({ tag: 'pred-false' })),
+    ]);
+    await expect(
+      retry(acceptedRawBoundary as RetryPolicy, (attempt) => {
+        if (attempt === 0) throw new Error('first');
+        return 'ok';
+      }),
+    ).resolves.toBe('ok');
+
+    const rejectedRawBoundary = predicatePolicy([
+      { tag: 'pred-true' },
+      ...Array.from({ length: 4_094 }, () => ({ tag: 'pred-false' })),
+    ]);
+    const rejectedOperation = vi.fn();
+    await expect(retry(rejectedRawBoundary as RetryPolicy, rejectedOperation)).rejects.toThrow(
+      'too deeply nested or expansive',
+    );
+
+    const expandedBoundary = (wrappers: number): RetryPolicy => {
+      const nodes: unknown[] = [];
+      for (let index = 0; index < wrappers; index += 1) {
+        nodes.push({ tag: 'count-box', val: { maxRetries: 1, inner: index + 1 } });
+      }
+      const subtreeIndex = nodes.length + 1;
+      nodes.push({ tag: 'policy-union', val: [subtreeIndex, subtreeIndex] });
+      for (let index = 0; index < 10; index += 1) {
+        const child = nodes.length + 1;
+        nodes.push({ tag: 'policy-union', val: [child, child] });
+      }
+      nodes.push({ tag: 'immediate' });
+      return { nodes } as RetryPolicy;
+    };
+    await expect(retry(expandedBoundary(1), () => 'ok')).resolves.toBe('ok');
+    await expect(retry(expandedBoundary(2), rejectedOperation)).rejects.toThrow(
+      'too deeply nested or expansive',
+    );
+
+    const exactPayload = predicatePolicy([
+      {
+        tag: 'prop-contains',
+        val: { propertyName: '', pattern: '😀'.repeat(262_144) },
+      },
+    ]);
+    await expect(retry(exactPayload as RetryPolicy, () => 'ok')).resolves.toBe('ok');
+    const oversizedMultibytePayload = predicatePolicy([
+      {
+        tag: 'prop-contains',
+        val: { propertyName: '', pattern: `${'😀'.repeat(262_144)}x` },
+      },
+    ]);
+    await expect(
+      retry(oversizedMultibytePayload as RetryPolicy, rejectedOperation),
+    ).rejects.toThrow('too deeply nested or expansive');
+
+    const sharedPayload = predicatePolicy([
+      { tag: 'pred-and', val: [1, 1] },
+      {
+        tag: 'prop-contains',
+        val: { propertyName: '', pattern: 'x'.repeat(600_000) },
+      },
+    ]);
+    await expect(retry(sharedPayload as RetryPolicy, rejectedOperation)).rejects.toThrow(
+      'too deeply nested or expansive',
+    );
+
+    const membershipBoundary = (length: number) =>
+      predicatePolicy([
+        {
+          tag: 'prop-in',
+          val: {
+            propertyName: '',
+            values: Array.from({ length }, () => ({ tag: 'boolean', val: true })),
+          },
+        },
+      ]);
+    await expect(retry(membershipBoundary(65_536) as RetryPolicy, () => 'ok')).resolves.toBe('ok');
+    await expect(
+      retry(membershipBoundary(65_537) as RetryPolicy, rejectedOperation),
+    ).rejects.toThrow('too deeply nested or expansive');
+
+    const exactMembershipValues = Array.from({ length: 65_536 }, () => ({
+      tag: 'boolean',
+      val: true,
+    }));
+    const mustNotCompile = {
+      tag: 'prop-exists',
+      get val(): never {
+        throw new Error('payload limit was checked too late');
+      },
+    };
+    const cumulativeMembershipPayload = predicatePolicy([
+      { tag: 'pred-and', val: [1, 2] },
+      {
+        tag: 'prop-in',
+        val: { propertyName: '', values: exactMembershipValues },
+      },
+      { tag: 'pred-and', val: [3, 4] },
+      {
+        tag: 'prop-in',
+        val: { propertyName: '', values: exactMembershipValues },
+      },
+      mustNotCompile,
+    ]);
+    await expect(
+      retry(cumulativeMembershipPayload as RetryPolicy, rejectedOperation),
+    ).rejects.toThrow('too deeply nested or expansive');
+
+    const predicateDepth = (wrappers: number) => {
+      const nodes: unknown[] = [];
+      for (let index = 0; index < wrappers; index += 1) {
+        nodes.push({ tag: 'pred-not', val: index + 1 });
+      }
+      nodes.push({ tag: 'pred-true' });
+      return predicatePolicy(nodes);
+    };
+    await expect(retry(predicateDepth(255) as RetryPolicy, () => 'ok')).resolves.toBe('ok');
+    await expect(retry(predicateDepth(256) as RetryPolicy, rejectedOperation)).rejects.toThrow(
+      'too deeply nested or expansive',
+    );
+
+    const reusedAtExcessiveDepth: unknown[] = [
+      { tag: 'policy-union', val: [1, 2] },
+      { tag: 'immediate' },
+    ];
+    for (let index = 0; index < 256; index += 1) {
+      reusedAtExcessiveDepth.push({
+        tag: 'count-box',
+        val: { maxRetries: 1, inner: index === 255 ? 1 : index + 3 },
+      });
+    }
+    await expect(
+      retry({ nodes: reusedAtExcessiveDepth } as RetryPolicy, rejectedOperation),
+    ).rejects.toThrow('too deeply nested or expansive');
+    expect(rejectedOperation).not.toHaveBeenCalled();
+  });
+
+  it('snapshots raw predicate values before user code can mutate them', async () => {
+    const comparisonValue = { tag: 'text' as const, val: 'transient' };
+    const membershipValue = { tag: 'text' as const, val: 'retryable' };
+    const raw = {
+      nodes: [
+        {
+          tag: 'filtered-on' as const,
+          val: {
+            inner: 1,
+            predicate: {
+              nodes: [
+                { tag: 'pred-and' as const, val: [1, 2] as [number, number] },
+                {
+                  tag: 'prop-eq' as const,
+                  val: { propertyName: 'kind', value: comparisonValue },
+                },
+                {
+                  tag: 'prop-in' as const,
+                  val: { propertyName: 'category', values: [membershipValue] },
+                },
+              ],
+            },
+          },
+        },
+        { tag: 'immediate' as const },
+      ],
+    };
+
+    const result = retry(
+      raw,
+      (attempt) => {
+        if (attempt === 0) throw new Error('first');
+        return 'ok';
+      },
+      { properties: () => ({ kind: 'transient', category: 'retryable' }) },
+    );
+    comparisonValue.val = 'x'.repeat(1_048_577);
+    membershipValue.val = 'changed';
+
+    await expect(result).resolves.toBe('ok');
   });
 
   it('cancels before starting, during an attempt, and while waiting for a timer', async () => {
