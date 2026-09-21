@@ -3326,7 +3326,7 @@ mod tests {
             agent_id: metadata.agent_id.clone(),
             expected_epoch: ShardEpoch(1),
             actual_epoch: Some(ShardEpoch(2)),
-            owner_conflict: false,
+            writer_conflict: false,
         });
         let inner: Arc<dyn Oplog> = in_memory.clone();
 

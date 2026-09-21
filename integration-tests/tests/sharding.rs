@@ -487,13 +487,13 @@ mod tests {
     #[cfg(unix)]
     async fn stored_owning_epoch(pool: &sqlx::PgPool, agent_id: &AgentId) -> Option<i64> {
         sqlx::query_scalar(
-            "SELECT epoch FROM golem_worker_executor_indexed.oplog_metadata \
+            "SELECT epoch FROM golem_worker_executor_indexed.indexed_key_epoch \
              WHERE namespace = 'durable-worker-oplog' AND key = $1",
         )
         .bind(agent_id.to_redis_key())
         .fetch_optional(pool)
         .await
-        .expect("Failed to read oplog_metadata")
+        .expect("Failed to read indexed_key_epoch")
     }
 
     /// Counts the completions `agent_id`'s oplog records for `method`. Scoped to one method on

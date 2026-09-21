@@ -42,7 +42,7 @@ pub struct PostgresIndexedStorage {
     pool: PostgresPool,
     drop_prefix_delete_batch_size: u64,
     semaphore: Option<Arc<Semaphore>>,
-    /// Recorded beside the epoch on every oplog this process claims, so an equal epoch from
+    /// Recorded beside the epoch on every key this process claims, so an equal epoch from
     /// another process is refused rather than shared. One per process; see [`WriterId`].
     writer_id: WriterId,
 }
@@ -151,10 +151,9 @@ impl PostgresIndexedStorage {
 
     /// A stored epoch that will not fit a `u64` is corruption, not a fence. `to_i64` refuses to
     /// write one, so a negative column value came from outside this code - and reading it back as
-    /// `u64` would wrap it into a near-ceiling epoch that fences every writer out of the oplog and,
-    /// reported as evidence, walks the shard manager's own mint towards its ceiling.
+    /// `u64` would wrap it into a near-ceiling epoch that fences every writer out of the key.
     fn negative_epoch_message(value: i64, key: &str) -> String {
-        format!("Postgres indexed storage read a negative shard epoch {value} for key '{key}'")
+        format!("Postgres indexed storage read a negative epoch {value} for key '{key}'")
     }
 
     fn classify_repo_error(err: RepoError, primary_oplog_insert: bool) -> IndexedStorageError {
@@ -360,7 +359,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
-        shard_epoch: Option<ShardEpoch>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.append_many(
             svc_name,
@@ -369,7 +368,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             &namespace,
             key,
             vec![(id, Bytes::from(value))].into(),
-            shard_epoch,
+            expected_epoch,
         )
         .await
     }
@@ -382,7 +381,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
-        shard_epoch: Option<ShardEpoch>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if pairs.is_empty() {
             return Ok(());
@@ -399,7 +398,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         // With no epoch asserted there is nothing to check atomically with the insert, so a lone
         // entry is one autocommit `INSERT` rather than a transaction held open around it. An
         // entry that asserts an epoch takes the transaction below, as a batch does.
-        if let (None, [(id, value)]) = (shard_epoch, pairs.as_ref()) {
+        if let (None, [(id, value)]) = (expected_epoch, pairs.as_ref()) {
             return self
                 .pool
                 .with_rw(svc_name, api_name)
@@ -425,38 +424,36 @@ impl IndexedStorage for PostgresIndexedStorage {
                     // Inside the insert transaction, and holding the row, so a writer that has
                     // lost the shard cannot slip a batch in between the check and the insert.
                     // `FOR UPDATE` is what serialises two executors racing over the same oplog.
-                    if let Some(expected) = shard_epoch {
+                    if let Some(expected) = expected_epoch {
                         let stored: Option<(i64, String)> = tx
                             .fetch_optional_as(
                                 sqlx::query_as(
-                                    "SELECT epoch, owner FROM oplog_metadata WHERE namespace = $1 AND key = $2 FOR UPDATE;",
+                                    "SELECT epoch, writer FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
                                 )
                                 .bind(namespace.clone())
                                 .bind(key.clone()),
                             )
                             .await?;
                         let mut actual = None;
-                        let mut owner_matches = false;
-                        if let Some((epoch, owner)) = stored {
+                        let mut writer_matches = false;
+                        if let Some((epoch, writer)) = stored {
                             let epoch = u64::try_from(epoch).map_err(|_| {
                                 FencedTxError::Corrupt(Self::negative_epoch_message(epoch, &key))
                             })?;
                             actual = Some(ShardEpoch(epoch));
-                            owner_matches = owner == writer_id;
+                            writer_matches = writer == writer_id;
                         }
                         // Strict equality on the epoch, and the row's own writer on top of it. A
-                        // stored epoch above ours means a newer owner has taken over; below ours
-                        // means an open skipped the assertion; equal but written by another
-                        // process means a manager that lost its state minted this generation
-                        // twice, and neither of us may write through the other. An absent row
-                        // fences too - it is written before the first entry and removed before
-                        // the last.
-                        if actual != Some(expected) || !owner_matches {
+                        // stored epoch above ours means a newer writer has taken over; below ours
+                        // means the caller skipped `set_key_epoch`; equal but recorded by another
+                        // process means the epoch was issued twice, and neither may write through
+                        // the other. An absent row fences too.
+                        if actual != Some(expected) || !writer_matches {
                             return Err(FencedTxError::Fenced {
                                 key: key.clone(),
                                 expected,
                                 actual,
-                                owner_conflict: actual == Some(expected) && !owner_matches,
+                                writer_conflict: actual == Some(expected) && !writer_matches,
                             });
                         }
                     }
@@ -492,25 +489,25 @@ impl IndexedStorage for PostgresIndexedStorage {
             })
     }
 
-    /// Postgres's half of [`IndexedStorage::upsert_oplog_metadata`], which states the rule this
+    /// Postgres's half of [`IndexedStorage::set_key_epoch`], which states the rule this
     /// enforces.
     ///
     /// The `WHERE` on the conflict path is where it lives: `epoch < EXCLUDED.epoch` for a higher
-    /// generation, or `= EXCLUDED.epoch AND owner = EXCLUDED.owner` for the same process re-opening
+    /// generation, or `= EXCLUDED.epoch AND writer = EXCLUDED.writer` for the same process re-opening
     /// at the one it holds. With no record there is no conflict and any epoch is inserted. Postgres
     /// reports one row affected for an insert and for an accepted update, and zero when the `WHERE`
     /// excludes it - which is what the read-back below turns into a fence.
-    async fn upsert_oplog_metadata(
+    async fn set_key_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-        shard_epoch: ShardEpoch,
+        new_epoch: ShardEpoch,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         let namespace = Self::namespace(namespace);
-        let epoch = Self::to_i64(shard_epoch.0, "shard_epoch")?;
+        let epoch = Self::to_i64(new_epoch.0, "epoch")?;
 
         let writer_id = self.writer_id.to_string();
 
@@ -518,10 +515,10 @@ impl IndexedStorage for PostgresIndexedStorage {
         let result = api
             .execute(
                 sqlx::query(
-                    r#"INSERT INTO oplog_metadata (namespace, key, epoch, owner) VALUES ($1, $2, $3, $4)
-                       ON CONFLICT (namespace, key) DO UPDATE SET epoch = EXCLUDED.epoch, owner = EXCLUDED.owner
-                       WHERE oplog_metadata.epoch < EXCLUDED.epoch
-                          OR (oplog_metadata.epoch = EXCLUDED.epoch AND oplog_metadata.owner = EXCLUDED.owner);"#,
+                    r#"INSERT INTO indexed_key_epoch (namespace, key, epoch, writer) VALUES ($1, $2, $3, $4)
+                       ON CONFLICT (namespace, key) DO UPDATE SET epoch = EXCLUDED.epoch, writer = EXCLUDED.writer
+                       WHERE indexed_key_epoch.epoch < EXCLUDED.epoch
+                          OR (indexed_key_epoch.epoch = EXCLUDED.epoch AND indexed_key_epoch.writer = EXCLUDED.writer);"#,
                 )
                 .bind(namespace.clone())
                 .bind(key)
@@ -536,7 +533,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             let stored: Option<(i64, String)> = api
                 .fetch_optional_as(
                     sqlx::query_as(
-                        "SELECT epoch, owner FROM oplog_metadata WHERE namespace = $1 AND key = $2;",
+                        "SELECT epoch, writer FROM indexed_key_epoch WHERE namespace = $1 AND key = $2;",
                     )
                     .bind(namespace)
                     .bind(key),
@@ -544,26 +541,26 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .await
                 .map_err(Self::classify_repo_error_general)?;
             let mut actual = None;
-            let mut owner_matches = false;
-            if let Some((epoch, owner)) = stored {
+            let mut writer_matches = false;
+            if let Some((epoch, writer)) = stored {
                 let epoch = u64::try_from(epoch).map_err(|_| {
                     IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
                 })?;
                 actual = Some(ShardEpoch(epoch));
-                owner_matches = owner == writer_id;
+                writer_matches = writer == writer_id;
             }
             return Err(IndexedStorageError::Fenced {
                 key: key.to_string(),
-                expected: shard_epoch,
+                expected: new_epoch,
                 actual,
-                owner_conflict: actual == Some(shard_epoch) && !owner_matches,
+                writer_conflict: actual == Some(new_epoch) && !writer_matches,
             });
         }
 
         Ok(())
     }
 
-    async fn delete_oplog_metadata(
+    async fn delete_key_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
@@ -571,7 +568,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         key: &str,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
-        let query = sqlx::query("DELETE FROM oplog_metadata WHERE namespace = $1 AND key = $2;")
+        let query = sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = $1 AND key = $2;")
             .bind(Self::namespace(namespace))
             .bind(key);
 
@@ -581,10 +578,6 @@ impl IndexedStorage for PostgresIndexedStorage {
             .await
             .map(|_| ())
             .map_err(Self::classify_repo_error_general)
-    }
-
-    fn supports_epoch_fencing(&self) -> bool {
-        true
     }
 
     async fn length(

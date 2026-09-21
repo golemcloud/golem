@@ -91,8 +91,8 @@ impl MultiSqliteIndexedStorage {
     }
 
     /// Writes as `writer_id` rather than as this process's own. The fan-out backend uses it to
-    /// give every storage it opens one identity, and a test uses it to play two executors racing
-    /// over one oplog inside a single process.
+    /// give every storage it opens one identity, and a test uses it to play two processes racing
+    /// over one key inside a single process.
     pub fn for_writer(mut self, writer_id: WriterId) -> Self {
         self.writer_id = writer_id;
         self
@@ -271,21 +271,21 @@ impl Debug for MultiSqliteIndexedStorage {
 
 #[async_trait]
 impl IndexedStorage for MultiSqliteIndexedStorage {
-    async fn upsert_oplog_metadata(
+    async fn set_key_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-        shard_epoch: ShardEpoch,
+        new_epoch: ShardEpoch,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
-            .upsert_oplog_metadata(svc_name, api_name, namespace, key, shard_epoch)
+            .set_key_epoch(svc_name, api_name, namespace, key, new_epoch)
             .await
     }
 
-    async fn delete_oplog_metadata(
+    async fn delete_key_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
@@ -294,15 +294,8 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
-            .delete_oplog_metadata(svc_name, api_name, namespace, key)
+            .delete_key_epoch(svc_name, api_name, namespace, key)
             .await
-    }
-
-    /// Answers for the per-namespace databases this fans out to, which are all
-    /// [`SqliteIndexedStorage`]. Taking the trait default here would silently report "no fence"
-    /// for a backend that has one.
-    fn supports_epoch_fencing(&self) -> bool {
-        SqliteIndexedStorage::SUPPORTS_EPOCH_FENCING
     }
 
     async fn number_of_replicas(
@@ -459,7 +452,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
-        shard_epoch: Option<ShardEpoch>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
@@ -471,7 +464,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
                 key,
                 id,
                 value,
-                shard_epoch,
+                expected_epoch,
             )
             .await
     }
@@ -488,7 +481,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
-        shard_epoch: Option<ShardEpoch>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(namespace)
             .await?
@@ -499,7 +492,7 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
                 namespace,
                 key,
                 pairs,
-                shard_epoch,
+                expected_epoch,
             )
             .await
     }

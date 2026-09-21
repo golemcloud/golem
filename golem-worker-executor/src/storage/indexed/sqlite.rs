@@ -37,20 +37,12 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 #[derive(Debug, Clone)]
 pub struct SqliteIndexedStorage {
     pool: SqlitePool,
-    /// Recorded beside the epoch on every oplog this process claims, so an equal epoch from
+    /// Recorded beside the epoch on every key this process claims, so an equal epoch from
     /// another process is refused rather than shared. One per process; see [`WriterId`].
     writer_id: WriterId,
 }
 
 impl SqliteIndexedStorage {
-    /// Whether this backend enforces the shard-epoch fence on writes.
-    ///
-    /// A constant rather than a literal in the trait impl because
-    /// [`super::multi_sqlite::MultiSqliteIndexedStorage`] is a fan-out of these and must always
-    /// answer the same way: it has no namespace to delegate the question through, so this is what
-    /// keeps the two from drifting apart.
-    pub(crate) const SUPPORTS_EPOCH_FENCING: bool = true;
-
     pub async fn configured(config: &DbSqliteConfig) -> Result<Self, String> {
         Self::migrate(config).await?;
 
@@ -65,8 +57,8 @@ impl SqliteIndexedStorage {
     }
 
     /// Writes as `writer_id` rather than as this process's own. The fan-out backend uses it to
-    /// give every storage it opens one identity, and a test uses it to play two executors racing
-    /// over one oplog inside a single process.
+    /// give every storage it opens one identity, and a test uses it to play two processes racing
+    /// over one key inside a single process.
     pub fn for_writer(mut self, writer_id: WriterId) -> Self {
         self.writer_id = writer_id;
         self
@@ -122,7 +114,7 @@ impl SqliteIndexedStorage {
     }
 
     /// sqlx has no `Encode<Sqlite>` for `u64`, so a value that must stay integer-bound (rather
-    /// than go through `Json`, which encodes as TEXT - see [`Self::upsert_oplog_metadata`]) has to
+    /// than go through `Json`, which encodes as TEXT - see [`Self::set_key_epoch`]) has to
     /// cross to `i64` first. Checked, like Postgres's own `to_i64`: an unchecked `as i64` on a
     /// value above `i64::MAX` wraps to negative, and reading that back `as u64` produces a
     /// spuriously huge epoch instead of failing loudly.
@@ -138,7 +130,7 @@ impl SqliteIndexedStorage {
     /// write one, so a negative column value came from outside this code, and reading it back as
     /// `u64` would wrap it into a spuriously huge epoch.
     fn negative_epoch_message(value: i64, key: &str) -> String {
-        format!("SQLite indexed storage read a negative shard epoch {value} for key '{key}'")
+        format!("SQLite indexed storage read a negative epoch {value} for key '{key}'")
     }
 
     fn classify_repo_error(err: RepoError) -> IndexedStorageError {
@@ -182,10 +174,6 @@ impl SqliteIndexedStorage {
 
 #[async_trait]
 impl IndexedStorage for SqliteIndexedStorage {
-    fn supports_epoch_fencing(&self) -> bool {
-        Self::SUPPORTS_EPOCH_FENCING
-    }
-
     async fn number_of_replicas(
         &self,
         _svc_name: &'static str,
@@ -325,7 +313,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
-        shard_epoch: Option<ShardEpoch>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.append_many(
             svc_name,
@@ -334,7 +322,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             &namespace,
             key,
             vec![(id, Bytes::from(value))].into(),
-            shard_epoch,
+            expected_epoch,
         )
         .await
     }
@@ -347,7 +335,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
-        shard_epoch: Option<ShardEpoch>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if pairs.is_empty() {
             return Ok(());
@@ -369,34 +357,34 @@ impl IndexedStorage for SqliteIndexedStorage {
                     // db/sqlite.rs:46-50), so this transaction holds the only writer and the
                     // check cannot be interleaved. Raising that cap means switching this to
                     // `BEGIN IMMEDIATE`.
-                    if let Some(expected) = shard_epoch {
+                    if let Some(expected) = expected_epoch {
                         let stored: Option<(i64, String)> = tx
                             .fetch_optional_as(
                                 sqlx::query_as(
-                                    "SELECT epoch, owner FROM oplog_metadata WHERE namespace = ? AND key = ?;",
+                                    "SELECT epoch, writer FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
                                 )
                                 .bind(namespace.clone())
                                 .bind(key.clone()),
                             )
                             .await?;
                         let mut actual = None;
-                        let mut owner_matches = false;
-                        if let Some((epoch, owner)) = stored {
+                        let mut writer_matches = false;
+                        if let Some((epoch, writer)) = stored {
                             let epoch = u64::try_from(epoch).map_err(|_| {
                                 FencedTxError::Corrupt(Self::negative_epoch_message(epoch, &key))
                             })?;
                             actual = Some(ShardEpoch(epoch));
-                            owner_matches = owner == writer_id;
+                            writer_matches = writer == writer_id;
                         }
                         // The epoch says which generation may write; the writer says which of two
-                        // processes holding that generation recorded it, which only a shard
-                        // manager that lost its state can produce.
-                        if actual != Some(expected) || !owner_matches {
+                        // processes holding that generation recorded it, which only an
+                        // issuer that lost its state can produce.
+                        if actual != Some(expected) || !writer_matches {
                             return Err(FencedTxError::Fenced {
                                 key: key.clone(),
                                 expected,
                                 actual,
-                                owner_conflict: actual == Some(expected) && !owner_matches,
+                                writer_conflict: actual == Some(expected) && !writer_matches,
                             });
                         }
                     }
@@ -427,23 +415,23 @@ impl IndexedStorage for SqliteIndexedStorage {
             })
     }
 
-    /// SQLite's half of [`IndexedStorage::upsert_oplog_metadata`], which states the rule this
-    /// enforces. The unqualified `epoch`/`owner` in the `WHERE` are the existing row's, and
+    /// SQLite's half of [`IndexedStorage::set_key_epoch`], which states the rule this
+    /// enforces. The unqualified `epoch`/`writer` in the `WHERE` are the existing row's, and
     /// `excluded` is the row being written.
-    async fn upsert_oplog_metadata(
+    async fn set_key_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
-        shard_epoch: ShardEpoch,
+        new_epoch: ShardEpoch,
     ) -> Result<(), IndexedStorageError> {
         let namespace = Self::namespace(namespace);
         // `i64`, not `u64`: sqlx has no `Encode<Sqlite>` for `u64`, which is why ids elsewhere in
         // this file go through `Json`. That encodes as TEXT, and comparison affinity is applied
         // per operand, so this column stays integer-bound everywhere. Checked (see `to_i64`)
         // rather than `as i64`, which would silently wrap an out-of-range epoch to negative.
-        let epoch = Self::to_i64(shard_epoch.0, "shard_epoch")?;
+        let epoch = Self::to_i64(new_epoch.0, "epoch")?;
 
         let writer_id = self.writer_id.to_string();
 
@@ -451,10 +439,10 @@ impl IndexedStorage for SqliteIndexedStorage {
         let result = api
             .execute(
                 sqlx::query(
-                    r#"INSERT INTO oplog_metadata (namespace, key, epoch, owner) VALUES (?, ?, ?, ?)
-                       ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch, owner = excluded.owner
+                    r#"INSERT INTO indexed_key_epoch (namespace, key, epoch, writer) VALUES (?, ?, ?, ?)
+                       ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch, writer = excluded.writer
                        WHERE epoch < excluded.epoch
-                          OR (epoch = excluded.epoch AND owner = excluded.owner);"#,
+                          OR (epoch = excluded.epoch AND writer = excluded.writer);"#,
                 )
                 .bind(namespace.clone())
                 .bind(key)
@@ -468,7 +456,7 @@ impl IndexedStorage for SqliteIndexedStorage {
             let stored: Option<(i64, String)> = api
                 .fetch_optional_as(
                     sqlx::query_as(
-                        "SELECT epoch, owner FROM oplog_metadata WHERE namespace = ? AND key = ?;",
+                        "SELECT epoch, writer FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
                     )
                     .bind(namespace)
                     .bind(key),
@@ -476,33 +464,33 @@ impl IndexedStorage for SqliteIndexedStorage {
                 .await
                 .map_err(Self::classify_repo_error)?;
             let mut actual = None;
-            let mut owner_matches = false;
-            if let Some((epoch, owner)) = stored {
+            let mut writer_matches = false;
+            if let Some((epoch, writer)) = stored {
                 let epoch = u64::try_from(epoch).map_err(|_| {
                     IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
                 })?;
                 actual = Some(ShardEpoch(epoch));
-                owner_matches = owner == writer_id;
+                writer_matches = writer == writer_id;
             }
             return Err(IndexedStorageError::Fenced {
                 key: key.to_string(),
-                expected: shard_epoch,
+                expected: new_epoch,
                 actual,
-                owner_conflict: actual == Some(shard_epoch) && !owner_matches,
+                writer_conflict: actual == Some(new_epoch) && !writer_matches,
             });
         }
 
         Ok(())
     }
 
-    async fn delete_oplog_metadata(
+    async fn delete_key_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<(), IndexedStorageError> {
-        let query = sqlx::query("DELETE FROM oplog_metadata WHERE namespace = ? AND key = ?;")
+        let query = sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ?;")
             .bind(Self::namespace(namespace))
             .bind(key);
 
@@ -830,9 +818,8 @@ mod tests {
     #[test]
     // The column is `i64`-bound (see `to_i64`'s doc). An epoch that does not fit it must be
     // rejected here rather than silently wrapped to a negative value that a later `epoch as u64`
-    // read turns into a spuriously huge one - the class of bug that let a corrupted epoch panic
-    // downstream in the shard manager (`ShardEpoch::next`'s `checked_add(1).expect(..)`).
-    async fn upsert_oplog_metadata_rejects_an_epoch_that_does_not_fit_i64() {
+    // read turns into a spuriously huge one.
+    async fn set_key_epoch_rejects_an_epoch_that_does_not_fit_i64() {
         let tempdir = tempfile::tempdir().unwrap();
         let storage = sqlite_storage(
             tempdir
@@ -845,9 +832,9 @@ mod tests {
         let namespace = oplog_namespace("sqlite-epoch-overflow");
 
         let result = storage
-            .upsert_oplog_metadata(
+            .set_key_epoch(
                 "test",
-                "upsert_oplog_metadata",
+                "set_key_epoch",
                 namespace,
                 "oplog",
                 ShardEpoch(u64::MAX),
@@ -863,7 +850,7 @@ mod tests {
     #[test]
     // The largest value that does fit is the boundary right below the rejected one, and must
     // still succeed - a regression here would mean the checked conversion rejects valid input.
-    async fn upsert_oplog_metadata_accepts_the_largest_epoch_that_fits_i64() {
+    async fn set_key_epoch_accepts_the_largest_epoch_that_fits_i64() {
         let tempdir = tempfile::tempdir().unwrap();
         let storage = sqlite_storage(
             tempdir
@@ -876,9 +863,9 @@ mod tests {
         let namespace = oplog_namespace("sqlite-epoch-boundary");
 
         storage
-            .upsert_oplog_metadata(
+            .set_key_epoch(
                 "test",
-                "upsert_oplog_metadata",
+                "set_key_epoch",
                 namespace,
                 "oplog",
                 ShardEpoch(i64::MAX as u64),

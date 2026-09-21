@@ -1506,7 +1506,7 @@ mod tests {
             key: &str,
             id: u64,
             value: Vec<u8>,
-            shard_epoch: Option<golem_common::model::ShardEpoch>,
+            expected_epoch: Option<golem_common::model::ShardEpoch>,
         ) -> Result<(), IndexedStorageError> {
             self.inner
                 .append(
@@ -1517,8 +1517,56 @@ mod tests {
                     key,
                     id,
                     value,
-                    shard_epoch,
+                    expected_epoch,
                 )
+                .await
+        }
+
+        async fn append_many(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            entity_name: &'static str,
+            namespace: &IndexedStorageNamespace,
+            key: &str,
+            pairs: Arc<[(u64, bytes::Bytes)]>,
+            expected_epoch: Option<golem_common::model::ShardEpoch>,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .append_many(
+                    svc_name,
+                    api_name,
+                    entity_name,
+                    namespace,
+                    key,
+                    pairs,
+                    expected_epoch,
+                )
+                .await
+        }
+
+        async fn set_key_epoch(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+            epoch: golem_common::model::ShardEpoch,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .set_key_epoch(svc_name, api_name, namespace, key, epoch)
+                .await
+        }
+
+        async fn delete_key_epoch(
+            &self,
+            svc_name: &'static str,
+            api_name: &'static str,
+            namespace: IndexedStorageNamespace,
+            key: &str,
+        ) -> Result<(), IndexedStorageError> {
+            self.inner
+                .delete_key_epoch(svc_name, api_name, namespace, key)
                 .await
         }
 

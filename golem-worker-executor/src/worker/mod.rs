@@ -10979,7 +10979,7 @@ mod tests {
             agent_id: agent_id.clone(),
             expected_epoch: ShardEpoch(2),
             actual_epoch: Some(ShardEpoch(3)),
-            owner_conflict: false,
+            writer_conflict: false,
         };
 
         // A latched fence wins over whatever the refusal was flattened into on its way out, and
@@ -11839,7 +11839,7 @@ mod tests {
             agent_id,
             expected_epoch: golem_common::model::ShardEpoch(3),
             actual_epoch: Some(golem_common::model::ShardEpoch(4)),
-            owner_conflict: false,
+            writer_conflict: false,
         };
 
         // A fence the write path saw in full names both epochs, so an operator reading the log

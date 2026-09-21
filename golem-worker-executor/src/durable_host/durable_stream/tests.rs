@@ -5924,7 +5924,7 @@ pub(crate) fn test_fence() -> crate::services::oplog::OplogFence {
         agent_id: identity().agent_id,
         expected_epoch: golem_common::model::ShardEpoch(3),
         actual_epoch: Some(golem_common::model::ShardEpoch(4)),
-        owner_conflict: false,
+        writer_conflict: false,
     }
 }
 

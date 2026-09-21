@@ -14,7 +14,7 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    ScanCursor, ScanResume, WriterId,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -28,15 +28,169 @@ use golem_common::redis::{RedisError, RedisPool};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use uuid::Uuid;
 
+/// Redis checks a key's epoch in a Lua script, which it runs atomically with the `XADD`s the
+/// script guards. Two limits follow from Redis itself rather than from this code: an epoch is
+/// only as durable as the last write the server kept, so a failover that loses the tail can lose
+/// a raised epoch and let the previous writer back in; and the script names two keys, which a
+/// Redis Cluster would need in one slot - this backend does not support Cluster.
 #[derive(Debug)]
 pub struct RedisIndexedStorage {
     redis: RedisPool,
+    writer_id: WriterId,
 }
 
 impl RedisIndexedStorage {
     pub fn new(redis: RedisPool) -> Self {
-        Self { redis }
+        Self {
+            redis,
+            writer_id: WriterId(Uuid::new_v4()),
+        }
+    }
+
+    /// The same store written as `writer_id`. See [`WriterId`] for why a process uses one value.
+    pub fn for_writer(mut self, writer_id: WriterId) -> Self {
+        self.writer_id = writer_id;
+        self
+    }
+
+    /// `ARGV`: the asserted epoch, the writer, then `id, value` pairs.
+    ///
+    /// Numbers stay decimal strings throughout, because a Lua number is a double and loses
+    /// precision above 2^53; with no leading zeros they order by length and then lexically. The
+    /// ids are checked against the stream before the first `XADD` because a script is atomic but
+    /// not transactional: an `XADD` failing half way would leave the ones before it behind.
+    const FENCED_APPEND_SCRIPT: &'static str = r#"
+local stored = redis.call('HMGET', KEYS[2], 'epoch', 'writer')
+if stored[1] == false then
+  return redis.error_reply('FENCED - 0')
+end
+if stored[1] ~= ARGV[1] then
+  return redis.error_reply('FENCED ' .. stored[1] .. ' 0')
+end
+if stored[2] ~= ARGV[2] then
+  return redis.error_reply('FENCED ' .. stored[1] .. ' 1')
+end
+local top = nil
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  local info = redis.call('XINFO', 'STREAM', KEYS[1])
+  for i = 1, #info, 2 do
+    if info[i] == 'last-generated-id' then
+      top = string.match(info[i + 1], '^(%d+)')
+    end
+  end
+end
+for i = 3, #ARGV, 2 do
+  local id = ARGV[i]
+  if top and not (#id > #top or (#id == #top and id > top)) then
+    return redis.error_reply('ERR The ID specified in XADD is equal or smaller than the target stream top item')
+  end
+  top = id
+end
+for i = 3, #ARGV, 2 do
+  redis.call('XADD', KEYS[1], ARGV[i], 'key', ARGV[i + 1])
+end
+return redis.status_reply('OK')
+"#;
+
+    /// `ARGV`: the epoch and the writer, compared the way [`Self::FENCED_APPEND_SCRIPT`] does.
+    const SET_KEY_EPOCH_SCRIPT: &'static str = r#"
+local stored = redis.call('HMGET', KEYS[1], 'epoch', 'writer')
+local epoch = stored[1]
+local higher = epoch ~= false and (#ARGV[1] > #epoch or (#ARGV[1] == #epoch and ARGV[1] > epoch))
+if epoch == false or higher or (epoch == ARGV[1] and stored[2] == ARGV[2]) then
+  redis.call('HSET', KEYS[1], 'epoch', ARGV[1], 'writer', ARGV[2])
+  return redis.status_reply('OK')
+end
+if epoch == ARGV[1] then
+  return redis.error_reply('FENCED ' .. epoch .. ' 1')
+end
+return redis.error_reply('FENCED ' .. epoch .. ' 0')
+"#;
+
+    /// Where a key's epoch lives. Not under the key's own name: `scan` matches `...oplog:*`, and
+    /// an `...oplog:<key>:epoch` sibling would come back from it as a key of its own.
+    fn epoch_key(namespace: IndexedStorageNamespace, key: &str) -> String {
+        match namespace {
+            IndexedStorageNamespace::OpLog {
+                agent_id: _,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:oplog-epoch:{key}")
+            }
+            IndexedStorageNamespace::CompressedOpLog {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:c{level}-oplog-epoch:{key}")
+            }
+        }
+    }
+
+    /// The `FENCED <stored epoch or -> <writer conflict 0|1>` reply of the scripts above.
+    fn parse_fenced(
+        error: &RedisError,
+        key: &str,
+        expected: ShardEpoch,
+    ) -> Option<IndexedStorageError> {
+        let mut parts = error
+            .details()
+            .split_whitespace()
+            .skip_while(|part| *part != "FENCED");
+        parts.next()?;
+        let actual = match parts.next()? {
+            "-" => None,
+            epoch => Some(ShardEpoch(epoch.parse::<u64>().ok()?)),
+        };
+        let writer_conflict = parts.next()? == "1";
+        Some(IndexedStorageError::Fenced {
+            key: key.to_string(),
+            expected,
+            actual,
+            writer_conflict,
+        })
+    }
+
+    async fn append_fenced(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: &IndexedStorageNamespace,
+        key: &str,
+        pairs: impl Iterator<Item = (u64, Bytes)>,
+        expected_epoch: ShardEpoch,
+        options: Option<&Options>,
+        primary_oplog_insert: bool,
+    ) -> Result<(), IndexedStorageError> {
+        let mut args = vec![
+            Value::from(expected_epoch.0.to_string()),
+            Value::from(self.writer_id.to_string()),
+        ];
+        for (id, value) in pairs {
+            args.push(Value::from(id.to_string()));
+            args.push(Value::Bytes(value));
+        }
+        self.redis
+            .with(svc_name, api_name)
+            .eval(
+                Self::FENCED_APPEND_SCRIPT,
+                &[
+                    Self::composite_key(namespace.clone(), key),
+                    Self::epoch_key(namespace.clone(), key),
+                ],
+                args,
+                options,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| {
+                Self::parse_fenced(&error, key, expected_epoch)
+                    .unwrap_or_else(|| Self::classify_append_error(error, primary_oplog_insert))
+            })
     }
 
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
@@ -268,7 +422,7 @@ impl IndexedStorage for RedisIndexedStorage {
         key: &str,
         id: u64,
         value: Vec<u8>,
-        _shard_epoch: Option<ShardEpoch>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
         let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
@@ -276,6 +430,21 @@ impl IndexedStorage for RedisIndexedStorage {
             max_attempts: Some(1),
             ..Default::default()
         });
+
+        if let Some(expected_epoch) = expected_epoch {
+            return self
+                .append_fenced(
+                    svc_name,
+                    api_name,
+                    &namespace,
+                    key,
+                    std::iter::once((id, Bytes::from(value))),
+                    expected_epoch,
+                    options.as_ref(),
+                    primary_oplog_insert,
+                )
+                .await;
+        }
 
         let _: String = self
             .redis
@@ -301,7 +470,7 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
-        _shard_epoch: Option<ShardEpoch>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if !pairs.is_empty() {
             let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
@@ -309,6 +478,24 @@ impl IndexedStorage for RedisIndexedStorage {
                 max_attempts: Some(1),
                 ..Default::default()
             });
+
+            if let Some(expected_epoch) = expected_epoch {
+                for (_, value) in pairs.iter() {
+                    record_redis_serialized_size(svc_name, entity_name, value.len());
+                }
+                return self
+                    .append_fenced(
+                        svc_name,
+                        api_name,
+                        namespace,
+                        key,
+                        pairs.iter().cloned(),
+                        expected_epoch,
+                        options.as_ref(),
+                        primary_oplog_insert,
+                    )
+                    .await;
+            }
             let mut redis_pairs = Vec::with_capacity(pairs.len());
             for (id, value) in pairs.iter() {
                 record_redis_serialized_size(svc_name, entity_name, value.len());
@@ -331,6 +518,47 @@ impl IndexedStorage for RedisIndexedStorage {
                 .map_err(|error| Self::classify_append_error(error, primary_oplog_insert))?;
         }
         Ok(())
+    }
+
+    async fn set_key_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        self.redis
+            .with(svc_name, api_name)
+            .eval(
+                Self::SET_KEY_EPOCH_SCRIPT,
+                &[Self::epoch_key(namespace, key)],
+                vec![
+                    Value::from(epoch.0.to_string()),
+                    Value::from(self.writer_id.to_string()),
+                ],
+                None,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| {
+                Self::parse_fenced(&error, key, epoch)
+                    .unwrap_or_else(|| IndexedStorageError::Other(error.to_string()))
+            })
+    }
+
+    async fn delete_key_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<(), IndexedStorageError> {
+        self.redis
+            .with(svc_name, api_name)
+            .del(Self::epoch_key(namespace, key))
+            .await
+            .map_err(|e| IndexedStorageError::Other(e.to_string()))
     }
 
     async fn length(
@@ -480,6 +708,49 @@ impl IndexedStorage for RedisIndexedStorage {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn a_fenced_reply_carries_the_stored_epoch_and_the_writer_conflict() {
+        let fenced = |details: &'static str| {
+            RedisIndexedStorage::parse_fenced(
+                &RedisError::new(ErrorKind::Unknown, details),
+                "k",
+                ShardEpoch(7),
+            )
+        };
+
+        assert!(matches!(
+            fenced("FENCED 9 0"),
+            Some(IndexedStorageError::Fenced {
+                actual: Some(ShardEpoch(9)),
+                writer_conflict: false,
+                ..
+            })
+        ));
+        assert!(matches!(
+            fenced("FENCED 7 1"),
+            Some(IndexedStorageError::Fenced {
+                actual: Some(ShardEpoch(7)),
+                writer_conflict: true,
+                ..
+            })
+        ));
+        assert!(matches!(
+            fenced("FENCED - 0"),
+            Some(IndexedStorageError::Fenced {
+                actual: None,
+                writer_conflict: false,
+                ..
+            })
+        ));
+        // An error raised by a command inside the script is not a fence.
+        assert!(
+            fenced(
+                "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn primary_oplog_xadd_ordering_error_is_a_conflict() {

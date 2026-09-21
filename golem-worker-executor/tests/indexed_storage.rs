@@ -45,13 +45,8 @@ use uuid::Uuid;
 trait GetIndexedStorage: Debug {
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync>;
 
-    /// Whether this backend is expected to enforce the shard-epoch fence. Stated here rather than
-    /// read off the storage so that a backend silently losing its fence fails a test.
-    fn expects_fencing(&self) -> bool;
-
     /// Two handles onto the SAME store, writing as two different processes - what a shard manager
-    /// that lost its state can produce by minting one epoch twice. A backend that cannot fence
-    /// returns two handles that write as the same process; nothing it does is checked.
+    /// that lost its state can produce by minting one epoch twice.
     async fn get_two_writers(
         &self,
     ) -> (
@@ -70,10 +65,6 @@ impl Debug for InMemoryIndexedStorageWrapper {
 
 #[async_trait]
 impl GetIndexedStorage for InMemoryIndexedStorageWrapper {
-    fn expects_fencing(&self) -> bool {
-        false
-    }
-
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
         let kvs = InMemoryIndexedStorage::new();
         Arc::new(kvs)
@@ -85,8 +76,10 @@ impl GetIndexedStorage for InMemoryIndexedStorageWrapper {
         Arc<dyn IndexedStorage + Send + Sync>,
         Arc<dyn IndexedStorage + Send + Sync>,
     ) {
-        let shared: Arc<dyn IndexedStorage + Send + Sync> = Arc::new(InMemoryIndexedStorage::new());
-        (shared.clone(), shared)
+        let store = InMemoryIndexedStorage::new();
+        let first = store.for_writer(WriterId(Uuid::new_v4()));
+        let second = store.for_writer(WriterId(Uuid::new_v4()));
+        (Arc::new(first), Arc::new(second))
     }
 }
 
@@ -109,28 +102,10 @@ impl Debug for RedisIndexedStorageWrapper {
 
 #[async_trait]
 impl GetIndexedStorage for RedisIndexedStorageWrapper {
-    fn expects_fencing(&self) -> bool {
-        false
-    }
-
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
-        let random_prefix = Uuid::new_v4();
-        let redis_pool = RedisPool::configured(&RedisConfig {
-            host: self.redis.public_host(),
-            port: self.redis.public_port(),
-            database: 0,
-            tracing: false,
-            pool_size: 1,
-            retries: Default::default(),
-            key_prefix: random_prefix.to_string(),
-            username: None,
-            password: None,
-            tls: false,
-        })
-        .await
-        .unwrap();
-        let kvs = RedisIndexedStorage::new(redis_pool);
-        Arc::new(kvs)
+        Arc::new(RedisIndexedStorage::new(
+            self.pool(&Uuid::new_v4().to_string()).await,
+        ))
     }
 
     async fn get_two_writers(
@@ -139,8 +114,31 @@ impl GetIndexedStorage for RedisIndexedStorageWrapper {
         Arc<dyn IndexedStorage + Send + Sync>,
         Arc<dyn IndexedStorage + Send + Sync>,
     ) {
-        let shared = self.get_indexed_storage().await;
-        (shared.clone(), shared)
+        let prefix = Uuid::new_v4().to_string();
+        let first =
+            RedisIndexedStorage::new(self.pool(&prefix).await).for_writer(WriterId(Uuid::new_v4()));
+        let second =
+            RedisIndexedStorage::new(self.pool(&prefix).await).for_writer(WriterId(Uuid::new_v4()));
+        (Arc::new(first), Arc::new(second))
+    }
+}
+
+impl RedisIndexedStorageWrapper {
+    async fn pool(&self, key_prefix: &str) -> RedisPool {
+        RedisPool::configured(&RedisConfig {
+            host: self.redis.public_host(),
+            port: self.redis.public_port(),
+            database: 0,
+            tracing: false,
+            pool_size: 1,
+            retries: Default::default(),
+            key_prefix: key_prefix.to_string(),
+            username: None,
+            password: None,
+            tls: false,
+        })
+        .await
+        .unwrap()
     }
 }
 
@@ -175,10 +173,6 @@ impl Debug for SqliteIndexedStorageWrapper {
 
 #[async_trait]
 impl GetIndexedStorage for SqliteIndexedStorageWrapper {
-    fn expects_fencing(&self) -> bool {
-        true
-    }
-
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
         let tempdir = tempfile::tempdir().unwrap();
         let database = tempdir
@@ -253,10 +247,6 @@ impl Debug for MultiSqliteIndexedStorageWrapper {
 
 #[async_trait]
 impl GetIndexedStorage for MultiSqliteIndexedStorageWrapper {
-    fn expects_fencing(&self) -> bool {
-        true
-    }
-
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
         let tempdir = tempfile::tempdir().unwrap();
         let path = tempdir.path().to_path_buf();
@@ -341,10 +331,6 @@ impl PostgresIndexedStorageWrapper {
 
 #[async_trait]
 impl GetIndexedStorage for PostgresIndexedStorageWrapper {
-    fn expects_fencing(&self) -> bool {
-        true
-    }
-
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
         let config = self.fresh_database().await;
         let storage = PostgresIndexedStorage::configured(&config)
@@ -463,7 +449,7 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
         for ns in [primary, compressed] {
             if let Some(epoch) = shard_epoch {
                 storage
-                    .upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, epoch)
+                    .set_key_epoch("svc", "api", ns.ns.clone(), key, epoch)
                     .await
                     .unwrap();
             }
@@ -2030,7 +2016,7 @@ async fn append_with_the_recorded_epoch_is_accepted(
     let is = is.get_indexed_storage().await;
     let key = "fence-match";
 
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
         .await
         .unwrap();
     is.append_many(
@@ -2062,11 +2048,10 @@ async fn a_stale_epoch_append_is_refused_and_writes_nothing(
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
-    let fencing = is.expects_fencing();
     let is = is.get_indexed_storage().await;
     let key = "fence-stale";
 
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
         .await
         .unwrap();
     let result = is
@@ -2086,14 +2071,9 @@ async fn a_stale_epoch_append_is_refused_and_writes_nothing(
         .await;
 
     let length = is.length("svc", "api", ns.ns.clone(), key).await.unwrap();
-    if fencing {
-        assert_fenced(result, 7, Some(8));
-        // The whole batch is rolled back, not the tail of it.
-        assert_eq!(length, 0, "a refused batch must leave no entry behind");
-    } else {
-        result.unwrap();
-        assert_eq!(length, 3);
-    }
+    assert_fenced(result, 7, Some(8));
+    // The whole batch is rolled back, not the tail of it.
+    assert_eq!(length, 0, "a refused batch must leave no entry behind");
 }
 
 #[test]
@@ -2106,35 +2086,29 @@ async fn another_writer_at_the_same_epoch_is_refused(
     // A shard manager that lost its state mints from zero again and can hand a live owner's epoch
     // to somebody else. The epoch alone cannot separate them, so the row's writer does: the owner
     // holds it, and the newcomer is refused at the open rather than sharing the generation.
-    let fencing = is.expects_fencing();
     let (owner, newcomer) = is.get_two_writers().await;
     let key = "fence-two-writers";
 
     owner
-        .upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
         .await
         .unwrap();
 
     let claim = newcomer
-        .upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
         .await;
-
-    if !fencing {
-        claim.unwrap();
-        return;
-    }
 
     match claim {
         Err(IndexedStorageError::Fenced {
             expected,
             actual,
-            owner_conflict,
+            writer_conflict,
             ..
         }) => {
             assert_eq!(expected, ShardEpoch(4), "expected epoch");
             assert_eq!(actual, Some(ShardEpoch(4)), "stored epoch");
             assert!(
-                owner_conflict,
+                writer_conflict,
                 "the epochs match, so the refusal has to name the writer as the reason - that is \
                  what tells the shard manager to mint past this epoch rather than leave it shared"
             );
@@ -2155,7 +2129,9 @@ async fn another_writer_at_the_same_epoch_is_refused(
         )
         .await;
     match append {
-        Err(IndexedStorageError::Fenced { owner_conflict, .. }) => assert!(owner_conflict),
+        Err(IndexedStorageError::Fenced {
+            writer_conflict, ..
+        }) => assert!(writer_conflict),
         other => panic!("expected a Fenced error, got {other:?}"),
     }
     assert_eq!(
@@ -2194,10 +2170,10 @@ async fn the_same_writer_re_opens_at_the_same_epoch(
     let is = is.get_indexed_storage().await;
     let key = "fence-reopen";
 
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
         .await
         .unwrap();
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
         .await
         .unwrap();
     is.append_many(
@@ -2223,19 +2199,15 @@ async fn a_newcomer_minted_above_the_collision_takes_the_oplog_over(
     // The repair the refusal above sets off: the newcomer reports the collision, the shard manager
     // mints past it, and the higher epoch takes the oplog over - at which point the old owner is
     // the one being refused.
-    let fencing = is.expects_fencing();
-    if !fencing {
-        return;
-    }
     let (owner, newcomer) = is.get_two_writers().await;
     let key = "fence-re-mint";
 
     owner
-        .upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
         .await
         .unwrap();
     newcomer
-        .upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
         .await
         .unwrap();
     newcomer
@@ -2265,12 +2237,12 @@ async fn a_newcomer_minted_above_the_collision_takes_the_oplog_over(
     match refused {
         Err(IndexedStorageError::Fenced {
             actual,
-            owner_conflict,
+            writer_conflict,
             ..
         }) => {
             assert_eq!(actual, Some(ShardEpoch(5)));
             assert!(
-                !owner_conflict,
+                !writer_conflict,
                 "this one is an ordinary takeover, not two writers on one epoch"
             );
         }
@@ -2285,11 +2257,10 @@ async fn an_append_ahead_of_the_recorded_epoch_is_refused(
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
-    let fencing = is.expects_fencing();
     let is = is.get_indexed_storage().await;
     let key = "fence-ahead";
 
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
         .await
         .unwrap();
 
@@ -2326,19 +2297,13 @@ async fn an_append_ahead_of_the_recorded_epoch_is_refused(
         .await;
     let length = is.length("svc", "api", ns.ns.clone(), key).await.unwrap();
 
-    if fencing {
-        assert_fenced(batch, 6, Some(5));
-        assert_eq!(
-            batch_length, 0,
-            "a refused batch must leave no entry behind"
-        );
-        assert_fenced(single, 6, Some(5));
-        assert_eq!(length, 0, "a refused append must leave no entry behind");
-    } else {
-        batch.unwrap();
-        single.unwrap();
-        assert_eq!(length, 4);
-    }
+    assert_fenced(batch, 6, Some(5));
+    assert_eq!(
+        batch_length, 0,
+        "a refused batch must leave no entry behind"
+    );
+    assert_fenced(single, 6, Some(5));
+    assert_eq!(length, 0, "a refused append must leave no entry behind");
 }
 
 #[test]
@@ -2348,7 +2313,6 @@ async fn an_append_without_a_recorded_epoch_is_refused(
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
-    let fencing = is.expects_fencing();
     let is = is.get_indexed_storage().await;
     let key = "fence-absent";
 
@@ -2368,13 +2332,8 @@ async fn an_append_without_a_recorded_epoch_is_refused(
         .await;
 
     let length = is.length("svc", "api", ns.ns.clone(), key).await.unwrap();
-    if fencing {
-        assert_fenced(result, 0, None);
-        assert_eq!(length, 0);
-    } else {
-        result.unwrap();
-        assert_eq!(length, 1);
-    }
+    assert_fenced(result, 0, None);
+    assert_eq!(length, 0);
 }
 
 #[test]
@@ -2387,7 +2346,7 @@ async fn an_unfenced_append_ignores_the_recorded_epoch(
     let is = is.get_indexed_storage().await;
     let key = "fence-none";
 
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
         .await
         .unwrap();
     // `None` asserts nothing: it is what the archive layers and generic callers pass.
@@ -2417,60 +2376,55 @@ async fn the_recorded_epoch_only_ever_climbs(
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
-    let fencing = is.expects_fencing();
     let is = is.get_indexed_storage().await;
     let key = "fence-monotonic";
 
     // Rising and repeated epochs are accepted ...
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
         .await
         .unwrap();
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
         .await
         .unwrap();
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
         .await
         .unwrap();
 
     // ... a falling one is not, or a zombie could re-open at its stale epoch and un-fence itself
     // against the current owner.
     let result = is
-        .upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
         .await;
 
-    if fencing {
-        assert_fenced(result, 8, Some(9));
-        // and the rejected upsert left the record alone
+    assert_fenced(result, 8, Some(9));
+    // and the rejected upsert left the record alone
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key,
+        1,
+        b"a".to_vec(),
+        Some(ShardEpoch(9)),
+    )
+    .await
+    .unwrap();
+    assert_fenced(
         is.append(
             "svc",
             "api",
             "entity",
             ns.ns.clone(),
             key,
-            1,
-            b"a".to_vec(),
-            Some(ShardEpoch(9)),
+            2,
+            b"b".to_vec(),
+            Some(ShardEpoch(8)),
         )
-        .await
-        .unwrap();
-        assert_fenced(
-            is.append(
-                "svc",
-                "api",
-                "entity",
-                ns.ns.clone(),
-                key,
-                2,
-                b"b".to_vec(),
-                Some(ShardEpoch(8)),
-            )
-            .await,
-            8,
-            Some(9),
-        );
-    } else {
-        result.unwrap();
-    }
+        .await,
+        8,
+        Some(9),
+    );
 }
 
 #[test]
@@ -2480,18 +2434,17 @@ async fn deleting_the_recorded_epoch_fences_later_writes(
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
-    let fencing = is.expects_fencing();
     let is = is.get_indexed_storage().await;
     let key = "fence-deleted";
 
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(3))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(3))
         .await
         .unwrap();
-    is.delete_oplog_metadata("svc", "api", ns.ns.clone(), key)
+    is.delete_key_epoch("svc", "api", ns.ns.clone(), key)
         .await
         .unwrap();
     // Idempotent: deleting again is not an error.
-    is.delete_oplog_metadata("svc", "api", ns.ns.clone(), key)
+    is.delete_key_epoch("svc", "api", ns.ns.clone(), key)
         .await
         .unwrap();
 
@@ -2508,11 +2461,7 @@ async fn deleting_the_recorded_epoch_fences_later_writes(
         )
         .await;
 
-    if fencing {
-        assert_fenced(result, 3, None);
-    } else {
-        result.unwrap();
-    }
+    assert_fenced(result, 3, None);
 }
 
 #[test]
@@ -2525,17 +2474,17 @@ async fn a_deleted_record_does_not_remember_its_epoch(
     let is = is.get_indexed_storage().await;
     let key = "fence-forgotten";
 
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
         .await
         .unwrap();
-    is.delete_oplog_metadata("svc", "api", ns.ns.clone(), key)
+    is.delete_key_epoch("svc", "api", ns.ns.clone(), key)
         .await
         .unwrap();
 
     // The documented limit of the fence: the forward-only rule lives on the record, so once the
     // record is gone a lower epoch than the one it held is recorded and written through. Closing
     // this needs the delete to keep the epoch, which changes this test on purpose.
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
         .await
         .unwrap();
     is.append(
@@ -2559,32 +2508,17 @@ async fn a_deleted_record_does_not_remember_its_epoch(
 
 #[test]
 #[tracing::instrument]
-async fn the_backend_reports_whether_it_fences(
-    deps: &WorkerExecutorTestDependencies,
-    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
-) {
-    let expected = is.expects_fencing();
-    let is = is.get_indexed_storage().await;
-    assert_eq!(is.supports_epoch_fencing(), expected);
-}
-
-#[test]
-#[tracing::instrument]
 async fn a_failed_batch_leaves_no_partial_write(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
     #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
 ) {
-    // The transactional backends are exactly the fencing ones, and this is what makes "the fence
-    // is checked once per batch" true rather than "once per entry": a backend that loops single
-    // appends would leave the entries before the failure behind.
-    if !is.expects_fencing() {
-        return;
-    }
+    // What makes "the fence is checked once per batch" true rather than "once per entry": a
+    // backend that loops single appends would leave the entries before the failure behind.
     let is = is.get_indexed_storage().await;
     let key = "batch-atomicity";
 
-    is.upsert_oplog_metadata("svc", "api", ns.ns.clone(), key, ShardEpoch(1))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(1))
         .await
         .unwrap();
     is.append_many(

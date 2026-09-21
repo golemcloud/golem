@@ -515,7 +515,7 @@ impl InjectedAppendFailure {
                 key: key.to_string(),
                 expected: shard_epoch.unwrap_or_default(),
                 actual: shard_epoch.map(|epoch| ShardEpoch(epoch.0 + 1)),
-                owner_conflict: false,
+                writer_conflict: false,
             }),
             _ => None,
         }
@@ -636,7 +636,7 @@ impl ReadCountingIndexedStorage {
 
 #[async_trait]
 impl IndexedStorage for ReadCountingIndexedStorage {
-    async fn upsert_oplog_metadata(
+    async fn set_key_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
@@ -645,11 +645,11 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         shard_epoch: ShardEpoch,
     ) -> Result<(), IndexedStorageError> {
         self.inner
-            .upsert_oplog_metadata(svc_name, api_name, namespace, key, shard_epoch)
+            .set_key_epoch(svc_name, api_name, namespace, key, shard_epoch)
             .await
     }
 
-    async fn delete_oplog_metadata(
+    async fn delete_key_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
@@ -657,12 +657,8 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
     ) -> Result<(), IndexedStorageError> {
         self.inner
-            .delete_oplog_metadata(svc_name, api_name, namespace, key)
+            .delete_key_epoch(svc_name, api_name, namespace, key)
             .await
-    }
-
-    fn supports_epoch_fencing(&self) -> bool {
-        self.inner.supports_epoch_fencing()
     }
 
     async fn number_of_replicas(
@@ -8351,10 +8347,7 @@ async fn reserved_start_through_production_stack_smoke(_tracing: &Tracing) {
     }
 }
 
-/// The fence, end to end through the real oplog service and a backend that enforces it.
-///
-/// SQLite rather than the in-memory backend on purpose: in-memory does not fence, so it would
-/// pass these no matter what the service does.
+/// The fence, end to end through the real oplog service, on SQLite.
 async fn fencing_oplog_service(tempdir: &tempfile::TempDir, name: &str) -> PrimaryOplogService {
     let config = golem_common::config::DbSqliteConfig {
         database: tempdir
@@ -8367,10 +8360,6 @@ async fn fencing_oplog_service(tempdir: &tempfile::TempDir, name: &str) -> Prima
     };
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
         Arc::new(SqliteIndexedStorage::configured(&config).await.unwrap());
-    assert!(
-        indexed_storage.supports_epoch_fencing(),
-        "this test is meaningless on a backend that cannot fence"
-    );
     PrimaryOplogService::new(
         indexed_storage,
         Arc::new(InMemoryBlobStorage::new()),
@@ -9434,7 +9423,7 @@ async fn a_refused_open_or_create_reports_the_stored_epoch_to_the_fence_observer
         agent_id: agent_id.clone(),
         expected_epoch: ShardEpoch(5),
         actual_epoch: Some(ShardEpoch(6)),
-        owner_conflict: false,
+        writer_conflict: false,
     };
 
     for agent_id in [&opened, &created] {
@@ -9597,7 +9586,7 @@ async fn a_create_refused_behind_a_cached_handle_still_reports_the_stored_epoch(
             agent_id: agent_id.clone(),
             expected_epoch: ShardEpoch(5),
             actual_epoch: Some(ShardEpoch(6)),
-            owner_conflict: false,
+            writer_conflict: false,
         }]
     );
 }
@@ -9658,7 +9647,7 @@ async fn a_refused_append_reports_the_stored_epoch_and_the_latch_does_not_report
         agent_id: agent_id.clone(),
         expected_epoch: ShardEpoch(5),
         actual_epoch: Some(ShardEpoch(6)),
-        owner_conflict: false,
+        writer_conflict: false,
     };
     assert_eq!(
         recorder.fences(),

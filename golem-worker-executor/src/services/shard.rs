@@ -333,7 +333,7 @@ impl OplogFenceObserver for ShardServiceDefault {
         // state does, and it has to mint past the epoch rather than leave it shared.
         let Some(stored) = fence.actual_epoch.filter(|stored| {
             *stored > fence.expected_epoch
-                || (fence.owner_conflict && *stored == fence.expected_epoch)
+                || (fence.writer_conflict && *stored == fence.expected_epoch)
         }) else {
             return;
         };
@@ -458,7 +458,7 @@ mod tests {
             agent_id: agent_id.clone(),
             expected_epoch: ShardEpoch(expected),
             actual_epoch: actual.map(ShardEpoch),
-            owner_conflict: false,
+            writer_conflict: false,
         }
     }
 

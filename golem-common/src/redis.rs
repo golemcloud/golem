@@ -422,6 +422,37 @@ return 1
         self.record(start, "EVAL", result)
     }
 
+    /// Runs a Lua script, which Redis executes atomically. `keys` get the pool's key prefix.
+    pub async fn eval<K>(
+        &self,
+        script: &'static str,
+        keys: &[K],
+        args: Vec<Value>,
+        options: Option<&Options>,
+    ) -> RedisResult<Value>
+    where
+        K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let options = options.cloned().unwrap_or_default();
+        let mut command_args: Vec<Value> = Vec::with_capacity(2 + keys.len() + args.len());
+        command_args.push(script.into());
+        command_args.push((keys.len() as i64).into());
+        for key in keys {
+            command_args.push(self.prefixed_key(key).into());
+        }
+        command_args.extend(args);
+        let result = self
+            .pool
+            .next()
+            .with_options(&options)
+            .custom_raw(cmd!("EVAL"), command_args)
+            .await
+            .and_then(|frame| frame.try_into());
+        self.record(start, "EVAL", result)
+    }
+
     pub async fn hset<R, K, V>(&self, key: K, values: V) -> RedisResult<R>
     where
         R: FromValue,

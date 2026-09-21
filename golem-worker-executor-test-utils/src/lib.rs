@@ -1750,7 +1750,7 @@ pub async fn take_agent_oplog_over_at_epoch(
     .map_err(|err| anyhow!(err))?;
     // The namespace and key the executor's own open records its epoch under.
     storage
-        .upsert_oplog_metadata(
+        .set_key_epoch(
             "oplog",
             "test_take_over",
             IndexedStorageNamespace::OpLog {

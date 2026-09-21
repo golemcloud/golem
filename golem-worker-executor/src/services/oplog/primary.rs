@@ -334,14 +334,14 @@ async fn record_owning_epoch(
     shard_epoch: ShardEpoch,
     fence_observer: Option<&dyn OplogFenceObserver>,
 ) -> Option<OplogFence> {
-    let outcome = retry_storage_op_fenceable(retry_config, "upsert_oplog_metadata", key, || {
+    let outcome = retry_storage_op_fenceable(retry_config, "set_key_epoch", key, || {
         let ns = IndexedStorageNamespace::OpLog {
             agent_id: owned_agent_id.agent_id(),
             agent_mode,
         };
         async move {
             indexed_storage
-                .upsert_oplog_metadata("oplog", "upsert_oplog_metadata", ns, key, shard_epoch)
+                .set_key_epoch("oplog", "set_key_epoch", ns, key, shard_epoch)
                 .await
         }
     })
@@ -352,21 +352,21 @@ async fn record_owning_epoch(
         Err(IndexedStorageError::Fenced {
             expected,
             actual,
-            owner_conflict,
+            writer_conflict,
             ..
         }) => {
             warn!(
                 agent_id = %owned_agent_id,
                 expected_epoch = expected.0,
                 actual_epoch = ?actual.map(|epoch| epoch.0),
-                owner_conflict,
+                writer_conflict,
                 "Oplog opened at a stale shard epoch: the shard has a new owner"
             );
             let fence = OplogFence {
                 agent_id: owned_agent_id.agent_id(),
                 expected_epoch: expected,
                 actual_epoch: actual,
-                owner_conflict,
+                writer_conflict,
             };
             if let Some(observer) = fence_observer {
                 observer.fenced(&fence);
@@ -890,7 +890,7 @@ impl OplogService for PrimaryOplogService {
             // The epoch record goes before the entries: a writer still holding this oplog open is
             // then refused by the absent record, instead of appending entries back into an oplog
             // that is being removed.
-            retry_storage_op(&self.retry_config, "delete_oplog_metadata", &key, || {
+            retry_storage_op(&self.retry_config, "delete_key_epoch", &key, || {
                 let is = is.clone();
                 let ns = IndexedStorageNamespace::OpLog {
                     agent_id: agent_id.clone(),
@@ -898,7 +898,7 @@ impl OplogService for PrimaryOplogService {
                 };
                 let key = key.clone();
                 async move {
-                    is.delete_oplog_metadata("oplog", "delete_oplog_metadata", ns, &key)
+                    is.delete_key_epoch("oplog", "delete_key_epoch", ns, &key)
                         .await
                 }
             })
@@ -2117,13 +2117,13 @@ impl PrimaryOplogState {
             IndexedStorageError::Fenced {
                 expected,
                 actual,
-                owner_conflict,
+                writer_conflict,
                 ..
             } => OplogError::Fenced(OplogFence {
                 agent_id: owned_agent_id.agent_id(),
                 expected_epoch: expected,
                 actual_epoch: actual,
-                owner_conflict,
+                writer_conflict,
             }),
             other => OplogError::Storage(other.to_string()),
         }
