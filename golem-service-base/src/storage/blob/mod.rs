@@ -1095,8 +1095,11 @@ pub(crate) fn blob_child_path(directory: &str, name: &str) -> Box<Path> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlobNameError, BlobRangeError, blob_path_to_string, blob_range, normalized_blob_path,
+        BlobNameError, BlobRangeError, agent_path_segment, blob_path_to_string, blob_range,
+        normalized_blob_path,
     };
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
     use pretty_assertions::assert_eq;
     use std::path::{Path, PathBuf};
     use test_r::test;
@@ -1305,6 +1308,30 @@ mod tests {
                 Err(BlobNameError::NoName {
                     path: PathBuf::from("")
                 }),
+            ]
+        );
+    }
+
+    /// The filesystem backend keeps oplog payloads at paths that hold this segment, so the
+    /// segment of an agent must not change. The first agent name is longer than 32 characters
+    /// and holds characters that the segment replaces, and the second is empty.
+    #[test]
+    fn the_path_segment_of_an_agent_keeps_its_form() {
+        let component_id =
+            ComponentId(uuid::Uuid::parse_str("0d9f6c1e-2b8a-4f3d-9e7c-5a4b3c2d1e0f").unwrap());
+        let segments = [r#"counter("a/../b", 12345678901234567890)"#, ""].map(|agent| {
+            agent_path_segment(&AgentId {
+                component_id,
+                agent_id: agent.to_string(),
+            })
+        });
+
+        assert_eq!(
+            segments,
+            [
+                "counter__a____b___12345678901234-97f0841e19646b6f20282e1d316187fb327b2df867064639c28e15d22dd797ec"
+                    .to_string(),
+                "agent-6a683fb8dbe943ef400d01ca02589e2b93eb9e982cfff9bf930fdcad6787107f".to_string(),
             ]
         );
     }
