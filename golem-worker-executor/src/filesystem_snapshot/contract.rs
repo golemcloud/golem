@@ -485,7 +485,7 @@ async fn a_restore_into_a_directory_that_is_not_empty_writes_nothing(open: OpenS
     let into = new_tree(&[(
         "already-there.txt",
         Spec::File {
-            content: b"already there".to_vec(),
+            content: Box::from(&b"already there"[..]),
             mode: 0o644,
         },
     )]);

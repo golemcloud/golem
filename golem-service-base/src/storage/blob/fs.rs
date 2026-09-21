@@ -250,7 +250,7 @@ impl BlobStorage for FileSystemBlobStorage {
         let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
         let staging = self.root.join(STAGING_DIRECTORY);
-        let data = data.to_vec();
+        let data: Box<[u8]> = Box::from(data);
 
         Ok(
             tokio::task::spawn_blocking(move || write_if_absent(&staging, &full_path, &data))

@@ -17,7 +17,7 @@
 //! check.
 
 use std::fs::Metadata;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
@@ -78,7 +78,7 @@ fn writable(mut permissions: std::fs::Permissions) -> std::fs::Permissions {
 /// modification time.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Listed {
-    pub(super) path: PathBuf,
+    pub(super) path: Box<Path>,
     pub(super) kind: ListedKind,
     pub(super) mode: u32,
     pub(super) modified: SystemTime,
@@ -89,8 +89,8 @@ pub(super) struct Listed {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ListedKind {
     Directory,
-    File { size: u64, hash: String },
-    Symlink(PathBuf),
+    File { size: u64, hash: Box<str> },
+    Symlink(Box<Path>),
 }
 
 /// Lists each entry below `root`, in the order of the paths. Symlinks are not followed.
@@ -111,17 +111,17 @@ fn add_listed(directory: &Path, relative: &Path, listed: Vec<Listed>) -> Vec<Lis
             let kind = if metadata.is_dir() {
                 ListedKind::Directory
             } else if metadata.file_type().is_symlink() {
-                ListedKind::Symlink(std::fs::read_link(&path).unwrap())
+                ListedKind::Symlink(std::fs::read_link(&path).unwrap().into_boxed_path())
             } else {
                 let content = std::fs::read(&path).unwrap();
                 ListedKind::File {
                     size: content.len() as u64,
-                    hash: blake3::hash(&content).to_hex().to_string(),
+                    hash: blake3::hash(&content).to_hex().as_str().into(),
                 }
             };
             let is_directory = kind == ListedKind::Directory;
             listed.push(Listed {
-                path: relative.clone(),
+                path: relative.clone().into_boxed_path(),
                 kind,
                 mode: mode_of(&metadata),
                 modified: metadata.modified().unwrap(),
@@ -159,7 +159,7 @@ pub(super) fn files_and_bytes(listed: &[Listed]) -> (u64, u64) {
 /// One entry of a tree that the suite writes.
 pub(super) enum Spec {
     Directory { mode: u32 },
-    File { content: Vec<u8>, mode: u32 },
+    File { content: Box<[u8]>, mode: u32 },
     Symlink { target: &'static str },
 }
 
@@ -241,7 +241,7 @@ fn make_symlink(_target: &str, _link: &Path) {
 
 /// Gives `size` bytes that do not repeat in a short period, so a store that compresses or cuts
 /// its data into parts cannot make them small.
-pub(super) fn pattern(size: usize) -> Vec<u8> {
+pub(super) fn pattern(size: usize) -> Box<[u8]> {
     (0..size)
         .scan(0x2545_f491_u32, |state, _| {
             *state ^= *state << 13;
@@ -259,7 +259,7 @@ pub(super) fn fixture() -> Vec<(&'static str, Spec)> {
         (
             "a.txt",
             Spec::File {
-                content: b"alpha".to_vec(),
+                content: Box::from(&b"alpha"[..]),
                 mode: 0o644,
             },
         ),
@@ -288,7 +288,7 @@ pub(super) fn fixture() -> Vec<(&'static str, Spec)> {
         (
             "dir/nested/deep.txt",
             Spec::File {
-                content: b"deep".to_vec(),
+                content: Box::from(&b"deep"[..]),
                 mode: 0o640,
             },
         ),
@@ -296,7 +296,7 @@ pub(super) fn fixture() -> Vec<(&'static str, Spec)> {
         (
             "empty",
             Spec::File {
-                content: Vec::new(),
+                content: Box::default(),
                 mode: 0o644,
             },
         ),
@@ -305,28 +305,28 @@ pub(super) fn fixture() -> Vec<(&'static str, Spec)> {
         (
             "locked/inside.txt",
             Spec::File {
-                content: b"inside".to_vec(),
+                content: Box::from(&b"inside"[..]),
                 mode: 0o644,
             },
         ),
         (
             "name with space é.txt",
             Spec::File {
-                content: b"unicode".to_vec(),
+                content: Box::from(&b"unicode"[..]),
                 mode: 0o644,
             },
         ),
         (
             "read-only.txt",
             Spec::File {
-                content: b"read only".to_vec(),
+                content: Box::from(&b"read only"[..]),
                 mode: 0o444,
             },
         ),
         (
             "run.sh",
             Spec::File {
-                content: b"#!/bin/sh\n".to_vec(),
+                content: Box::from(&b"#!/bin/sh\n"[..]),
                 mode: 0o755,
             },
         ),
@@ -340,7 +340,7 @@ pub(super) fn fixture() -> Vec<(&'static str, Spec)> {
         (
             "a.txt",
             Spec::File {
-                content: b"alpha".to_vec(),
+                content: Box::from(&b"alpha"[..]),
                 mode: 0o644,
             },
         ),
@@ -356,14 +356,14 @@ pub(super) fn fixture() -> Vec<(&'static str, Spec)> {
         (
             "dir/nested/deep.txt",
             Spec::File {
-                content: b"deep".to_vec(),
+                content: Box::from(&b"deep"[..]),
                 mode: 0o644,
             },
         ),
         (
             "empty",
             Spec::File {
-                content: Vec::new(),
+                content: Box::default(),
                 mode: 0o644,
             },
         ),
@@ -371,7 +371,7 @@ pub(super) fn fixture() -> Vec<(&'static str, Spec)> {
         (
             "read-only.txt",
             Spec::File {
-                content: b"read only".to_vec(),
+                content: Box::from(&b"read only"[..]),
                 mode: 0o444,
             },
         ),
@@ -383,7 +383,7 @@ pub(super) fn one_file(content: &str) -> Vec<(&'static str, Spec)> {
     vec![(
         "file.txt",
         Spec::File {
-            content: content.as_bytes().to_vec(),
+            content: Box::from(content.as_bytes()),
             mode: 0o644,
         },
     )]
