@@ -213,8 +213,9 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     ///
     /// The result is the tree as it was at the save: the same files, directories, symlinks,
     /// permissions and modification times. Each name of a file comes back as a separate file.
-    /// The call does not change the metadata of `into`. A failed restore can leave a part of the
-    /// tree in `into`, so only a successful restore gives a whole tree.
+    /// A snapshot does not keep the metadata of the root of the tree, so the call does not set
+    /// the permissions or the modification time of `into`. A failed restore can leave a part of
+    /// the tree in `into`, so only a successful restore gives a whole tree.
     ///
     /// `NotFound` means that no complete snapshot has the name, because no save of it finished
     /// or the snapshot was deleted. `Corrupt` means that an integrity check failed. Both give

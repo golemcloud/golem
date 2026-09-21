@@ -139,7 +139,8 @@ pub(super) fn tree_info(tree: &[TreeEntry], created_at: Timestamp) -> SnapshotIn
 /// its children. A file gets its permissions and its modification time when it is made, and a
 /// symlink gets its modification time. The directories get their permissions and modification
 /// times last, children before parents, so a read-only directory still takes its children, and
-/// no later write changes the time of a directory. The metadata of `into` does not change.
+/// no later write changes the time of a directory. The tree does not keep the metadata of its
+/// root, so the function does not set the permissions or the modification time of `into`.
 ///
 /// An `into` that is missing gives a `NotFound` error, one that is not a directory gives a
 /// `NotADirectory` error, and one that is not empty gives a `DirectoryNotEmpty` error. In these
