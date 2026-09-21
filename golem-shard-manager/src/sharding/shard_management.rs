@@ -238,8 +238,7 @@ impl ShardManagement {
     /// earlier id, so it refused the renewal that would have repaired it, and this is the moment
     /// the executor can tell it what it forgot - see [`ShardLeaseState::raise_epoch_floor`]. An
     /// unassigned shard's high-water rises to the claim, so the loop's first mint lands one past
-    /// it; a shard another executor already holds is re-minted one past the claim, and that owner
-    /// is pushed its new epoch.
+    /// it; a shard another executor already holds is left alone.
     pub async fn register_executor_with_previous_claim(
         &self,
         executor_id: ExecutorId,
@@ -256,22 +255,20 @@ impl ShardManagement {
         let now = Utc::now();
         let lease_ttl = self.lease_ttl;
 
-        let ((already_known, replaced, number_of_shards, pending, re_minted_owners), stored_at) =
-            self.persist_for_request(move |shard_state| {
+        let ((already_known, replaced, number_of_shards, pending), stored_at) = self
+            .persist_for_request(move |shard_state| {
                 let already_known = shard_state.has_executor(executor_id);
                 let replaced =
                     shard_state.add_executor(executor_id, addr, pod_name, now, lease_ttl);
 
                 // After `add_executor`, so a replaced predecessor's shards are already this
-                // executor's and no owner that is about to disappear is re-minted; ahead of the
-                // grant, so the grant carries the repaired epochs.
+                // executor's and its claim on them counts; ahead of the grant, so the grant
+                // carries the repaired epochs.
                 let raised = shard_state.raise_epoch_floor(executor_id, &previous_claim);
-                let re_minted_owners = owners_re_minted_by(shard_state, &raised, executor_id);
                 if !raised.is_empty() {
                     warn!(
                         executor_id = %executor_id,
                         raised_shards = raised.iter().join(", "),
-                        re_minted_owners = re_minted_owners.iter().join(", "),
                         "Registration carried epochs ahead of the stored state; raising them. \
                          The shard state has lost history - it was wiped, replaced or restored"
                     );
@@ -287,7 +284,6 @@ impl ShardManagement {
                     replaced,
                     shard_state.number_of_shards,
                     pending,
-                    re_minted_owners,
                 ))
             })
             .await?;
@@ -315,16 +311,6 @@ impl ShardManagement {
             info!(executor_id = %executor_id, addr = %addr, "Executor lease refreshed");
         } else {
             info!(executor_id = %executor_id, addr = %addr, "Executor added");
-        }
-
-        if !re_minted_owners.is_empty() {
-            // After the persist, so the pass pushes a stored epoch. The registration's grant does
-            // not reach these owners, and until they adopt the new epoch the claimant's oplog rows
-            // refuse their writes; their own renewals could be a third of a lease away.
-            let mut updates = self.updates.lock().await;
-            for owner in &re_minted_owners {
-                updates.retry_full_assignment(*owner);
-            }
         }
 
         self.change.notify_one();
@@ -355,7 +341,7 @@ impl ShardManagement {
     /// ownership generation, and moving it on a renewal would make a lost response permanently
     /// fatal for a shard the executor still owns. The exception is a store that lost history -
     /// see [`ShardLeaseState::raise_epoch_floor`]: a claim ahead of the record restores the
-    /// claimant's own epochs, and re-mints the owner of another executor's shard one past it.
+    /// claimant's own epochs, and moves nothing on a shard another executor owns.
     ///
     /// `fenced` is what the oplog writes this executor was refused found on the rows - see
     /// [`ShardLeaseState::raise_epoch_floor_past`]. Ahead of the record it re-mints every owner of
@@ -366,7 +352,7 @@ impl ShardManagement {
     /// Leases that have already lapsed are reaped *before* this one is looked up, so an executor
     /// whose lease expired while its renewal was in flight is told
     /// [`ShardManagerError::ShardLeaseNotFound`] rather than silently resurrected. The loop is
-    /// notified only when the claim or a fenced epoch re-minted another executor's shard, so that
+    /// notified only when a fenced epoch re-minted another executor's shard, so that
     /// owner is pushed its new epoch instead of waiting for its own renewal; the shards that
     /// reaping freed are picked up by the next tick.
     pub async fn renew_shard_lease_with_fenced_epochs(
@@ -444,12 +430,14 @@ impl ShardManagement {
             // claim still wins. They reach a state that was wiped or replaced as well, because the
             // executor keeps reporting them until a renewal under its re-registered id is granted.
             let re_minted = shard_state.raise_epoch_floor_past(executor_id, &fenced);
-            let fence_re_minted_owners = owners_re_minted_by(shard_state, &re_minted, executor_id);
+            // A re-minted shard another executor owns: this renewal's grant does not reach that
+            // owner, so it has to be pushed the new epoch.
+            let re_minted_owners = owners_re_minted_by(shard_state, &re_minted, executor_id);
             if !re_minted.is_empty() {
                 warn!(
                     executor_id = %executor_id,
                     re_minted_shards = re_minted.iter().join(", "),
-                    re_minted_owners = fence_re_minted_owners.iter().join(", "),
+                    re_minted_owners = re_minted_owners.iter().join(", "),
                     "Fenced oplog writes reported epochs ahead of the stored state; re-minting above \
                      them. The shard state has lost history - it was wiped, replaced or restored"
                 );
@@ -459,23 +447,14 @@ impl ShardManagement {
             // that was wiped or replaced refused the renewal above, and is repaired by the
             // re-registration that follows it.
             let raised = shard_state.raise_epoch_floor(executor_id, &claimed);
-            let claim_re_minted_owners = owners_re_minted_by(shard_state, &raised, executor_id);
             if !raised.is_empty() {
                 warn!(
                     executor_id = %executor_id,
                     raised_shards = raised.iter().join(", "),
-                    re_minted_owners = claim_re_minted_owners.iter().join(", "),
                     "Shard lease claim carried epochs ahead of the stored state; raising them. \
                      The shard state has lost history - it was restored from a backup"
                 );
             }
-            // The moved shards another executor owns were re-minted. This renewal's grant does not
-            // reach that owner, so it has to be pushed the new epoch.
-            let re_minted_owners: BTreeSet<ExecutorId> = fence_re_minted_owners
-                .union(&claim_re_minted_owners)
-                .copied()
-                .collect();
-
             if !shard_state.renew_lease(executor_id, now, lease_ttl) {
                 return Err(ShardManagerError::Internal(format!(
                     "executor {executor_id} holds no lease right after it was found"

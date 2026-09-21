@@ -57,7 +57,10 @@ message RegisterRequest {
   // - a wiped or replaced store no longer lists the earlier executor_id, so the
   // renewal that would have repaired it was refused - and the manager raises
   // its record so that the epochs it mints next clear the oplog rows written at
-  // the old ones. A malformed entry is rejected before any state is touched.
+  // the old ones. Believed only for shards that are this executor's own or
+  // unassigned: on a shard another executor owns it moves nothing, and that
+  // owner's fenced_shard_epochs repair it instead. A malformed entry is
+  // rejected before any state is touched.
   repeated golem.shardmanager.ShardEpochEntry previous_shard_epochs = 4;
 }
 

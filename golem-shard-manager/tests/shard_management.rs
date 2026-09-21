@@ -1363,11 +1363,10 @@ async fn a_re_registration_against_an_intact_store_mints_as_if_it_carried_nothin
 }
 
 #[test]
-// A re-registration's carried set can name a shard the manager has given to another executor. Ahead
-// of the record, it proves the claimant's oplog rows for that shard are fenced above the epoch the
-// owner holds, so the owner is re-minted one past the claim and pushed that epoch at once: the
-// registration's grant does not reach it, and its own renewal could be a third of a lease away.
-async fn a_re_registration_carrying_a_claim_on_another_executors_shard_pushes_its_owner() {
+// A re-registration's carried set can name a shard the manager has given to another executor.
+// Nothing corroborates a claim, so it moves nothing there: if the claimant did write oplog rows
+// above the owner's epoch, the owner's refused writes report them, and that is what re-mints it.
+async fn a_re_registration_carrying_a_claim_on_another_executors_shard_leaves_its_owner_alone() {
     let restarted_pod = pod(1, 9000);
     let owner_pod = pod(2, 9001);
     let worker_executors = Arc::new(TestWorkerExecutors::default());
@@ -1406,29 +1405,18 @@ async fn a_re_registration_carrying_a_claim_on_another_executors_shard_pushes_it
         stored.shards_for_executor(executor(2)),
         Some(shard_ids(&[2, 3]))
     );
-    assert_eq!(stored.epoch_for_shard(ShardId::new(2)), Some(ShardEpoch(6)));
+    assert_eq!(stored.epoch_for_shard(ShardId::new(2)), Some(ShardEpoch(0)));
     assert_eq!(stored.epoch_for_shard(ShardId::new(3)), Some(ShardEpoch(0)));
     assert!(stored.check_invariants().is_ok());
 
-    // Startup pushed once to each executor and the replacement pushes the restarted one, so the
-    // owner's push is the fourth. The tick is a third of a 60s lease away, so only the registration
-    // queueing the owner can send it within the wait.
-    wait_for_pushes(&worker_executors, 4).await;
+    // Startup pushed once to each executor and the replacement pushes the restarted one. The
+    // owner's epochs did not move, so it is owed nothing.
+    wait_for_pushes(&worker_executors, 3).await;
     wait_for_quiescence(&persistence).await;
-
-    let owner_pushes = worker_executors.pushes_to(owner_pod).await;
-    assert_eq!(owner_pushes.len(), 2);
-    let pushed = owner_pushes.last().expect("the owner was pushed");
     assert_eq!(
-        pushed.shard_epochs,
-        BTreeMap::from([
-            (ShardId::new(2), ShardEpoch(6)),
-            (ShardId::new(3), ShardEpoch(0)),
-        ])
-    );
-    assert!(
-        pushed.revision >= ack.grant.revision,
-        "the push was read off a state older than the re-mint"
+        worker_executors.pushes_to(owner_pod).await.len(),
+        1,
+        "a claim on the owner's shard pushed it"
     );
 
     join_set.abort_all();
@@ -2199,11 +2187,10 @@ async fn renewing_twice_with_the_same_epochs_moves_nothing() {
 
 #[test]
 // The claim is what the executor believes it holds, not a condition of the renewal. Another
-// executor's shard and a released shard are an executor that missed a push, and an epoch ahead of
-// the record on another executor's shard is one the manager forgot; refusing either renewal would
-// only hold the executor on a picture the manager knows is wrong. It is renewed,
-// and the grant carries the manager's set: the renewal is the guaranteed second delivery path for a
-// push that was lost. Only an executor the manager has never heard of is refused.
+// executor's shard - at any epoch - and a released shard are an executor that missed a push;
+// refusing the renewal would only hold the executor on a picture the manager knows is wrong. It is
+// renewed, and the grant carries the manager's set: the renewal is the guaranteed second delivery
+// path for a push that was lost. Only an executor the manager has never heard of is refused.
 async fn a_mismatched_claim_is_renewed_and_corrected() {
     let worker_executors = Arc::new(TestWorkerExecutors::default());
     let (shard_management, persistence, mut join_set) =
@@ -2226,11 +2213,8 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
     );
 
     // an epoch ahead of the record on a shard that belongs to somebody else, alongside claim
-    // entries that are perfectly valid. Corrected and never adopted: an epoch stamped onto another
-    // executor's assignment would leave both of them live on one `(shard, epoch)`, which is the one
-    // pair the oplog fence cannot separate. Being ahead, the claim proves the store lost history, so
-    // the owner keeps the shard and is re-minted one past the claim, and the claimant is not given
-    // it.
+    // entries that are perfectly valid. Corrected and never adopted, and the owner's epoch does not
+    // move on the claimant's word.
     let mut ahead_of_owner = truth.clone();
     ahead_of_owner.insert(ShardId::new(2), ShardEpoch(7));
     let expiry_before = expiry_of(&persistence.latest().await, executor(1));
@@ -2244,30 +2228,16 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
     );
     assert!(grant.expires_at > expiry_before, "the lease was extended");
 
-    // The re-mint woke the loop to push the owner its new epoch, and that pass has to finish before
-    // executor 2 deregisters below, or it could re-home the shards the deregistration releases.
-    // Startup pushed once to each executor, so the owner's push is the third.
-    wait_for_pushes(&worker_executors, 3).await;
-    wait_for_quiescence(&persistence).await;
-    let re_minted = persistence.latest().await;
+    let after_claim = persistence.latest().await;
     assert_eq!(
-        re_minted.epoch_for_shard(ShardId::new(2)),
-        Some(ShardEpoch(8)),
-        "the owner was not re-minted one past the claim"
+        after_claim.epoch_for_shard(ShardId::new(2)),
+        Some(ShardEpoch(0)),
+        "the claim moved another executor's epoch"
     );
     assert_eq!(
-        re_minted.shards_for_executor(executor(2)),
+        after_claim.shards_for_executor(executor(2)),
         Some(shard_ids(&[2, 3])),
         "the claim moved another executor's shard"
-    );
-    assert_eq!(
-        worker_executors
-            .pushes_to(pod(2, 9001))
-            .await
-            .last()
-            .and_then(|push| push.shard_epochs.get(&ShardId::new(2)).copied()),
-        Some(ShardEpoch(8)),
-        "the owner was not pushed its re-minted epoch"
     );
 
     // a shard that belongs to another executor
@@ -2294,14 +2264,13 @@ async fn a_mismatched_claim_is_renewed_and_corrected() {
         .expect("claiming a released shard is renewed and corrected");
     assert_eq!(grant.shard_epochs, truth);
 
-    // No correction moved executor 1's set or epochs: they are exactly what they were, only its
-    // lease clock moved, and executor 2's released shards stayed released. The one thing that
-    // moved was shard 2's epoch, and its release keeps it as the floor the next owner mints above.
+    // No correction moved executor 1's set or anybody's epochs: they are exactly what they were,
+    // only its lease clock moved, and executor 2's released shards stayed released.
     let after = persistence.latest().await;
     assert_eq!(claim_of(&after, executor(1)), truth);
     assert!(expiry_of(&after, executor(1)) > expiry_before);
     assert_eq!(after.get_unassigned_shards(), shard_ids(&[2, 3]));
-    assert_eq!(after.shard_epochs[&ShardId::new(2)], ShardEpoch(8));
+    assert_eq!(after.shard_epochs[&ShardId::new(2)], ShardEpoch(0));
 
     join_set.abort_all();
 }
@@ -2350,12 +2319,12 @@ async fn a_claim_ahead_of_the_record_raises_the_managers_floor() {
 }
 
 #[test]
-// A claim ahead of the record on a shard the manager has since given to another executor. The store
-// lost history, so the claimant's oplog rows for that shard are fenced above the epoch the owner
-// holds, and every write the owner makes is refused. The owner keeps the shard and is minted one
-// past the claim - never onto it, which would put two live executors on one `(shard, epoch)` - and
-// is pushed that epoch at once rather than left to find out on its own renewal.
-async fn a_higher_claim_on_another_executors_shard_re_mints_and_pushes_its_owner() {
+// A claim ahead of the record on a shard the manager has since given to another executor. It is one
+// executor's word about another's shard, so it moves nothing and nobody is pushed. If the claimant
+// did write oplog rows at that epoch, the owner's refused write reports them, and that report -
+// see `a_fenced_epoch_reported_by_a_non_owner_re_mints_and_pushes_the_owner` and its neighbours -
+// is what mints the owner past them.
+async fn a_higher_claim_on_another_executors_shard_moves_nothing() {
     let worker_executors = Arc::new(TestWorkerExecutors::default());
     let (shard_management, persistence, mut join_set) =
         new_shard_management(balanced_pair(), worker_executors.clone()).await;
@@ -2380,7 +2349,7 @@ async fn a_higher_claim_on_another_executors_shard_re_mints_and_pushes_its_owner
         after.shards_for_executor(executor(2)),
         Some(shard_ids(&[2, 3]))
     );
-    assert_eq!(after.epoch_for_shard(ShardId::new(2)), Some(ShardEpoch(8)));
+    assert_eq!(after.epoch_for_shard(ShardId::new(2)), Some(ShardEpoch(0)));
     assert_eq!(after.epoch_for_shard(ShardId::new(3)), Some(ShardEpoch(0)));
     assert_eq!(
         claim_of(&after, executor(1)),
@@ -2388,30 +2357,14 @@ async fn a_higher_claim_on_another_executors_shard_re_mints_and_pushes_its_owner
     );
     assert!(after.check_invariants().is_ok());
 
-    // Startup pushed once to each executor, so the owner's push is the third. The tick is a third of
-    // a 60s lease away, so only the renewal waking the loop can send it within the wait.
-    wait_for_pushes(&worker_executors, 3).await;
     wait_for_quiescence(&persistence).await;
-
-    let owner_pushes = worker_executors.pushes_to(pod(2, 9001)).await;
-    assert_eq!(owner_pushes.len(), 2);
-    let pushed = owner_pushes.last().expect("the owner was pushed");
-    assert_eq!(
-        pushed.shard_epochs,
-        BTreeMap::from([
-            (ShardId::new(2), ShardEpoch(8)),
-            (ShardId::new(3), ShardEpoch(0)),
-        ])
-    );
-    assert!(
-        pushed.revision >= grant.revision,
-        "the push was read off a state older than the re-mint"
-    );
-    assert_eq!(
-        worker_executors.pushes_to(pod(1, 9000)).await.len(),
-        1,
-        "the claimant was pushed as well"
-    );
+    for pod in [pod(1, 9000), pod(2, 9001)] {
+        assert_eq!(
+            worker_executors.pushes_to(pod).await.len(),
+            1,
+            "a claim that moved nothing pushed somebody"
+        );
+    }
 
     join_set.abort_all();
 }
