@@ -440,6 +440,19 @@ impl S3BlobStorage {
         encoded
     }
 
+    /// Gives the prefix that lists what is below a key: the key and one `/` after it.
+    ///
+    /// A key that already ends with a `/` is its own prefix. `list_objects` and
+    /// `prefix_has_objects` both list what is below a key, so they make the prefix here and
+    /// cannot read the same key in two ways.
+    fn prefix_with_slash(prefix: &str) -> String {
+        if prefix.ends_with('/') {
+            prefix.to_string()
+        } else {
+            format!("{prefix}/")
+        }
+    }
+
     async fn list_objects(
         &self,
         target_label: &'static str,
@@ -449,11 +462,7 @@ impl S3BlobStorage {
     ) -> Result<Vec<Object>, Error> {
         let mut result = Vec::new();
         let mut cont: Option<String> = None;
-        let prefix_with_slash = if prefix.ends_with('/') {
-            prefix.to_string()
-        } else {
-            format!("{prefix}/")
-        };
+        let prefix_with_slash = Self::prefix_with_slash(prefix);
 
         loop {
             let response = with_retries_customized(
@@ -510,11 +519,7 @@ impl S3BlobStorage {
         bucket: &str,
         prefix: &str,
     ) -> Result<bool, Error> {
-        let prefix_with_slash = if prefix.ends_with('/') {
-            prefix.to_string()
-        } else {
-            format!("{prefix}/")
-        };
+        let prefix_with_slash = Self::prefix_with_slash(prefix);
 
         let response = with_retries_customized(
             target_label,
