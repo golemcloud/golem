@@ -130,16 +130,23 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             let svc = self.state.blob_store_service.clone();
             let result = loop {
-                let result = svc
-                    .create_container(environment_id, name.clone())
-                    .await
-                    .map(|_| name.clone());
-                let result = match result {
-                    Ok(name) => svc
-                        .get_container(environment_id, name)
+                // The guest gets the time of the container, so the creation reads the container
+                // back. A read that finds no container after a creation that gave no error is a
+                // `BlobStoreError::NotFound`, which is permanent: the creation has already run,
+                // so no retry of the read can find a container that the storage does not hold.
+                // `Host::get_container` tells the guest the same thing about such a container.
+                let result = match svc.create_container(environment_id, name.clone()).await {
+                    Ok(()) => svc
+                        .get_container(environment_id, name.clone())
                         .await
-                        .map(|r| r.unwrap()),
-                    Err(e) => Err(e),
+                        .and_then(|created_at| {
+                            created_at.ok_or_else(|| {
+                                BlobStoreError::NotFound(format!(
+                                    "the container {name:?} was created, and the storage holds no container at that name"
+                                ))
+                            })
+                        }),
+                    Err(err) => Err(err),
                 };
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)

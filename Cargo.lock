@@ -4189,6 +4189,7 @@ dependencies = [
  "async-fs",
  "async-trait",
  "aws-config",
+ "aws-runtime",
  "aws-sdk-s3",
  "aws-smithy-runtime-api",
  "axum",

@@ -14,8 +14,8 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_path_is_root,
-    validate_relative_blob_path,
+    BlobMetadata, BlobMissingError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
+    NormalizedBlobPath, blob_copy_changes_nothing, normalized_blob_path,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -79,7 +79,7 @@ impl FileSystemBlobStorage {
         Ok(Self { root: canonical })
     }
 
-    fn path_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> PathBuf {
+    fn path_of(&self, namespace: &BlobStorageNamespace, path: &NormalizedBlobPath) -> PathBuf {
         let mut result = self.root.clone();
 
         match namespace {
@@ -173,8 +173,8 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
-        validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let path = normalized_blob_path(path)?;
+        let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
@@ -192,8 +192,8 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let path = normalized_blob_path(path)?;
+        let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
@@ -212,8 +212,8 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
-        validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let path = normalized_blob_path(path)?;
+        let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Ok(metadata) = async_fs::metadata(&full_path).await {
@@ -238,8 +238,8 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let path = normalized_blob_path(path)?;
+        let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Some(parent) = full_path.parent()
@@ -261,8 +261,8 @@ impl BlobStorage for FileSystemBlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let path = normalized_blob_path(path)?;
+        let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Some(parent) = full_path.parent()
@@ -292,8 +292,8 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let path = normalized_blob_path(path)?;
+        let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         async_fs::remove_file(&full_path).await?;
@@ -307,8 +307,13 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let path = normalized_blob_path(path)?;
+
+        if path.is_root() {
+            return Ok(());
+        }
+
+        let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         async_fs::create_dir_all(&full_path).await?;
@@ -323,12 +328,18 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
-        validate_relative_blob_path(path)?;
-        let namespace_root = self.path_of(&namespace, Path::new(""));
-        let full_path = self.path_of(&namespace, path);
+        let path = normalized_blob_path(path)?;
+        let namespace_root = self.path_of(&namespace, &NormalizedBlobPath::root());
+        let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        let mut entries = async_fs::read_dir(&full_path).await?;
+        // The directory of a namespace comes into being with the first write below it, so a
+        // path that is not there holds nothing, and so does an untouched namespace.
+        let mut entries = match async_fs::read_dir(&full_path).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(err) => return Err(err.into()),
+        };
 
         let mut result = Vec::new();
         while let Some(entry) = TryStreamExt::try_next(&mut entries).await? {
@@ -346,9 +357,9 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        validate_relative_blob_path(path)?;
-        let namespace_root = self.path_of(&namespace, Path::new(""));
-        let full_path = self.path_of(&namespace, path);
+        let path = normalized_blob_path(path)?;
+        let namespace_root = self.path_of(&namespace, &NormalizedBlobPath::root());
+        let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         Ok(
@@ -364,13 +375,13 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(false);
         }
 
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         let result = async_fs::remove_dir_all(&full_path).await;
@@ -393,8 +404,14 @@ impl BlobStorage for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
-        validate_relative_blob_path(path)?;
-        let full_path = self.path_of(&namespace, path);
+        let path = normalized_blob_path(path)?;
+
+        // The root of a namespace is a directory, also before the first write makes it.
+        if path.is_root() {
+            return Ok(ExistsResult::Directory);
+        }
+
+        let full_path = self.path_of(&namespace, &path);
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Ok(metadata) = async_fs::metadata(&full_path).await {
@@ -416,10 +433,30 @@ impl BlobStorage for FileSystemBlobStorage {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
-        validate_relative_blob_path(from)?;
-        validate_relative_blob_path(to)?;
-        let from_full_path = self.path_of(&namespace, from);
-        let to_full_path = self.path_of(&namespace, to);
+        // `BlobMissingError` names the path as the guest wrote it. The next line makes `from`
+        // the normalized path, so keep the path of the guest first.
+        let guest_from = from;
+        let from = normalized_blob_path(from)?;
+        let to = normalized_blob_path(to)?;
+
+        // A copy onto the same path writes nothing, and it still needs the blob that it reads.
+        // `async_fs::copy` opens the target for writing before it reads the source, so with one
+        // path it empties the blob.
+        if blob_copy_changes_nothing(&from, &to)? {
+            return match self
+                .exists(_target_label, _op_label, namespace, &from)
+                .await?
+            {
+                ExistsResult::File => Ok(()),
+                _ => Err(BlobMissingError {
+                    path: guest_from.to_path_buf(),
+                }
+                .into()),
+            };
+        }
+
+        let from_full_path = self.path_of(&namespace, &from);
+        let to_full_path = self.path_of(&namespace, &to);
         self.ensure_path_is_inside_root(&from_full_path)?;
         self.ensure_path_is_inside_root(&to_full_path)?;
 

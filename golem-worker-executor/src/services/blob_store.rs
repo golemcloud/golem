@@ -16,7 +16,8 @@ use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::types::ObjectMetadata;
 use golem_service_base::storage::blob::{
-    BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult,
+    BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
+    ExistsResult, blob_path_is_root,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -52,6 +53,10 @@ impl std::fmt::Display for BlobStoreError {
 }
 
 /// Interface for storing blobs in a persistent storage.
+///
+/// A guest picks the container name, and a name that names the root of the namespace names no
+/// container. Every method that takes a container name gives [`BlobStoreError::InvalidInput`]
+/// for such a name, which is permanent (`DefaultBlobStoreService::container_path`).
 #[async_trait]
 pub trait BlobStoreService: Send + Sync {
     async fn clear(
@@ -66,6 +71,12 @@ pub trait BlobStoreService: Send + Sync {
         container_name: String,
     ) -> Result<bool, BlobStoreError>;
 
+    /// Writes the source object to `destination_container_name` and
+    /// `destination_object_name`, and keeps the source object.
+    ///
+    /// A source object that is not there gives [`BlobStoreError::NotFound`], which is permanent,
+    /// so the guest gets it at once, the executor does not retry it, and the operation writes
+    /// nothing.
     async fn copy_object(
         &self,
         environment_id: EnvironmentId,
@@ -135,6 +146,12 @@ pub trait BlobStoreService: Send + Sync {
         container_name: String,
     ) -> Result<Vec<String>, BlobStoreError>;
 
+    /// Writes the source object to `destination_container_name` and
+    /// `destination_object_name`, and then deletes the source object.
+    ///
+    /// The write comes before the delete, so a source object that is not there gives the same
+    /// permanent [`BlobStoreError::NotFound`] as [`BlobStoreService::copy_object`], and the
+    /// operation deletes nothing.
     async fn move_object(
         &self,
         environment_id: EnvironmentId,
@@ -164,9 +181,76 @@ pub struct DefaultBlobStoreService {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
 }
 
+/// Gives the `BlobStoreError` of an error of the blob storage.
+///
+/// A [`BlobRangeError`] and a [`BlobNameError`] are errors of the input of the guest, so they
+/// become [`BlobStoreError::InvalidInput`]. A [`BlobMissingError`] becomes
+/// [`BlobStoreError::NotFound`]. `classify_blob_store_error` in
+/// `crate::durable_host::blobstore` makes each of the three permanent. Each other error becomes
+/// [`BlobStoreError::TransientBackend`], which is transient, so the executor retries the
+/// operation. Each method of [`DefaultBlobStoreService`] maps its errors with this function,
+/// so an error of the input is permanent at each of them.
+///
+/// [`BlobNameError`] has one downcast here and one rule: each of its variants is a name that
+/// the guest chose and that the storage cannot use, so each of them is permanent, whichever
+/// backend gives it. The path rules are in it too, so a `..` name and an absolute name are
+/// permanent like a name that S3 does not accept as an object key.
+///
+/// [`BlobMissingError`] is not a name error: the storage accepts the name, and holds no blob at
+/// it. The default `copy` of the blob storage gives it for a source path with no blob at it, the
+/// S3 backend gives it for a `CopyObject` whose source key is not there, and the default `move`
+/// is a copy and then a delete, so [`BlobStoreService::copy_object`] and
+/// [`BlobStoreService::move_object`] give [`BlobStoreError::NotFound`] for a source object that
+/// the guest names and that is not there. A retry cannot make the storage hold that object, so
+/// the error is permanent.
+fn blob_store_error(err: anyhow::Error) -> BlobStoreError {
+    if let Some(range) = err.downcast_ref::<BlobRangeError>() {
+        BlobStoreError::InvalidInput(range.to_string())
+    } else if let Some(name) = err.downcast_ref::<BlobNameError>() {
+        BlobStoreError::InvalidInput(name.to_string())
+    } else if let Some(missing) = err.downcast_ref::<BlobMissingError>() {
+        BlobStoreError::NotFound(missing.to_string())
+    } else {
+        BlobStoreError::TransientBackend(err.to_string())
+    }
+}
+
 impl DefaultBlobStoreService {
     pub fn new(blob_storage: Arc<dyn BlobStorage + Send + Sync>) -> Self {
         Self { blob_storage }
+    }
+
+    /// Gives the path of the container, or [`BlobStoreError::InvalidInput`] for a container name
+    /// that names the root of the namespace.
+    ///
+    /// A guest picks the container name, and a name with no name in it, for example an empty
+    /// name or `.`, names the root (`blob_path_is_root`). The root is the namespace itself and
+    /// not a container, so every method that takes a container name reads it here first. Without
+    /// the rule each method answers about the namespace: `container_exists` tells the guest that
+    /// the root is a container, `delete_container` reports that it removed one, and
+    /// `copy_object` and `move_object` read and write a blob beside the containers instead of
+    /// inside one.
+    ///
+    /// The error is permanent (`classify_blob_store_error`), so the guest gets it on the first
+    /// call and the executor does not retry a name that can never name a container. The error
+    /// names the container as the guest wrote it, because the guest reads the message.
+    ///
+    /// A container name that breaks another rule of a name is not here. The path of the
+    /// operation holds the container name and the object name, and the backend that reads that
+    /// path gives the rule that it breaks, with both names in the message.
+    fn container_path(container_name: &str) -> Result<&Path, BlobStoreError> {
+        let path = Path::new(container_name);
+
+        if blob_path_is_root(path) {
+            return Err(BlobStoreError::InvalidInput(
+                BlobNameError::NoName {
+                    path: path.to_path_buf(),
+                }
+                .to_string(),
+            ));
+        }
+
+        Ok(path)
     }
 }
 
@@ -178,17 +262,17 @@ impl BlobStoreService for DefaultBlobStoreService {
         container_name: String,
     ) -> Result<(), BlobStoreError> {
         let namespace = BlobStorageNamespace::CustomStorage { environment_id };
-        let path = Path::new(&container_name);
+        let path = Self::container_path(&container_name)?;
         self.blob_storage
             .delete_dir("blob_store", "clear", namespace.clone(), path)
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+            .map_err(blob_store_error)?;
         // Re-create the empty container directory so the container continues to exist.
         // clear() semantics: remove all objects, keep the container itself.
         self.blob_storage
             .create_dir("blob_store", "clear", namespace, path)
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+            .map_err(blob_store_error)?;
         Ok(())
     }
 
@@ -197,15 +281,16 @@ impl BlobStoreService for DefaultBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<bool, BlobStoreError> {
+        let path = Self::container_path(&container_name)?;
         self.blob_storage
             .exists(
                 "blob_store",
                 "container_exists",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                Path::new(&container_name),
+                path,
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
             .map(|result| match result {
                 ExistsResult::Directory => true,
                 ExistsResult::File => false,
@@ -221,16 +306,18 @@ impl BlobStoreService for DefaultBlobStoreService {
         destination_container_name: String,
         destination_object_name: String,
     ) -> Result<(), BlobStoreError> {
+        let source_path = Self::container_path(&source_container_name)?;
+        let destination_path = Self::container_path(&destination_container_name)?;
         self.blob_storage
             .copy(
                 "blob_store",
                 "copy_object",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                &Path::new(&source_container_name).join(&source_object_name),
-                &Path::new(&destination_container_name).join(&destination_object_name),
+                &source_path.join(&source_object_name),
+                &destination_path.join(&destination_object_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
     }
 
     async fn create_container(
@@ -238,15 +325,16 @@ impl BlobStoreService for DefaultBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<(), BlobStoreError> {
+        let path = Self::container_path(&container_name)?;
         self.blob_storage
             .create_dir(
                 "blob_store",
                 "create_container",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                Path::new(&container_name),
+                path,
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+            .map_err(blob_store_error)?;
         Ok(())
     }
 
@@ -255,15 +343,16 @@ impl BlobStoreService for DefaultBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<(), BlobStoreError> {
+        let path = Self::container_path(&container_name)?;
         self.blob_storage
             .delete_dir(
                 "blob_store",
                 "delete_container",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                Path::new(&container_name),
+                path,
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+            .map_err(blob_store_error)?;
         Ok(())
     }
 
@@ -273,15 +362,16 @@ impl BlobStoreService for DefaultBlobStoreService {
         container_name: String,
         object_name: String,
     ) -> Result<(), BlobStoreError> {
+        let path = Self::container_path(&container_name)?;
         self.blob_storage
             .delete(
                 "blob_store",
                 "delete_object",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                &Path::new(&container_name).join(&object_name),
+                &path.join(&object_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+            .map_err(blob_store_error)?;
         Ok(())
     }
 
@@ -291,9 +381,10 @@ impl BlobStoreService for DefaultBlobStoreService {
         container_name: &str,
         object_names: &[String],
     ) -> Result<(), BlobStoreError> {
+        let container_path = Self::container_path(container_name)?;
         let paths: Vec<PathBuf> = object_names
             .iter()
-            .map(|object_name| Path::new(container_name).join(object_name))
+            .map(|object_name| container_path.join(object_name))
             .collect();
         self.blob_storage
             .delete_many(
@@ -303,7 +394,7 @@ impl BlobStoreService for DefaultBlobStoreService {
                 &paths,
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
     }
 
     async fn get_container(
@@ -311,15 +402,16 @@ impl BlobStoreService for DefaultBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<Option<u64>, BlobStoreError> {
+        let path = Self::container_path(&container_name)?;
         self.blob_storage
             .get_metadata(
                 "blob_store",
                 "get_container",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                Path::new(&container_name),
+                path,
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
             .map(|result| result.map(|metadata| metadata.last_modified_at.to_millis()))
     }
 
@@ -331,21 +423,19 @@ impl BlobStoreService for DefaultBlobStoreService {
         start: u64,
         end: u64,
     ) -> Result<Vec<u8>, BlobStoreError> {
+        let path = Self::container_path(&container_name)?;
         let data = self
             .blob_storage
             .get_raw_slice(
                 "blob_store",
                 "get_data",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                &Path::new(&container_name).join(&object_name),
+                &path.join(&object_name),
                 start,
                 end,
             )
             .await
-            .map_err(|err| match err.downcast_ref::<BlobRangeError>() {
-                Some(range) => BlobStoreError::InvalidInput(range.to_string()),
-                None => BlobStoreError::TransientBackend(err.to_string()),
-            })?;
+            .map_err(blob_store_error)?;
 
         match data {
             Some(data) => Ok(data.to_vec()),
@@ -361,15 +451,16 @@ impl BlobStoreService for DefaultBlobStoreService {
         container_name: String,
         object_name: String,
     ) -> Result<bool, BlobStoreError> {
+        let path = Self::container_path(&container_name)?;
         self.blob_storage
             .exists(
                 "blob_store",
                 "has_object",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                &Path::new(&container_name).join(&object_name),
+                &path.join(&object_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
             .map(|result| match result {
                 ExistsResult::Directory => false,
                 ExistsResult::File => true,
@@ -382,15 +473,16 @@ impl BlobStoreService for DefaultBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<Vec<String>, BlobStoreError> {
+        let path = Self::container_path(&container_name)?;
         self.blob_storage
             .list_dir(
                 "blob_store",
                 "list_objects",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                Path::new(&container_name),
+                path,
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
             .map(|paths| {
                 paths
                     .iter()
@@ -407,16 +499,18 @@ impl BlobStoreService for DefaultBlobStoreService {
         destination_container_name: String,
         destination_object_name: String,
     ) -> Result<(), BlobStoreError> {
+        let source_path = Self::container_path(&source_container_name)?;
+        let destination_path = Self::container_path(&destination_container_name)?;
         self.blob_storage
             .r#move(
                 "blob_store",
                 "move_object",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                &Path::new(&source_container_name).join(&source_object_name),
-                &Path::new(&destination_container_name).join(&destination_object_name),
+                &source_path.join(&source_object_name),
+                &destination_path.join(&destination_object_name),
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
     }
 
     async fn object_info(
@@ -425,16 +519,17 @@ impl BlobStoreService for DefaultBlobStoreService {
         container_name: String,
         object_name: String,
     ) -> Result<ObjectMetadata, BlobStoreError> {
+        let path = Self::container_path(&container_name)?.join(&object_name);
         match self
             .blob_storage
             .get_metadata(
                 "blob_store",
                 "object_info",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                &Path::new(&container_name).join(&object_name),
+                &path,
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?
+            .map_err(blob_store_error)?
         {
             Some(metadata) => Ok(ObjectMetadata {
                 name: object_name,
@@ -455,16 +550,17 @@ impl BlobStoreService for DefaultBlobStoreService {
         object_name: &str,
         data: &[u8],
     ) -> Result<(), BlobStoreError> {
+        let path = Self::container_path(container_name)?;
         self.blob_storage
             .put_raw(
                 "blob_store",
                 "write_data",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                &Path::new(container_name).join(object_name),
+                &path.join(object_name),
                 data,
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
+            .map_err(blob_store_error)
     }
 }
 
@@ -472,14 +568,305 @@ impl BlobStoreService for DefaultBlobStoreService {
 mod tests {
     use crate::durable_host::blobstore::classify_blob_store_error;
     use crate::durable_host::durability::HostFailureKind;
-    use crate::services::blob_store::{BlobStoreError, BlobStoreService, DefaultBlobStoreService};
+    use crate::services::blob_store::{
+        BlobStoreError, BlobStoreService, DefaultBlobStoreService, blob_store_error,
+    };
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use futures::stream::BoxStream;
     use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::replayable_stream::ErasedReplayableStream;
     use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use std::path::Path;
+    use golem_service_base::storage::blob::{
+        BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
+        BlobStorageNamespace, ExistsResult, ListedBlob,
+    };
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tempfile::TempDir;
     use test_r::test;
+
+    /// A blob storage that gives a `BlobNameError` for each operation.
+    #[derive(Debug)]
+    struct NameErrorBlobStorage;
+
+    impl NameErrorBlobStorage {
+        fn error<T>() -> Result<T, anyhow::Error> {
+            Err(BlobNameError::NulByte.into())
+        }
+    }
+
+    #[async_trait]
+    impl BlobStorage for NameErrorBlobStorage {
+        async fn get_raw(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Option<Vec<u8>>, anyhow::Error> {
+            Self::error()
+        }
+
+        async fn get_stream(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Option<BoxStream<'static, Result<Bytes, anyhow::Error>>>, anyhow::Error>
+        {
+            Self::error()
+        }
+
+        async fn get_metadata(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Option<BlobMetadata>, anyhow::Error> {
+            Self::error()
+        }
+
+        async fn put_raw(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+            _data: &[u8],
+        ) -> Result<(), anyhow::Error> {
+            Self::error()
+        }
+
+        async fn put_stream(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+            _stream: &dyn ErasedReplayableStream<
+                Item = Result<Vec<u8>, anyhow::Error>,
+                Error = anyhow::Error,
+            >,
+        ) -> Result<(), anyhow::Error> {
+            Self::error()
+        }
+
+        async fn delete(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<(), anyhow::Error> {
+            Self::error()
+        }
+
+        async fn create_dir(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<(), anyhow::Error> {
+            Self::error()
+        }
+
+        async fn list_dir(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Vec<PathBuf>, anyhow::Error> {
+            Self::error()
+        }
+
+        async fn list_blobs_below(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<Box<[ListedBlob]>, anyhow::Error> {
+            Self::error()
+        }
+
+        async fn delete_dir(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<bool, anyhow::Error> {
+            Self::error()
+        }
+
+        async fn exists(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+        ) -> Result<ExistsResult, anyhow::Error> {
+            Self::error()
+        }
+    }
+
+    /// `blob_store_error` has one downcast for `BlobNameError`, so each rule of a name is
+    /// permanent, and the rules of the path are in it with the rules of the object key of S3.
+    ///
+    /// The filesystem backend gives the three errors of the path, so the test reads the real
+    /// rules and breaks if the type of their error changes. The NUL rule is a rule of MinIO,
+    /// and every backend applies it, so the filesystem backend gives it here too. The backend
+    /// also gives an error of its own: a write that the filesystem cannot do.
+    #[test]
+    async fn blob_store_error_makes_an_error_of_the_input_permanent_and_a_backend_error_transient()
+    {
+        let tempdir = TempDir::new().unwrap();
+        let storage = FileSystemBlobStorage::new(tempdir.path()).await.unwrap();
+        let namespace = BlobStorageNamespace::CustomStorage {
+            environment_id: EnvironmentId::new(),
+        };
+        let put = |path: &'static str| {
+            let namespace = namespace.clone();
+            let storage = &storage;
+            async move {
+                storage
+                    .put_raw("test", "put-raw", namespace, Path::new(path), &[1])
+                    .await
+            }
+        };
+
+        // A blob at `file` makes `file/blob` a path that the filesystem cannot write, because
+        // the parent of the blob is a file and not a directory.
+        put("file").await.unwrap();
+        let backend = blob_store_error(put("file/blob").await.unwrap_err());
+        let names = [
+            put("../escape").await.unwrap_err(),
+            put("/escape").await.unwrap_err(),
+            put("a\0b").await.unwrap_err(),
+            BlobRangeError { start: 3, end: 2 }.into(),
+        ]
+        .map(blob_store_error);
+
+        assert_eq!(
+            names
+                .iter()
+                .map(|error| (error.to_string(), classify_blob_store_error(error)))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    format!(
+                        "Invalid input: {}",
+                        BlobNameError::ParentDir {
+                            path: PathBuf::from("../escape")
+                        }
+                    ),
+                    HostFailureKind::Permanent
+                ),
+                (
+                    format!(
+                        "Invalid input: {}",
+                        BlobNameError::NotRelative {
+                            path: PathBuf::from("/escape")
+                        }
+                    ),
+                    HostFailureKind::Permanent
+                ),
+                (
+                    format!("Invalid input: {}", BlobNameError::NulByte),
+                    HostFailureKind::Permanent
+                ),
+                (
+                    format!("Invalid input: {}", BlobRangeError { start: 3, end: 2 }),
+                    HostFailureKind::Permanent
+                ),
+            ]
+        );
+        assert_eq!(
+            (
+                matches!(backend, BlobStoreError::TransientBackend(_)),
+                classify_blob_store_error(&backend)
+            ),
+            (true, HostFailureKind::Transient),
+            "{backend:?}"
+        );
+    }
+
+    #[test]
+    async fn every_operation_gives_invalid_input_for_a_name_error() {
+        let blob_store = DefaultBlobStoreService::new(Arc::new(NameErrorBlobStorage));
+        let environment_id = EnvironmentId::new();
+        let container = || "container".to_string();
+        let object = || "object".to_string();
+
+        let errors: Vec<Result<(), BlobStoreError>> = vec![
+            blob_store.clear(environment_id, container()).await,
+            blob_store
+                .container_exists(environment_id, container())
+                .await
+                .map(drop),
+            blob_store
+                .copy_object(environment_id, container(), object(), container(), object())
+                .await,
+            blob_store
+                .create_container(environment_id, container())
+                .await,
+            blob_store
+                .delete_container(environment_id, container())
+                .await,
+            blob_store
+                .delete_object(environment_id, container(), object())
+                .await,
+            blob_store
+                .delete_objects(environment_id, "container", &[object()])
+                .await,
+            blob_store
+                .get_container(environment_id, container())
+                .await
+                .map(drop),
+            blob_store
+                .get_data(environment_id, container(), object(), 0, 1)
+                .await
+                .map(drop),
+            blob_store
+                .has_object(environment_id, container(), object())
+                .await
+                .map(drop),
+            blob_store
+                .list_objects(environment_id, container())
+                .await
+                .map(drop),
+            blob_store
+                .move_object(environment_id, container(), object(), container(), object())
+                .await,
+            blob_store
+                .object_info(environment_id, container(), object())
+                .await
+                .map(drop),
+            blob_store
+                .write_data(environment_id, "container", "object", &[1])
+                .await,
+        ];
+
+        assert_eq!(
+            errors
+                .iter()
+                .map(|result| match result {
+                    Err(error @ BlobStoreError::InvalidInput(_)) => {
+                        classify_blob_store_error(error) == HostFailureKind::Permanent
+                    }
+                    _ => false,
+                })
+                .collect::<Vec<_>>(),
+            vec![true; 14],
+            "{errors:?}"
+        );
+    }
 
     async fn test_container_exists(blob_store: &impl BlobStoreService) {
         let environment_id = EnvironmentId::new();
@@ -669,6 +1056,273 @@ mod tests {
         );
     }
 
+    /// A guest picks the name of a container and the name of an object, and a `..` in a name
+    /// makes a path that goes above the root of its namespace. Each backend rejects such a
+    /// path, and the guest gets a permanent error, so the executor does not retry a name that
+    /// can never work.
+    async fn test_a_parent_name_is_invalid_input(blob_store: &impl BlobStoreService) {
+        let environment_id = EnvironmentId::new();
+        blob_store
+            .create_container(environment_id, "container1".to_string())
+            .await
+            .unwrap();
+
+        let written = blob_store
+            .write_data(environment_id, "container1", "../../escape", &[1])
+            .await;
+        let read = blob_store
+            .get_data(
+                environment_id,
+                "container1".to_string(),
+                "../../escape".to_string(),
+                0,
+                0,
+            )
+            .await
+            .map(drop);
+        let container = blob_store
+            .create_container(environment_id, "../escape".to_string())
+            .await;
+
+        let results = [written, read, container];
+        assert!(
+            results.iter().all(|result| matches!(
+                result,
+                Err(error @ BlobStoreError::InvalidInput(_))
+                    if classify_blob_store_error(error) == HostFailureKind::Permanent
+            )),
+            "{results:?}"
+        );
+    }
+
+    /// A guest picks the container name, and `""`, `"."`, `"./"` and `"././"` are four spellings
+    /// of one name: the root of the namespace, because a `.` is not a name. The root is the
+    /// namespace itself and not a container, so every method that takes a container name gives
+    /// `BlobStoreError::InvalidInput` for each of the four
+    /// (`DefaultBlobStoreService::container_path`). The error is permanent, so the guest gets it
+    /// on the first call and the executor does not retry a name that can never name a container.
+    ///
+    /// The rule sits above the backends, so both backends here give it and so do the other two.
+    /// Each backend keeps its own rule about a root path, which
+    /// `golem_service_base::storage::blob` states and `golem-service-base/tests/blob_storage.rs`
+    /// holds: a root path is a directory, so a read there finds no blob, a delete there removes
+    /// none, and `create_dir` and `delete_dir` there change nothing.
+    ///
+    /// `Host::create_container` reads the container back after it makes one, for the time that
+    /// the guest gets (`crate::durable_host::blobstore`). The rule is what keeps that read from
+    /// asking about a directory that `create_dir` never made.
+    async fn test_a_root_container_name_is_invalid_input(blob_store: &impl BlobStoreService) {
+        let environment_id = EnvironmentId::new();
+        blob_store
+            .create_container(environment_id, "container1".to_string())
+            .await
+            .unwrap();
+
+        for root_name in ["", ".", "./", "././"] {
+            let root = || root_name.to_string();
+            let object = || "object".to_string();
+
+            let results: Vec<Result<(), BlobStoreError>> = vec![
+                blob_store.clear(environment_id, root()).await,
+                blob_store
+                    .container_exists(environment_id, root())
+                    .await
+                    .map(drop),
+                blob_store
+                    .copy_object(
+                        environment_id,
+                        root(),
+                        object(),
+                        "container1".into(),
+                        object(),
+                    )
+                    .await,
+                blob_store
+                    .copy_object(
+                        environment_id,
+                        "container1".into(),
+                        object(),
+                        root(),
+                        object(),
+                    )
+                    .await,
+                blob_store.create_container(environment_id, root()).await,
+                blob_store.delete_container(environment_id, root()).await,
+                blob_store
+                    .delete_object(environment_id, root(), object())
+                    .await,
+                blob_store
+                    .delete_objects(environment_id, root_name, &[object()])
+                    .await,
+                blob_store
+                    .get_container(environment_id, root())
+                    .await
+                    .map(drop),
+                blob_store
+                    .get_data(environment_id, root(), object(), 0, 0)
+                    .await
+                    .map(drop),
+                blob_store
+                    .has_object(environment_id, root(), object())
+                    .await
+                    .map(drop),
+                blob_store
+                    .list_objects(environment_id, root())
+                    .await
+                    .map(drop),
+                blob_store
+                    .move_object(
+                        environment_id,
+                        root(),
+                        object(),
+                        "container1".into(),
+                        object(),
+                    )
+                    .await,
+                blob_store
+                    .move_object(
+                        environment_id,
+                        "container1".into(),
+                        object(),
+                        root(),
+                        object(),
+                    )
+                    .await,
+                blob_store
+                    .object_info(environment_id, root(), object())
+                    .await
+                    .map(drop),
+                blob_store
+                    .write_data(environment_id, root_name, "object", &[1])
+                    .await,
+            ];
+
+            assert!(
+                results.iter().all(|result| matches!(
+                    result,
+                    Err(error @ BlobStoreError::InvalidInput(_))
+                        if classify_blob_store_error(error) == HostFailureKind::Permanent
+                )),
+                "the container name {root_name:?} gave {results:?}"
+            );
+        }
+
+        assert_eq!(
+            blob_store
+                .list_objects(environment_id, "container1".to_string())
+                .await
+                .unwrap(),
+            Vec::<String>::new(),
+            "a root container name wrote an object"
+        );
+    }
+
+    /// A guest picks the source container name and the source object name of `copy_object` and
+    /// of `move_object`, and a source object that is not there gives a permanent
+    /// `BlobStoreError::NotFound`. The name is good, so it is not an error of the name: the
+    /// storage holds no object at it, and a retry cannot make the storage hold it.
+    ///
+    /// The error names the path of the source object, and the copy writes nothing. The test
+    /// does not hold that the move deletes nothing: the delete of a move is of the source, and
+    /// the source is not there, so the listing is the same whether the delete runs or not. The
+    /// S3 test `move_gives_a_missing_error_for_a_source_that_is_not_there_and_deletes_nothing`
+    /// holds that, by the one request that the move sends.
+    async fn test_a_source_that_is_not_there_is_not_found(blob_store: &impl BlobStoreService) {
+        let environment_id = EnvironmentId::new();
+        blob_store
+            .create_container(environment_id, "container1".to_string())
+            .await
+            .unwrap();
+        blob_store
+            .write_data(environment_id, "container1", "obj1", &[1])
+            .await
+            .unwrap();
+
+        let copied = blob_store
+            .copy_object(
+                environment_id,
+                "container1".to_string(),
+                "missing".to_string(),
+                "container1".to_string(),
+                "obj2".to_string(),
+            )
+            .await;
+        let moved = blob_store
+            .move_object(
+                environment_id,
+                "container1".to_string(),
+                "missing".to_string(),
+                "container1".to_string(),
+                "obj3".to_string(),
+            )
+            .await;
+
+        let expected = format!(
+            "Not found: {}",
+            BlobMissingError {
+                path: PathBuf::from("container1/missing"),
+            }
+        );
+        assert_eq!(
+            [copied, moved].map(|result| result
+                .err()
+                .map(|error| (error.to_string(), classify_blob_store_error(&error)))),
+            [
+                Some((expected.clone(), HostFailureKind::Permanent)),
+                Some((expected, HostFailureKind::Permanent)),
+            ]
+        );
+        assert_eq!(
+            blob_store
+                .list_objects(environment_id, "container1".to_string())
+                .await
+                .unwrap(),
+            vec!["obj1"],
+            "a source that is not there writes nothing"
+        );
+    }
+
+    /// A guest picks the source container name and the source object name, so the guest writes
+    /// the path of the source. `./missing` and `missing` are two forms of one path, and each
+    /// backend normalizes the path before it reads the storage. The error names the path as the
+    /// guest wrote it, as a `BlobNameError` does, because the guest reads the message and the
+    /// normalized form is of the storage.
+    ///
+    /// The copy is onto the same path, which each backend reads before it writes: the in-memory
+    /// backend uses the default `copy` of `BlobStorage` there, and the filesystem backend has
+    /// a `copy` of its own. The S3 backend has one too, which
+    /// `copy_names_the_source_path_as_the_guest_wrote_it` in
+    /// `golem_service_base::storage::blob::s3::tests` holds.
+    async fn test_a_missing_source_names_the_path_that_the_guest_wrote(
+        blob_store: &impl BlobStoreService,
+    ) {
+        let environment_id = EnvironmentId::new();
+        blob_store
+            .create_container(environment_id, "container1".to_string())
+            .await
+            .unwrap();
+
+        let copied = blob_store
+            .copy_object(
+                environment_id,
+                "container1".to_string(),
+                "./missing".to_string(),
+                "container1".to_string(),
+                "missing".to_string(),
+            )
+            .await;
+
+        assert_eq!(
+            copied.map_err(|error| error.to_string()),
+            Err(format!(
+                "Not found: {}",
+                BlobMissingError {
+                    path: PathBuf::from("container1/./missing"),
+                }
+            ))
+        );
+    }
+
     fn in_memory_blob_store() -> impl BlobStoreService {
         let blob_storage = Arc::new(InMemoryBlobStorage::new());
         DefaultBlobStoreService::new(blob_storage)
@@ -729,6 +1383,51 @@ mod tests {
         let tempdir = TempDir::new().unwrap();
         let blob_store = fs_blob_store(tempdir.path()).await;
         test_container_list_copy_move_list(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_parent_name_is_invalid_input_in_memory() {
+        let blob_store = in_memory_blob_store();
+        test_a_parent_name_is_invalid_input(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_parent_name_is_invalid_input_local() {
+        let tempdir = TempDir::new().unwrap();
+        let blob_store = fs_blob_store(tempdir.path()).await;
+        test_a_parent_name_is_invalid_input(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_source_that_is_not_there_is_not_found_in_memory() {
+        let blob_store = in_memory_blob_store();
+        test_a_source_that_is_not_there_is_not_found(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_missing_source_names_the_path_that_the_guest_wrote_in_memory() {
+        let blob_store = in_memory_blob_store();
+        test_a_missing_source_names_the_path_that_the_guest_wrote(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_missing_source_names_the_path_that_the_guest_wrote_local() {
+        let tempdir = TempDir::new().unwrap();
+        let blob_store = fs_blob_store(tempdir.path()).await;
+        test_a_missing_source_names_the_path_that_the_guest_wrote(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_root_container_name_is_invalid_input_in_memory() {
+        let blob_store = in_memory_blob_store();
+        test_a_root_container_name_is_invalid_input(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_a_root_container_name_is_invalid_input_local() {
+        let tempdir = TempDir::new().unwrap();
+        let blob_store = fs_blob_store(tempdir.path()).await;
+        test_a_root_container_name_is_invalid_input(&blob_store).await;
     }
 
     #[test]

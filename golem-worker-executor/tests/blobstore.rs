@@ -14,15 +14,19 @@
 
 use crate::Tracing;
 use golem_common::{agent_id, data_value};
+use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::metrics::storage::{
     STORAGE_BYTES_WRITTEN_TOTAL, STORAGE_OBJECTS_DELETED_TOTAL, STORAGE_OBJECTS_WRITTEN_TOTAL,
     STORAGE_TYPE_BLOB_STORE,
 };
+use golem_worker_executor::services::blob_store::DefaultBlobStoreService;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -356,6 +360,112 @@ async fn blobstore_get_data_outside_the_object_gives_the_guest_an_error(
         "{start_after_the_object:?}"
     );
     assert_eq!(whole_object, Ok(vec![10u8, 20u8, 30u8]));
+
+    Ok(())
+}
+
+/// A guest picks the container name, and `""`, `"."`, `"./"` and `"././"` are four spellings of
+/// one name: the root of the namespace, which names no container. Each host function of
+/// `wasi:blobstore/blobstore` that takes a container name gives the guest a permanent error for
+/// each of the four, and the executor keeps running.
+///
+/// `create-container` is the one that stopped the executor. It reads the container back for the
+/// time that the guest gets, `create_dir` leaves no directory at the root, so the read found no
+/// container. The host read that answer with `Option::unwrap`. The harness of this test unwinds
+/// a panic and fails the invocation, while the executor binary is built with `panic = "abort"`,
+/// so there one container name of a guest stopped the process and every worker on it.
+#[test]
+#[tracing::instrument]
+async fn blobstore_gives_an_error_for_a_container_name_at_the_root_of_the_namespace(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    // The executor runs the blob store service of production over the in-memory backend, which
+    // gives no metadata for a root path, as the S3 backend does. The filesystem backend that
+    // the test dependencies hold gives the metadata of the directory of the namespace there, so
+    // it hides the read that found no container.
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_blob_store_service: Some(Arc::new(|_| {
+                Arc::new(DefaultBlobStoreService::new(Arc::new(
+                    InMemoryBlobStorage::new(),
+                )))
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("BlobStore", "blob-store-root-name-1");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let container_name = format!("{}-blob-store-root-name-1-container", component.id);
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "create_container",
+            data_value!(container_name.clone()),
+        )
+        .await?;
+
+    let mut results = Vec::new();
+    for root_name in ["", ".", "./", "././"] {
+        // The root name is the container of the first four probes, and then the source
+        // container and the destination container of a copy and of a move.
+        let probes = [
+            ("create-container", root_name, root_name),
+            ("get-container", root_name, root_name),
+            ("delete-container", root_name, root_name),
+            ("container-exists", root_name, root_name),
+            ("copy-object", root_name, container_name.as_str()),
+            ("copy-object", container_name.as_str(), root_name),
+            ("move-object", root_name, container_name.as_str()),
+            ("move-object", container_name.as_str(), root_name),
+        ];
+
+        for (operation, source_container, destination_container) in probes {
+            let result = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "blobstore_probe",
+                    data_value!(
+                        operation,
+                        source_container,
+                        "object",
+                        destination_container,
+                        "object"
+                    ),
+                )
+                .await?
+                .into_typed::<Result<(), String>>()?;
+
+            results.push((root_name, operation, result));
+        }
+    }
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+
+    assert!(
+        results.iter().all(|(_, _, result)| result
+            .as_ref()
+            .is_err_and(|error| error.contains("Invalid input: the blob path has no name in it"))),
+        "{results:?}"
+    );
 
     Ok(())
 }

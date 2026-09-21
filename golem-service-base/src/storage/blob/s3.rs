@@ -15,8 +15,10 @@
 use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
-    blob_path_is_root, blob_path_to_string, blob_range, validate_relative_blob_path,
+    BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
+    BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob, NormalizedBlobPath,
+    blob_copy_changes_nothing, blob_path_to_string, blob_range, check_blob_name,
+    normalized_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -32,7 +34,7 @@ use aws_sdk_s3::operation::copy_object::CopyObjectError;
 use aws_sdk_s3::operation::delete_objects::DeleteObjectsOutput;
 use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey;
-use aws_sdk_s3::operation::head_object::HeadObjectError;
+use aws_sdk_s3::operation::head_object::{HeadObjectError, HeadObjectOutput};
 use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
@@ -44,6 +46,7 @@ use golem_common::retries::with_retries_customized;
 use http_body::SizeHint;
 use http_body_util::BodyExt;
 use http_body_util::combinators::BoxBody;
+use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -63,8 +66,93 @@ const HTTP_OK: u16 = 200;
 /// object (RFC 9110, section 15.5.17). `get_raw_slice` gives a `BlobRangeError` for it.
 const RANGE_NOT_SATISFIABLE: u16 = 416;
 
-/// The name of the object that records a directory, because S3 has no directories.
-const DIR_MARKER: &str = "__dir_marker";
+/// The first HTTP status of a response that reports a fault of the request (RFC 9110, section
+/// 15.5), and the first of a response that reports a fault of the server (section 15.6).
+///
+/// A server tells a client with a 4xx that the request is the fault, so the same request gets
+/// the same answer. `is_permanent_put_object_error` reads the range between the two as
+/// permanent.
+const CLIENT_ERROR: u16 = 400;
+const SERVER_ERROR: u16 = 500;
+
+/// The 4xx statuses that ask the client to send the request again: the server did not get the
+/// request in time (RFC 9110, section 15.5.9), or the client sent too many requests (RFC 6585,
+/// section 4). Neither says that the request itself is the fault.
+const RETRIABLE_CLIENT_ERROR_STATUSES: [u16; 2] = [408, 429];
+
+/// The codes of an error of the service that the backend sends again, whatever the status of
+/// the response is.
+///
+/// The list holds every code of `TRANSIENT_ERRORS` and of `THROTTLING_ERRORS` in
+/// `aws_runtime::retries::classifiers`, which are the codes that the SDK itself sends again,
+/// the code that the `PutObject` classifier of the SDK adds to `TRANSIENT_ERRORS`, and the
+/// codes of the back-pressure of MinIO. The backend keeps every one of them retriable so that
+/// it never stops at an error that the SDK would send again. S3 gives `RequestTimeout`
+/// with the status 400 and a service behind the same API can give a throttling code with
+/// another 4xx, so the status alone would make a permanent error of an answer that asks for one
+/// more attempt. MinIO gives its own back-pressure codes (`SlowDownRead`, `SlowDownWrite`,
+/// `ServerBusy` and `RequestTimeout`) with the status 503 (`cmd/api-errors.go`), which is
+/// retriable by its status.
+///
+/// `InternalError` is the code that the `PutObject` classifier adds, and the SDK sends the
+/// request again for it, so the backend does too. S3 gives the code with the status 500, and it
+/// gives the code in the body of a response with the status 200 as well, and
+/// `is_permanent_put_object_error` keeps the loop for either status without this list. The
+/// answer that this list covers is a 4xx of a service behind the S3 API that carries the code.
+///
+/// The codes of the SDK are a copy, because `aws-runtime` is the runtime support of the SDK and
+/// says that nothing uses it directly. The crate is a dev dependency, and
+/// `the_retriable_codes_hold_every_code_that_the_sdk_sends_again` holds this list against the
+/// two constants, so a code that the SDK adds to either constant cannot go missing here without
+/// notice. The code that the classifier of one operation adds is not in a constant, and no test
+/// holds this list against it: a reader who wants to check it reads the retry classifiers that
+/// `RuntimePlugin for PutObject` builds in the generated `aws-sdk-s3` source
+/// `src/operation/put_object.rs`.
+const RETRIABLE_SERVICE_ERROR_CODES: [&str; 20] = [
+    // `TRANSIENT_ERRORS`.
+    "RequestTimeout",
+    "RequestTimeoutException",
+    // The code that the `PutObject` classifier of the SDK adds to `TRANSIENT_ERRORS`.
+    "InternalError",
+    // `THROTTLING_ERRORS`.
+    "Throttling",
+    "ThrottlingException",
+    "ThrottledException",
+    "RequestThrottledException",
+    "TooManyRequestsException",
+    "ProvisionedThroughputExceededException",
+    "TransactionInProgressException",
+    "RequestLimitExceeded",
+    "BandwidthLimitExceeded",
+    "LimitExceededException",
+    "RequestThrottled",
+    "SlowDown",
+    "PriorRequestNotComplete",
+    "EC2ThrottledException",
+    // The back-pressure of MinIO.
+    "ServerBusy",
+    "SlowDownRead",
+    "SlowDownWrite",
+];
+
+/// The code that S3 gives in the body of the error of a key that is not there.
+///
+/// The S3 model (`com.amazonaws.s3#NoSuchKey`) holds the code with the status 404 and the
+/// message "The specified key does not exist.". MinIO holds the same code and status
+/// (`ErrNoSuchKey` in `cmd/api-errors.go`) and gives it for the source of a `CopyObject`
+/// (`CopyObjectHandler` in `cmd/object-handlers.go`).
+///
+/// `GetObject` has no use for this code: the model names `NoSuchKey` as an error of that
+/// operation, so the SDK gives the `GetObjectError::NoSuchKey` variant for it. `CopyObject`
+/// names one error only, `ObjectNotInActiveTierError`, so `is_copy_source_missing` reads this
+/// code out of the metadata of a `CopyObjectError`.
+const NO_SUCH_KEY_CODE: &str = "NoSuchKey";
+
+/// The largest number of bytes of UTF-8 that S3 accepts in an object key.
+///
+/// [`BlobNameError::TooLong`] in the parent module holds the rule, and this backend gives that
+/// error with this limit in it.
+const MAX_KEY_BYTES: usize = 1024;
 
 #[derive(Debug)]
 pub struct S3BlobStorage {
@@ -242,6 +330,136 @@ impl S3BlobStorage {
         }
     }
 
+    /// Gives the object key of the blob at `path` in `namespace`, or a [`BlobNameError`].
+    ///
+    /// The key is the prefix of the namespace, then `/`, then `path`. The key of the root of a
+    /// namespace is the prefix and a `/` after it, which is what `Path::join` gives for an
+    /// empty path. The prefix holds the environment id, so the key is never empty.
+    ///
+    /// Each key that the backend makes of a blob path comes from this function or from
+    /// `dir_marker_key_of`, so each such key satisfies the rules of [`BlobNameError`]. Two
+    /// things that the backend sends are not keys of a blob path: `list_objects` and
+    /// `prefix_has_objects` send a key of this function with a `/` at its end as a prefix,
+    /// and `delete_dir` sends the keys of the response of a listing, which are the keys of
+    /// objects that the bucket holds.
+    fn key_of(
+        &self,
+        namespace: &BlobStorageNamespace,
+        path: &NormalizedBlobPath,
+    ) -> Result<String, BlobNameError> {
+        let key = blob_path_to_string(&self.prefix_of(namespace).join(path))?;
+        Self::checked_key(key)
+    }
+
+    /// Gives the key of the object that records the directory at `key`, or a
+    /// [`BlobNameError`]. `key` comes from `key_of`.
+    ///
+    /// The key of a root path ends with `/`, so this function uses a separator before
+    /// [`DIR_MARKER`] only when `key` does not end with one. A key with two separators in a
+    /// row is a key that MinIO rejects.
+    ///
+    /// The object has the name [`DIR_MARKER`] in the directory, so its key is longer than
+    /// `key`. S3 measures the key of the object, so it is that key which has to fit
+    /// [`MAX_KEY_BYTES`], and the length is the one rule that this function applies. The NUL
+    /// rule and the dot-segment rule hold for the marker key when they hold for `key`, which
+    /// `checked_key` has already applied to `key`, because [`DIR_MARKER`] has no NUL byte and
+    /// is neither `.` nor `..`. The reserved rule cannot hold for the marker key: its last
+    /// segment is [`DIR_MARKER`] by construction, because this is the object that the backend
+    /// keeps that name for.
+    ///
+    /// A key that fits [`MAX_KEY_BYTES`] can have a marker key that does not, so a caller
+    /// that looks for a directory reads the error as "this directory has no marker object"
+    /// (`exists`, `get_metadata`), and only the caller that writes the marker gives the error
+    /// to the guest (`create_dir`).
+    fn dir_marker_key_of(key: &str) -> Result<String, BlobNameError> {
+        let separator = if key.ends_with('/') { "" } else { "/" };
+        Self::checked_length(format!("{key}{separator}{DIR_MARKER}"))
+    }
+
+    /// Applies the rules of [`BlobNameError`] to an object key. Gives the key when it
+    /// satisfies each rule.
+    ///
+    /// `check_blob_name` holds the three rules that read the text of a name, and
+    /// `normalized_blob_path` has already applied them to the blob path. This call applies them
+    /// to the full key, so an `object_prefix` of the configuration gets them too. The length is
+    /// the rule of this backend alone: S3 measures the full key, and only this backend builds
+    /// it.
+    fn checked_key(key: String) -> Result<String, BlobNameError> {
+        check_blob_name(&key)?;
+        Self::checked_length(key)
+    }
+
+    /// Gives the key when it has at most [`MAX_KEY_BYTES`] bytes of UTF-8.
+    fn checked_length(key: String) -> Result<String, BlobNameError> {
+        if key.len() > MAX_KEY_BYTES {
+            return Err(BlobNameError::TooLong {
+                length: key.len(),
+                max: MAX_KEY_BYTES,
+            });
+        }
+        Ok(key)
+    }
+
+    /// Tells what the bucket holds at one object key: the head of the object, or `None` when
+    /// the bucket holds no object there.
+    ///
+    /// The key is a key of this backend (`key_of` or `dir_marker_key_of`), so S3 accepts it.
+    /// The request goes again while the error of an attempt is one that one more attempt can
+    /// pass (`is_head_object_error_retriable`), and every other error of the service comes to
+    /// the caller. A key that the bucket does not hold is not such an error: it is the answer.
+    async fn head_object(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        bucket: &str,
+        key: String,
+        op_id: String,
+    ) -> Result<Option<HeadObjectOutput>, Error> {
+        let result = with_retries_customized(
+            target_label,
+            op_label,
+            Some(op_id),
+            &self.config.retries,
+            &(self.client.clone(), bucket, key),
+            |(client, bucket, key)| {
+                Box::pin(async move {
+                    client
+                        .head_object()
+                        .bucket(*bucket)
+                        .key(key.clone())
+                        .send()
+                        .await
+                })
+            },
+            Self::is_head_object_error_retriable,
+            Self::head_object_error_as_loggable,
+            false,
+        )
+        .await;
+
+        match result {
+            Ok(head) => Ok(Some(head)),
+            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
+                HeadObjectError::NotFound(_) => Ok(None),
+                err => Err(err.into()),
+            },
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Gives the time of the last change of the object.
+    ///
+    /// S3 sends that time in each response to a `HeadObject`, so a response without it is not
+    /// one that S3 sends.
+    fn last_modified_of(head: &HeadObjectOutput) -> Timestamp {
+        Timestamp::from(
+            head.last_modified()
+                .expect("S3 gave no time of the last change of the object")
+                .to_millis()
+                .expect("failed to convert date-time value to millis") as u64,
+        )
+    }
+
     fn encode_copy_source_key(key: &str) -> String {
         let mut encoded = String::with_capacity(key.len());
         for b in key.bytes() {
@@ -255,27 +473,35 @@ impl S3BlobStorage {
         encoded
     }
 
+    /// Gives the prefix that lists what is below a key: the key and one `/` after it.
+    ///
+    /// A key that already ends with a `/` is its own prefix. `list_objects` and
+    /// `prefix_has_objects` both list what is below a key, so they make the prefix here and
+    /// cannot read the same key in two ways.
+    fn prefix_with_slash(prefix: &str) -> String {
+        if prefix.ends_with('/') {
+            prefix.to_string()
+        } else {
+            format!("{prefix}/")
+        }
+    }
+
     async fn list_objects(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         bucket: &str,
-        prefix: &Path,
+        prefix: &str,
     ) -> Result<Vec<Object>, Error> {
         let mut result = Vec::new();
         let mut cont: Option<String> = None;
-        let prefix_str = blob_path_to_string(prefix)?;
-        let prefix_with_slash = if prefix_str.ends_with('/') {
-            prefix_str.clone()
-        } else {
-            format!("{prefix_str}/")
-        };
+        let prefix_with_slash = Self::prefix_with_slash(prefix);
 
         loop {
             let response = with_retries_customized(
                 target_label,
                 op_label,
-                Some(format!("{bucket} - {prefix_str}")),
+                Some(format!("{bucket} - {prefix}")),
                 &self.config.retries,
                 &(self.client.clone(), bucket, prefix_with_slash.clone(), cont),
                 |(client, bucket, prefix, cont)| {
@@ -309,24 +535,29 @@ impl S3BlobStorage {
     /// Returns whether any object exists under the given prefix (treated as a
     /// directory, i.e. with a trailing `/`). Used to detect implicit directories
     /// that have children but no explicit `__dir_marker`.
+    ///
+    /// The prefix is a key with a `/` after it, so it has one byte more than the key and can
+    /// have more bytes than [`MAX_KEY_BYTES`]. MinIO accepts such a prefix: it reads the
+    /// prefix of a listing with `IsValidObjectPrefix`, which counts no bytes
+    /// (`validateListObjectsArgs` in `cmd/bucket-listobjects-handlers.go` and
+    /// `checkListObjsArgs` in `cmd/object-api-input-checks.go`), and it counts the 1024 bytes
+    /// of a name only for an object (`checkObjectNameForLengthAndSlash`). The API reference of
+    /// S3 gives no limit for the `prefix` parameter of ListObjectsV2 and does not say what S3
+    /// does with a prefix that has more bytes than a key, so this doc does not say it
+    /// either.
     async fn prefix_has_objects(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         bucket: &str,
-        prefix: &Path,
+        prefix: &str,
     ) -> Result<bool, Error> {
-        let prefix_str = blob_path_to_string(prefix)?;
-        let prefix_with_slash = if prefix_str.ends_with('/') {
-            prefix_str.clone()
-        } else {
-            format!("{prefix_str}/")
-        };
+        let prefix_with_slash = Self::prefix_with_slash(prefix);
 
         let response = with_retries_customized(
             target_label,
             op_label,
-            Some(format!("{bucket} - {prefix_str}")),
+            Some(format!("{bucket} - {prefix}")),
             &self.config.retries,
             &(self.client.clone(), bucket, prefix_with_slash),
             |(client, bucket, prefix)| {
@@ -543,10 +774,68 @@ impl S3BlobStorage {
         }
     }
 
-    fn is_put_object_error_retriable(
-        _error: &SdkError<aws_sdk_s3::operation::put_object::PutObjectError>,
-    ) -> bool {
-        true
+    /// Tells whether the retry loop sends a `PutObject` request again after an error.
+    ///
+    /// An error that stays for every attempt of the same request stops the loop
+    /// (`is_permanent_put_object_error`): each attempt of it writes no object, and one
+    /// `PutObject` can carry 5 GiB, so the attempts that follow cost the time of that body
+    /// again and give the same answer. The error then reaches the caller as it is. Every other
+    /// error keeps the loop, as it does for the shape of an error that carries no response:
+    /// the transport, the timeout and the construction of the request.
+    fn is_put_object_error_retriable(error: &SdkError<PutObjectError>) -> bool {
+        match error {
+            SdkError::ServiceError(service_error) => !Self::is_permanent_put_object_error(
+                service_error.err(),
+                service_error.raw().status().as_u16(),
+            ),
+            _ => true,
+        }
+    }
+
+    /// Tells whether a `PutObject` error of the service stays for every attempt of the same
+    /// request.
+    ///
+    /// The S3 model names four errors of `PutObject`, and it marks each of them as an error of
+    /// the client with the status 400: the request carries the wrong encryption parameters for
+    /// the session (`EncryptionTypeMismatch`), a parameter or a header of it is not valid
+    /// (`InvalidRequest`), its write offset does not match the size of the object
+    /// (`InvalidWriteOffset`), or the object already has the 10,000 parts that S3 accepts
+    /// (`TooManyParts`). Each of them is a fault of the request that the caller sent, and the
+    /// backend sends the same request again, so it would get the same answer. The SDK reads the
+    /// code of the body and not the status, so the variant holds whatever status carries the
+    /// code.
+    ///
+    /// The model names no other error, so the SDK gives every other code as
+    /// `PutObjectError::Unhandled` and keeps the code of the body in the metadata of the
+    /// error. The status of the response is what tells those apart: a 4xx reports a fault of
+    /// the request (RFC 9110, section 15.5), for example `EntityTooLarge` for a body over 5
+    /// GiB, `AccessDenied` for a key that the credentials cannot write, or
+    /// `XMinioInvalidObjectName` for a name that MinIO does not accept. A 5xx reports a fault
+    /// of the server (section 15.6) and keeps the loop, and so does every other status.
+    ///
+    /// The cost of the status rule is the 4xx answer that one more attempt could pass:
+    /// credentials that a provider refreshes between two attempts (`ExpiredToken`), a clock
+    /// that a host corrects (`RequestTimeTooSkewed`), or a conflicting operation on the same
+    /// key (`OperationAborted`, status 409). The SDK does not send those again either, and the
+    /// caller of a guest operation still gets its own retry:
+    /// `golem_worker_executor::services::blob_store` makes a `BlobStoreError::TransientBackend`
+    /// of an error that is not a [`BlobNameError`], which the executor retries.
+    /// [`RETRIABLE_CLIENT_ERROR_STATUSES`] and [`RETRIABLE_SERVICE_ERROR_CODES`] keep the 4xx
+    /// answers that ask for one more attempt.
+    fn is_permanent_put_object_error(error: &PutObjectError, status: u16) -> bool {
+        if matches!(
+            error,
+            PutObjectError::EncryptionTypeMismatch(_)
+                | PutObjectError::InvalidRequest(_)
+                | PutObjectError::InvalidWriteOffset(_)
+                | PutObjectError::TooManyParts(_)
+        ) {
+            return true;
+        }
+
+        (CLIENT_ERROR..SERVER_ERROR).contains(&status)
+            && !RETRIABLE_CLIENT_ERROR_STATUSES.contains(&status)
+            && !RETRIABLE_SERVICE_ERROR_CODES.contains(&error.meta().code().unwrap_or_default())
     }
 
     fn is_list_objects_v2_error_retriable(
@@ -567,12 +856,36 @@ impl S3BlobStorage {
         true
     }
 
+    /// Tells whether a `CopyObject` error says that the source key is not there.
+    ///
+    /// The SDK gives the error as `CopyObjectError::Unhandled` and keeps the code of the body
+    /// in the metadata of the error: `CopyObject` names `ObjectNotInActiveTierError` as its one
+    /// error of the service, so `de_copy_object_http_error` in
+    /// `aws_sdk_s3::protocol_serde::shape_copy_object` makes every other code a generic error.
+    /// The code of that metadata is what this reads.
+    ///
+    /// The status of the response is not what this reads, and a predicate of the status 404
+    /// would be wrong: S3 can give the error of a copy in a response with the status 200, and
+    /// the SDK reads the error out of the body of such a response
+    /// (`CopyObjectResponseDeserializer` in `aws_sdk_s3::operation::copy_object`, and "Response
+    /// and special errors" in the S3 API reference of `CopyObject`).
+    fn is_copy_source_missing(error: &CopyObjectError) -> bool {
+        error.meta().code() == Some(NO_SUCH_KEY_CODE)
+    }
+
+    /// Tells whether the retry loop sends a `CopyObject` request again after an error.
+    ///
+    /// A source key that is not there stops the loop: a retry cannot make the bucket hold that
+    /// key, so each retry of it is work with no result, and `copy` gives a [`BlobMissingError`]
+    /// for it.
     fn is_copy_object_error_retriable(error: &SdkError<CopyObjectError>) -> bool {
         match error {
-            SdkError::ServiceError(service_error) => !matches!(
-                service_error.err(),
-                CopyObjectError::ObjectNotInActiveTierError(_)
-            ),
+            SdkError::ServiceError(service_error) => {
+                !matches!(
+                    service_error.err(),
+                    CopyObjectError::ObjectNotInActiveTierError(_)
+                ) && !Self::is_copy_source_missing(service_error.err())
+            }
             _ => true,
         }
     }
@@ -615,6 +928,26 @@ impl S3BlobStorage {
         }
     }
 
+    /// Gives the text that the retry loop (`with_retries_customized` in `golem_common::retries`)
+    /// records for a `CopyObject` error, or `None` for an error that the loop does not record
+    /// and does not count as a failure.
+    ///
+    /// A source key that is not there (`is_copy_source_missing`) stays out of the error log and
+    /// out of the failure counter, as a missing key of a `GetObject` and of a `HeadObject` does
+    /// (`get_object_error_as_loggable`, `head_object_error_as_loggable`): a guest picks the
+    /// source name, S3 did the work of the request, and the error goes to the guest. Every
+    /// other error gets its text.
+    fn copy_object_error_as_loggable(error: &SdkError<CopyObjectError>) -> Option<String> {
+        match error {
+            SdkError::ServiceError(service_error)
+                if Self::is_copy_source_missing(service_error.err()) =>
+            {
+                None
+            }
+            _ => Some(Self::error_string(error)),
+        }
+    }
+
     fn head_object_error_as_loggable(error: &SdkError<HeadObjectError>) -> Option<String> {
         match error {
             SdkError::ServiceError(service_error) => {
@@ -638,17 +971,16 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, &path)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -688,17 +1020,16 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, &path)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -744,17 +1075,16 @@ impl BlobStorage for S3BlobStorage {
         if start > end {
             return Err(BlobRangeError { start, end }.into());
         }
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, &path)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     let status = ResponseStatus::default();
@@ -830,95 +1160,39 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, &path)?;
         let op_id = format!("{bucket} - {key:?}");
 
-        let file_head_result = with_retries_customized(
-            target_label,
-            op_label,
-            Some(op_id.clone()),
-            &self.config.retries,
-            &(self.client.clone(), bucket, key_str.clone()),
-            |(client, bucket, key)| {
-                Box::pin(async move {
-                    client
-                        .head_object()
-                        .bucket(*bucket)
-                        .key(key.clone())
-                        .send()
-                        .await
-                })
-            },
-            Self::is_head_object_error_retriable,
-            Self::head_object_error_as_loggable,
-            false,
-        )
-        .await;
-        match file_head_result {
-            Ok(result) => Ok(Some(BlobMetadata {
-                size: result.content_length().unwrap_or_default() as u64,
-                last_modified_at: Timestamp::from(
-                    result
-                        .last_modified
-                        .unwrap()
-                        .to_millis()
-                        .expect("failed to convert date-time value to millis")
-                        as u64,
-                ),
-            })),
-            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                HeadObjectError::NotFound(_) => {
-                    let marker = key.join(DIR_MARKER);
-                    let marker_str = blob_path_to_string(&marker)?;
-                    let dir_marker_head_result = with_retries_customized(
-                        target_label,
-                        op_label,
-                        Some(op_id),
-                        &self.config.retries,
-                        &(self.client.clone(), bucket, marker_str),
-                        |(client, bucket, marker)| {
-                            Box::pin(async move {
-                                client
-                                    .head_object()
-                                    .bucket(*bucket)
-                                    .key(marker.clone())
-                                    .send()
-                                    .await
-                            })
-                        },
-                        Self::is_head_object_error_retriable,
-                        Self::head_object_error_as_loggable,
-                        false,
-                    )
-                    .await;
-                    match dir_marker_head_result {
-                        Ok(result) => Ok(Some(BlobMetadata {
-                            size: 0,
-                            last_modified_at: Timestamp::from(
-                                result
-                                    .last_modified
-                                    .unwrap()
-                                    .to_millis()
-                                    .expect("failed to convert date-time value to millis")
-                                    as u64,
-                            ),
-                        })),
-                        Err(SdkError::ServiceError(service_error)) => {
-                            match service_error.into_err() {
-                                HeadObjectError::NotFound(_) => Ok(None),
-                                err => Err(err.into()),
-                            }
-                        }
-                        Err(err) => Err(err.into()),
-                    }
-                }
-                err => Err(err.into()),
-            },
-            Err(err) => Err(err.into()),
+        if let Some(head) = self
+            .head_object(target_label, op_label, bucket, key.clone(), op_id.clone())
+            .await?
+        {
+            return Ok(Some(BlobMetadata {
+                size: head.content_length().unwrap_or_default() as u64,
+                last_modified_at: Self::last_modified_of(&head),
+            }));
         }
+
+        // A directory that create_dir made keeps a marker object below its path, and the time
+        // of the marker is the time of the directory.
+        //
+        // The marker key is longer than the key of the directory, so it can go past the limit
+        // for a key that fits it (`dir_marker_key_of`). The backend sends no key that S3
+        // rejects, so a directory with such a key has no marker object, and nothing is at the
+        // path.
+        let Ok(marker) = Self::dir_marker_key_of(&key) else {
+            return Ok(None);
+        };
+
+        Ok(self
+            .head_object(target_label, op_label, bucket, marker, op_id)
+            .await?
+            .map(|head| BlobMetadata {
+                size: 0,
+                last_modified_at: Self::last_modified_of(&head),
+            }))
     }
 
     async fn put_raw(
@@ -929,10 +1203,11 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
+        path.reject_root()?;
+
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, &path)?;
         let bytes = Bytes::copy_from_slice(data);
 
         with_retries_customized(
@@ -940,7 +1215,7 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str, bytes),
+            &(self.client.clone(), bucket, key, bytes),
             |(client, bucket, key, bytes)| {
                 Box::pin(async move {
                     client
@@ -969,10 +1244,11 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
+        path.reject_root()?;
+
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, &path)?;
 
         fn go<'a>(
             args: &'a (
@@ -1019,7 +1295,7 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str, stream),
+            &(self.client.clone(), bucket, key, stream),
             go,
             |err| err.is_retriable(Self::is_put_object_error_retriable),
             SdkErrorOrCustomError::as_loggable,
@@ -1038,17 +1314,16 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, &path)?;
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -1075,17 +1350,15 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
     ) -> Result<(), Error> {
-        for path in paths {
-            validate_relative_blob_path(path)?;
-        }
         let bucket = self.bucket_of(&namespace);
-        let prefix = self.prefix_of(&namespace);
 
+        // The key of every path is made before the first request goes, because a path that
+        // breaks a rule of a name removes no blob.
         let to_delete = paths
             .iter()
             .map(|path| {
-                let key = prefix.join(path);
-                let key = blob_path_to_string(&key)?;
+                let path = normalized_blob_path(path)?;
+                let key = self.key_of(&namespace, &path)?;
                 ObjectIdentifier::builder()
                     .key(key)
                     .build()
@@ -1104,18 +1377,22 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
+
+        if path.is_root() {
+            return Ok(());
+        }
+
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let marker = key.join(DIR_MARKER);
-        let marker_str = blob_path_to_string(&marker)?;
+        let key = self.key_of(&namespace, &path)?;
+        let marker = Self::dir_marker_key_of(&key)?;
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, marker_str),
+            &(self.client.clone(), bucket, marker),
             |(client, bucket, marker)| {
                 Box::pin(async move {
                     client
@@ -1143,10 +1420,14 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
-        let key = namespace_root.join(path);
+        let key = self.key_of(&namespace, &path)?;
+
+        // A blob and a directory can hold one path, and then S3 has the key of the blob and the
+        // marker of the directory. The set gives the path one time.
+        let mut listed = HashSet::new();
 
         Ok(self
             .list_objects(target_label, op_label, bucket, &key)
@@ -1155,7 +1436,7 @@ impl BlobStorage for S3BlobStorage {
             .flat_map(|obj| obj.key.as_ref().map(|k| Path::new(k).to_path_buf()))
             .filter_map(|path| {
                 let is_dir_marker = path.file_name().and_then(|s| s.to_str()) == Some(DIR_MARKER);
-                let is_nested = path.parent() != Some(&key);
+                let is_nested = path.parent() != Some(Path::new(&key));
                 if is_nested {
                     if is_dir_marker {
                         path.parent().map(|p| p.to_path_buf())
@@ -1173,6 +1454,7 @@ impl BlobStorage for S3BlobStorage {
                     .ok()
                     .map(|p| p.to_path_buf())
             })
+            .filter(|path| listed.insert(path.clone()))
             .collect::<Vec<_>>())
     }
 
@@ -1183,10 +1465,10 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
-        let key = namespace_root.join(path);
+        let key = self.key_of(&namespace, &path)?;
 
         self.list_objects(target_label, op_label, bucket, &key)
             .await?
@@ -1215,14 +1497,14 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<bool, Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
 
-        if blob_path_is_root(path) {
+        if path.is_root() {
             return Ok(false);
         }
 
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.key_of(&namespace, &path)?;
 
         let to_delete = self
             .list_objects(target_label, op_label, bucket, &key)
@@ -1249,93 +1531,67 @@ impl BlobStorage for S3BlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, Error> {
-        validate_relative_blob_path(path)?;
+        let path = normalized_blob_path(path)?;
+
+        // The root of a namespace is a directory, also when the bucket holds no object under
+        // its prefix.
+        if path.is_root() {
+            return Ok(ExistsResult::Directory);
+        }
+
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, &path)?;
         let op_id = format!("{bucket} - {key:?}");
 
-        let file_head_result = with_retries_customized(
-            target_label,
-            op_label,
-            Some(op_id.clone()),
-            &self.config.retries,
-            &(self.client.clone(), bucket, key_str.clone()),
-            |(client, bucket, key)| {
-                Box::pin(async move {
-                    client
-                        .head_object()
-                        .bucket(*bucket)
-                        .key(key.clone())
-                        .send()
-                        .await
-                })
-            },
-            Self::is_head_object_error_retriable,
-            Self::head_object_error_as_loggable,
-            false,
-        )
-        .await;
-        match file_head_result {
-            Ok(_) => Ok(ExistsResult::File),
-            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                HeadObjectError::NotFound(_) => {
-                    let marker = key.join(DIR_MARKER);
-                    let marker_str = blob_path_to_string(&marker)?;
-                    let dir_marker_head_result = with_retries_customized(
-                        target_label,
-                        op_label,
-                        Some(op_id),
-                        &self.config.retries,
-                        &(self.client.clone(), bucket, marker_str),
-                        |(client, bucket, marker)| {
-                            Box::pin(async move {
-                                client
-                                    .head_object()
-                                    .bucket(*bucket)
-                                    .key(marker.clone())
-                                    .send()
-                                    .await
-                            })
-                        },
-                        Self::is_head_object_error_retriable,
-                        Self::head_object_error_as_loggable,
-                        false,
-                    )
-                    .await;
-                    match dir_marker_head_result {
-                        Ok(_) => Ok(ExistsResult::Directory),
-                        Err(SdkError::ServiceError(service_error)) => {
-                            match service_error.into_err() {
-                                HeadObjectError::NotFound(_) => {
-                                    // S3 has no real directories: an implicit
-                                    // directory can exist (because of nested
-                                    // objects or markers) without an explicit
-                                    // `__dir_marker` of its own. Match the
-                                    // filesystem and in-memory backends by
-                                    // reporting a directory whenever any object
-                                    // exists under this path's prefix.
-                                    if self
-                                        .prefix_has_objects(target_label, op_label, bucket, &key)
-                                        .await?
-                                    {
-                                        Ok(ExistsResult::Directory)
-                                    } else {
-                                        Ok(ExistsResult::DoesNotExist)
-                                    }
-                                }
-                                err => Err(err.into()),
-                            }
-                        }
-                        Err(err) => Err(err.into()),
-                    }
-                }
-                err => Err(err.into()),
-            },
-            Err(err) => Err(err.into()),
+        if self
+            .head_object(target_label, op_label, bucket, key.clone(), op_id.clone())
+            .await?
+            .is_some()
+        {
+            return Ok(ExistsResult::File);
+        }
+
+        let marker_exists = match Self::dir_marker_key_of(&key) {
+            Ok(marker) => self
+                .head_object(target_label, op_label, bucket, marker, op_id)
+                .await?
+                .is_some(),
+            // The marker key is longer than the key of the directory, so it can go past the
+            // limit for a key that fits it (`dir_marker_key_of`). The backend sends no key
+            // that S3 rejects, so a directory with such a key has no marker object. A child
+            // of it can still fit the limit, so the prefix below decides.
+            Err(_) => false,
+        };
+
+        // S3 has no real directories: an implicit directory can exist (because of nested
+        // objects or markers) without an explicit `__dir_marker` of its own. Match the
+        // filesystem and in-memory backends and give a directory whenever any object is under
+        // the prefix of this path.
+        if marker_exists
+            || self
+                .prefix_has_objects(target_label, op_label, bucket, &key)
+                .await?
+        {
+            Ok(ExistsResult::Directory)
+        } else {
+            Ok(ExistsResult::DoesNotExist)
         }
     }
 
+    /// Writes the blob at `from` to `to` with one `CopyObject` request, and keeps the blob at
+    /// `from`. S3 reads the source and writes the target, so no byte of the object comes to
+    /// this process.
+    ///
+    /// A `from` with no object at it gives a [`BlobMissingError`], as the default `copy` of
+    /// [`BlobStorage`] does. One request gives that error: `is_copy_object_error_retriable`
+    /// stops the retry loop at it. `move` is the default one, which is this copy and then a
+    /// delete of the source, so a source that is not there gives the error from the copy and
+    /// deletes nothing.
+    ///
+    /// A copy onto the same path sends no `CopyObject` request: it sends one `HeadObject` for
+    /// the key of the source and gives the same [`BlobMissingError`] when the bucket holds no
+    /// object at that key. A root path at either end gives [`BlobNameError::NoName`]
+    /// (`blob_copy_changes_nothing`).
     async fn copy(
         &self,
         target_label: &'static str,
@@ -1344,21 +1600,46 @@ impl BlobStorage for S3BlobStorage {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
-        validate_relative_blob_path(from)?;
-        validate_relative_blob_path(to)?;
-        let bucket = self.bucket_of(&namespace);
-        let from_key = self.prefix_of(&namespace).join(from);
-        let to_key = self.prefix_of(&namespace).join(to);
-        let from_key_str = blob_path_to_string(&from_key)?;
-        let to_key_str = blob_path_to_string(&to_key)?;
-        let encoded_from_key = Self::encode_copy_source_key(&from_key_str);
+        // `BlobMissingError` names the path as the guest wrote it. The next line makes `from`
+        // the normalized path, so keep the path of the guest first.
+        let guest_from = from;
+        let from = normalized_blob_path(from)?;
+        let to = normalized_blob_path(to)?;
 
-        with_retries_customized(
+        let changes_nothing = blob_copy_changes_nothing(&from, &to)?;
+        let bucket = self.bucket_of(&namespace);
+        let from_key = self.key_of(&namespace, &from)?;
+
+        // A copy onto the same path writes nothing, and it still needs the blob that it reads.
+        // The copy asks one thing of the storage: does the bucket hold a blob at `from`? The
+        // head of the key of that blob answers it, and a directory at the same path holds no
+        // blob, so the marker object of a directory and the keys below the path say nothing
+        // here. `exists` reads both of them, and an error of one of those later requests would
+        // reach the guest in place of the permanent error of a source that is not there, which
+        // the executor would then retry.
+        if changes_nothing {
+            let op_id = format!("{bucket} - {from_key:?}");
+            return match self
+                .head_object(target_label, op_label, bucket, from_key, op_id)
+                .await?
+            {
+                Some(_) => Ok(()),
+                None => Err(BlobMissingError {
+                    path: guest_from.to_path_buf(),
+                }
+                .into()),
+            };
+        }
+
+        let to_key = self.key_of(&namespace, &to)?;
+        let encoded_from_key = Self::encode_copy_source_key(&from_key);
+
+        let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {from_key:?} -> {to_key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, encoded_from_key, to_key_str),
+            &(self.client.clone(), bucket, encoded_from_key, to_key),
             |(client, bucket, encoded_from_key, to_key)| {
                 Box::pin(async move {
                     client
@@ -1371,12 +1652,23 @@ impl BlobStorage for S3BlobStorage {
                 })
             },
             Self::is_copy_object_error_retriable,
-            Self::sdk_error_as_loggable_string,
+            Self::copy_object_error_as_loggable,
             false,
         )
-        .await?;
+        .await;
 
-        Ok(())
+        match result {
+            Ok(_) => Ok(()),
+            Err(SdkError::ServiceError(service_error))
+                if Self::is_copy_source_missing(service_error.err()) =>
+            {
+                Err(BlobMissingError {
+                    path: guest_from.to_path_buf(),
+                }
+                .into())
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 }
 

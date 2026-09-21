@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::S3BlobStorage;
+use super::{RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage};
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
-use crate::storage::blob::{BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob};
+use crate::storage::blob::{
+    BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
+    ExistsResult, ListedBlob,
+};
+use aws_runtime::retries::classifiers::{THROTTLING_ERRORS, TRANSIENT_ERRORS};
 use aws_sdk_s3::config::http::{HttpRequest, HttpResponse};
 use aws_sdk_s3::config::retry::RetryConfig;
 use aws_sdk_s3::config::{
@@ -42,11 +46,12 @@ use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 use test_r::{test, timeout};
-use tracing::Level;
 use tracing::instrument::WithSubscriber;
+use tracing::subscriber::Interest;
+use tracing::{Event, Level, Metadata, span};
 use uuid::Uuid;
 
 /// A request that the scripted transport received.
@@ -55,6 +60,7 @@ struct SentRequest {
     method: String,
     uri: String,
     range: Option<String>,
+    copy_source: Option<String>,
     body: String,
 }
 
@@ -64,6 +70,10 @@ impl SentRequest {
             method: request.method().to_string(),
             uri: request.uri().to_string(),
             range: request.headers().get("range").map(str::to_string),
+            copy_source: request
+                .headers()
+                .get("x-amz-copy-source")
+                .map(str::to_string),
             body: request
                 .body()
                 .bytes()
@@ -99,6 +109,7 @@ struct Answer {
     status: u16,
     content_range: Option<&'static str>,
     content_length: Option<usize>,
+    last_modified: Option<&'static str>,
     body_reads: Option<Arc<AtomicUsize>>,
     body: String,
     transport_error: Option<ConnectorError>,
@@ -110,9 +121,20 @@ impl Answer {
             status,
             content_range: None,
             content_length: None,
+            last_modified: None,
             body_reads: None,
             body: body.into(),
             transport_error: None,
+        }
+    }
+
+    /// The response to a `HEAD` of an object that is in the bucket. `get_metadata` reads the
+    /// time of the last change of the object from the header, so a response without it makes
+    /// `get_metadata` panic.
+    fn object_head() -> Self {
+        Self {
+            last_modified: Some("Wed, 21 Oct 2015 07:28:00 GMT"),
+            ..Self::new(200, "")
         }
     }
 
@@ -155,6 +177,7 @@ impl Answer {
         let status = StatusCode::try_from(self.status).unwrap();
         let content_range = self.content_range;
         let content_length = self.content_length;
+        let last_modified = self.last_modified;
         let mut response = HttpResponse::new(status, self.into_body());
         response
             .headers_mut()
@@ -168,6 +191,11 @@ impl Answer {
             response
                 .headers_mut()
                 .insert("content-length", content_length.to_string());
+        }
+        if let Some(last_modified) = last_modified {
+            response
+                .headers_mut()
+                .insert("last-modified", last_modified);
         }
         response
     }
@@ -280,6 +308,19 @@ fn range_error(error: anyhow::Error) -> Option<BlobRangeError> {
     error.downcast_ref::<BlobRangeError>().copied()
 }
 
+/// Gives the `BlobNameError` of an error of the blob storage, or `None` for another error.
+fn name_error(error: anyhow::Error) -> Option<BlobNameError> {
+    error.downcast_ref::<BlobNameError>().cloned()
+}
+
+/// Gives the `BlobMissingError` of an error of the blob storage, or `None` for another error.
+///
+/// `blob_store_error` in `golem_worker_executor::services::blob_store` downcasts the same way,
+/// and makes a `BlobStoreError::NotFound`, which is permanent, of what it gets.
+fn missing_error(error: anyhow::Error) -> Option<BlobMissingError> {
+    error.downcast_ref::<BlobMissingError>().cloned()
+}
+
 /// The lines that a subscriber wrote, one JSON object for each event.
 #[derive(Clone, Default)]
 struct LogLines(Arc<Mutex<Vec<u8>>>);
@@ -322,12 +363,65 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogLines {
     }
 }
 
+/// A subscriber that records no event, and that is interested in each callsite.
+///
+/// `open_each_callsite` makes it the default subscriber of the process.
+struct OpenCallsites;
+
+impl tracing::Subscriber for OpenCallsites {
+    fn register_callsite(&self, _metadata: &'static Metadata<'static>) -> Interest {
+        Interest::sometimes()
+    }
+
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        false
+    }
+
+    fn new_span(&self, _span: &span::Attributes<'_>) -> span::Id {
+        span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &span::Id, _values: &span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &span::Id, _follows: &span::Id) {}
+
+    fn event(&self, _event: &Event<'_>) {}
+
+    fn enter(&self, _span: &span::Id) {}
+
+    fn exit(&self, _span: &span::Id) {}
+}
+
+/// Makes `OpenCallsites` the default subscriber of the process, one time.
+///
+/// `tracing` keeps one `Interest` for each callsite, for the full process, and the first event
+/// of a callsite makes that `Interest` from the subscriber of the thread that gives the event.
+/// A thread with no subscriber makes `Interest::never`, and then `tracing` keeps each later
+/// event of that callsite away from every subscriber, also from the subscriber that
+/// `with_error_log` attaches to its own future. The tests share one process and more than one
+/// thread, so the thread that first gives an event of the retry loop is not always the thread
+/// of the test that reads the error log. A service sets its default subscriber before its
+/// first request, and gets the `Interest` of each callsite from that subscriber.
+///
+/// `OpenCallsites` is interested in each callsite, so each callsite gets `Interest::sometimes`,
+/// `tracing` asks the subscriber of the thread about each event, and the subscriber of
+/// `with_error_log` gets each error that its future gives. `OpenCallsites` records no event, so
+/// a test that attaches no subscriber gets no output.
+fn open_each_callsite() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        tracing::subscriber::set_global_default(OpenCallsites)
+            .expect("the tests set no other default subscriber of the process");
+    });
+}
+
 /// Runs a future with a subscriber that records each event of the `error` level, and no event
 /// of a lower level.
 ///
 /// Gives the output of the future, and the `op_label` of each recorded event of the retry loop,
 /// in the order of the events.
 async fn with_error_log<T>(future: impl Future<Output = T>) -> (T, Vec<String>) {
+    open_each_callsite();
     let lines = LogLines::default();
     let subscriber = tracing_subscriber::fmt()
         .json()
@@ -386,9 +480,48 @@ const EMPTY_DELETE_RESULT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Dele
 
 const INVALID_RANGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>InvalidRange</Code><Message>The requested range is not satisfiable</Message></Error>"#;
 
+/// The body of the error of a fault of the server itself. S3 gives the code `InternalError`
+/// with the status 500, and the `PutObject` classifier of the SDK adds the code to
+/// `TRANSIENT_ERRORS`, so a 4xx that carries the code asks for one more attempt as well.
 const INTERNAL_ERROR: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>We encountered an internal error</Message></Error>"#;
 
 const NO_SUCH_KEY: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>"#;
+
+/// The body of the error of a bucket that is not there. S3 and MinIO give the code
+/// `NoSuchBucket` with the status 404, as they give `NoSuchKey` with the status 404, so the
+/// code is the one part of the error that a missing bucket and a missing source key do not
+/// share.
+const NO_SUCH_BUCKET: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist.</Message></Error>"#;
+
+/// The body of the response of a `CopyObject` that S3 did.
+const COPY_RESULT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><LastModified>2015-10-21T07:28:00.000Z</LastModified><ETag>"9b2cf535f27731c974343645a3985328"</ETag></CopyObjectResult>"#;
+
+/// The body of the error of a body that is over the 5 GiB that one `PutObject` accepts. S3 and
+/// MinIO give the code `EntityTooLarge` with the status 400 (`ErrEntityTooLarge` in
+/// `cmd/api-errors.go`). The S3 model names no error of `PutObject` for this code, so the SDK
+/// gives it as `PutObjectError::Unhandled` and keeps the code in the metadata of the error.
+const ENTITY_TOO_LARGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>EntityTooLarge</Code><Message>Your proposed upload exceeds the maximum allowed object size.</Message></Error>"#;
+
+/// The body of the error of a request that S3 asks the client to send again. S3 gives the code
+/// `RequestTimeout` with the status 400, and `TRANSIENT_ERRORS` in
+/// `aws_runtime::retries::classifiers` holds the code, so the status alone must not make a
+/// permanent error of it.
+const REQUEST_TIMEOUT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>RequestTimeout</Code><Message>Your socket connection to the server was not read from or written to within the timeout period.</Message></Error>"#;
+
+/// The body of the answer of a server that asks the client to send fewer requests. S3 and
+/// MinIO give the code `SlowDown` with the status 503.
+const SLOW_DOWN: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>"#;
+
+/// The body of another answer of a server that asks the client to send fewer requests.
+/// `THROTTLING_ERRORS` in `aws_runtime::retries::classifiers` holds `ThrottlingException`, and
+/// the classifier of the SDK reads the code and not the status of the response, so a 4xx that
+/// carries the code asks for one more attempt.
+const THROTTLING_EXCEPTION: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>ThrottlingException</Code><Message>Rate exceeded.</Message></Error>"#;
+
+/// The body of the error of a request that is not valid. The S3 model names `InvalidRequest` as
+/// an error of `PutObject`, so the SDK gives the `PutObjectError::InvalidRequest` variant for
+/// the code, whatever status the response carries.
+const INVALID_REQUEST: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>InvalidRequest</Code><Message>A parameter or header in your request is not valid.</Message></Error>"#;
 
 fn delete_result_with_error(key: &str, code: &str, message: &str) -> String {
     format!(
@@ -982,6 +1115,187 @@ async fn get_raw_slice_retries_a_transport_error() {
 }
 
 #[test]
+async fn a_put_that_s3_rejects_sends_one_request() {
+    // One `PutObject` carries the whole blob and accepts 5 GiB of it, so an attempt that sends
+    // a body which S3 rejects costs the time of that body and gives the same answer again. The
+    // retry loop makes 3 attempts, and it stops at the first of them here: the write of the
+    // blob, and the write of the marker object of a directory, which `create_dir` sends
+    // through the same predicate.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(400, ENTITY_TOO_LARGE));
+
+    let written = storage
+        .put_raw("test", "put-raw", namespace(), Path::new("blob"), b"x")
+        .await;
+    let created = storage
+        .create_dir("test", "create-dir", namespace(), Path::new("dir"))
+        .await;
+
+    assert_eq!(
+        (
+            written.is_err(),
+            created.is_err(),
+            sent(&requests)
+                .iter()
+                .map(|request| request.method.clone())
+                .collect::<Vec<_>>()
+        ),
+        (true, true, vec!["PUT".to_string(), "PUT".to_string()])
+    );
+}
+
+#[test]
+async fn a_put_that_the_model_names_a_fault_of_the_request_sends_one_request() {
+    // The S3 model names `InvalidRequest` as an error of `PutObject`, so the SDK gives the
+    // `PutObjectError::InvalidRequest` variant for the code and the backend reads the variant
+    // and not the status. The script gives the code with the status 500, which the status rule
+    // alone would send again: the model says that the request is the fault, so one more
+    // attempt of the same request gets the same answer.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(500, INVALID_REQUEST));
+
+    let written = storage
+        .put_raw("test", "put-raw", namespace(), Path::new("blob"), b"x")
+        .await;
+
+    assert_eq!((written.is_err(), sent(&requests).len()), (true, 1));
+}
+
+#[test]
+async fn a_put_that_one_more_attempt_can_pass_goes_again() {
+    // The retry loop makes 3 attempts. A fault of the server keeps the loop, and so does a 4xx
+    // whose code asks for one more attempt: S3 gives `RequestTimeout` with the status 400, and
+    // `SlowDown` comes with the status 503, which keeps the loop by its status.
+    let (after_a_server_error, server_error_requests) =
+        scripted_storage("", |_, earlier| match earlier {
+            0 => Answer::new(500, INTERNAL_ERROR),
+            _ => Answer::new(200, ""),
+        });
+    let (timed_out, timeout_requests) =
+        scripted_storage("", |_, _| Answer::new(400, REQUEST_TIMEOUT));
+    let (slowed_down, slow_down_requests) =
+        scripted_storage("", |_, _| Answer::new(503, SLOW_DOWN));
+    let write = |storage: S3BlobStorage| async move {
+        storage
+            .put_raw("test", "put-raw", namespace(), Path::new("blob"), b"x")
+            .await
+            .is_ok()
+    };
+
+    let after_a_server_error = write(after_a_server_error).await;
+    let timed_out = write(timed_out).await;
+    let slowed_down = write(slowed_down).await;
+
+    assert_eq!(
+        (
+            (after_a_server_error, sent(&server_error_requests).len()),
+            (timed_out, sent(&timeout_requests).len()),
+            (slowed_down, sent(&slow_down_requests).len())
+        ),
+        ((true, 2), (false, 3), (false, 3))
+    );
+}
+
+#[test]
+async fn a_put_that_a_throttling_code_answers_goes_again() {
+    // `RETRIABLE_SERVICE_ERROR_CODES` holds every code of `THROTTLING_ERRORS` and of
+    // `TRANSIENT_ERRORS`, which are the codes that the SDK itself sends again. A service behind
+    // the S3 API can give a throttling code with a 4xx that is not 408 and not 429, and the
+    // status rule alone would make a permanent error of that answer: the retry loop would stop
+    // at an answer which asks for one more attempt. The loop makes 3 attempts and makes all 3
+    // here. The filesystem snapshot of a worker writes to S3, so a `PutObject` that a throttle
+    // answers must not reach the caller as a permanent error.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(400, THROTTLING_EXCEPTION));
+
+    let written = storage
+        .put_raw("test", "put-raw", namespace(), Path::new("blob"), b"x")
+        .await;
+
+    assert_eq!((written.is_err(), sent(&requests).len()), (true, 3));
+}
+
+#[test]
+async fn a_put_that_an_internal_error_code_answers_goes_again() {
+    // The `PutObject` classifier of the SDK adds `InternalError` to `TRANSIENT_ERRORS`, so
+    // `RETRIABLE_SERVICE_ERROR_CODES` holds the code as well. S3 gives the code with the status
+    // 500, which keeps the retry loop by its status, and a service behind the S3 API can give
+    // the code with a 4xx, which the status rule alone would make a permanent error of. The
+    // loop makes 3 attempts and makes all 3 here. The filesystem snapshot of a worker writes to
+    // S3, so a `PutObject` that this code answers must not reach the caller as a permanent
+    // error.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(400, INTERNAL_ERROR));
+
+    let written = storage
+        .put_raw("test", "put-raw", namespace(), Path::new("blob"), b"x")
+        .await;
+
+    assert_eq!((written.is_err(), sent(&requests).len()), (true, 3));
+}
+
+/// The backend holds its own copy of the codes that the SDK sends again, because `aws-runtime`
+/// is the runtime support of the SDK and says that nothing uses it directly. The crate is a dev
+/// dependency, so this test reads the two lists and the backend does not. A code that a later
+/// version of the SDK adds to either list fails this test.
+///
+/// The test reads the two lists and nothing else. The classifier of one operation can add a
+/// code of its own, which is in no list and is no constant: the `PutObject` classifier adds
+/// `InternalError` (`RuntimePlugin for PutObject` in the generated `aws-sdk-s3` source
+/// `src/operation/put_object.rs`). This test cannot see such a code, so a reader who wants to
+/// check `RETRIABLE_SERVICE_ERROR_CODES` against it reads that classifier.
+#[test]
+fn the_retriable_codes_hold_every_code_that_the_sdk_sends_again() {
+    let missing = THROTTLING_ERRORS
+        .iter()
+        .chain(TRANSIENT_ERRORS)
+        .copied()
+        .filter(|code| !RETRIABLE_SERVICE_ERROR_CODES.contains(code))
+        .collect::<Vec<_>>();
+
+    assert_eq!(missing, Vec::<&str>::new());
+}
+
+/// The key namespace of S3 is flat, so a blob at `a` and the marker of the directory `a` are two
+/// objects that S3 holds at the same time. `list_dir` gives the path `a` for the blob, and the
+/// parent of the marker, which is also the path `a`.
+///
+/// MinIO holds both objects, but its `ListObjectsV2` gives one key of the two, not both, so it
+/// cannot give this response. The scripted transport is the one seam that holds this rule.
+#[test]
+async fn list_dir_gives_a_blob_and_the_marker_of_its_directory_one_time() {
+    let prefix = namespace_prefix();
+    let listing = list_page(
+        &[
+            (format!("{prefix}/a"), 5),
+            (format!("{prefix}/a/__dir_marker"), 0),
+        ],
+        None,
+    );
+    let (storage, _) = scripted_storage("", move |_, _| Answer::new(200, listing.clone()));
+
+    let entries = storage
+        .list_dir("test", "list-dir", namespace(), Path::new(""))
+        .await
+        .unwrap();
+
+    assert_eq!(entries, vec![PathBuf::from("a")]);
+}
+
+/// A `delete` of the blob at `a` removes the key `a` and keeps the marker of the directory `a`,
+/// because the backend does not remove a marker on a write or on a delete of a blob. The
+/// directory that `create_dir` made is still there, so `list_dir` still gives the path `a`.
+#[test]
+async fn list_dir_gives_a_directory_whose_blob_is_deleted() {
+    let prefix = namespace_prefix();
+    let listing = list_page(&[(format!("{prefix}/a/__dir_marker"), 0)], None);
+    let (storage, _) = scripted_storage("", move |_, _| Answer::new(200, listing.clone()));
+
+    let entries = storage
+        .list_dir("test", "list-dir", namespace(), Path::new(""))
+        .await
+        .unwrap();
+
+    assert_eq!(entries, vec![PathBuf::from("a")]);
+}
+
+#[test]
 async fn list_blobs_below_skips_directory_markers_and_keeps_sizes() {
     let prefix = format!("objects/{}", namespace_prefix());
     let first_page = list_page(
@@ -1041,6 +1355,952 @@ async fn list_blobs_below_fails_when_a_key_has_no_size() {
     assert_eq!(
         error.to_string(),
         format!("S3 gave no size for the key {key}")
+    );
+}
+
+#[test]
+async fn put_raw_rejects_a_name_that_breaks_a_rule_without_a_request() {
+    // The key of `namespace()` in a storage without an object prefix is the 36 bytes of the
+    // nil UUID, `/`, and the name. The last name has 988 bytes, so its key has 1025.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+    let names = [
+        "a\0b".to_string(),
+        " . ".to_string(),
+        "a/ .. /b".to_string(),
+        "a\\..\\b".to_string(),
+        "dir/__dir_marker".to_string(),
+        "a".repeat(988),
+    ];
+
+    let errors = futures::stream::iter(&names)
+        .then(|name| async {
+            storage
+                .put_raw("test", "put-raw", namespace(), Path::new(name), b"x")
+                .await
+                .map_err(name_error)
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    assert_eq!(
+        (errors, sent(&requests).len()),
+        (
+            vec![
+                Err(Some(BlobNameError::NulByte)),
+                Err(Some(BlobNameError::DotSegment {
+                    segment: " . ".to_string()
+                })),
+                Err(Some(BlobNameError::DotSegment {
+                    segment: " .. ".to_string()
+                })),
+                Err(Some(BlobNameError::DotSegment {
+                    segment: "..".to_string()
+                })),
+                Err(Some(BlobNameError::Reserved {
+                    marker: "__dir_marker"
+                })),
+                Err(Some(BlobNameError::TooLong {
+                    length: 1025,
+                    max: 1024
+                })),
+            ],
+            0
+        )
+    );
+}
+
+#[test]
+async fn the_key_limit_counts_bytes_of_utf8_and_not_characters() {
+    // Each name has 600 characters, which is under the limit. The first has 1200 bytes,
+    // because `é` has 2 bytes of UTF-8, so its key has 1237. The second has 600 bytes.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+    let storage = &storage;
+    let write = |name: String| async move {
+        storage
+            .put_raw("test", "put-raw", namespace(), Path::new(&name), b"x")
+            .await
+            .map_err(name_error)
+    };
+
+    let multi_byte = write("é".repeat(600)).await;
+    let single_byte = write("a".repeat(600)).await;
+
+    assert_eq!(
+        (multi_byte, single_byte, sent(&requests).len()),
+        (
+            Err(Some(BlobNameError::TooLong {
+                length: 1237,
+                max: 1024
+            })),
+            Ok(()),
+            1
+        )
+    );
+}
+
+#[test]
+async fn the_key_limit_counts_the_namespace_prefix() {
+    // The prefix of `namespace()` is `objects/`, the 36 bytes of the nil UUID, and `/`: 45
+    // bytes. A name of 979 bytes gives a key of 1024 bytes, and a name of 980 bytes a key of
+    // 1025, although both names have fewer than 1024 bytes on their own.
+    let (storage, requests) = scripted_storage("objects", |_, _| Answer::new(200, ""));
+    let storage = &storage;
+    let write = |name: String| async move {
+        storage
+            .put_raw("test", "put-raw", namespace(), Path::new(&name), b"x")
+            .await
+            .map_err(name_error)
+    };
+
+    let at_the_limit = write("a".repeat(979)).await;
+    let over_the_limit = write("a".repeat(980)).await;
+
+    assert_eq!(
+        (
+            at_the_limit,
+            over_the_limit,
+            sent(&requests)
+                .iter()
+                .map(|request| {
+                    request.uri.contains(&format!(
+                        "/objects/{}/{}?",
+                        namespace_prefix(),
+                        "a".repeat(979)
+                    ))
+                })
+                .collect::<Vec<_>>()
+        ),
+        (
+            Ok(()),
+            Err(Some(BlobNameError::TooLong {
+                length: 1025,
+                max: 1024
+            })),
+            vec![true]
+        )
+    );
+}
+
+#[test]
+async fn a_name_that_ends_with_the_marker_is_rejected_and_the_error_names_it() {
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+
+    let written = storage
+        .put_raw(
+            "test",
+            "put-raw",
+            namespace(),
+            Path::new("dir/__dir_marker"),
+            b"x",
+        )
+        .await
+        .unwrap_err();
+    let created = storage
+        .create_dir("test", "create-dir", namespace(), Path::new("__dir_marker"))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        (
+            written.to_string().contains("__dir_marker"),
+            created.to_string().contains("__dir_marker"),
+            name_error(written),
+            name_error(created),
+            sent(&requests).len()
+        ),
+        (
+            true,
+            true,
+            Some(BlobNameError::Reserved {
+                marker: "__dir_marker"
+            }),
+            Some(BlobNameError::Reserved {
+                marker: "__dir_marker"
+            }),
+            0
+        )
+    );
+}
+
+#[test]
+async fn a_name_with_the_marker_in_the_middle_is_written_read_and_listed() {
+    // The marker is reserved as the last segment only. This test shows what a name with the
+    // marker as a middle segment does: the backend sends it to S3 as the guest wrote it, gives
+    // the object back under it, and keeps it in the blob listing, because the filter of the
+    // listing reads the last segment only.
+    let prefix = namespace_prefix();
+    let listing = list_page(
+        &[
+            (format!("{prefix}/tree/__dir_marker/b"), 1),
+            (format!("{prefix}/tree/x/__dir_marker"), 0),
+        ],
+        None,
+    );
+    let (storage, requests) = scripted_storage("", move |request, _| {
+        if request.is_list_objects() {
+            Answer::new(200, listing.clone())
+        } else if request.method == "GET" {
+            Answer::new(200, "b")
+        } else {
+            Answer::new(200, "")
+        }
+    });
+    let path = Path::new("tree/__dir_marker/b");
+
+    storage
+        .put_raw("test", "put-raw", namespace(), path, b"b")
+        .await
+        .unwrap();
+    let read = storage
+        .get_raw("test", "get-raw", namespace(), path)
+        .await
+        .unwrap();
+    let listed = storage
+        .list_blobs_below("test", "list", namespace(), Path::new("tree"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            read,
+            listed.into_vec(),
+            sent(&requests)
+                .iter()
+                .map(|request| (
+                    request.method.clone(),
+                    request.uri.contains("/tree/__dir_marker/b")
+                ))
+                .collect::<Vec<_>>()
+        ),
+        (
+            Some(b"b".to_vec()),
+            vec![listed_blob("tree/__dir_marker/b", 1)],
+            vec![
+                ("PUT".to_string(), true),
+                ("GET".to_string(), true),
+                ("GET".to_string(), false)
+            ]
+        )
+    );
+}
+
+#[test]
+async fn create_dir_writes_the_marker_and_the_listing_leaves_it_out() {
+    let prefix = namespace_prefix();
+    let listing = list_page(
+        &[
+            (format!("{prefix}/tree/__dir_marker"), 0),
+            (format!("{prefix}/tree/a"), 1),
+        ],
+        None,
+    );
+    // A `HEAD` of `tree` itself finds nothing, because S3 has no directory object of its own,
+    // and the listing that `exists` falls back on (the one with `start-after`) finds nothing
+    // either. The object at `tree/__dir_marker` is therefore the one thing that can make
+    // `exists` give `Directory`.
+    let (storage, requests) = scripted_storage("", move |request, _| {
+        if request.is_list_objects() {
+            if request.uri.contains("start-after") {
+                Answer::new(200, list_page(&[], None))
+            } else {
+                Answer::new(200, listing.clone())
+            }
+        } else if request.method == "HEAD" && !request.uri.ends_with("__dir_marker") {
+            Answer::new(404, "")
+        } else {
+            Answer::new(200, "")
+        }
+    });
+
+    storage
+        .create_dir("test", "create-dir", namespace(), Path::new("tree"))
+        .await
+        .unwrap();
+    let marked = storage
+        .exists("test", "exists", namespace(), Path::new("tree"))
+        .await
+        .unwrap();
+    let listed = storage
+        .list_blobs_below("test", "list", namespace(), Path::new("tree"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            marked,
+            listed.into_vec(),
+            sent(&requests)
+                .iter()
+                .map(|request| (
+                    request.method.clone(),
+                    request
+                        .uri
+                        .contains(&format!("/{prefix}/tree/__dir_marker"))
+                ))
+                .collect::<Vec<_>>()
+        ),
+        (
+            ExistsResult::Directory,
+            vec![listed_blob("tree/a", 1)],
+            vec![
+                ("PUT".to_string(), true),
+                ("HEAD".to_string(), false),
+                ("HEAD".to_string(), true),
+                ("GET".to_string(), false)
+            ]
+        )
+    );
+}
+
+#[test]
+async fn create_dir_rejects_a_directory_whose_marker_does_not_fit_the_key_limit() {
+    // The name has 987 bytes, so its key has 1024 bytes and a blob can have it. The key of
+    // the marker of a directory with the name has 13 bytes more.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+    let name = "a".repeat(987);
+
+    let written = storage
+        .put_raw("test", "put-raw", namespace(), Path::new(&name), b"x")
+        .await
+        .map_err(name_error);
+    let created = storage
+        .create_dir("test", "create-dir", namespace(), Path::new(&name))
+        .await
+        .map_err(name_error);
+
+    assert_eq!(
+        (written, created, sent(&requests).len()),
+        (
+            Ok(()),
+            Err(Some(BlobNameError::TooLong {
+                length: 1037,
+                max: 1024
+            })),
+            1
+        )
+    );
+}
+
+#[test]
+async fn exists_tells_the_truth_for_a_name_whose_marker_does_not_fit_the_key_limit() {
+    // The key of a name of 975 bytes has 1012 bytes, so the key of the marker of a directory
+    // with that name has 1025 and does not fit. A child of that directory still fits: the key
+    // of a child with a name of one byte has 1014 bytes. No marker object of such a directory
+    // can be there, so `exists` sends no request for one, and the objects below the prefix
+    // decide. A name that is too long for a marker is a name that a blob can still have, so
+    // an error here would tell a guest that its question is invalid when `exists` can give
+    // `Directory` or `DoesNotExist`.
+    let name = "a".repeat(975);
+    let prefix = namespace_prefix();
+    let with_a_child = list_page(&[(format!("{prefix}/{name}/c"), 1)], None);
+    let (with_child, with_child_requests) = scripted_storage("", move |request, _| {
+        if request.is_list_objects() {
+            Answer::new(200, with_a_child.clone())
+        } else {
+            Answer::new(404, "")
+        }
+    });
+    let (empty, empty_requests) = scripted_storage("", |request, _| {
+        if request.is_list_objects() {
+            Answer::new(200, list_page(&[], None))
+        } else {
+            Answer::new(404, "")
+        }
+    });
+
+    let directory = with_child
+        .exists("test", "exists", namespace(), Path::new(&name))
+        .await
+        .map_err(name_error);
+    let nothing = empty
+        .exists("test", "exists", namespace(), Path::new(&name))
+        .await
+        .map_err(name_error);
+
+    let with_child_sent = sent(&with_child_requests);
+    let empty_sent = sent(&empty_requests);
+    assert_eq!(
+        (
+            directory,
+            nothing,
+            with_child_sent
+                .iter()
+                .chain(empty_sent.iter())
+                .map(|request| (request.method.clone(), request.uri.contains("__dir_marker")))
+                .collect::<Vec<_>>()
+        ),
+        (
+            Ok(ExistsResult::Directory),
+            Ok(ExistsResult::DoesNotExist),
+            vec![
+                ("HEAD".to_string(), false),
+                ("GET".to_string(), false),
+                ("HEAD".to_string(), false),
+                ("GET".to_string(), false)
+            ]
+        )
+    );
+}
+
+#[test]
+async fn get_metadata_gives_none_for_a_missing_name_whose_marker_does_not_fit_the_key_limit() {
+    // The key of a name of 987 bytes has 1024 bytes, the most that S3 accepts, so the key of
+    // the marker of a directory with that name has 1037 and does not fit. `put_raw` writes a
+    // blob at that name, so a question about it is a valid question, and nothing is there:
+    // one `HEAD` of the name, no request for a marker, and `None`.
+    let name = "a".repeat(987);
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, ""));
+
+    let metadata = storage
+        .get_metadata("test", "get-metadata", namespace(), Path::new(&name))
+        .await
+        .map(|metadata| metadata.is_some())
+        .map_err(name_error);
+
+    assert_eq!(
+        (
+            metadata,
+            sent(&requests)
+                .iter()
+                .map(|request| (request.method.clone(), request.uri.contains("__dir_marker")))
+                .collect::<Vec<_>>()
+        ),
+        (Ok(false), vec![("HEAD".to_string(), false)])
+    );
+}
+
+#[test]
+async fn the_marker_key_of_a_root_path_has_one_separator() {
+    // The key of a root path is the prefix of the namespace and a `/` after it, so a marker
+    // key that always puts a separator of its own before the marker would have `//` in it.
+    // MinIO rejects such a key with `XMinioInvalidObjectName`, and no rule of `BlobNameError`
+    // reads the marker key, so nothing else would catch it. `get_metadata` is the one method
+    // that reads the marker of a root path: `exists` gives `Directory` for such a path and
+    // sends no request, and `create_dir` leaves no directory at the root.
+    let prefix = namespace_prefix();
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, ""));
+
+    let root = storage
+        .get_metadata("test", "get-metadata", namespace(), Path::new(""))
+        .await
+        .map(|metadata| metadata.is_some())
+        .map_err(name_error);
+
+    assert_eq!(
+        (
+            root,
+            sent(&requests)
+                .iter()
+                .map(|request| request.uri.clone())
+                .collect::<Vec<_>>()
+        ),
+        (
+            Ok(false),
+            vec![
+                format!("http://s3.test/custom-data/{prefix}/"),
+                format!("http://s3.test/custom-data/{prefix}/__dir_marker"),
+            ]
+        )
+    );
+}
+
+#[test]
+async fn exists_gives_a_directory_for_a_root_path_and_sends_no_request() {
+    // The root of a namespace is a directory, also when the bucket holds no object under its
+    // prefix, so the answer needs no request of its own.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, ""));
+
+    let root = storage
+        .exists("test", "exists", namespace(), Path::new("."))
+        .await
+        .map_err(name_error);
+
+    assert_eq!(
+        (root, sent(&requests).len()),
+        (Ok(ExistsResult::Directory), 0)
+    );
+}
+
+#[test]
+async fn the_reserved_rule_keeps_the_marker_object_of_a_directory_free() {
+    // `create_dir("x")` records the directory `x` with an object at the key
+    // `<prefix>/x/__dir_marker`, and `exists` reads that object as the mark of the directory.
+    // `exists` sends its first `HEAD` for the key of the path itself, as the second request
+    // below shows, so `exists("x/__dir_marker")` would send a `HEAD` for
+    // `<prefix>/x/__dir_marker`, find the marker object of `x`, and give `File` for a
+    // directory that the guest had just made. `get_metadata` would give the size of that
+    // object, and `create_dir("x/__dir_marker")` would write its own marker one level below
+    // it. The reserved rule keeps that one key for the backend: the three calls give the
+    // permanent error and send no request.
+    let prefix = namespace_prefix();
+    let (storage, requests) = scripted_storage("", |request, _| {
+        if request.method != "HEAD" {
+            Answer::new(200, "")
+        } else if request.uri.ends_with("__dir_marker") {
+            Answer::object_head()
+        } else {
+            Answer::new(404, "")
+        }
+    });
+    let marker_path = Path::new("x/__dir_marker");
+
+    storage
+        .create_dir("test", "create-dir", namespace(), Path::new("x"))
+        .await
+        .unwrap();
+    let directory = storage
+        .exists("test", "exists", namespace(), Path::new("x"))
+        .await
+        .map_err(name_error);
+    let created = storage
+        .create_dir("test", "create-dir", namespace(), marker_path)
+        .await
+        .map_err(name_error);
+    let checked = storage
+        .exists("test", "exists", namespace(), marker_path)
+        .await
+        .map_err(name_error);
+    let described = storage
+        .get_metadata("test", "get-metadata", namespace(), marker_path)
+        .await
+        .map(|metadata| metadata.is_some())
+        .map_err(name_error);
+
+    assert_eq!(
+        (
+            directory,
+            created,
+            checked,
+            described,
+            sent(&requests)
+                .iter()
+                .map(|request| (request.method.clone(), request.uri.clone()))
+                .collect::<Vec<_>>()
+        ),
+        (
+            Ok(ExistsResult::Directory),
+            Err(Some(BlobNameError::Reserved {
+                marker: "__dir_marker"
+            })),
+            Err(Some(BlobNameError::Reserved {
+                marker: "__dir_marker"
+            })),
+            Err(Some(BlobNameError::Reserved {
+                marker: "__dir_marker"
+            })),
+            vec![
+                (
+                    "PUT".to_string(),
+                    format!("http://s3.test/custom-data/{prefix}/x/__dir_marker?x-id=PutObject")
+                ),
+                (
+                    "HEAD".to_string(),
+                    format!("http://s3.test/custom-data/{prefix}/x")
+                ),
+                (
+                    "HEAD".to_string(),
+                    format!("http://s3.test/custom-data/{prefix}/x/__dir_marker")
+                ),
+            ]
+        )
+    );
+}
+
+#[test]
+async fn create_dir_at_a_root_path_sends_no_request() {
+    // A path with no name in it is the root of the namespace, which needs no marker object:
+    // the prefix of the namespace is there as soon as one object is below it. This is what
+    // the matrix test `create_dir_at_a_root_path_leaves_nothing_behind` states for every
+    // backend, and the S3 half of it belongs here, because a marker object at the root of a
+    // namespace stays out of every listing of the backend: `list_dir` and `list_blobs_below`
+    // leave the marker of the directory that they list out, so no call of `BlobStorage` could
+    // see a stray one.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+
+    for root_path in ["", ".", "./", "././"] {
+        storage
+            .create_dir("test", "create-dir", namespace(), Path::new(root_path))
+            .await
+            .unwrap_or_else(|err| panic!("create_dir({root_path:?}) gave {err}"));
+    }
+
+    assert_eq!(
+        sent(&requests)
+            .iter()
+            .map(|request| request.uri.clone())
+            .collect::<Vec<_>>(),
+        Vec::<String>::new()
+    );
+}
+
+/// Gives the method, the target and the copy source of each request, in the order of the
+/// requests. A `CopyObject` is a `PUT` of the target key with the source key in its
+/// `x-amz-copy-source` header, so these three show which request is a copy.
+fn copy_requests(requests: &SentRequests) -> Vec<(String, String, Option<String>)> {
+    sent(requests)
+        .iter()
+        .map(|request| {
+            (
+                request.method.clone(),
+                request.uri.clone(),
+                request.copy_source.clone(),
+            )
+        })
+        .collect()
+}
+
+/// Gives the one `CopyObject` request of a copy from `from` to `to` in `namespace()`.
+fn one_copy_request(from: &str, to: &str) -> Vec<(String, String, Option<String>)> {
+    let prefix = namespace_prefix();
+    vec![(
+        "PUT".to_string(),
+        format!("http://s3.test/custom-data/{prefix}/{to}?x-id=CopyObject"),
+        Some(format!("/custom-data/{prefix}/{from}")),
+    )]
+}
+
+#[test]
+async fn copy_gives_a_missing_error_for_a_source_that_is_not_there_and_sends_one_request() {
+    // The S3 model names one error of `CopyObject`, `ObjectNotInActiveTierError`, so a source
+    // key that is not there comes as the code `NoSuchKey` in the body of the response, which
+    // the SDK keeps in the metadata of a `CopyObjectError::Unhandled`. The backend reads that
+    // code, gives the `BlobMissingError` that the default `copy` gives, and sends the request
+    // one time: a retry cannot make the bucket hold the source key. The storage sends 3
+    // requests for a retriable error, which `copy_retries_a_server_error` holds.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, NO_SUCH_KEY));
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), copy_requests(&requests)),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("from")
+            })),
+            one_copy_request("from", "to")
+        )
+    );
+}
+
+#[test]
+async fn move_gives_a_missing_error_for_a_source_that_is_not_there_and_deletes_nothing() {
+    // `move` is the default one of `BlobStorage`: the copy comes first, and the delete of the
+    // source comes after it. The copy gives the error, so the delete does not run and the one
+    // request of the move is that copy. No backend has a `move` of its own.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, NO_SUCH_KEY));
+
+    let result = storage
+        .r#move(
+            "test",
+            "move",
+            namespace(),
+            Path::new("from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), copy_requests(&requests)),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("from")
+            })),
+            one_copy_request("from", "to")
+        )
+    );
+}
+
+#[test]
+async fn copy_retries_a_server_error() {
+    // The first request gets a 500 and the second gets the result of the copy. The test of a
+    // missing source key matches one code, so every other error of the service keeps its retry.
+    let (storage, requests) = scripted_storage("", |_, earlier| match earlier {
+        0 => Answer::new(500, INTERNAL_ERROR),
+        _ => Answer::new(200, COPY_RESULT),
+    });
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), sent(&requests).len()),
+        (Ok(()), 2)
+    );
+}
+
+#[test]
+async fn copy_keeps_the_retry_of_a_bucket_that_is_not_there() {
+    // A source key that is not there and a bucket that is not there are two conditions, and
+    // the backend reads the code of the error to know which one it has. `NoSuchKey` says that
+    // the bucket holds no object at the source key, which no retry can change, so the copy
+    // gives a `BlobMissingError` and stops. `NoSuchBucket` says that the bucket itself is not
+    // there, which is of the configuration of the storage, so the error keeps its retry and
+    // the guest does not read "no blob at the path" for it.
+    //
+    // Each code comes with the status 404 (`com.amazonaws.s3#NoSuchBucket` in the S3 model,
+    // and `ErrNoSuchBucket` in `cmd/api-errors.go` of MinIO), so a test of the status, or of
+    // any code with that status, gives the same result for the two. The storage sends 3
+    // requests for a retriable error, as `copy_retries_a_server_error` holds, and 1 request
+    // for a source key that is not there.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, NO_SUCH_BUCKET));
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), copy_requests(&requests)),
+        (Err(None), vec![one_copy_request("from", "to"); 3].concat())
+    );
+}
+
+#[test]
+async fn a_copy_onto_the_same_path_reads_the_key_of_the_source_and_no_more() {
+    // The copy needs a blob at its source path, and the `HeadObject` of the key of that blob
+    // gives the answer. A directory at the same path is not a blob, so the copy asks nothing
+    // about it: it sends no `HeadObject` for the marker object and no listing of the keys below
+    // the path. The copy onto the same path writes nothing, so the one request is that head.
+    let (storage, requests) = scripted_storage("", |request, _| {
+        if request.method == "HEAD" && request.uri.ends_with("/from") {
+            Answer::object_head()
+        } else {
+            Answer::new(500, INTERNAL_ERROR)
+        }
+    });
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("./from"),
+        )
+        .await;
+
+    let prefix = namespace_prefix();
+    assert_eq!(
+        (
+            result.map_err(missing_error),
+            sent(&requests)
+                .iter()
+                .map(|request| (request.method.clone(), request.uri.clone()))
+                .collect::<Vec<_>>()
+        ),
+        (
+            Ok(()),
+            vec![(
+                "HEAD".to_string(),
+                format!("http://s3.test/custom-data/{prefix}/from")
+            )]
+        )
+    );
+}
+
+#[test]
+async fn a_copy_onto_the_same_path_gives_the_missing_error_at_the_head_of_the_source() {
+    // The head of the key of the source tells that the bucket holds no blob at the path, and
+    // that answer is final: a directory at the path holds no blob either. So the copy gives the
+    // permanent `BlobMissingError` at that head, and a later request cannot turn it into an
+    // error that one more attempt can pass. The script gives an error of the transport to each
+    // request after the head, so a copy that asked more would give that error to the guest and
+    // the executor would retry a copy whose source is not there.
+    let (storage, requests) = scripted_storage("", |request, _| {
+        if request.method == "HEAD" && request.uri.ends_with("/from") {
+            // A response to a `HEAD` has no body, so the SDK reads its status.
+            Answer::new(404, "")
+        } else {
+            Answer::transport_error(ConnectorError::io("connection reset".into()))
+        }
+    });
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("from"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), sent(&requests).len()),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("from")
+            })),
+            1
+        )
+    );
+}
+
+#[test]
+async fn copy_names_the_source_path_as_the_guest_wrote_it() {
+    // A guest picks the source container name and the source object name, so the guest writes
+    // the path of the source. `./from` and `from` are two forms of one path, and the backend
+    // normalizes the path before it makes the key of the object. The `BlobMissingError` names
+    // the path as the guest wrote it, as each `BlobNameError` does, because the guest reads the
+    // message.
+    //
+    // The copy onto the same path reads the source and sends no `CopyObject`; the copy onto
+    // another path sends one. Each gives the error, and each names `./from`.
+    let (storage, _) = scripted_storage("", |request, _| {
+        if request.method == "HEAD" {
+            // A response to a `HEAD` has no body, so the SDK reads its status.
+            Answer::new(404, "")
+        } else if request.is_list_objects() {
+            Answer::new(200, list_page(&[], None))
+        } else {
+            Answer::new(404, NO_SUCH_KEY)
+        }
+    });
+
+    let onto_the_same_path = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("./from"),
+            Path::new("from"),
+        )
+        .await;
+    let onto_another_path = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("./from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (
+            onto_the_same_path.map_err(missing_error),
+            onto_another_path.map_err(missing_error)
+        ),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("./from")
+            })),
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("./from")
+            }))
+        )
+    );
+}
+
+#[test]
+async fn copy_reads_the_code_of_the_error_and_not_the_status_of_the_response() {
+    // A `CopyObject` can get an error in a response with the status 200: the SDK reads the body
+    // of such a response, sees the `Error` element and makes the error of it
+    // (`CopyObjectResponseDeserializer` in `aws_sdk_s3::operation::copy_object`, and "Response
+    // and special errors" in the S3 API reference of `CopyObject`). The backend reads the code
+    // of the error out of its metadata, so the status of the response does not change what the
+    // copy gives.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, NO_SUCH_KEY));
+
+    let result = storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("from"),
+            Path::new("to"),
+        )
+        .await;
+
+    assert_eq!(
+        (result.map_err(missing_error), copy_requests(&requests)),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("from")
+            })),
+            one_copy_request("from", "to")
+        )
+    );
+}
+
+#[test]
+async fn copy_keeps_a_source_that_is_not_there_out_of_the_error_log() {
+    // The missing source key is not retriable, so that copy sends 1 request. The copy that gets
+    // a server error is the control. The blob storage sends 3 requests for it: the first 2
+    // record a warning, which is not in the error log, and the last records an error and counts
+    // a failure. A missing key of a `GetObject` and of a `HeadObject` has the same policy: the
+    // guest picks the name, S3 did the work of the request, and the error goes to the guest.
+    //
+    // The source key of a copy is in the `x-amz-copy-source` header, and the target key is in
+    // the URI, so the script reads the header to find which copy the request is.
+    let (storage, requests) = scripted_storage("", |request, _| {
+        if request
+            .copy_source
+            .as_deref()
+            .is_some_and(|source| source.ends_with("missing"))
+        {
+            Answer::new(404, NO_SUCH_KEY)
+        } else {
+            Answer::new(500, INTERNAL_ERROR)
+        }
+    });
+    let ops = ["copy-404", "copy-500"];
+    let copy = |from: &'static str, op_label: &'static str| {
+        storage.copy(
+            "test",
+            op_label,
+            namespace(),
+            Path::new(from),
+            Path::new("to"),
+        )
+    };
+    let failures_before = ops.map(external_call_failures);
+
+    let ((missing, failing), errors) = with_error_log(async {
+        (
+            copy("missing", ops[0]).await.map_err(missing_error),
+            copy("failing", ops[1]).await.map_err(missing_error),
+        )
+    })
+    .await;
+    let failures = ops
+        .map(external_call_failures)
+        .iter()
+        .zip(failures_before)
+        .map(|(after, before)| after - before)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (missing, failing, errors, failures, sent(&requests).len()),
+        (
+            Err(Some(BlobMissingError {
+                path: PathBuf::from("missing")
+            })),
+            Err(None),
+            vec![ops[1].to_string()],
+            vec![0.0, 1.0],
+            4
+        )
     );
 }
 
