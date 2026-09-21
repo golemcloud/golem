@@ -256,14 +256,14 @@ test "invocation stdout terminals preserve structured results and original error
     for
       mode in [
         "success", "tool-error", "explicit-failure", "exception", "cancelled", "abandoned",
-        "finish-error",
+        "finish-error", "finish-error-tool",
       ] {
       let terminals : Array[String] = []
       let drops = Ref(0)
       let stdout = provider_stdout_from_callbacks(
         _ => Ok(()),
         () => {
-          if mode == "finish-error" {
+          if mode == "finish-error" || mode == "finish-error-tool" {
             Err(@toolStreams.StreamWriteError::ConcurrentOperation)
           } else {
             terminals.push("finish")
@@ -286,7 +286,8 @@ test "invocation stdout terminals preserve structured results and original error
       let result = try
         invoke_with_stdout(stdout, () => {
           match mode {
-            "tool-error" => Err(@types.ToolError::InvalidInput("original"))
+            "tool-error" | "finish-error-tool" =>
+              Err(@types.ToolError::InvalidInput("original"))
             "exception" => raise ToolStreamError::Failed("original")
             "cancelled" => raise @async-core.Cancelled::Cancelled
             _ => {
@@ -309,7 +310,7 @@ test "invocation stdout terminals preserve structured results and original error
           assert_true(
             result is Ok(Err(@types.ToolError::InvalidInput("original"))),
           )
-          assert_eq(terminals, ["failed"])
+          assert_eq(terminals, ["finish"])
         }
         "exception" => {
           assert_true(result is Err(ToolStreamError::Failed("original")))
@@ -320,8 +321,12 @@ test "invocation stdout terminals preserve structured results and original error
           assert_eq(terminals, ["cancelled"])
         }
         "finish-error" => {
+          assert_true(result is Ok(Ok(_)))
+          assert_eq(terminals, [])
+        }
+        "finish-error-tool" => {
           assert_true(
-            result is Err(@toolStreams.StreamWriteError::ConcurrentOperation),
+            result is Ok(Err(@types.ToolError::InvalidInput("original"))),
           )
           assert_eq(terminals, [])
         }

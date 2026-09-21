@@ -621,7 +621,11 @@ function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapt
       controller?.error(invocationCompleted);
       if (!terminated) {
         terminated = true;
-        await writer.finish();
+        try {
+          await writer.finish();
+        } catch {
+          // The writer's selected or drop terminal reports completion failure independently.
+        }
       }
     },
     abort,

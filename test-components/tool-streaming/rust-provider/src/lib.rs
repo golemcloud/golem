@@ -1003,7 +1003,6 @@ impl Streaming for StreamingImpl {
         }
 
         if mode == "declared-error" {
-            let _ = stdout.finish().await;
             return Err(StreamingError::Declared {
                 bytes_read: summary.bytes_read,
             });

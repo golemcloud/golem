@@ -1346,6 +1346,65 @@ describe('tool guest exports', () => {
       expect(output.finish).toHaveBeenCalledOnce();
     });
 
+    it('default-finishes stdout before returning a declared tool error', async () => {
+      toolDefinition('stdout-declared-error')
+        .body((body) =>
+          body
+            .stdout({ required: true })
+            .returns(z.void())
+            .error('declared', { kind: 'runtime', exitCode: 1 }),
+        )
+        .implement({
+          'stdout-declared-error': async (_, context) => {
+            await context.stdout.getWriter().write(Uint8Array.of(1, 2, 3));
+            return err('declared');
+          },
+        });
+
+      const output = stdoutWriter();
+      await expect(
+        tool.invoke(
+          'stdout-declared-error',
+          [],
+          invocationInput('stdout-declared-error'),
+          undefined,
+          output,
+          { tag: 'anonymous' },
+        ),
+      ).rejects.toMatchObject({ tag: 'custom-error' });
+      expect(output.write).toHaveBeenCalledWith(Uint8Array.of(1, 2, 3));
+      expect(output.finish).toHaveBeenCalledOnce();
+      expect(output.fail).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: 'success', outcome: ok(undefined), expected: 'success' },
+      { name: 'declared error', outcome: err('declared'), expected: 'custom-error' },
+    ])('preserves $name when implicit stdout finish fails', async ({ name, outcome, expected }) => {
+      const toolName = `stdout-finish-failure-${name.replace(' ', '-')}`;
+      toolDefinition(toolName)
+        .body((body) =>
+          body
+            .stdout({ required: true })
+            .returns(z.void())
+            .error('declared', { kind: 'runtime', exitCode: 1 }),
+        )
+        .implement({ [toolName]: async () => outcome });
+
+      const output = stdoutWriter();
+      output.finish.mockRejectedValue({ tag: 'concurrent-operation' });
+      const invocation = tool.invoke(toolName, [], invocationInput(toolName), undefined, output, {
+        tag: 'anonymous',
+      });
+      if (expected === 'success') {
+        await expect(invocation).resolves.toEqual({ result: undefined });
+      } else {
+        await expect(invocation).rejects.toMatchObject({ tag: expected });
+      }
+      expect(output.finish).toHaveBeenCalledOnce();
+      expect(output.fail).not.toHaveBeenCalled();
+    });
+
     it('errors when stdin yields an empty chunk', async () => {
       async function* invalidInput() {
         yield { tag: 'ok' as const, val: new Uint8Array() };

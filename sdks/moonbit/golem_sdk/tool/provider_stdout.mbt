@@ -285,30 +285,28 @@ pub async fn invoke_with_stdout(
       raise error
     }
   }
-  let reason = match result {
-    Ok(_) => None
-    Err(_) => Some(ToolStreamError::Failed("tool invocation failed"))
-  }
-  @async-core.protect_from_cancel(() => stdout.complete(reason)) catch {
+  @async-core.protect_from_cancel(() => stdout.complete(None)) catch {
     error =>
-      match result {
-        Ok(value) => {
+      match (error, result) {
+        (@async-core.Cancelled::Cancelled, Ok(value)) => {
           match @toolCore.decode_invocation_result(value) {
             Ok(decoded) => @toolCore.drop_invocation_result(decoded)
             Err(_) => ()
           }
           raise error
         }
-        Err(@types.ToolError::CustomError(payload)) if error
-          is @async-core.Cancelled::Cancelled => {
+        (
+          @async-core.Cancelled::Cancelled,
+          Err(@types.ToolError::CustomError(payload)),
+        ) => {
           match @toolCore.decode_typed_value(payload.payload, "tool error") {
             Ok(decoded) => @model.drop_owned_capabilities(decoded.value)
             Err(_) => ()
           }
           raise error
         }
-        Err(_) if error is @async-core.Cancelled::Cancelled => raise error
-        Err(_) => ()
+        (@async-core.Cancelled::Cancelled, Err(_)) => raise error
+        _ => ()
       }
   }
   result

@@ -3,6 +3,13 @@
 struct MoonBitStreaming {}
 
 ///|
+#derive.golem_schema
+enum MoonBitStreamingError {
+  #derive.error(kind="runtime-error", exit_code="1")
+  Expected(String)
+}
+
+///|
 pub async fn MoonBitStreaming::stdout_only(
   stdout : @tool.ProviderStdout,
 ) -> UInt64 {
@@ -10,6 +17,16 @@ pub async fn MoonBitStreaming::stdout_only(
     abort("MoonBit stdout-only write failed")
   }
   73UL
+}
+
+///|
+pub async fn MoonBitStreaming::declared_stdout(
+  stdout : @tool.ProviderStdout,
+) -> Result[UInt64, MoonBitStreamingError] {
+  guard stdout.write_all_bytes(b"moonbit-declared:") else {
+    abort("MoonBit declared-error stdout write failed")
+  }
+  Err(Expected("expected"))
 }
 
 ///|
@@ -123,6 +140,38 @@ pub async fn MoonBitToolStreamingCaller::explicit_stdout_failure(
     Err(@tool.ToolError::Tool(_)) => "tool-error"
     Err(@tool.ToolError::UnknownToolError(name, _)) =>
       "unknown-tool-error:" + name
+    Ok(_) => "ok"
+  }
+  stdout_terminal + ":" + result_terminal
+}
+
+///|
+pub async fn MoonBitToolStreamingCaller::declared_error_completion(
+  self : Self,
+) -> String {
+  ignore(self)
+  let client = MoonbitStreamingClient::new()
+  defer client.drop()
+  let invocation = match client.declared_stdout() {
+    Ok(invocation) => invocation
+    Err(_) => abort("failed to start MoonBit declared-error tool")
+  }
+  defer invocation.drop()
+  let output = match invocation.stdout.read(65536) {
+    Some(bytes) => Bytes::from_array(bytes)
+    None => abort("MoonBit declared-error stdout closed before partial output")
+  }
+  guard output == b"moonbit-declared:" else {
+    abort("unexpected MoonBit declared-error partial output")
+  }
+  let stdout_terminal = match invocation.stdout.read(1) {
+    None => "finished"
+    Some(_) => "data"
+  }
+  let result_terminal = match invocation.get() {
+    Err(@tool.ToolError::Tool(Expected(message))) => "declared:" + message
+    Err(@tool.ToolError::Rpc(_)) => "unexpected:rpc"
+    Err(@tool.ToolError::UnknownToolError(name, _)) => "unexpected:" + name
     Ok(_) => "ok"
   }
   stdout_terminal + ":" + result_terminal
