@@ -36,19 +36,19 @@ pub fn handle_selected_preflight(
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     use super::{RichRouteBehaviour, RichRouteSecurity};
     let requested_method = requested_preflight_method(&request.underlying)?;
-    let parameters = match &selected.route.behavior {
-        RichRouteBehaviour::CallAgent(agent) => agent.method_parameters.as_slice(),
-        _ => &[],
+    let (body, parameters) = match &selected.route.behavior {
+        RichRouteBehaviour::CallAgent(agent) => (&agent.body, agent.method_parameters.as_slice()),
+        _ => (
+            &golem_service_base::custom_api::RequestBodySchema::Unused,
+            &[] as &[_],
+        ),
     };
     let session = match &selected.route.security {
         RichRouteSecurity::SessionFromHeader(s) => Some(s.header_name.as_str()),
         _ => None,
     };
-    let mut allowed_headers = golem_service_base::custom_api::cors_allowed_request_headers(
-        &selected.route.body,
-        parameters,
-        session,
-    );
+    let mut allowed_headers =
+        golem_service_base::custom_api::cors_allowed_request_headers(body, parameters, session);
     match &selected.route.behavior {
         RichRouteBehaviour::CallAgent(agent)
             if agent.route_mode
@@ -459,7 +459,10 @@ mod tests {
         parent.cors.allowed_patterns = vec![OriginPattern("*".into())];
         let mut typed = test_route(2, "/a/{id}", Some("POST"), "typed");
         typed.cors.allowed_patterns = vec![OriginPattern("https://typed.example".into())];
-        typed.body = RequestBodySchema::JsonBody {
+        let RouteBehaviour::CallAgent(agent) = &mut typed.behavior else {
+            unreachable!()
+        };
+        agent.body = RequestBodySchema::JsonBody {
             expected: golem_service_base::custom_api::CompiledSchema {
                 graph: golem_common::schema::SchemaGraph::anonymous(
                     golem_common::schema::SchemaType::string(),
@@ -831,7 +834,6 @@ mod tests {
                 path: vec![PathSegment::Literal {
                     value: "notes".to_string(),
                 }],
-                body: RequestBodySchema::Unused,
                 behavior: RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                     format: OpenApiSpecFormat::Json,
                     scheme: Default::default(),

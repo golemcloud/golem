@@ -15,7 +15,7 @@
 use super::RichRouteSecurity;
 use super::api_definition_lookup::{ApiDefinitionLookupError, HttpApiDefinitionsLookup};
 use super::model::RichCompiledRoute;
-use super::openapi::{Freshness, OpenApiInputs, OpenApiKey};
+use super::openapi::{OpenApiInputs, OpenApiKey};
 use crate::config::RouteResolverConfig;
 use crate::custom_api::{
     OidcCallbackBehaviour, RichRouteBehaviour, RichSecuritySchemeRouteSecurity,
@@ -29,8 +29,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_service_base::custom_api::router::Router;
 use golem_service_base::custom_api::{
-    CompiledRoutes, CorsOptions, PathSegment, RequestBodySchema, RouteMatch, RouteSecurity,
-    SecuritySchemeDetails,
+    CompiledRoutes, CorsOptions, PathSegment, RouteMatch, RouteSecurity, SecuritySchemeDetails,
 };
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -217,9 +216,8 @@ impl RouteResolver {
             };
             let lookup = self.api_definition_lookup.clone();
             let domain = domain.clone();
-            let freshness = Freshness::capture(self.generation.clone());
             let fetch = move || async move {
-                Self::fetch_and_build_domain_api(lookup, &domain, freshness)
+                Self::fetch_and_build_domain_api(lookup, &domain)
                     .await
                     .map(Arc::new)
             };
@@ -251,7 +249,6 @@ impl RouteResolver {
     async fn fetch_and_build_domain_api(
         lookup: Arc<dyn HttpApiDefinitionsLookup>,
         domain: &Domain,
-        freshness: Freshness,
     ) -> Result<DomainHttpApi, ()> {
         let compiled_routes = lookup.get(domain).await;
 
@@ -285,12 +282,7 @@ impl RouteResolver {
         let openapi_inputs = finalized_routes.iter().find_map(|route| {
             if let RichRouteBehaviour::OpenApiSpec(behavior) = &route.behavior {
                 Some(Arc::new(OpenApiInputs {
-                    key: OpenApiKey {
-                        environment_id: route.environment_id,
-                        deployment_revision: route.deployment_revision,
-                        domain: domain.clone(),
-                    },
-                    freshness: freshness.clone(),
+                    key: OpenApiKey::fresh(),
                     public_origin: behavior.scheme.origin(domain),
                     routes: finalized_routes.clone(),
                 }))
@@ -347,7 +339,6 @@ impl RouteResolver {
                 route_id: route.route_id,
                 route_match: route.route_match,
                 path: route.path,
-                body: route.body,
                 behavior: route.behavior.into(),
                 security,
                 cors: route.cors,
@@ -388,7 +379,6 @@ impl RouteResolver {
                     trailing_slash: target.trailing_slash(),
                 },
                 path: redirect_url_path_segments,
-                body: RequestBodySchema::Unused,
                 behavior: RichRouteBehaviour::OidcCallback(OidcCallbackBehaviour {
                     security_scheme: scheme.clone(),
                 }),
@@ -514,7 +504,9 @@ pub(super) mod tests {
     use golem_common::model::agent::HttpMethod;
     use golem_common::model::component::ComponentId;
     use golem_common::model::deployment::DeploymentRevision;
-    use golem_service_base::custom_api::{CompiledRoute, RouteBehaviour, WebhookCallbackBehaviour};
+    use golem_service_base::custom_api::{
+        CompiledRoute, RequestBodySchema, RouteBehaviour, WebhookCallbackBehaviour,
+    };
     use test_r::test;
 
     pub(in crate::custom_api) fn test_route(
@@ -572,6 +564,7 @@ pub(super) mod tests {
                 phantom: false,
                 method_name: "run".into(),
                 method_input: input(),
+                body: RequestBodySchema::Unused,
                 method_parameters: path
                     .split('/')
                     .filter(|segment| segment.starts_with('{'))
@@ -626,7 +619,6 @@ pub(super) mod tests {
                     }
                 })
                 .collect(),
-            body: RequestBodySchema::Unused,
             behavior,
             security: RouteSecurity::None,
             cors: CorsOptions {
@@ -659,7 +651,6 @@ pub(super) mod tests {
             let api = RouteResolver::fetch_and_build_domain_api(
                 Arc::new(RoutesLookup(std::sync::Mutex::new(Some(compiled)))),
                 &domain,
-                Freshness::capture(Arc::new(AtomicU64::new(0))),
             )
             .await
             .unwrap();
@@ -1123,7 +1114,6 @@ pub(super) mod tests {
                         .cloned()
                         .map(|value| PathSegment::Literal { value })
                         .collect(),
-                    body: RequestBodySchema::Unused,
                     behavior: RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
                         component_id: ComponentId(uuid::Uuid::nil()),
                     }),

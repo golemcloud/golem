@@ -1,18 +1,24 @@
 use super::*;
-use futures::Stream;
+use async_trait::async_trait;
+use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::common::{Empty, EnvironmentId, Uuid};
 use golem_api_grpc::proto::golem::component::ComponentId;
-use golem_api_grpc::proto::golem::schema::{ListValue, SchemaValueStreamReference};
+use golem_api_grpc::proto::golem::schema::{
+    ListValue, SchemaValue, SchemaValueStreamReference, schema_value,
+};
 use golem_api_grpc::proto::golem::worker::{
-    AgentId as ProtoAgentId, DurableStreamHandle, IdempotencyKey, InputStreamAck,
-    InputStreamHighWater, InvocationFailure, InvocationFailureKind, InvocationRejected,
-    InvocationRejectionReason, InvocationResponse, InvocationSessionCompletion, OutputStreamEnd,
-    OutputStreamItem, StreamInvocationIdentity,
+    AgentId as ProtoAgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey,
+    InputStreamAck, InputStreamHighWater, InvocationAccepted, InvocationFailure,
+    InvocationFailureKind, InvocationRejected, InvocationRejectionReason, InvocationRequest,
+    InvocationResponse, InvocationSessionCompletion, OutputStreamEnd, OutputStreamItem,
+    ResumeAttach, ResumeOperation, StreamCancelReason, StreamCancelRole, StreamInvocationIdentity,
+    StreamMappingRole, input_stream_item, invocation_request, invocation_response,
 };
 use golem_api_grpc::proto::golem::worker::{
     invocation_session_completion, invocation_session_result,
 };
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
@@ -20,6 +26,9 @@ use tokio::sync::{Mutex, Semaphore, mpsc};
 use tokio::time::{Duration, timeout};
 use tonic::Status;
 
+use crate::service::worker::{
+    InvocationRequestStream, InvocationResponseStream, WorkerServiceError,
+};
 use test_r::{test, timeout as test_timeout};
 
 type ResponseSender = mpsc::Sender<Result<InvocationResponse, Status>>;
@@ -327,6 +336,18 @@ fn response(value: invocation_response::Response) -> InvocationResponse {
         response: Some(value),
     }
 }
+fn rejected(reason: InvocationRejectionReason) -> InvocationResponse {
+    response(invocation_response::Response::Rejected(
+        InvocationRejected {
+            reason: reason as i32,
+            error: format!("{reason:?}"),
+            idempotency_key: Some(key()),
+            agent_id: Some(proto_agent()),
+            component_revision: Some(12),
+            worker_error: None,
+        },
+    ))
+}
 fn offset(n: u64) -> Vec<u8> {
     let mut v = vec![0; 24];
     v[0] = 1;
@@ -594,6 +615,149 @@ async fn lost_ack_resume_high_water_suppresses_only_persisted_frames() {
             .await
             .is_err()
     );
+}
+
+#[test]
+#[test_timeout("10s")]
+async fn lost_resume_acceptance_replays_the_exact_attempt() {
+    let mut h = harness(3);
+    let mut session =
+        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+    let Call::Start(_, _) = call(&mut h.calls).await else {
+        panic!()
+    };
+    send(&h.response_txs[0], accepted(1, None)).await;
+    let _ = event(&mut session).await;
+    drop(h.response_txs.remove(0));
+
+    let Call::Resume(first, _) = call(&mut h.calls).await else {
+        panic!()
+    };
+    assert_eq!(first.operation(), ResumeOperation::Resume);
+    // The executor accepted this attempt, but its reply was lost with the transport.
+    drop(h.response_txs.remove(0));
+    let Call::Resume(replayed, mut tail) = call(&mut h.calls).await else {
+        panic!()
+    };
+    assert_eq!(*replayed, *first);
+    send(&h.response_txs[0], resumed_accepted(&replayed, None)).await;
+    session.input.dispose().await.unwrap();
+    assert!(matches!(
+        input(tail.next().await.unwrap()),
+        invocation_request::Request::StreamCancel(_)
+    ));
+    send(&h.response_txs[0], scalar_result()).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Result(_)
+    ));
+    send(&h.response_txs[0], finished()).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Finished(_)
+    ));
+}
+
+#[test]
+#[test_timeout("10s")]
+async fn definite_attached_rejection_switches_resume_to_takeover() {
+    let mut h = harness(3);
+    let mut session =
+        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+    let Call::Start(_, _) = call(&mut h.calls).await else {
+        panic!()
+    };
+    send(&h.response_txs[0], accepted(1, None)).await;
+    let _ = event(&mut session).await;
+    drop(h.response_txs.remove(0));
+
+    let Call::Resume(resume, _) = call(&mut h.calls).await else {
+        panic!()
+    };
+    assert_eq!(resume.operation(), ResumeOperation::Resume);
+    send(
+        &h.response_txs[0],
+        rejected(InvocationRejectionReason::InvalidAttachmentState),
+    )
+    .await;
+    let Call::Resume(takeover, mut tail) = call(&mut h.calls).await else {
+        panic!()
+    };
+    assert_eq!(takeover.operation(), ResumeOperation::Takeover);
+    assert_ne!(takeover.attempt_id, resume.attempt_id);
+    assert_eq!(takeover.expected_epoch, resume.expected_epoch);
+    send(&h.response_txs[1], resumed_accepted(&takeover, None)).await;
+    session.input.dispose().await.unwrap();
+    assert!(matches!(
+        input(tail.next().await.unwrap()),
+        invocation_request::Request::StreamCancel(_)
+    ));
+    send(&h.response_txs[1], scalar_result()).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Result(_)
+    ));
+    send(&h.response_txs[1], finished()).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Finished(_)
+    ));
+}
+
+#[test]
+#[test_timeout("10s")]
+async fn definite_takeover_rejection_switches_back_to_resume_without_changing_epoch() {
+    let mut h = harness(4);
+    let mut session =
+        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+    let Call::Start(_, _) = call(&mut h.calls).await else {
+        panic!()
+    };
+    send(&h.response_txs[0], accepted(1, None)).await;
+    let _ = event(&mut session).await;
+    drop(h.response_txs.remove(0));
+
+    let Call::Resume(resume, _) = call(&mut h.calls).await else {
+        panic!()
+    };
+    send(
+        &h.response_txs[0],
+        rejected(InvocationRejectionReason::InvalidAttachmentState),
+    )
+    .await;
+    let Call::Resume(takeover, _) = call(&mut h.calls).await else {
+        panic!()
+    };
+    assert_eq!(takeover.operation(), ResumeOperation::Takeover);
+    send(
+        &h.response_txs[1],
+        rejected(InvocationRejectionReason::InvalidAttachmentState),
+    )
+    .await;
+    let Call::Resume(retry, mut tail) = call(&mut h.calls).await else {
+        panic!()
+    };
+    assert_eq!(retry.operation(), ResumeOperation::Resume);
+    assert_eq!(retry.expected_epoch, resume.expected_epoch);
+    assert_eq!(takeover.expected_epoch, resume.expected_epoch);
+    assert_ne!(retry.attempt_id, takeover.attempt_id);
+
+    send(&h.response_txs[2], resumed_accepted(&retry, None)).await;
+    session.input.dispose().await.unwrap();
+    assert!(matches!(
+        input(tail.next().await.unwrap()),
+        invocation_request::Request::StreamCancel(_)
+    ));
+    send(&h.response_txs[2], scalar_result()).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Result(_)
+    ));
+    send(&h.response_txs[2], finished()).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Finished(_)
+    ));
 }
 
 #[test]

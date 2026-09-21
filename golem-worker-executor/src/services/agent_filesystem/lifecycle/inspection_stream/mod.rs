@@ -89,7 +89,12 @@ struct ProducerGuard(Arc<Completion>);
 
 impl Drop for ProducerGuard {
     fn drop(&mut self) {
-        self.0.finish(State::Aborted(FileReadError::Lifecycle));
+        let mut state = self.0.state.lock().unwrap();
+        if *state == State::Streaming {
+            *state = State::Aborted(FileReadError::Lifecycle);
+            drop(state);
+            self.0.consumer.wake();
+        }
     }
 }
 
@@ -140,8 +145,8 @@ impl Drop for ReadBody {
 }
 
 /// The invocation loop awaits this while holding the resident Store and exclusive OwnerLane.
-/// The future does not finish on last-byte enqueue: it keeps that serialization scope until
-/// the consumer polls EOF, drops the body, or an I/O failure wins.
+/// Ownership is released after all selected bytes have been copied into the bounded response;
+/// mutable filesystem work cannot overlap production, but does not wait for consumer-observed EOF.
 /// No producer task is spawned, and file length is never converted to a host-sized allocation.
 pub(crate) async fn produce_file_read<Adapter: SandboxFilesystemAdapter>(
     handle: &FilesystemGenerationHandle<Adapter>,
@@ -236,7 +241,6 @@ pub(crate) async fn produce_file_read<Adapter: SandboxFilesystemAdapter>(
             }
         }
         drop(sender);
-        producer_completion.wait_for_consumer().await;
     };
     tokio::select! {
         _ = completion.wait_for_consumer() => {},

@@ -274,7 +274,6 @@ fn call_agent_route(
         route_id: 0,
         route_match: test_route_match(method),
         path,
-        body,
         behavior: RichRouteBehaviour::CallAgent(CallAgentBehaviour {
             route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
             base_path_variables: 0,
@@ -293,6 +292,7 @@ fn call_agent_route(
                 graph: SchemaGraph::empty(),
                 input_schema: InputSchema::Parameters(vec![]),
             },
+            body,
             method_parameters,
             expected_agent_response: response,
             method_description,
@@ -1858,7 +1858,6 @@ fn call_agent_operation_has_id_and_description() {
 fn raw_route(
     method: Method,
     path: Vec<PathSegment>,
-    body: RequestBodySchema,
     behavior: RichRouteBehaviour,
 ) -> RichCompiledRoute {
     RichCompiledRoute {
@@ -1869,7 +1868,6 @@ fn raw_route(
         route_id: 0,
         route_match: test_route_match(method),
         path,
-        body,
         behavior,
         security: RichRouteSecurity::None,
         cors: CorsOptions {
@@ -1909,7 +1907,6 @@ fn webhook_route_emits_204_404_and_promise_id_param() {
                     display_name: "promise-id".to_string(),
                 },
             ],
-            unrestricted_binary(),
             RichRouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
                 component_id: ComponentId::new(),
             }),
@@ -1919,6 +1916,21 @@ fn webhook_route_emits_204_404_and_promise_id_param() {
     );
     assert!(op["responses"]["204"].is_object());
     assert!(op["responses"]["404"].is_object());
+    assert_eq!(
+        op["requestBody"],
+        json!({
+            "description": "Unrestricted binary body",
+            "required": true,
+            "content": {
+                "*/*": {
+                    "schema": {
+                        "type": "string",
+                        "format": "binary"
+                    }
+                }
+            }
+        })
+    );
     let params = op["parameters"].as_array().expect("parameters");
     let promise = params
         .iter()
@@ -1938,7 +1950,6 @@ fn openapi_spec_route_returns_object_with_additional_properties() {
             vec![PathSegment::Literal {
                 value: "openapi.json".to_string(),
             }],
-            RequestBodySchema::Unused,
             RichRouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                 format: OpenApiSpecFormat::Json,
                 scheme: Default::default(),
@@ -2140,7 +2151,6 @@ fn cors_preflight_emits_204_and_cors_headers() {
             vec![PathSegment::Literal {
                 value: "cors".to_string(),
             }],
-            RequestBodySchema::Unused,
             RichRouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
                 method_policies: vec![CorsPreflightMethodPolicy {
                     method: HttpMethod::Get(Empty {}),

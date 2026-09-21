@@ -26,7 +26,6 @@ use crate::model::public_oplog::{
 };
 use crate::model::{LastError, LookupResult};
 use crate::services::events::Event;
-use crate::services::file_read_admission::FileReadAdmission;
 use crate::services::rpc::DurableStreamReadError;
 use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
 use crate::services::worker_activator::{
@@ -121,7 +120,6 @@ pub struct WorkerExecutorImpl<
 > {
     /// Reference to all the initialized services
     services: Svcs,
-    file_reads: Arc<FileReadAdmission>,
     /// Holds the strong Arc to the worker activator so the Weak reference
     /// stored in LazyWorkerActivator remains valid while the gRPC server runs.
     _worker_activator: Arc<dyn WorkerActivator<Ctx>>,
@@ -137,7 +135,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     fn clone(&self) -> Self {
         Self {
             services: self.services.clone(),
-            file_reads: self.file_reads.clone(),
             _worker_activator: self._worker_activator.clone(),
             _assignment_changed_hook: self._assignment_changed_hook.clone(),
             ctx: PhantomData,
@@ -185,7 +182,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker_executor = WorkerExecutorImpl {
             services: services.clone(),
-            file_reads: Arc::new(FileReadAdmission::from(&services.config().file_read)),
             _worker_activator: worker_activator,
             _assignment_changed_hook: assignment_changed_hook.clone(),
             ctx: PhantomData,
@@ -1847,12 +1843,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
-        let reservation = match self.file_reads.reserve(owned_agent_id) {
-            Ok(reservation) => reservation,
-            Err(error) => return Ok(Err(error)),
-        };
         let worker = self.get_or_create(&request).await?;
-        Ok(worker.read_file(path, selection, reservation).await)
+        Ok(worker.read_file(path, selection).await)
     }
 
     async fn activate_plugin_internal(

@@ -29,11 +29,21 @@ pub struct AgentDefinitionAttributes {
     pub snapshotting_enabled: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AgentDefinitionKind {
+    Regular,
+    HttpRouter,
+}
+
 pub fn parse_agent_definition_attributes(
     attrs: TokenStream,
+    definition_kind: AgentDefinitionKind,
 ) -> Result<AgentDefinitionAttributes, Error> {
     let mut name = None;
-    let mut kind = syn::parse_quote!(Regular);
+    let kind = match definition_kind {
+        AgentDefinitionKind::Regular => syn::parse_quote!(Regular),
+        AgentDefinitionKind::HttpRouter => syn::parse_quote!(HttpRouter),
+    };
     let mut mode = quote! {
         golem_rust::golem_agentic::golem::agent::common::AgentMode::Durable
     };
@@ -149,33 +159,6 @@ pub fn parse_agent_definition_attributes(
                     return Err(Error::new_spanned(
                         &assign.right,
                         "mode must be a string literal",
-                    ));
-                }
-            }
-
-            if left.path.is_ident("kind") {
-                if let Expr::Lit(ExprLit {
-                    lit: Lit::Str(lit), ..
-                }) = &*assign.right
-                {
-                    kind = match lit.value().as_str() {
-                        "regular" => syn::parse_quote!(Regular),
-                        "http-router" => syn::parse_quote!(HttpRouter),
-                        other => {
-                            return Err(Error::new_spanned(
-                                lit,
-                                format!(
-                                    "invalid agent kind `{}`. Valid values are: regular, http-router",
-                                    other
-                                ),
-                            ));
-                        }
-                    };
-                    continue;
-                } else {
-                    return Err(Error::new_spanned(
-                        &assign.right,
-                        "kind must be a string literal",
                     ));
                 }
             }
@@ -433,7 +416,7 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
 
     Err(Error::new_spanned(
         expr,
-        "Unknown agent_definition parameter. Valid parameters are: name, kind, mode, snapshotting, mount, auth, phantom_agent, cors, webhook_suffix, static_files, filesystem_bindings, openapi_provider_method",
+        "Unknown agent_definition parameter. Valid parameters are: name, mode, snapshotting, mount, auth, phantom_agent, cors, webhook_suffix, static_files, filesystem_bindings, openapi_provider_method",
     ))
 }
 
@@ -633,18 +616,39 @@ mod tests {
 
     #[test]
     fn exposure_mount_and_owner_diagnostics() {
-        for attrs in [
-            quote! { kind = "http-router", mount = "/" },
-            quote! { kind = "http-router", ephemeral, mount = "/", snapshotting = "enabled" },
-            quote! { kind = "http-router", ephemeral, mount = "/{id}" },
-            quote! { ephemeral, mount = "/files", filesystem_bindings = [("/*", "/public/$1")] },
-            quote! { phantom_agent = true, mount = "/files", filesystem_bindings = [("/*", "/public/$1")] },
-            quote! { mount = "/files//", filesystem_bindings = [("/*", "/public/$1")] },
-            quote! { mount = "/files/*", filesystem_bindings = [("/*", "/public/$1")] },
-            quote! { mount = "/", filesystem_bindings = [("/*", "/a/$1")], filesystem_bindings = [] },
+        for (kind, attrs) in [
+            (AgentDefinitionKind::HttpRouter, quote! { mount = "/" }),
+            (
+                AgentDefinitionKind::HttpRouter,
+                quote! { ephemeral, mount = "/", snapshotting = "enabled" },
+            ),
+            (
+                AgentDefinitionKind::HttpRouter,
+                quote! { ephemeral, mount = "/{id}" },
+            ),
+            (
+                AgentDefinitionKind::Regular,
+                quote! { ephemeral, mount = "/files", filesystem_bindings = [("/*", "/public/$1")] },
+            ),
+            (
+                AgentDefinitionKind::Regular,
+                quote! { phantom_agent = true, mount = "/files", filesystem_bindings = [("/*", "/public/$1")] },
+            ),
+            (
+                AgentDefinitionKind::Regular,
+                quote! { mount = "/files//", filesystem_bindings = [("/*", "/public/$1")] },
+            ),
+            (
+                AgentDefinitionKind::Regular,
+                quote! { mount = "/files/*", filesystem_bindings = [("/*", "/public/$1")] },
+            ),
+            (
+                AgentDefinitionKind::Regular,
+                quote! { mount = "/", filesystem_bindings = [("/*", "/a/$1")], filesystem_bindings = [] },
+            ),
         ] {
             assert!(
-                parse_agent_definition_attributes(attrs.clone()).is_err(),
+                parse_agent_definition_attributes(attrs.clone(), kind).is_err(),
                 "{attrs}"
             );
         }
@@ -652,5 +656,20 @@ mod tests {
         let compiled = compile_exposure_mount(&mount, true).unwrap().to_string();
         assert!(compiled.contains("\"files\""));
         assert!(!compiled.contains("%66"));
+    }
+
+    #[test]
+    fn public_agent_definition_rejects_kind() {
+        let error = parse_agent_definition_attributes(
+            quote! { kind = "http-router" },
+            AgentDefinitionKind::Regular,
+        )
+        .err()
+        .expect("kind must not be publicly settable");
+        assert!(
+            error
+                .to_string()
+                .contains("Unknown agent_definition parameter")
+        );
     }
 }

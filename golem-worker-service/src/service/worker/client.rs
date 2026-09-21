@@ -3688,11 +3688,7 @@ mod file_read_tests {
                 Err(WorkerServiceError::FileRead(FileReadError::InvalidResponse))
             ));
         }
-        for error in [
-            FileReadError::ResourceExhausted,
-            FileReadError::Storage,
-            FileReadError::Lifecycle,
-        ] {
+        for error in [FileReadError::Storage, FileReadError::Lifecycle] {
             let response = decode_file_read_response(
                 futures::stream::iter([frame(Frame::ReadFailure(
                     golem_api_grpc::proto::golem::worker::FileReadError::from(error) as i32,

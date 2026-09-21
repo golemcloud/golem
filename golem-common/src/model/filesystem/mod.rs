@@ -56,8 +56,6 @@ pub enum FileReadError {
     InvalidTarget,
     #[error("Invalid byte selection")]
     InvalidSelection,
-    #[error("Filesystem read admission exhausted")]
-    ResourceExhausted,
     #[error("Agent lifecycle operation failed")]
     Lifecycle,
     #[error("Filesystem storage operation failed")]
@@ -71,7 +69,6 @@ impl crate::metrics::api::ApiErrorDetails for FileReadError {
         match self {
             Self::InvalidTarget => "InvalidTarget",
             Self::InvalidSelection => "InvalidSelection",
-            Self::ResourceExhausted => "ResourceExhausted",
             Self::Lifecycle => "Lifecycle",
             Self::Storage => "Storage",
             Self::InvalidResponse => "InvalidResponse",
@@ -79,10 +76,7 @@ impl crate::metrics::api::ApiErrorDetails for FileReadError {
     }
 
     fn is_expected(&self) -> bool {
-        matches!(
-            self,
-            Self::InvalidTarget | Self::InvalidSelection | Self::ResourceExhausted
-        )
+        matches!(self, Self::InvalidTarget | Self::InvalidSelection)
     }
 
     fn take_cause(&mut self) -> Option<anyhow::Error> {
@@ -95,7 +89,6 @@ impl From<FileReadError> for proto::FileReadError {
         match value {
             FileReadError::InvalidTarget => Self::InvalidTarget,
             FileReadError::InvalidSelection => Self::InvalidSelection,
-            FileReadError::ResourceExhausted => Self::ResourceExhausted,
             FileReadError::Lifecycle => Self::Lifecycle,
             FileReadError::Storage => Self::Storage,
             FileReadError::InvalidResponse => Self::InvalidResponse,
@@ -110,7 +103,6 @@ impl TryFrom<i32> for FileReadError {
         match proto::FileReadError::try_from(value) {
             Ok(proto::FileReadError::InvalidTarget) => Ok(Self::InvalidTarget),
             Ok(proto::FileReadError::InvalidSelection) => Ok(Self::InvalidSelection),
-            Ok(proto::FileReadError::ResourceExhausted) => Ok(Self::ResourceExhausted),
             Ok(proto::FileReadError::Lifecycle) => Ok(Self::Lifecycle),
             Ok(proto::FileReadError::Storage) => Ok(Self::Storage),
             Ok(proto::FileReadError::InvalidResponse) => Ok(Self::InvalidResponse),

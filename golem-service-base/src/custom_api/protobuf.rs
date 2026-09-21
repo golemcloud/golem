@@ -149,7 +149,6 @@ impl TryFrom<proto::golem::customapi::CompiledRoute> for CompiledRoute {
             route_id: value.route_id,
             route_match,
             path,
-            body: value.body.ok_or("Missing body")?.try_into()?,
             behavior,
             security: value.security.ok_or("Missing security")?.try_into()?,
             cors: value.cors.ok_or("Missing cors")?.try_into()?,
@@ -163,7 +162,6 @@ impl From<CompiledRoute> for proto::golem::customapi::CompiledRoute {
             route_id: value.route_id,
             route_match: Some(value.route_match.into()),
             path: value.path.into_iter().map(Into::into).collect(),
-            body: Some(value.body.into()),
             behavior: Some(value.behavior.into()),
             security: Some(value.security.into()),
             cors: Some(value.cors.into()),
@@ -255,6 +253,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .method_input
                     .ok_or("Missing method_input")?
                     .try_into()?,
+                body: call_agent.body.ok_or("Missing body")?.try_into()?,
                 method_parameters: call_agent
                     .method_parameters
                     .into_iter()
@@ -445,6 +444,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 phantom,
                 method_name,
                 method_input,
+                body,
                 method_parameters,
                 expected_agent_response,
                 method_description,
@@ -469,6 +469,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                         phantom,
                         method_name,
                         method_input: Some(method_input.into()),
+                        body: Some(body.into()),
                         method_parameters: method_parameters.into_iter().map(Into::into).collect(),
                         expected_agent_response: Some(expected_agent_response.into()),
                         method_description,
@@ -1184,7 +1185,6 @@ mod tests {
             route_id: 19,
             route_match: RouteMatch::MountPrefix,
             path,
-            body: RequestBodySchema::Unused,
             behavior,
             security: RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
                 header_name: "x-session".into(),

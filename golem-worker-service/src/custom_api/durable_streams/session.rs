@@ -53,7 +53,7 @@ impl DurableStreamsHandler {
         agent_id: &AgentId,
         session: &str,
     ) -> Result<CreateStreamSessionSuccess, RequestHandlerError> {
-        let body = request.parse_request_body(&route.route.body).await?;
+        let body = request.parse_request_body(&behaviour.body).await?;
         let args = self
             .call_agent
             .resolve_method_arguments(route, request, behaviour, body)?;

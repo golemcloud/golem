@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::agentic::agent_definition_attributes::{
-    AgentDefinitionAttributes, parse_agent_definition_attributes,
+    AgentDefinitionAttributes, AgentDefinitionKind, parse_agent_definition_attributes,
 };
 use crate::agentic::agent_definition_http_endpoint::{
     ParsedHttpEndpointDetails, extract_http_endpoints,
@@ -37,7 +37,18 @@ use syn::spanned::Spanned;
 use syn::visit_mut::VisitMut;
 
 pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStream {
-    let mut agent_definition_trait = syn::parse_macro_input!(item as ItemTrait);
+    expand_agent_definition(attrs.into(), item.into(), AgentDefinitionKind::Regular).into()
+}
+
+pub(crate) fn expand_agent_definition(
+    attrs: proc_macro2::TokenStream,
+    item: proc_macro2::TokenStream,
+    definition_kind: AgentDefinitionKind,
+) -> proc_macro2::TokenStream {
+    let mut agent_definition_trait = match syn::parse2::<ItemTrait>(item) {
+        Ok(item) => item,
+        Err(error) => return error.to_compile_error(),
+    };
 
     let AgentDefinitionAttributes {
         name,
@@ -48,9 +59,9 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         http_mount,
         snapshotting,
         snapshotting_enabled,
-    } = match parse_agent_definition_attributes(attrs.into()) {
+    } = match parse_agent_definition_attributes(attrs, definition_kind) {
         Ok(v) => v,
-        Err(err) => return err.to_compile_error().into(),
+        Err(err) => return err.to_compile_error(),
     };
 
     if let Err(error) = validate_http_constructor(
@@ -58,7 +69,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
         &agent_kind,
         filesystem_mount.as_ref(),
     ) {
-        return error.to_compile_error().into();
+        return error.to_compile_error();
     }
     let type_name = name
         .map(|name| name.value())
@@ -72,7 +83,7 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
     let has_async_trait_attribute = agent_definition_trait.attrs.iter().any(is_async_trait_attr);
 
     if has_async_trait_attribute {
-        return async_trait_in_agent_definition_error(&agent_definition_trait).into();
+        return async_trait_in_agent_definition_error(&agent_definition_trait);
     }
 
     match get_agent_type_with_remote_client(
@@ -143,10 +154,10 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
                 #remote_client
             };
 
-            result.into()
+            result
         }
 
-        Err(invalid_trait_error) => invalid_trait_error,
+        Err(invalid_trait_error) => invalid_trait_error.into(),
     }
 }
 
@@ -330,7 +341,7 @@ fn get_agent_type_with_remote_client(
             if kind_value == "Regular" && parsed_endpoint_details.iter().any(|endpoint| endpoint.http_method == "any") {
                 return Some(syn::Error::new_spanned(
                     &trait_fn.sig.ident,
-                    "ANY endpoints require kind = \"http-router\"",
+                    "ANY endpoints require an HTTP router defined with #[http_router]",
                 ).to_compile_error());
             }
 

@@ -20,12 +20,11 @@ use golem_common::model::{AgentId, OplogIndex, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_service_base::model::FileReadResponse;
 use golem_test_framework::dsl::{TestDsl, count_agent_invocation_pair_since};
-use golem_worker_executor::services::file_read_admission::FileReadAdmission;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    start_with_concurrent_agent_limit,
 };
 use serde_json::Value;
-use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::StreamExt;
@@ -226,7 +225,22 @@ async fn live_file_inspection_initializer_failure_is_not_a_miss(
         golem_common::model::AgentStatus::Failed,
         "{id}"
     );
+    let before_rejected_read = executor.oplog_max_index(&agent).await?;
+    let error = executor
+        .get_file_contents(&agent, "/a.txt")
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("PreviousInvocationFailed")
+            && error.to_string().contains("inspection initializer failed"),
+        "{id}: {error}"
+    );
     let oplog = executor.get_oplog(&agent, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        count_agent_invocation_pair_since(&oplog, before_rejected_read),
+        (0, 0),
+        "{id}: failed status admitted another filesystem operation"
+    );
     assert!(
         oplog
             .iter()
@@ -263,7 +277,6 @@ async fn live_file_inspection_corpus_byte_selections(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let admission = Arc::new(FileReadAdmission::default());
     // These are generic byte-selection expectations, not an HTTP Range parser or header test.
     for (id, selection, extent, expected) in [
         (
@@ -359,7 +372,6 @@ async fn live_file_inspection_corpus_byte_selections(
             .read_file(
                 CanonicalFilePath::from_abs_str("/a.txt").unwrap(),
                 selection,
-                admission.reserve(owned)?,
             )
             .await?;
         let FileReadHead::File(metadata) = &response.head else {
@@ -374,7 +386,7 @@ async fn live_file_inspection_corpus_byte_selections(
 
 #[test]
 #[timeout("2m")]
-async fn live_file_inspection_serializes_until_consumer_eof_and_queue_deadline(
+async fn live_file_inspection_releases_ownership_after_production(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("initial_file_system")] fixture: &PrecompiledComponent,
@@ -406,21 +418,16 @@ async fn live_file_inspection_serializes_until_consumer_eof_and_queue_deadline(
     let agent = executor.start_agent(&component.id, parsed.clone()).await?;
     let owned = OwnedAgentId::new(context.default_environment_id, &agent);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
-    let admission = Arc::new(FileReadAdmission::default());
     let target = CanonicalFilePath::from_abs_str("/a.txt").unwrap();
     let mut response = worker
-        .read_file(
-            target.clone(),
-            FileByteSelection::Full,
-            admission.reserve(owned.clone())?,
-        )
+        .read_file(target.clone(), FileByteSelection::Full)
         .await?;
     let FileReadHead::File(metadata) = &response.head else {
         panic!("{id}: {:?}", response.head)
     };
     assert_eq!(metadata.total_size, 4, "{id}");
-    // A small file fits in the producer channel. Even after its last chunk, the consumer's EOF
-    // observation, not producer enqueue completion, owns release of the serialization guard.
+    // Once the selected bytes have been copied into the bounded response, filesystem ownership
+    // is released without waiting for consumer-observed EOF.
     assert_eq!(
         response.body.next().await.unwrap()?.as_ref(),
         b"abcd",
@@ -432,31 +439,8 @@ async fn live_file_inspection_serializes_until_consumer_eof_and_queue_deadline(
         "replace",
         data_value!("/a.txt", replacement, 0u64),
     ));
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut write)
-            .await
-            .is_err(),
-        "{id}: write escaped read guard"
-    );
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while worker
-            .get_attached_last_known_status()
-            .await
-            .pending_invocations
-            .is_empty()
-        {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
-    let queued = admission.reserve(owned.clone())?;
-    let mut queued_read =
-        Box::pin(worker.read_file(target.clone(), FileByteSelection::Full, queued));
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut queued_read)
-            .await
-            .is_err()
-    );
+    tokio::time::timeout(Duration::from_secs(10), &mut write).await??;
+    let queued_read = worker.read_file(target.clone(), FileByteSelection::Full);
     assert!(response.body.next().await.is_none(), "{id}");
     let queued_response = tokio::time::timeout(Duration::from_secs(10), queued_read).await??;
     assert_eq!(
@@ -464,10 +448,7 @@ async fn live_file_inspection_serializes_until_consumer_eof_and_queue_deadline(
         bytes(vector["expect"]["response_bodies_hex"][1].as_str().unwrap()),
         "{id}"
     );
-    tokio::time::timeout(Duration::from_secs(10), write).await??;
-    let next = worker
-        .read_file(target, FileByteSelection::Full, admission.reserve(owned)?)
-        .await?;
+    let next = worker.read_file(target, FileByteSelection::Full).await?;
     let FileReadHead::File(metadata) = &next.head else {
         panic!("{id}")
     };
@@ -498,23 +479,28 @@ async fn live_file_inspection_drop_releases_update_without_changing_selected_roo
         target_path: CanonicalFilePath::from_abs_str(target).unwrap(),
         permissions: AgentFilePermissions::ReadOnly,
     };
+    let directory = tempfile::tempdir()?;
+    let large_file = directory.path().join("large.txt");
+    std::fs::write(&large_file, vec![42; 3 * 65536])?;
     let component = executor
         .component_dep(&context.default_environment_id, fixture)
-        .with_files("P3FileSystem", &[file("baz", "/selected/a.txt")])
+        .with_files(
+            "P3FileSystem",
+            &[IFSEntry {
+                source_path: large_file,
+                target_path: CanonicalFilePath::from_abs_str("/selected/a.txt").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+            }],
+        )
         .store()
         .await?;
     let parsed = agent_id!("P3FileSystem", id);
     let agent = executor.start_agent(&component.id, parsed).await?;
     let owned = OwnedAgentId::new(context.default_environment_id, &agent);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
-    let admission = Arc::new(FileReadAdmission::default());
     let target = CanonicalFilePath::from_abs_str("/selected/a.txt").unwrap();
     let response = worker
-        .read_file(
-            target.clone(),
-            FileByteSelection::Full,
-            admission.reserve(owned.clone())?,
-        )
+        .read_file(target.clone(), FileByteSelection::Full)
         .await?;
     let updated = executor
         .update_component_with_files(
@@ -533,23 +519,25 @@ async fn live_file_inspection_drop_releases_update_without_changing_selected_roo
                 .await
         })
     };
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(
+    tokio::time::timeout(Duration::from_secs(10), update).await???;
+    assert!(
         executor
-            .get_worker_metadata(&agent)
-            .await?
-            .component_revision,
-        component.revision,
-        "{id}"
+            .wait_for_component_revision(&agent, updated.revision, Duration::from_millis(200))
+            .await
+            .is_err(),
+        "{id}: update passed a backpressured file producer"
     );
     drop(response);
-    tokio::time::timeout(Duration::from_secs(10), update).await???;
+    assert_eq!(
+        executor
+            .wait_for_component_revision(&agent, updated.revision, Duration::from_secs(10))
+            .await?
+            .component_revision,
+        updated.revision,
+        "{id}"
+    );
     let next = worker
-        .read_file(
-            target.clone(),
-            FileByteSelection::Full,
-            admission.reserve(owned.clone())?,
-        )
+        .read_file(target.clone(), FileByteSelection::Full)
         .await?;
     assert_eq!(body(next).await?, b"foo\n", "{id}");
     assert_eq!(
@@ -573,9 +561,7 @@ async fn live_file_inspection_drop_releases_update_without_changing_selected_roo
     executor
         .auto_update_worker(&agent, moved.revision, false)
         .await?;
-    let missing = worker
-        .read_file(target, FileByteSelection::Full, admission.reserve(owned)?)
-        .await?;
+    let missing = worker.read_file(target, FileByteSelection::Full).await?;
     assert_eq!(missing.head, FileReadHead::Absent);
     assert!(body(missing).await?.is_empty());
     assert_eq!(
@@ -599,7 +585,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     use golem_common::model::Timestamp;
     use golem_service_base::error::worker_executor::InterruptKind;
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
     let component = executor
         .component_dep(&context.default_environment_id, fixture)
         .store()
@@ -611,11 +597,16 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         b"before"
     );
     let owned = OwnedAgentId::new(context.default_environment_id, &agent);
-    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    let worker = executor
+        .production_active_agent(&owned)
+        .await
+        .unwrap()
+        .primary();
     let before = executor.oplog_max_index(&agent).await?;
     let write = {
         let executor = executor.clone();
         let component = component.clone();
+        let parsed = parsed.clone();
         tokio::spawn(async move {
             executor
                 .invoke_and_await_agent(
@@ -642,17 +633,57 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         }
     })
     .await?;
-    let admission = Arc::new(FileReadAdmission::default());
     let mut read = Box::pin(worker.read_file(
         CanonicalFilePath::from_abs_str("/a.txt").unwrap(),
         FileByteSelection::Full,
-        admission.reserve(owned.clone())?,
     ));
     assert!(
-        tokio::time::timeout(Duration::from_millis(50), &mut read)
+        tokio::time::timeout(Duration::from_secs(1), &mut read)
             .await
-            .is_err()
+            .is_err(),
+        "read completed before the write"
     );
+
+    let final_write = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let parsed = parsed.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &parsed,
+                    "replace",
+                    data_value!("/a.txt", b"final".to_vec(), 0u64),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while worker
+            .get_attached_last_known_status()
+            .await
+            .pending_invocations
+            .is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    let permit_agent = AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Inspection", "inspection-permit-holder").to_string(),
+    };
+    let permit_waiter = executor.acquire_account_concurrent_agent_permit(permit_agent);
+    tokio::pin!(permit_waiter);
+    // Poll the waiter into the scheduler before Suspend releases this worker's permit. This makes
+    // the holder precede reconstruction in the permit scheduler without a timing sleep.
+    tokio::select! {
+        biased;
+        _ = &mut permit_waiter => panic!("permit waiter acquired while the worker was running"),
+        _ = tokio::task::yield_now() => {}
+    }
     worker
         .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
         .await;
@@ -662,17 +693,50 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         }
     })
     .await?;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), &mut read)
-            .await
-            .is_err(),
-        "queued read did not survive ordinary Suspend"
-    );
+    let held_permit = tokio::time::timeout(Duration::from_secs(10), &mut permit_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("queued permit holder did not acquire after Suspend"))?;
     // Resume is normally driven by a scheduled wakeup; inspection cannot bypass that policy.
+    executor.resume(&agent, false).await?;
+    tokio::select! {
+        biased;
+        result = &mut read => panic!("read bypassed the concurrent-agent permit: {result:?}"),
+        _ = tokio::task::yield_now() => {}
+    }
+    assert!(
+        executor.worker_has_pending_startup(&owned).await,
+        "reconstruction must be waiting for the held concurrent-agent permit"
+    );
+    worker
+        .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
+        .await;
+    assert!(
+        executor.worker_has_pending_startup(&owned).await,
+        "Suspend waits for normal permit wakeup before startup can process it"
+    );
+    drop(held_permit);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_has_pending_startup(&owned).await
+            || executor.worker_is_loaded(&owned).await
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    tokio::select! {
+        biased;
+        result = &mut read => panic!("permit-wait Suspend discarded the read: {result:?}"),
+        _ = tokio::task::yield_now() => {}
+    }
     executor.resume(&agent, false).await?;
     let response = tokio::time::timeout(Duration::from_secs(20), read).await??;
     assert_eq!(body(response).await?, b"after");
     write.await??;
+    final_write.await??;
+    assert_eq!(
+        executor.get_file_contents(&agent, "/a.txt").await?.as_ref(),
+        b"final"
+    );
     let oplog = executor.get_oplog(&agent, before.next()).await?;
     assert!(
         oplog
@@ -680,7 +744,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_))),
         "test must exercise real Suspend before inspection"
     );
-    assert_eq!(count_agent_invocation_pair_since(&oplog, before), (1, 1));
+    assert_eq!(count_agent_invocation_pair_since(&oplog, before), (2, 2));
     Ok(())
 }
 

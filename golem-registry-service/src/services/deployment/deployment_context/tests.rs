@@ -573,7 +573,6 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
                     display_name: "promise-id".into(),
                 },
             ],
-            body: golem_service_base::custom_api::RequestBodySchema::Unused,
             behaviour: RouteBehaviour::WebhookCallback(
                 golem_service_base::custom_api::WebhookCallbackBehaviour {
                     component_id: ComponentId::new(),

@@ -23,7 +23,7 @@ mod tests {
         AgentStream, AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
         UnstructuredBinary, UnstructuredText,
     };
-    use golem_rust::agentic::{Principal, create_webhook};
+    use golem_rust::agentic::{HttpRequest, HttpResponse, HttpRouter, Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
         AgentConfigDeclaration, AgentConfigSource, AgentMode, AgentType, AgentTypeKind,
         CachePolicy, Snapshotting, SnapshottingConfig,
@@ -32,7 +32,7 @@ mod tests {
     use golem_rust::{
         AllowedLanguages, AllowedMimeTypes, ConfigSchema, FromSchema, IntoSchema, MultimodalSchema,
     };
-    use golem_rust::{ScheduledTime, SchemaType, SchemaValue};
+    use golem_rust::{ScheduledTime, SchemaType, SchemaValue, http_router};
     use golem_rust::{agent_definition, agent_implementation, agentic::BaseAgent};
     use golem_rust_macro::{description, endpoint, prompt, read_only};
     use std::fmt::Debug;
@@ -2237,37 +2237,23 @@ mod tests {
         }
     }
 
-    #[agent_definition(
-        kind = "http-router",
-        ephemeral,
+    struct HttpRouterAgent;
+
+    #[http_router(
+        name = "HttpRouterAgent",
         mount = "/raw",
         auth = false,
         cors = ["https://allowed.test"],
-        snapshotting = "disabled",
     )]
-    trait HttpRouterAgent {
-        fn new() -> Self;
+    impl HttpRouter for HttpRouterAgent {
+        type Config = ();
 
-        #[endpoint(any = "/")]
-        fn route(
-            &self,
-            request: golem_rust::agentic::HttpRequest,
-        ) -> golem_rust::agentic::HttpResponse;
-    }
-
-    struct HttpRouterAgentImpl;
-
-    #[agent_implementation]
-    impl HttpRouterAgent for HttpRouterAgentImpl {
-        fn new() -> Self {
+        fn new(_: golem_rust::agentic::Config<Self::Config>) -> Self {
             Self
         }
 
-        fn route(
-            &self,
-            request: golem_rust::agentic::HttpRequest,
-        ) -> golem_rust::agentic::HttpResponse {
-            golem_rust::agentic::HttpResponse {
+        async fn handle(&self, request: HttpRequest) -> HttpResponse {
+            HttpResponse {
                 status: 200,
                 headers: request.headers,
                 body: request.body,
@@ -2341,8 +2327,8 @@ mod tests {
         let route = router
             .methods
             .iter()
-            .find(|method| method.name == "route")
-            .expect("route method not found");
+            .find(|method| method.name == "handle")
+            .expect("handle method not found");
         assert_eq!(route.http_endpoint.len(), 1);
         assert!(matches!(
             route.http_endpoint[0].http_method,

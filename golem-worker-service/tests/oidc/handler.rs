@@ -18,8 +18,7 @@ use golem_common::model::component::ComponentId;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::{
-    CorsOptions, OriginPattern, PathSegment, RequestBodySchema, SecuritySchemeDetails,
-    WebhookCallbackBehaviour,
+    CorsOptions, OriginPattern, PathSegment, SecuritySchemeDetails, WebhookCallbackBehaviour,
 };
 use golem_worker_service::custom_api::error::RequestHandlerError;
 use golem_worker_service::custom_api::oidc::handler::OidcHandler;
@@ -149,7 +148,6 @@ pub fn resolved_route_entry_with_oidc(scheme: Arc<SecuritySchemeDetails>) -> Res
         path: vec![PathSegment::Literal {
             value: "redirect".to_string(),
         }],
-        body: RequestBodySchema::Unused,
         behavior: RichRouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
             component_id: ComponentId::new(),
         }),

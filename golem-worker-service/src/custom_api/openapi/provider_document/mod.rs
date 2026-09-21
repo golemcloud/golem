@@ -26,7 +26,6 @@ pub(super) const METHODS: [&str; 8] = [
 pub(super) enum Category {
     Size,
     MergedSize,
-    Timeout,
     Depth,
     Json,
     Structure,
@@ -251,7 +250,7 @@ impl jsonschema::Retrieve for Offline {
 }
 
 static STRUCTURE: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
-    let mut schema: Value = serde_json::from_str(include_str!("schemas/schema.json")).unwrap();
+    let mut schema: Value = serde_json::from_str(include_str!("../schemas/schema.json")).unwrap();
     // OAS 3.1.0 section 4.8.20 allows literal values of any JSON type as Link
     // parameters, not only the strings accepted by the published schema.
     schema["$defs"]["link"]["properties"]["parameters"] = serde_json::json!({"type":"object"});
@@ -265,10 +264,10 @@ static SCHEMA: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
         .with_resource(
             "https://spec.openapis.org/oas/3.1/meta/base",
             jsonschema::Resource::from_contents(
-                serde_json::from_str(include_str!("schemas/meta.json")).unwrap(),
+                serde_json::from_str(include_str!("../schemas/meta.json")).unwrap(),
             ),
         )
-        .build(&serde_json::from_str(include_str!("schemas/dialect.json")).unwrap())
+        .build(&serde_json::from_str(include_str!("../schemas/dialect.json")).unwrap())
         .expect("offline OpenAPI schema-object validator")
 });
 

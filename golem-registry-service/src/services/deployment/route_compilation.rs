@@ -35,15 +35,15 @@ use golem_common::model::http_api_deployment::{
 };
 use golem_common::schema::multimodal::is_multimodal_schema_type;
 use golem_common::schema::{
-    AgentMethodSchema, AgentTypeSchema, BinaryRestrictions, InputSchema, NamedFieldType,
-    OutputSchema, SchemaGraph, SchemaType,
+    AgentMethodSchema, AgentTypeSchema, InputSchema, NamedFieldType, OutputSchema, SchemaGraph,
+    SchemaType,
 };
 use golem_service_base::custom_api::{
     AgentFilesystemBehaviour, AgentRouteMode, CallAgentBehaviour, CompiledInputSchema,
-    CompiledOutputSchema, CompiledSchema, ConstructorParameter, CorsOptions,
-    CorsPreflightBehaviour, CorsPreflightMethodPolicy, HttpRouterBehaviour, OpenApiSpecBehaviour,
-    OpenApiSpecFormat, OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, RouteMatch,
-    RouterMethod, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    CompiledOutputSchema, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
+    CorsPreflightMethodPolicy, HttpRouterBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat,
+    OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, RouteMatch, RouterMethod,
+    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
@@ -180,7 +180,6 @@ pub fn compile_fallback_mount(
         route_id,
         route_match: RouteMatch::MountPrefix,
         path,
-        body: RequestBodySchema::Unused,
         behaviour: behavior,
         security,
         cors: CorsOptions { allowed_patterns },
@@ -328,6 +327,7 @@ pub fn add_agent_method_http_routes(
                 constructor_input: constructor_input.clone(),
                 constructor_parameters: constructor_parameters.clone(),
                 method_input: compiled_input(agent, &agent_method.input_schema),
+                body,
                 method_parameters,
                 expected_agent_response: compiled_output(agent, &agent_method.output_schema),
                 method_description: Some(agent_method.description.clone()),
@@ -338,7 +338,6 @@ pub fn add_agent_method_http_routes(
                 domain: deployment.domain.clone(),
                 route_match: http_endpoint.http_method.clone().into(),
                 path: path_segments,
-                body,
                 behaviour: RouteBehaviour::CallAgent(behaviour.clone()),
                 security,
                 cors,
@@ -405,7 +404,6 @@ fn add_durable_stream_route_family(
             route_id,
             route_match: method.into(),
             path: path.clone(),
-            body: base.body.clone(),
             behaviour: RouteBehaviour::CallAgent(behaviour.clone()),
             security: base.security.clone(),
             cors: base.cors.clone(),
@@ -452,7 +450,6 @@ fn add_durable_stream_route_family(
                 route_id: fork_route_id,
                 route_match: method.into(),
                 path: fork_path.clone(),
-                body: base.body.clone(),
                 behaviour: RouteBehaviour::CallAgent(behaviour.clone()),
                 security: base.security.clone(),
                 cors: base.cors.clone(),
@@ -609,7 +606,6 @@ pub fn add_cors_preflight_http_routes(
             domain: deployment.domain.clone(),
             route_match: HttpMethod::Options(Empty {}).into(),
             path: path_segments,
-            body: RequestBodySchema::Unused,
             behaviour: RouteBehaviour::CorsPreflight(CorsPreflightBehaviour { method_policies }),
             security: UnboundRouteSecurity::None,
             cors: CorsOptions {
@@ -620,19 +616,16 @@ pub fn add_cors_preflight_http_routes(
 }
 
 fn collect_allowed_request_headers(compiled_route: &UnboundCompiledRoute) -> BTreeSet<String> {
-    let parameters = match &compiled_route.behaviour {
-        RouteBehaviour::CallAgent(agent) => agent.method_parameters.as_slice(),
-        _ => &[],
+    let (body, parameters) = match &compiled_route.behaviour {
+        RouteBehaviour::CallAgent(agent) => (&agent.body, agent.method_parameters.as_slice()),
+        _ => (&RequestBodySchema::Unused, &[] as &[_]),
     };
     let session = match &compiled_route.security {
         UnboundRouteSecurity::SessionFromHeader(s) => Some(s.header_name.as_str()),
         _ => None,
     };
-    let mut headers = golem_service_base::custom_api::cors_allowed_request_headers(
-        &compiled_route.body,
-        parameters,
-        session,
-    );
+    let mut headers =
+        golem_service_base::custom_api::cors_allowed_request_headers(body, parameters, session);
     if matches!(&compiled_route.behaviour, RouteBehaviour::CallAgent(agent)
         if agent.route_mode == AgentRouteMode::DurableStreams)
     {
@@ -671,13 +664,6 @@ pub fn add_webhook_callback_routes(
             domain: deployment.domain.clone(),
             route_match: HttpMethod::Post(Empty {}).into(),
             path: typed_segments,
-            body: RequestBodySchema::BinaryBody {
-                expected: CompiledSchema {
-                    graph: SchemaGraph::anonymous(
-                        SchemaType::binary(BinaryRestrictions::default()),
-                    ),
-                },
-            },
             behaviour: RouteBehaviour::WebhookCallback(WebhookCallbackBehaviour {
                 component_id: agent_type.implemented_by.component_id,
             }),
@@ -716,7 +702,6 @@ pub fn add_openapi_spec_routes(
             domain: deployment.domain.clone(),
             route_match: HttpMethod::Get(Empty {}).into(),
             path,
-            body: RequestBodySchema::Unused,
             behaviour: RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                 format,
                 scheme: deployment.scheme,
@@ -1035,7 +1020,7 @@ mod tests {
     use golem_common::schema::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, OutputSchema,
     };
-    use golem_service_base::custom_api::MethodParameter;
+    use golem_service_base::custom_api::{CompiledSchema, MethodParameter};
     use std::collections::{BTreeMap, BTreeSet};
     use test_r::test;
     use uuid::Uuid;
@@ -1254,7 +1239,7 @@ mod tests {
             assert_eq!(call.route_mode, AgentRouteMode::DurableStreams);
             assert_eq!(call.method_parameters.len(), 1);
             assert_eq!(call.method_input.input_schema.fields().len(), 2);
-            let RequestBodySchema::JsonBody { ref expected } = route.body else {
+            let RequestBodySchema::JsonBody { ref expected } = call.body else {
                 panic!()
             };
             assert_eq!(
@@ -1524,7 +1509,6 @@ mod tests {
                 route_id: 1,
                 route_match: HttpMethod::Get(Empty {}).into(),
                 path: path.clone(),
-                body: RequestBodySchema::Unused,
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                     route_mode: AgentRouteMode::Rest,
                     base_path_variables: 0,
@@ -1538,6 +1522,7 @@ mod tests {
                     phantom: false,
                     method_name: "list".to_string(),
                     method_input: empty_compiled_input(),
+                    body: RequestBodySchema::Unused,
                     method_parameters: vec![MethodParameter::Header {
                         header_name: "X-List-Token".to_string(),
                         parameter_type:
@@ -1559,11 +1544,6 @@ mod tests {
                 route_id: 2,
                 route_match: HttpMethod::Post(Empty {}).into(),
                 path: path.clone(),
-                body: RequestBodySchema::JsonBody {
-                    expected: CompiledSchema {
-                        graph: SchemaGraph::anonymous(SchemaType::string()),
-                    },
-                },
                 behaviour: RouteBehaviour::CallAgent(CallAgentBehaviour {
                     route_mode: AgentRouteMode::Rest,
                     base_path_variables: 0,
@@ -1577,6 +1557,11 @@ mod tests {
                     phantom: false,
                     method_name: "add".to_string(),
                     method_input: empty_compiled_input(),
+                    body: RequestBodySchema::JsonBody {
+                        expected: CompiledSchema {
+                            graph: SchemaGraph::anonymous(SchemaType::string()),
+                        },
+                    },
                     method_parameters: vec![],
                     expected_agent_response: empty_compiled_output(),
                     method_description: None,

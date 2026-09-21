@@ -57,9 +57,9 @@ fn endpoint_with_timeout(
         files.clone(),
         harness.worker_service.clone(),
     );
-    handler.raw_handler = RawHandler::new(
+    handler.mounted_dispatch = MountedDispatch::new(
         harness.worker_service.clone(),
-        crate::config::HttpSessionLimits {
+        &crate::config::HttpSessionLimits {
             exchange_timeout: timeout,
             ..Default::default()
         },
@@ -596,13 +596,6 @@ async fn live_file_only_absence_advances_and_errors_are_private() {
         (Ok(read(FileReadHead::Symlink, vec![])), 403, 1),
         (Ok(read(FileReadHead::PermissionDenied, vec![])), 403, 1),
         (Ok(read(FileReadHead::NotRegular, vec![])), 403, 1),
-        (
-            Err(WorkerServiceError::FileRead(
-                FileReadError::ResourceExhausted,
-            )),
-            503,
-            1,
-        ),
         (
             Err(WorkerServiceError::Internal(
                 "/private/secret/agent-id".into(),

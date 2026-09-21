@@ -24,7 +24,7 @@ use golem_service_base::custom_api::{
     HttpRouterBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat, RouteMatch,
     SecuritySchemeDetails, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
-use golem_service_base::custom_api::{PathSegment, RequestBodySchema, RouteBehaviour, RouteId};
+use golem_service_base::custom_api::{PathSegment, RouteBehaviour, RouteId};
 use http::{HeaderMap, StatusCode};
 use openidconnect::Scope;
 use openidconnect::core::CoreIdTokenClaims;
@@ -69,7 +69,6 @@ pub struct RichCompiledRoute {
     pub route_id: RouteId,
     pub route_match: RouteMatch,
     pub path: Vec<PathSegment>,
-    pub body: RequestBodySchema,
     pub behavior: RichRouteBehaviour,
     pub security: RichRouteSecurity,
     pub cors: CorsOptions,

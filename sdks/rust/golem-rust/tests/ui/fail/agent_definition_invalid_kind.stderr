@@ -1,5 +1,5 @@
-error: invalid agent kind `router`. Valid values are: regular, http-router
- --> tests/ui/fail/agent_definition_invalid_kind.rs:3:27
+error: Unknown agent_definition parameter. Valid parameters are: name, mode, snapshotting, mount, auth, phantom_agent, cors, webhook_suffix, static_files, filesystem_bindings, openapi_provider_method
+ --> tests/ui/fail/agent_definition_invalid_kind.rs:3:20
   |
 3 | #[agent_definition(kind = "router")]
-  |                           ^^^^^^^^
+  |                    ^^^^^^^^^^^^^^^

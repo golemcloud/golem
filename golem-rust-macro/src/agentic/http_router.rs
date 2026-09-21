@@ -5,6 +5,9 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Expr, ImplItem, ItemImpl, Token, parse::Parser, punctuated::Punctuated};
 
+use super::agent_definition_attributes::AgentDefinitionKind;
+use super::agent_definition_impl::expand_agent_definition;
+
 /// Lower a fixed SDK trait implementation through the ordinary agent macros.
 pub fn expand(attrs: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let implementation: ItemImpl = syn::parse2(item)?;
@@ -139,21 +142,26 @@ pub fn expand(attrs: TokenStream, item: TokenStream) -> syn::Result<TokenStream>
         async fn openapi(&self) -> String { <Self as golem_rust::agentic::HttpRouter>::openapi(self).await }
     });
     let provider_option = openapi.then(|| quote! { openapi_provider_method = "openapi", });
+    let agent_definition = expand_agent_definition(
+        quote! {
+            ephemeral, snapshotting = "disabled", #provider_option #options
+        },
+        quote! {
+            trait #agent_trait {
+                fn new(#[agent_config] config: golem_rust::agentic::Config<<#self_ty as golem_rust::agentic::HttpRouter>::Config>) -> Self;
+                #handle_decl
+                #provider_decl
+            }
+        },
+        AgentDefinitionKind::HttpRouter,
+    );
     Ok(quote! {
         #implementation
         #(#cfg)*
         const _: () = {
             #[allow(unused_imports)]
             use golem_rust::endpoint;
-            #[golem_rust::agent_definition(
-                kind = "http-router", ephemeral, snapshotting = "disabled",
-                #provider_option #options
-            )]
-            trait #agent_trait {
-                fn new(#[agent_config] config: golem_rust::agentic::Config<<#self_ty as golem_rust::agentic::HttpRouter>::Config>) -> Self;
-                #handle_decl
-                #provider_decl
-            }
+            #agent_definition
             #[golem_rust::agent_implementation]
             impl #agent_trait for #self_ty {
                 fn new(#[agent_config] config: golem_rust::agentic::Config<<#self_ty as golem_rust::agentic::HttpRouter>::Config>) -> Self {

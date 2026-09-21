@@ -14,12 +14,120 @@
 
 use super::call_agent::CallAgentHandler;
 use super::error::RequestHandlerError;
+use super::raw_handler::RawHandler;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RichRouteBehaviour, RouteExecutionResult};
 use golem_common::model::AgentId;
 use golem_common::model::agent::FileMapping;
 use golem_service_base::custom_api::RouterFileIndexEntry;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use http::{Method, StatusCode};
+use std::sync::Arc;
+
+use crate::config::HttpSessionLimits;
+use crate::service::worker::WorkerService;
+
+/// Owns mounted-route selection and both mounted storage backends. Guest HTTP value/body
+/// adaptation remains in [`RawHandler`], while invocation transport/recovery remains in
+/// `http_session`.
+pub(super) struct MountedDispatch {
+    worker_service: Arc<WorkerService>,
+    initial_files: Arc<InitialAgentFilesService>,
+    file_timeout: std::time::Duration,
+}
+
+impl MountedDispatch {
+    pub(super) fn new(
+        worker_service: Arc<WorkerService>,
+        limits: &HttpSessionLimits,
+        initial_files: Arc<InitialAgentFilesService>,
+    ) -> Self {
+        Self {
+            worker_service,
+            initial_files,
+            file_timeout: limits.exchange_timeout,
+        }
+    }
+
+    pub(super) async fn dispatch(
+        &self,
+        raw_handler: &RawHandler,
+        request: &mut RichRequest,
+        selected: &ResolvedRouteEntry,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let deadline = tokio::time::Instant::now() + self.file_timeout;
+        let mut backend = MountedBackend {
+            owner: self,
+            raw_handler,
+            file_deadline: deadline,
+        };
+        let dispatch = dispatch_mount(request, selected, &mut backend);
+        if matches!(
+            selected.route.behavior,
+            RichRouteBehaviour::AgentFilesystem(_)
+        ) {
+            tokio::time::timeout_at(deadline, dispatch)
+                .await
+                .unwrap_or(Err(RequestHandlerError::RawDeadline))
+        } else {
+            dispatch.await
+        }
+    }
+}
+
+struct MountedBackend<'a> {
+    owner: &'a MountedDispatch,
+    raw_handler: &'a RawHandler,
+    file_deadline: tokio::time::Instant,
+}
+
+impl MountBackend for MountedBackend<'_> {
+    async fn file(
+        &mut self,
+        request: &mut RichRequest,
+        selected: &ResolvedRouteEntry,
+        file: MountFile<'_>,
+    ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
+        match file {
+            MountFile::Initial(entry) => super::immutable_files::serve(
+                &self.owner.initial_files,
+                selected.route.environment_id,
+                entry,
+                request.underlying.method(),
+                request.underlying.headers(),
+            )
+            .await
+            .map(Some),
+            MountFile::Live {
+                agent_id,
+                path,
+                directory_request,
+            } => {
+                super::live_files::serve(
+                    &self.owner.worker_service,
+                    request,
+                    selected,
+                    agent_id,
+                    &path,
+                    directory_request,
+                    self.file_deadline,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handler(
+        &mut self,
+        request: &mut RichRequest,
+        selected: &ResolvedRouteEntry,
+    ) -> Result<RouteExecutionResult, RequestHandlerError> {
+        let RichRouteBehaviour::HttpRouter(router) = &selected.route.behavior else {
+            return Err(RequestHandlerError::RawInternal);
+        };
+        self.raw_handler.invoke(request, selected, router).await
+    }
+}
 
 #[allow(dead_code)]
 pub(super) enum MountFile<'a> {

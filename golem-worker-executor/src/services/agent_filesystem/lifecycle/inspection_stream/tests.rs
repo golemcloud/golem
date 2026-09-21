@@ -74,7 +74,7 @@ async fn stream_selects_exact_bytes_in_bounded_chunks_and_finishes_on_eof() {
             actual.extend_from_slice(&chunk);
         }
         assert_eq!(actual, content[offset..end]);
-        // Keep the exhausted body allocated: EOF, rather than Drop, must release the producer.
+        // Keep the exhausted body allocated: production completion does not depend on Drop.
         producer.await.unwrap();
         assert!(response.body.next().await.is_none());
     }
@@ -83,26 +83,24 @@ async fn stream_selects_exact_bytes_in_bounded_chunks_and_finishes_on_eof() {
 
 #[test]
 #[timeout("30s")]
-async fn last_chunk_does_not_release_turn_until_eof_is_polled() {
+async fn last_chunk_releases_producer_before_eof_is_polled() {
     let parent = tempfile::tempdir().unwrap();
     let (resident, root) = native_resident(parent.path()).await;
     std::fs::write(root.join("file"), b"abcdef").unwrap();
-    let (producer, mut response) = start_read(
+    let (mut producer, mut response) = start_read(
         resident_generation_handle(&resident),
         FileByteSelection::Full,
     )
     .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), &mut producer)
+        .await
+        .expect("one-chunk production must finish before the body is first polled")
+        .unwrap();
     assert_eq!(
         response.body.next().await.unwrap().unwrap().as_ref(),
         b"abcdef"
     );
-    tokio::task::yield_now().await;
-    assert!(
-        !producer.is_finished(),
-        "last chunk must not release the read turn"
-    );
     assert!(response.body.next().await.is_none());
-    producer.await.unwrap();
     assert!(response.body.next().await.is_none());
     delete(seal(resident)).await.unwrap();
 }

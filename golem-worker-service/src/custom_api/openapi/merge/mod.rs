@@ -10,9 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-#[cfg(test)]
-use super::budget::GENERATION_TIMEOUT;
-use super::budget::{Budget, DOCUMENT_BYTE_LIMIT};
+use super::bounded_json::{self, DOCUMENT_BYTE_LIMIT};
 use super::provider_document::{Category, DocumentError, METHODS, ProviderDocument, pointer};
 use golem_common::model::component::ComponentId;
 use serde_json::{Map, Value, json};
@@ -31,27 +29,11 @@ pub(super) struct ProviderContribution {
 
 /// Generated values are host-owned; provider values have already passed strict
 /// validation against their own document, before any names can be merged.
-#[cfg(test)]
 pub(super) fn merge(
-    generated: Value,
-    providers: Vec<ProviderContribution>,
-    public_origin: &str,
-) -> Result<Value, DocumentError> {
-    merge_bounded(
-        generated,
-        providers,
-        public_origin,
-        &Budget::new(tokio::time::Instant::now() + GENERATION_TIMEOUT),
-    )
-}
-
-pub(super) fn merge_bounded(
     mut generated: Value,
     mut providers: Vec<ProviderContribution>,
     public_origin: &str,
-    budget: &Budget,
 ) -> Result<Value, DocumentError> {
-    budget.check()?;
     providers.sort_by(|a, b| {
         (&a.mount, &a.router_type, a.component_id.to_string()).cmp(&(
             &b.mount,
@@ -75,14 +57,12 @@ pub(super) fn merge_bounded(
         &mut shapes,
         &mut operation_ids,
         generated_paths,
-        budget,
         &mut operation_bytes,
     )?;
     generated.as_object_mut().unwrap().remove("security");
     generated["servers"] = json!([{"url":public_origin}]);
 
     for mut provider in providers {
-        budget.check()?;
         let router = &provider.router;
         let document = &mut provider.document;
         let root_security = requirements(document.value.get("security"));
@@ -121,7 +101,6 @@ pub(super) fn merge_bounded(
         }
         // Rewrite while locations still refer to the original path keys.
         for reference in &document.references {
-            budget.check()?;
             let target = rebase_pointer(&reference.target, &provider.mount);
             *document.value.pointer_mut(&reference.location).unwrap() =
                 Value::String(fragment(&target));
@@ -133,7 +112,6 @@ pub(super) fn merge_bounded(
             unreachable!()
         };
         for (path, mut item) in original_paths {
-            budget.check()?;
             if path.starts_with("x-") {
                 rebased.insert(path, item);
                 continue;
@@ -145,10 +123,10 @@ pub(super) fn merge_bounded(
                         .map(|value| requirements(Some(value)))
                         .unwrap_or_else(|| root_security.clone());
                     operation["security"] =
-                        json!(and_security(&provider.mount_security, &security, budget)?);
+                        json!(and_security(&provider.mount_security, &security)?);
                     // Each operation survives merging exactly once. Count before retaining
                     // inherited security on further operations, which can multiply input size.
-                    add_operation_size(&mut operation_bytes, budget.size(operation)?)?;
+                    add_operation_size(&mut operation_bytes, bounded_json::size(operation)?)?;
                 }
             }
             rebased.insert(rebase_path(&path, &provider.mount), item);
@@ -159,7 +137,6 @@ pub(super) fn merge_bounded(
             &mut shapes,
             &mut operation_ids,
             Value::Object(rebased),
-            budget,
             &mut 0,
         )?;
         if let Some(components) = root.remove("components") {
@@ -241,7 +218,7 @@ pub(super) fn merge_bounded(
         }
     }
     generated["paths"] = Value::Object(paths);
-    budget.size(&generated)?;
+    bounded_json::size(&generated)?;
     Ok(generated)
 }
 
@@ -280,10 +257,9 @@ fn validate_security(
 fn and_security(
     host: &SecurityRequirements,
     provider: &SecurityRequirements,
-    budget: &Budget,
 ) -> Result<SecurityRequirements, DocumentError> {
-    budget.size(host)?;
-    budget.size(provider)?;
+    bounded_json::size(host)?;
+    bounded_json::size(provider)?;
     if host.is_empty() {
         return Ok(provider.clone());
     }
@@ -294,18 +270,16 @@ fn and_security(
     let mut bytes = 0;
     for host in host {
         for provider in provider {
-            budget.check()?;
             let mut requirement = host.clone();
             for (name, scopes) in provider {
                 let target = requirement.entry(name.clone()).or_default();
                 for scope in scopes {
-                    budget.check()?;
                     if !target.contains(scope) {
                         target.push(scope.clone());
                     }
                 }
             }
-            add_operation_size(&mut bytes, budget.size(&requirement)?)?;
+            add_operation_size(&mut bytes, bounded_json::size(&requirement)?)?;
             combined.push(requirement);
         }
     }
@@ -357,11 +331,9 @@ fn merge_paths(
     shapes: &mut BTreeMap<Vec<Option<String>>, String>,
     ids: &mut BTreeSet<String>,
     paths: Value,
-    budget: &Budget,
     operation_bytes: &mut usize,
 ) -> Result<(), DocumentError> {
     for (path, item) in paths.as_object().unwrap() {
-        budget.check()?;
         let location = pointer("/paths", path);
         if path.starts_with("x-") {
             equal_or_insert(
@@ -442,7 +414,7 @@ fn merge_paths(
                     .unwrap()
                     .entry("security")
                     .or_insert(json!([]));
-                add_operation_size(operation_bytes, budget.size(&operation)?)?;
+                add_operation_size(operation_bytes, bounded_json::size(&operation)?)?;
                 previous.insert(key.clone(), operation);
             } else {
                 equal_or_insert(

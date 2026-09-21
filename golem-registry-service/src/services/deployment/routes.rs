@@ -106,7 +106,6 @@ impl DeployedRoutesService {
                 route_id: route.route.route_id,
                 route_match: route.route.route_match,
                 path: route.route.path,
-                body: route.route.body,
                 behavior: route.route.behaviour,
                 security,
                 cors: route.route.cors,

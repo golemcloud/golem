@@ -20,8 +20,9 @@ use super::cors::{
 use super::durable_streams::DurableStreamsHandler;
 use super::error::RequestHandlerError;
 use super::model::RichRouteBehaviour;
+use super::mounted_dispatch::MountedDispatch;
 use super::oidc::handler::OidcHandler;
-use super::openapi::{GENERATION_TIMEOUT, OpenApiError, OpenApiService};
+use super::openapi::OpenApiService;
 use super::raw_handler::RawHandler;
 use super::route_resolver::{ResolvedRouteEntry, RouteResolver, RouteResolverError};
 use super::session_from_header_security::apply_session_from_header_security_middleware;
@@ -45,6 +46,7 @@ pub struct RequestHandler {
     oidc_handler: Arc<OidcHandler>,
     webhook_callback_handler: Arc<WebhookCallbackHandler>,
     raw_handler: RawHandler,
+    mounted_dispatch: MountedDispatch,
     openapi_service: Arc<OpenApiService>,
 }
 
@@ -83,12 +85,16 @@ impl RequestHandler {
             oidc_handler,
             webhook_callback_handler,
             openapi_service,
-            raw_handler: RawHandler::new(worker_service, http_session_limits, initial_files),
+            mounted_dispatch: MountedDispatch::new(
+                worker_service.clone(),
+                &http_session_limits,
+                initial_files,
+            ),
+            raw_handler: RawHandler::new(worker_service, http_session_limits),
         }
     }
 
     pub async fn handle_request(&self, request: Request) -> Result<Response, RequestFailure> {
-        let openapi_deadline = tokio::time::Instant::now() + GENERATION_TIMEOUT;
         debug!(method = %request.method(), path = request.uri().path(), "Begin http request handling");
 
         if request.method() == http::Method::OPTIONS && request.uri().path() == "*" {
@@ -111,7 +117,7 @@ impl RequestHandler {
         if is_cors_preflight(&request) {
             return handle_preflight(&self.route_resolver, request).await;
         }
-        let mut matching_route = self
+        let matching_route = self
             .route_resolver
             .resolve_matching_route(&request)
             .await
@@ -119,64 +125,25 @@ impl RequestHandler {
         let mut request = RichRequest::new(request);
         let request_method = request.underlying.method().clone();
 
-        loop {
-            if matches!(
-                matching_route.route.behavior,
-                RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_)
-            ) && request
-                .underlying
-                .headers()
-                .contains_key(http::header::UPGRADE)
-            {
-                return Err(RequestHandlerError::RawRequest(StatusCode::NOT_IMPLEMENTED).into());
-            }
-            let openapi = matches!(
-                matching_route.route.behavior,
-                RichRouteBehaviour::OpenApiSpec(_)
-            );
-            if openapi && tokio::time::Instant::now() > openapi_deadline {
-                return Err(
-                    RequestHandlerError::from(OpenApiError::new("generation-timeout")).into(),
-                );
-            }
-            let execute = require_available_security(&matching_route,
+        if matches!(
+            matching_route.route.behavior,
+            RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_)
+        ) && request
+            .underlying
+            .headers()
+            .contains_key(http::header::UPGRADE)
+        {
+            return Err(RequestHandlerError::RawRequest(StatusCode::NOT_IMPLEMENTED).into());
+        }
+        let execute = require_available_security(&matching_route,
                 self.execute_route_and_middlewares(&mut request, &matching_route))
                 .instrument(tracing::span!(
                     tracing::Level::INFO, "handle_route",
                     domain = %matching_route.domain, method = %request_method,
                     route = %matching_route.route.path.iter().map(|p| p.to_string()).collect::<Vec<_>>().join("/")
                 ));
-            let mut execution_result = if openapi {
-                tokio::time::timeout_at(openapi_deadline, execute)
-                    .await
-                    .unwrap_or_else(|_| Err(OpenApiError::new("generation-timeout").into()))
-            } else {
-                execute.await
-            };
-            if openapi && tokio::time::Instant::now() > openapi_deadline {
-                execution_result = Err(OpenApiError::new("generation-timeout").into());
-            }
-            if openapi
-                && matches!(&execution_result, Err(RequestHandlerError::OpenApi(error)) if error.is_stale())
-            {
-                if tokio::time::Instant::now() >= openapi_deadline {
-                    return Err(
-                        RequestHandlerError::from(OpenApiError::new("generation-timeout")).into(),
-                    );
-                }
-                tokio::task::yield_now().await;
-                matching_route = tokio::time::timeout_at(
-                    openapi_deadline,
-                    self.route_resolver
-                        .resolve_matching_route(&request.underlying),
-                )
-                .await
-                .map_err(|_| RequestHandlerError::from(OpenApiError::new("generation-timeout")))?
-                .map_err(RequestHandlerError::from)?;
-                continue;
-            }
-            return finish_selected_response(execution_result, &request, &matching_route);
-        }
+        let execution_result = execute.await;
+        finish_selected_response(execution_result, &request, &matching_route)
     }
 
     async fn execute_route_and_middlewares(
@@ -254,8 +221,8 @@ impl RequestHandler {
                     .await
             }
             RichRouteBehaviour::HttpRouter(_) | RichRouteBehaviour::AgentFilesystem(_) => {
-                self.raw_handler
-                    .dispatch_mount(request, resolved_route)
+                self.mounted_dispatch
+                    .dispatch(&self.raw_handler, request, resolved_route)
                     .await
             }
         }

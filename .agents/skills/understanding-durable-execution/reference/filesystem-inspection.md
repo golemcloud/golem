@@ -12,7 +12,7 @@ reads blob storage without activating an agent. Directory listing remains a sepa
 
 ## Ownership and wire boundary
 
-- `golem-common/src/model/filesystem.rs` owns raw read-path validation, `FileByteSelection`, metadata,
+- `golem-common/src/model/filesystem/mod.rs` owns raw read-path validation, `FileByteSelection`, metadata,
   status and typed errors, including protobuf conversions. The Rust executor API receives the
   existing `CanonicalFilePath` from `base_model/path.rs`; gRPC carries it as the string `file_path`. Root/suffix composition,
   decoded-segment checks and trailing-directory intent belong to the HTTP layer. At the executor
@@ -30,37 +30,34 @@ reads blob storage without activating an agent. Directory listing remains a sepa
   The existing REST inspection consumer retains its Read authorization and requests Full for the
   exact canonical path it derived.
 
-## Admission through consumer termination
+## Scheduling through production
 
-1. `grpc/mod.rs::get_file_contents` reserves capacity before activation. `FileReadAdmission` tracks
-   active plus queued requests, including absent agents. Defaults are one active read per
-   agent, 16 additional queued per agent and 128 outstanding per executor.
-   `GolemConfig.file_read` configures queue/total capacity; one active turn is fixed.
-   Full capacity fails immediately, without spawning a waiter. The executor imposes neither a
-   read deadline nor a file-size limit. A connected request waits for completion or an error.
-2. Shared `ActiveAgents` activation survives an individual waiter's cancellation. Abandoning
-   inspection removes its reservation, not initialization or its durable effects. Existing
-   failed/interrupted/ephemeral lifecycle rules still apply.
-3. `Worker::read_file` records `InspectionOrder` while holding the instance mutex, the same
-   boundary as invocation acceptance. Its durable-invocation cutoff prevents inspection from
-   passing earlier work even when that work is not resident in the local queue. Pending updates
-   block inspection. `QueuedInspectionGuard` removes a cancelled read synchronously rather
-   than waiting for the invocation loop to reach it.
-4. `Invocation::read_file` acquires the per-agent read turn and the exclusive `OwnerLane`, then
+1. Shared `ActiveAgents` activation survives an individual waiter's cancellation. Existing
+   initialization, replay, failure, update and ephemeral lifecycle rules apply. There is no
+   filesystem-read-specific admission limit, semaphore, timeout or error.
+2. `Worker::read_file` enqueues a `ResidentWork` envelope ordered after `status.oplog_idx` while holding
+   the instance mutex, the same boundary as invocation acceptance. One selector samples attached
+   status under that mutex and compares the first durable pending index with the first eligible
+   resident envelope; selected durable references are hydrated from the oplog and remain pending
+   until the normal start transition. Controls may pass blocked ordered work but not earlier
+   eligible resident work. Pending updates block ordinary ordered work. Cancelled resident work is
+   pruned at enqueue, selection, idle/eviction, restart and cleanup boundaries; durable invocations
+   are never pruned on caller disconnect.
+3. `Invocation::read_file` acquires the exclusive `OwnerLane`, then
    calls `services/agent_filesystem/lifecycle/inspection/mod.rs::open_file_for_inspection`. It walks
    descriptor-relative components with no-follow semantics through the final target. Any symlink
    is forbidden. Only a regular file can be opened; directories, special files and permission
    failures are forbidden.
    Missing targets are absent. There is no implicit index or directory listing in this protocol.
-5. Metadata comes from that open descriptor, and Full/Bounded/OpenEnded/Suffix selection is
+4. Metadata comes from that open descriptor, and Full/Bounded/OpenEnded/Suffix selection is
    resolved against its length. `inspection_stream/mod.rs::produce_file_read` runs in the invocation
-   loop, not a detached task. It holds the resident Store, generation, descriptor, owner lane
-   and admission through the response. A capacity-one channel carries at most 64 KiB per chunk;
+   loop, not a detached task. It holds the resident Store, generation, descriptor and owner lane
+   through production. A capacity-one channel carries at most 64 KiB per chunk;
    only the bounded chunk length is converted to usize, never whole-file length.
-6. Enqueueing the final chunk is **not** completion. The producer waits for consumer EOF, drop
-   or failure. A metadata-only, empty or unsatisfiable response releases after its head.
-   Drop reclaims every read guard and reservation, including when a body is not
-   polled. Premature EOF and post-head errors abort instead of silently truncating a response.
+5. Once all selected bytes have been copied into the bounded response, production is complete and
+   filesystem/execution ownership is released without waiting for consumer-observed EOF. No mutable
+   filesystem work overlaps producer reads. Failures are published before channel close, so a
+   terminal error never appears as EOF. Premature EOF aborts instead of silently truncating a head.
 
 ## Policy, lifecycle and generation are different
 
@@ -89,8 +86,7 @@ loss aborts the external stream; there is no durable read reattachment contract.
   initializer failure, prior writes, EOF/drop/update ordering and the same exact path across update.
 - `services/agent_filesystem/lifecycle/{inspection,inspection_stream}/tests.rs` tests descriptor
   safety, range boundaries, bounded chunks, early EOF, backpressure without expiry and consumer cleanup.
-- `services/file_read_admission.rs` tests full queues and waiting without expiry before activation;
-  `worker/inspection_queue.rs` tests durable cutoff ordering, pending updates and cancellation.
+- `worker/invocation_queue.rs` tests durable-prefix ordering and transient cancellation pruning.
 - `grpc_read_waits_for_blocking_invocation_and_completes` proves a real gRPC read waits behind
   guest work and returns its final bytes. The Suspend runtime test proves a queued read survives
   actual unload and completes after normal resume with the earlier invocation's final bytes.

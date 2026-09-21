@@ -1,6 +1,6 @@
 use golem_rust::{agent_definition, endpoint};
 
-#[agent_definition(kind = "http-router", ephemeral, mount = "/raw")]
+#[agent_definition(mount = "/raw")]
 trait InvalidAnyEndpointAgent {
     fn new() -> Self;
 

@@ -13,9 +13,8 @@ use super::http_envelope::{
     HttpVersion, RawHeaders, ResponseBodyPolicy, process_request_head, process_response_head,
 };
 use super::http_session::{HttpSession, HttpSessionEvent, HttpSessionLimits};
-use super::mounted_dispatch::{MountBackend, MountFile};
 use super::route_resolver::ResolvedRouteEntry;
-use super::{ResponseBody, RichRequest, RichRouteBehaviour, RouteExecutionResult};
+use super::{ResponseBody, RichRequest, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use bytes::Bytes;
 use futures::StreamExt;
@@ -33,7 +32,6 @@ use golem_schema::schema::protobuf::schema_value_to_proto_with_streams;
 use golem_schema::schema::validation::validate_value;
 use golem_service_base::custom_api::HttpRouterBehaviour;
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use http::StatusCode;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -46,48 +44,17 @@ const BODY_STREAM_ID: u64 = 1;
 pub(super) struct RawHandler {
     worker_service: Arc<WorkerService>,
     limits: HttpSessionLimits,
-    initial_files: Arc<InitialAgentFilesService>,
-    file_deadline: Option<tokio::time::Instant>,
 }
 
 impl RawHandler {
-    pub(super) fn new(
-        worker_service: Arc<WorkerService>,
-        limits: HttpSessionLimits,
-        initial_files: Arc<InitialAgentFilesService>,
-    ) -> Self {
+    pub(super) fn new(worker_service: Arc<WorkerService>, limits: HttpSessionLimits) -> Self {
         Self {
             worker_service,
             limits,
-            initial_files,
-            file_deadline: None,
         }
     }
 
-    pub(super) async fn dispatch_mount(
-        &self,
-        request: &mut RichRequest,
-        selected: &ResolvedRouteEntry,
-    ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let mut backend = self.clone();
-        if matches!(
-            selected.route.behavior,
-            RichRouteBehaviour::AgentFilesystem(_)
-        ) {
-            let deadline = tokio::time::Instant::now() + self.limits.exchange_timeout;
-            backend.file_deadline = Some(deadline);
-            tokio::time::timeout_at(
-                deadline,
-                super::mounted_dispatch::dispatch_mount(request, selected, &mut backend),
-            )
-            .await
-            .unwrap_or(Err(RequestHandlerError::RawDeadline))
-        } else {
-            super::mounted_dispatch::dispatch_mount(request, selected, &mut backend).await
-        }
-    }
-
-    async fn invoke(
+    pub(super) async fn invoke(
         &self,
         request: &mut RichRequest,
         selected: &ResolvedRouteEntry,
@@ -232,56 +199,6 @@ impl RawHandler {
             self.limits.clone(),
         )
         .map_err(map_session_error)
-    }
-}
-
-impl MountBackend for RawHandler {
-    async fn file(
-        &mut self,
-        request: &mut RichRequest,
-        selected: &ResolvedRouteEntry,
-        file: MountFile<'_>,
-    ) -> Result<Option<RouteExecutionResult>, RequestHandlerError> {
-        match file {
-            MountFile::Initial(entry) => super::immutable_files::serve(
-                &self.initial_files,
-                selected.route.environment_id,
-                entry,
-                request.underlying.method(),
-                request.underlying.headers(),
-            )
-            .await
-            .map(Some),
-            MountFile::Live {
-                agent_id,
-                path,
-                directory_request,
-            } => {
-                super::live_files::serve(
-                    &self.worker_service,
-                    request,
-                    selected,
-                    agent_id,
-                    &path,
-                    directory_request,
-                    self.file_deadline.ok_or_else(|| {
-                        RequestHandlerError::invariant_violated("Missing file serving deadline")
-                    })?,
-                )
-                .await
-            }
-        }
-    }
-
-    async fn handler(
-        &mut self,
-        request: &mut RichRequest,
-        selected: &ResolvedRouteEntry,
-    ) -> Result<RouteExecutionResult, RequestHandlerError> {
-        let RichRouteBehaviour::HttpRouter(router) = &selected.route.behavior else {
-            return Err(RequestHandlerError::RawInternal);
-        };
-        self.invoke(request, selected, router).await
     }
 }
 

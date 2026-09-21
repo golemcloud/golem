@@ -194,7 +194,6 @@ message CompiledRoute {
   int32 route_id = 1;
   RouteMatch route_match = 2;
   repeated PathSegment path = 3;
-  RequestBodySchema body = 4;
   RouteBehaviour behavior = 5;
   RouteSecurity security = 6;
   CorsOptions cors = 7;
@@ -240,6 +239,7 @@ message RouteBehaviour {
     golem.component.AgentMode agent_mode = 13;
     AgentRouteMode route_mode = 14;
     uint32 base_path_variables = 15;
+    RequestBodySchema body = 16;
   }
 
   enum AgentRouteMode {

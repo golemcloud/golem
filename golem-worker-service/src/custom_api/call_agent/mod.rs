@@ -98,9 +98,7 @@ impl CallAgentHandler {
             return Ok(not_modified);
         }
 
-        let parsed_body = request
-            .parse_request_body(&resolved_route.route.body)
-            .await?;
+        let parsed_body = request.parse_request_body(&behaviour.body).await?;
 
         let method_params =
             self.resolve_method_arguments(resolved_route, request, behaviour, parsed_body)?;
@@ -413,7 +411,7 @@ impl CallAgentHandler {
                         // wrapper (raw body -> `inline` case; DA: url-referenced
                         // request bodies are not accepted) or a bare `Binary`
                         // rich scalar (raw value as-is).
-                        wrap_unstructured_body_value(&resolved_route.route.body, raw)?
+                        wrap_unstructured_body_value(&behaviour.body, raw)?
                     }
 
                     _ => {
@@ -441,7 +439,7 @@ impl CallAgentHandler {
                         // wrapper (raw body -> `inline` case; DA: url-referenced
                         // request bodies are not accepted) or a bare `Text` rich
                         // scalar (raw value as-is).
-                        wrap_unstructured_body_value(&resolved_route.route.body, raw)?
+                        wrap_unstructured_body_value(&behaviour.body, raw)?
                     }
 
                     _ => {

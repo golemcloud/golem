@@ -19,8 +19,8 @@ use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeName};
 use golem_service_base::custom_api::{
-    CorsOptions, PathSegment, RequestBodySchema, RouteBehaviour, RouteId, RouteMatch,
-    SecuritySchemeDetails, SessionFromHeaderRouteSecurity,
+    CorsOptions, PathSegment, RouteBehaviour, RouteId, RouteMatch, SecuritySchemeDetails,
+    SessionFromHeaderRouteSecurity,
 };
 use std::collections::HashMap;
 
@@ -46,7 +46,6 @@ pub struct UnboundCompiledRoute {
     pub route_id: RouteId,
     pub route_match: RouteMatch,
     pub path: Vec<PathSegment>,
-    pub body: RequestBodySchema,
     pub behaviour: RouteBehaviour,
     pub security: UnboundRouteSecurity,
     pub cors: CorsOptions,
@@ -79,7 +78,6 @@ pub struct CompiledRoutesForDomain {
 pub struct MaybeDisabledCompiledRoute {
     pub route_match: RouteMatch,
     pub path: Vec<PathSegment>,
-    pub body: RequestBodySchema,
     pub behavior: RouteBehaviour,
     pub security_scheme_missing: bool,
     pub security_scheme: Option<SecuritySchemeId>,

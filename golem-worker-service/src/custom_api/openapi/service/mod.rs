@@ -10,32 +10,26 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 
-use super::OpenApiInputs;
-use super::budget::Budget;
-use super::cache::CacheState;
 use super::http_openapi_spec::{build_security, render_full_path};
-use super::merge::{ProviderContribution, merge_bounded};
+use super::merge::{ProviderContribution, merge};
 use super::provider_document::{self, Category, DocumentError, PROVIDER_BYTE_LIMIT};
+use super::{OpenApiInputs, bounded_json};
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour};
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt, stream};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentId, Principal};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, AgentInvocationResult, IdempotencyKey};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_service_base::model::auth::AuthCtx;
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio::time::{Instant, timeout, timeout_at};
+use std::sync::Arc;
 
-const PROVIDER_TIMEOUT: Duration = Duration::from_secs(5);
-const CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 const PROVIDER_CONCURRENCY: usize = 8;
-const GENERATION_CONCURRENCY: usize = 8;
+const CACHE_CAPACITY: usize = 256;
 
 pub struct OpenApiDocument {
     pub json: Bytes,
@@ -67,16 +61,8 @@ impl OpenApiError {
         self.category
     }
 
-    pub fn is_stale(&self) -> bool {
-        self.category == "stale"
-    }
-
     pub fn status(&self) -> http::StatusCode {
-        match self.category {
-            "provider-timeout" | "generation-timeout" => http::StatusCode::GATEWAY_TIMEOUT,
-            "admission" => http::StatusCode::SERVICE_UNAVAILABLE,
-            _ => http::StatusCode::BAD_GATEWAY,
-        }
+        http::StatusCode::BAD_GATEWAY
     }
 }
 
@@ -85,7 +71,6 @@ impl From<DocumentError> for OpenApiError {
         let category = match error.category {
             Category::Size => "provider-size",
             Category::MergedSize => "merged-size",
-            Category::Timeout => "generation-timeout",
             Category::Depth => "provider-depth",
             Category::Json => "provider-json",
             Category::Structure => "provider-structure",
@@ -117,7 +102,6 @@ struct ProviderCall {
 #[async_trait]
 trait ProviderInvoker: Send + Sync {
     async fn invoke(&self, call: &ProviderCall) -> Result<String, OpenApiError>;
-    async fn cleanup(&self, call: &ProviderCall);
 }
 
 struct WorkerProviderInvoker(Arc<WorkerService>);
@@ -155,23 +139,14 @@ impl ProviderInvoker for WorkerProviderInvoker {
             _ => Err(OpenApiError::new("provider-output")),
         }
     }
-
-    async fn cleanup(&self, call: &ProviderCall) {
-        // These are bounded best-effort control requests, not confirmation that
-        // execution stopped or that any side effects were rolled back.
-        let _ = tokio::join!(
-            self.0
-                .cancel_invocation(&call.agent_id, &call.key, AuthCtx::System),
-            self.0.interrupt(&call.agent_id, false, AuthCtx::System),
-        );
-    }
 }
+
+type OpenApiCache = Cache<super::OpenApiKey, (), Arc<OpenApiDocument>, OpenApiError>;
 
 #[derive(Clone)]
 pub struct OpenApiService {
     invoker: Arc<dyn ProviderInvoker>,
-    pub(super) admission: Arc<Semaphore>,
-    pub(super) cache: Arc<Mutex<CacheState>>,
+    pub(super) cache: OpenApiCache,
     #[cfg(test)]
     pub(super) processing_hook: Option<Arc<dyn Fn() + Send + Sync>>,
 }
@@ -180,8 +155,12 @@ impl OpenApiService {
     pub fn new(worker: Arc<WorkerService>) -> Self {
         Self {
             invoker: Arc::new(WorkerProviderInvoker(worker)),
-            admission: Arc::new(Semaphore::new(GENERATION_CONCURRENCY)),
-            cache: Arc::new(Mutex::new(CacheState::default())),
+            cache: Cache::new(
+                Some(CACHE_CAPACITY),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::None,
+                "openapi_documents",
+            ),
             #[cfg(test)]
             processing_hook: None,
         }
@@ -190,8 +169,6 @@ impl OpenApiService {
     pub(super) async fn run(
         &self,
         inputs: Arc<OpenApiInputs>,
-        budget: Budget,
-        lease: Arc<OwnedSemaphorePermit>,
     ) -> Result<Arc<OpenApiDocument>, OpenApiError> {
         let providers = inputs.routes.iter().filter(|route| matches!(
             &route.behavior, RichRouteBehaviour::HttpRouter(router) if router.openapi_provider_method.is_some()
@@ -199,9 +176,8 @@ impl OpenApiService {
         let documents = stream::iter(providers)
             .map(|route| {
                 let invoker = self.invoker.clone();
-                let lease = lease.clone();
                 async move {
-                    let text = invoke_provider(invoker, &route, lease).await?;
+                    let text = invoke_provider(invoker, &route).await?;
                     Ok::<_, OpenApiError>((route, text))
                 }
             })
@@ -211,16 +187,13 @@ impl OpenApiService {
         #[cfg(test)]
         let processing_hook = self.processing_hook.clone();
         tokio::task::spawn_blocking(move || {
-            let _lease = lease;
             #[cfg(test)]
             if let Some(hook) = processing_hook {
                 hook();
             }
-            budget.check()?;
             let mut generated = inputs
                 .generated_contribution()
                 .map_err(|_| OpenApiError::new("generated-document"))?;
-            budget.check()?;
             let mut schemes = generated
                 .get_mut("components")
                 .and_then(Value::as_object_mut)
@@ -229,14 +202,12 @@ impl OpenApiService {
                 .unwrap_or_default();
             let mut contributions = Vec::with_capacity(documents.len());
             for (route, text) in documents {
-                budget.check()?;
                 let RichRouteBehaviour::HttpRouter(router) = &route.behavior else {
                     unreachable!()
                 };
                 let mount = render_full_path(&route.path);
                 let identity = format!("{}:{}:{mount}", router.component_id, router.agent_type.0);
                 let document = provider_document::parse(&identity, &text)?;
-                budget.check()?;
                 let security = build_security(&route.security, &mut schemes)
                     .map_err(|_| OpenApiError::new("mount-security"))?;
                 contributions.push(ProviderContribution {
@@ -252,12 +223,11 @@ impl OpenApiService {
             if !schemes.is_empty() {
                 generated["components"]["securitySchemes"] = Value::Object(schemes);
             }
-            let document = merge_bounded(generated, contributions, &inputs.public_origin, &budget)?;
-            let json = budget.json(&document)?.into();
+            let document = merge(generated, contributions, &inputs.public_origin)?;
+            let json = bounded_json::to_vec(&document)?.into();
             let yaml = serde_yaml::to_string(&document)
                 .map_err(|_| OpenApiError::new("encoding"))?
                 .into();
-            budget.check()?;
             Ok(Arc::new(OpenApiDocument { json, yaml }))
         })
         .await
@@ -301,47 +271,13 @@ fn prepare_call(route: &RichCompiledRoute) -> Result<ProviderCall, OpenApiError>
 async fn invoke_provider(
     invoker: Arc<dyn ProviderInvoker>,
     route: &RichCompiledRoute,
-    lease: Arc<OwnedSemaphorePermit>,
 ) -> Result<String, OpenApiError> {
-    let deadline = Instant::now() + PROVIDER_TIMEOUT;
-    let result = timeout_at(deadline, async {
-        let call = Arc::new(prepare_call(route)?);
-        let mut cleanup = Cleanup {
-            invoker: invoker.clone(),
-            call: Some(call.clone()),
-            lease,
-        };
-        let text = invoker.invoke(&call).await?;
-        cleanup.call = None;
-        if Instant::now() > deadline {
-            return Err(OpenApiError::new("provider-timeout"));
-        }
-        if text.len() > PROVIDER_BYTE_LIMIT {
-            return Err(OpenApiError::new("provider-size"));
-        }
-        Ok(text)
-    })
-    .await;
-    result.unwrap_or_else(|_| Err(OpenApiError::new("provider-timeout")))
-}
-
-struct Cleanup {
-    invoker: Arc<dyn ProviderInvoker>,
-    call: Option<Arc<ProviderCall>>,
-    lease: Arc<OwnedSemaphorePermit>,
-}
-
-impl Drop for Cleanup {
-    fn drop(&mut self) {
-        if let Some(call) = self.call.take() {
-            let invoker = self.invoker.clone();
-            let lease = self.lease.clone();
-            tokio::spawn(async move {
-                let _lease = lease;
-                let _ = timeout(CLEANUP_TIMEOUT, invoker.cleanup(&call)).await;
-            });
-        }
+    let call = prepare_call(route)?;
+    let text = invoker.invoke(&call).await?;
+    if text.len() > PROVIDER_BYTE_LIMIT {
+        return Err(OpenApiError::new("provider-size"));
     }
+    Ok(text)
 }
 
 #[cfg(test)]

@@ -55,7 +55,6 @@ pub async fn run(
 ) -> Result<RunDetails, anyhow::Error> {
     golem_config.durable_stream.validate()?;
     golem_config.invocation_results.validate()?;
-    golem_config.file_read.validate()?;
     bootstrap_and_run_worker_executor(
         &ServerBootstrap,
         golem_config,

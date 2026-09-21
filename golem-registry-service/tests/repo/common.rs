@@ -8763,8 +8763,8 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
     use golem_registry_service::services::deployment::DeployedRoutesService;
     use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
     use golem_service_base::custom_api::{
-        CompiledInputSchema, CorsOptions, HttpRouterBehaviour, PathSegment, RequestBodySchema,
-        RouteBehaviour, RouteMatch, RouteSecurity,
+        CompiledInputSchema, CorsOptions, HttpRouterBehaviour, PathSegment, RouteBehaviour,
+        RouteMatch, RouteSecurity,
     };
     use golem_service_base::repo::Blob;
     use std::sync::Arc;
@@ -8813,7 +8813,6 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
                 } else {
                     vec![]
                 },
-                body: RequestBodySchema::Unused,
                 behaviour: RouteBehaviour::HttpRouter(HttpRouterBehaviour {
                     component_id: ComponentId(new_repo_uuid()),
                     component_revision: ComponentRevision::INITIAL,

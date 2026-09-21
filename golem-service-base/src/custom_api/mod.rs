@@ -359,8 +359,6 @@ pub struct CompiledRoute {
     pub route_id: RouteId,
     pub route_match: RouteMatch,
     pub path: Vec<PathSegment>,
-    // TODO: move this into the individual route behaviours
-    pub body: RequestBodySchema,
     pub behavior: RouteBehaviour,
     pub security: RouteSecurity,
     pub cors: CorsOptions,
@@ -571,6 +569,7 @@ pub struct CallAgentBehaviour {
     /// HTTP method parameters, injecting auto-injected fields in declaration
     /// order.
     pub method_input: CompiledInputSchema,
+    pub body: RequestBodySchema,
     pub method_parameters: Vec<MethodParameter>,
     pub expected_agent_response: CompiledOutputSchema,
     #[desert(default)]

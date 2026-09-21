@@ -76,13 +76,12 @@ fn rebases_semantic_path_references_without_changing_examples() {
 
 #[test]
 fn security_and_distributes_alternatives_preserving_scope_order() {
-    let budget = Budget::new(tokio::time::Instant::now() + GENERATION_TIMEOUT);
     let host = requirements(Some(&json!([{"host":["read","host"]},{"alternate":[]}])));
     let provider = requirements(Some(
         &json!([{"host":["write","read"],"provider":["admin"]},{}]),
     ));
     assert_eq!(
-        json!(and_security(&host, &provider, &budget).unwrap()),
+        json!(and_security(&host, &provider).unwrap()),
         json!([
             {"host":["read","host","write"],"provider":["admin"]},
             {"host":["read","host"]},
@@ -90,8 +89,8 @@ fn security_and_distributes_alternatives_preserving_scope_order() {
             {"alternate":[]}
         ])
     );
-    assert_eq!(and_security(&host, &vec![], &budget).unwrap(), host);
-    assert_eq!(and_security(&vec![], &provider, &budget).unwrap(), provider);
+    assert_eq!(and_security(&host, &vec![]).unwrap(), host);
+    assert_eq!(and_security(&vec![], &provider).unwrap(), provider);
 }
 
 #[test]

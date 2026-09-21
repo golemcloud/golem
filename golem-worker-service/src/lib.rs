@@ -90,7 +90,6 @@ impl WorkerService {
         let registry_service = self.services.registry_service.clone();
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
-        let openapi_service = self.services.openapi_service.clone();
         let auth_service = self.services.auth_service.clone();
         let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
         join_set.spawn(async move {
@@ -98,7 +97,6 @@ impl WorkerService {
                 registry_service,
                 agent_resolution_cache,
                 route_resolver,
-                openapi_service,
                 auth_service,
                 mcp_capability_lookup,
                 None,
@@ -136,7 +134,6 @@ impl WorkerService {
         let registry_service = self.services.registry_service.clone();
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
-        let openapi_service = self.services.openapi_service.clone();
         let auth_service = self.services.auth_service.clone();
         let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
         join_set.spawn(async move {
@@ -144,7 +141,6 @@ impl WorkerService {
                 registry_service,
                 agent_resolution_cache,
                 route_resolver,
-                openapi_service,
                 auth_service,
                 mcp_capability_lookup,
                 None,

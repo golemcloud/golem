@@ -1055,6 +1055,22 @@ impl TestWorkerExecutor {
             .await
     }
 
+    pub async fn production_active_agent(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<
+        Arc<
+            golem_worker_executor::services::active_agents::ActiveAgent<
+                golem_worker_executor::workerctx::default::Context,
+            >,
+        >,
+    > {
+        self.production_active_agents
+            .as_ref()?
+            .try_get_active_agent(owned_agent_id)
+            .await
+    }
+
     pub async fn active_entity_metadata(
         &self,
         owned_agent_id: &OwnedAgentId,
