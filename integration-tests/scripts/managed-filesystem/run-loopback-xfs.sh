@@ -713,7 +713,7 @@ run_privileged_test \
 run_privileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::managed_xfs_seed_charges_the_project_and_follows_the_existing_rule
+  sandbox_filesystem::xfs::tests::managed_xfs_seed_charges_the_project_and_follows_the_placement
 
 run_privileged_test \
   lib \

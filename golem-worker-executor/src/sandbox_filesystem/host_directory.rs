@@ -126,7 +126,6 @@ impl HostDirectory {
 
     /// Makes an empty directory with this name in `parent`. Fails if the name exists, or if the
     /// name is not one normal component.
-    #[allow(dead_code)]
     pub(crate) async fn create_in(
         parent: &HostPath,
         name: &OsStr,
@@ -167,7 +166,6 @@ impl HostDirectory {
     ///
     /// A directory that is already absent, for example because its parent was removed first, gives
     /// success.
-    #[allow(dead_code)]
     pub(crate) async fn discard(mut self) -> Result<(), FilesystemStorageError> {
         self.removed = true;
         let path = self.path.clone();
@@ -254,6 +252,7 @@ fn forget_name(names: &Mutex<HashSet<Box<OsStr>>>, name: &OsStr) {
 mod tests {
     use super::*;
     use std::io::ErrorKind;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
     use test_r::test;
 
@@ -321,9 +320,10 @@ mod tests {
         assert!(std::fs::read_dir(root.path()).unwrap().next().is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     async fn create_at_root_accepts_the_name_again_after_a_failed_creation() {
-        if rustix::process::geteuid().is_root() {
+        if running_as_root() {
             return;
         }
         let root = tempfile::tempdir().unwrap();
@@ -469,9 +469,10 @@ mod tests {
         assert!(std::fs::read_dir(root.path()).unwrap().next().is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     async fn discard_reports_a_removal_failure() {
-        if rustix::process::geteuid().is_root() {
+        if running_as_root() {
             return;
         }
         let root = tempfile::tempdir().unwrap();

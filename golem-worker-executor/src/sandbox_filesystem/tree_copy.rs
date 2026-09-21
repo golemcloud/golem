@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt as _};
+use cap_fs_ext::{FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt as _};
 use std::ffi::{OsStr, OsString};
 use std::time::SystemTime;
 
@@ -24,6 +24,9 @@ pub(super) struct TreeEntry {
     pub(super) kind: TreeEntryKind,
     pub(super) permissions: cap_std::fs::Permissions,
     pub(super) modified: Option<SystemTime>,
+    /// The identity of an entry that is not a directory and has more than one name, and `None` for
+    /// another entry.
+    pub(super) link: Option<NativeFileIdentity>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -50,13 +53,11 @@ impl TreeExclusions {
     /// current-directory components are removed from a path. A path with a parent or prefix
     /// component names no entry, so the set does not keep it. The set also does not keep a path
     /// that is empty after the removal.
-    #[allow(dead_code)]
-    pub(crate) fn new(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+    pub(crate) fn new(paths: impl IntoIterator<Item: AsRef<Path>>) -> Self {
         Self {
             paths: paths
                 .into_iter()
-                .filter_map(normalize_exclusion)
-                .map(PathBuf::into_boxed_path)
+                .filter_map(|path| normalize_exclusion(path.as_ref()))
                 .collect(),
         }
     }
@@ -72,12 +73,12 @@ impl TreeExclusions {
     }
 }
 
-fn normalize_exclusion(path: PathBuf) -> Option<PathBuf> {
+fn normalize_exclusion(path: &Path) -> Option<Box<Path>> {
     if path
         .components()
         .all(|component| matches!(component, Component::Normal(_)))
     {
-        return (!path.as_os_str().is_empty()).then_some(path);
+        return (!path.as_os_str().is_empty()).then(|| Box::from(path));
     }
     let mut normalized = PathBuf::new();
     path.components()
@@ -89,7 +90,7 @@ fn normalize_exclusion(path: PathBuf) -> Option<PathBuf> {
             Component::RootDir | Component::CurDir => Some(()),
             Component::ParentDir | Component::Prefix(_) => None,
         })?;
-    (!normalized.as_os_str().is_empty()).then_some(normalized)
+    (!normalized.as_os_str().is_empty()).then(|| normalized.into_boxed_path())
 }
 
 /// Lists a tree, parents before children, without the excluded root-relative paths.
@@ -168,6 +169,9 @@ fn tree_entry(
 ) -> std::io::Result<TreeEntry> {
     let metadata = directory.symlink_metadata(name)?;
     let file_type = metadata.file_type();
+    let link = (!file_type.is_dir() && metadata.nlink() > 1)
+        .then(|| native_file_identity(&metadata))
+        .transpose()?;
     let kind = if file_type.is_symlink() {
         TreeEntryKind::Symlink(read_link_contents(directory, Path::new(name))?.into_boxed_path())
     } else if file_type.is_dir() {
@@ -188,6 +192,7 @@ fn tree_entry(
         kind,
         permissions: metadata.permissions(),
         modified: metadata.modified().ok().map(|time| time.into_std()),
+        link,
     })
 }
 
@@ -198,14 +203,19 @@ fn tree_entry(
 /// `destination` must be an empty directory and not a symlink: a missing path gives a `NotFound`
 /// error, another kind of object gives a `NotADirectory` error, and a directory with an entry
 /// gives a `DirectoryNotEmpty` error. Directories and symlinks are made again. Permissions and
-/// modification times are copied. Each regular file is transferred with `copy_mode`.
+/// modification times are copied, and `destination` gets the permissions and the modification
+/// time of `source` after all entries are copied. Each regular file is transferred with
+/// `copy_mode`.
+///
+/// A regular file or a symlink with more than one name is copied once, at the first name that the
+/// listing gives. The result gives the names of each such object as a [`LinkGroup`].
 pub(super) fn copy_contents(
     base: &cap_std::fs::Dir,
     source: &Path,
     excluded: &TreeExclusions,
     destination: &Path,
     copy_mode: FileCopyMode,
-) -> std::io::Result<()> {
+) -> std::io::Result<Box<[LinkGroup]>> {
     verify_empty_directory(destination)?;
     let opened;
     let source = if source.as_os_str().is_empty() {
@@ -215,14 +225,69 @@ pub(super) fn copy_contents(
         &opened
     };
     let entries = list_tree(source, excluded)?;
-    entries
+    let links = entries
         .iter()
-        .try_for_each(|entry| copy_out_entry(source, destination, entry, copy_mode))?;
+        .try_fold(CopiedLinks::default(), |links, entry| {
+            links.copy(source, destination, entry, copy_mode)
+        })?;
     entries
         .iter()
         .rev()
         .filter(|entry| entry.kind == TreeEntryKind::Directory)
-        .try_for_each(|entry| set_copied_directory_attributes(destination, entry))
+        .try_for_each(|entry| set_copied_directory_attributes(destination, entry))?;
+    let source_metadata = source.dir_metadata()?;
+    set_host_directory_attributes(
+        destination,
+        &source_metadata.permissions(),
+        source_metadata.modified().ok().map(|time| time.into_std()),
+    )?;
+    Ok(links.into_groups())
+}
+
+/// The regular files and symlinks with more than one name that a copy met.
+#[derive(Default)]
+struct CopiedLinks<'a> {
+    /// The position in `groups` of the object with each identity.
+    positions: HashMap<&'a NativeFileIdentity, usize>,
+    /// The copied name of each object, with the other names that the copy met.
+    groups: Vec<(&'a Path, Vec<&'a Path>)>,
+}
+
+impl<'a> CopiedLinks<'a> {
+    /// Copies one listed entry, unless it is another name of an object that the copy already
+    /// holds, and gives the state back.
+    fn copy(
+        mut self,
+        source: &cap_std::fs::Dir,
+        destination: &Path,
+        entry: &'a TreeEntry,
+        copy_mode: FileCopyMode,
+    ) -> std::io::Result<Self> {
+        let Some(identity) = &entry.link else {
+            return copy_out_entry(source, destination, entry, copy_mode).map(|()| self);
+        };
+        match self.positions.get(identity) {
+            Some(&position) => self.groups[position].1.push(&entry.relative),
+            None => {
+                copy_out_entry(source, destination, entry, copy_mode)?;
+                self.positions.insert(identity, self.groups.len());
+                self.groups.push((&entry.relative, Vec::new()));
+            }
+        }
+        Ok(self)
+    }
+
+    /// Gives a group for each object that the copy met at more than one name.
+    fn into_groups(self) -> Box<[LinkGroup]> {
+        self.groups
+            .into_iter()
+            .filter(|(_, others)| !others.is_empty())
+            .map(|(first, others)| LinkGroup {
+                first: Box::from(first),
+                others: others.into_iter().map(Box::from).collect(),
+            })
+            .collect()
+    }
 }
 
 /// Checks that `path` is an empty directory and not a symlink.
@@ -286,12 +351,23 @@ fn copy_out_entry(
 /// Gives a directory under the host directory `destination` the permissions and the modification
 /// time of its listed entry.
 fn set_copied_directory_attributes(destination: &Path, entry: &TreeEntry) -> std::io::Result<()> {
-    let directory = File::open(destination.join(&entry.relative))?;
-    directory.set_permissions(host_permissions(&entry.permissions, &directory)?)?;
-    if let Some(modified) = entry.modified {
-        directory.set_modified(modified)?;
-    }
-    Ok(())
+    set_host_directory_attributes(
+        &destination.join(&entry.relative),
+        &entry.permissions,
+        entry.modified,
+    )
+}
+
+/// Gives the host directory at `directory` the permissions `permissions` and, where it is given,
+/// the modification time `modified`.
+fn set_host_directory_attributes(
+    directory: &Path,
+    permissions: &cap_std::fs::Permissions,
+    modified: Option<SystemTime>,
+) -> std::io::Result<()> {
+    let directory = File::open(directory)?;
+    directory.set_permissions(host_permissions(permissions, &directory)?)?;
+    modified.map_or(Ok(()), |modified| directory.set_modified(modified))
 }
 
 /// What a seed entry needs to make objects in one sandbox.
@@ -300,7 +376,7 @@ pub(super) struct SeedContext {
     pub(super) mode: FileCopyMode,
     pub(super) quota_authority: QuotaAuthority,
     pub(super) access: SeedAccess,
-    pub(super) existing: OnExisting,
+    pub(super) placement: SeedPlacement,
 }
 
 /// Puts the host object at `source` into the sandbox at `destination` under `base`.
@@ -331,7 +407,7 @@ pub(super) fn seed_entry(
             destination,
             link_target,
             entry.modified,
-            context.existing,
+            context.placement,
         ),
         TreeEntryKind::Directory => seed_directory(
             context,
@@ -357,9 +433,6 @@ fn seed_file(
     destination: &Path,
 ) -> std::io::Result<()> {
     let (parent, name) = create_capability_copy_parent(directory, destination)?;
-    if context.existing == OnExisting::Keep && is_present(parent.as_dir(), &name)? {
-        return Ok(());
-    }
     let source_file = open_file_nofollow(source_directory, &source.relative)?;
     let mut temporary = CapabilityTempFile::new(parent)?;
     let temporary_file = temporary.as_file().try_clone()?.into_std();
@@ -379,13 +452,9 @@ fn seed_file(
     if let Some(modified) = source.modified {
         temporary_file.set_modified(modified)?;
     }
-    match context.existing {
-        OnExisting::Fail => temporary.persist_noclobber(&name)?,
-        OnExisting::Replace => temporary.persist_replacing(&name)?,
-        OnExisting::Keep => match temporary.persist_noclobber(&name) {
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            result => result?,
-        },
+    match context.placement {
+        SeedPlacement::CreateNew => temporary.persist_noclobber(&name)?,
+        SeedPlacement::Replace => temporary.persist_replacing(&name)?,
     }
     Ok(())
 }
@@ -399,17 +468,13 @@ fn seed_symlink(
     destination: &Path,
     link_target: &Path,
     modified: Option<SystemTime>,
-    existing: OnExisting,
+    placement: SeedPlacement,
 ) -> std::io::Result<()> {
     let (parent, name) = create_capability_copy_parent(directory, destination)?;
     let parent = parent.as_dir();
-    match existing {
-        OnExisting::Fail => make_symlink(parent, link_target, &name, modified),
-        OnExisting::Keep => match make_symlink(parent, link_target, &name, modified) {
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-            result => result,
-        },
-        OnExisting::Replace => {
+    match placement {
+        SeedPlacement::CreateNew => make_symlink(parent, link_target, &name, modified),
+        SeedPlacement::Replace => {
             let temporary = PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4()));
             make_symlink(parent, link_target, &temporary, modified)
                 .and_then(|()| remove_directory_in_the_way(parent, &name))
@@ -453,10 +518,7 @@ fn seed_directory(
         return seed_directory_contents(context, source, base);
     }
     let (parent, name) = create_capability_copy_parent(base, destination)?;
-    let seeded = seed_directory_at(parent.as_dir(), &name, context.existing)?;
-    if seeded == SeededDirectory::Kept {
-        return Ok(());
-    }
+    let seeded = seed_directory_at(parent.as_dir(), &name, context.placement)?;
     seed_directory_contents(context, source, &parent.as_dir().open_dir_nofollow(&name)?)?;
     if seeded == SeededDirectory::Made {
         set_seeded_directory_attributes(parent.as_dir(), &name, source_entry)
@@ -475,60 +537,43 @@ fn seed_directory_contents(
     target: &cap_std::fs::Dir,
 ) -> std::io::Result<()> {
     let entries = list_tree(source, &TreeExclusions::default())?;
-    let walk = entries
-        .iter()
-        .try_fold(SeedWalk::default(), |walk, entry| {
-            walk.seed(context, source, target, entry)
-        })?;
-    walk.made
-        .iter()
+    let made = entries.iter().try_fold(Vec::new(), |made, entry| {
+        seed_listed_entry(context, source, target, entry, made)
+    })?;
+    made.iter()
         .rev()
         .try_for_each(|entry| set_seeded_directory_attributes(target, &entry.relative, entry))
 }
 
-/// The state of a walk that seeds the entries of one tree listing.
-#[derive(Default)]
-struct SeedWalk<'a> {
-    /// A target path that stays as it is, together with all that is under it.
-    kept: Option<&'a Path>,
-    /// The directories that the walk made, parents first.
-    made: Vec<&'a TreeEntry>,
-}
-
-impl<'a> SeedWalk<'a> {
-    /// Seeds one listed entry under `target` and gives the walk back.
-    fn seed(
-        mut self,
-        context: SeedContext,
-        source: &cap_std::fs::Dir,
-        target: &cap_std::fs::Dir,
-        entry: &'a TreeEntry,
-    ) -> std::io::Result<Self> {
-        if self
-            .kept
-            .is_some_and(|kept| entry.relative.starts_with(kept))
-        {
-            return Ok(self);
-        }
-        match &entry.kind {
-            TreeEntryKind::Directory => {
-                match seed_directory_at(target, &entry.relative, context.existing)? {
-                    SeededDirectory::Made => self.made.push(entry),
-                    SeededDirectory::Merged => {}
-                    SeededDirectory::Kept => self.kept = Some(&entry.relative),
-                }
+/// Seeds one listed entry under `target`.
+///
+/// `made` holds the directories that the walk made, parents first. The result gives it back, with
+/// the directory of `entry` added when the call made it.
+fn seed_listed_entry<'a>(
+    context: SeedContext,
+    source: &cap_std::fs::Dir,
+    target: &cap_std::fs::Dir,
+    entry: &'a TreeEntry,
+    mut made: Vec<&'a TreeEntry>,
+) -> std::io::Result<Vec<&'a TreeEntry>> {
+    match &entry.kind {
+        TreeEntryKind::Directory => {
+            if seed_directory_at(target, &entry.relative, context.placement)?
+                == SeededDirectory::Made
+            {
+                made.push(entry);
             }
-            TreeEntryKind::File => seed_file(context, source, entry, target, &entry.relative)?,
-            TreeEntryKind::Symlink(link_target) => seed_symlink(
-                target,
-                &entry.relative,
-                link_target,
-                entry.modified,
-                context.existing,
-            )?,
         }
-        Ok(self)
+        TreeEntryKind::File => seed_file(context, source, entry, target, &entry.relative)?,
+        TreeEntryKind::Symlink(link_target) => seed_symlink(
+            target,
+            &entry.relative,
+            link_target,
+            entry.modified,
+            context.placement,
+        )?,
     }
+    Ok(made)
 }
 
 /// What happened at the target path of a directory in a seed source.
@@ -538,29 +583,25 @@ enum SeededDirectory {
     Made,
     /// A directory was already there, and the contents of the source go into it.
     Merged,
-    /// Another kind of object was already there, and it stays, together with all that is under
-    /// the path in the source.
-    Kept,
 }
 
 /// Makes the directory at `path` in `directory` for a directory in a seed source.
 ///
-/// A directory that is already there merges under every rule. Another kind of object at the path
-/// follows `existing`: `Fail` gives an `AlreadyExists` error, `Keep` leaves the object, and
-/// `Replace` removes the object and makes the directory.
+/// A directory that is already there merges under every placement. Another kind of object at the
+/// path follows `placement`: `CreateNew` gives an `AlreadyExists` error, and `Replace` removes the
+/// object and makes the directory.
 fn seed_directory_at(
     directory: &cap_std::fs::Dir,
     path: &Path,
-    existing: OnExisting,
+    placement: SeedPlacement,
 ) -> std::io::Result<SeededDirectory> {
     match directory.create_dir(path) {
         Ok(()) => Ok(SeededDirectory::Made),
         Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => Err(error),
-        Err(error) => match (directory.symlink_metadata(path)?.is_dir(), existing) {
+        Err(error) => match (directory.symlink_metadata(path)?.is_dir(), placement) {
             (true, _) => Ok(SeededDirectory::Merged),
-            (false, OnExisting::Fail) => Err(error),
-            (false, OnExisting::Keep) => Ok(SeededDirectory::Kept),
-            (false, OnExisting::Replace) => {
+            (false, SeedPlacement::CreateNew) => Err(error),
+            (false, SeedPlacement::Replace) => {
                 directory.remove_file(path)?;
                 directory.create_dir(path)?;
                 Ok(SeededDirectory::Made)
@@ -581,15 +622,6 @@ fn set_seeded_directory_attributes(
         cap_fs_ext::DirExt::set_times(directory, path, None, Some(capability_time(modified)))?;
     }
     Ok(())
-}
-
-/// Tells whether a path is there in `directory`, without following a symlink.
-fn is_present(directory: &cap_std::fs::Dir, path: &Path) -> std::io::Result<bool> {
-    match directory.symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
 }
 
 /// Opens a file in `directory` for reading, without following a symlink.
@@ -778,8 +810,11 @@ fn list_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use cap_std::fs::PermissionsExt as _;
+    #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt as _;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
     use std::time::{Duration, UNIX_EPOCH};
     use test_r::test;
@@ -799,15 +834,16 @@ mod tests {
         cap_std::fs::Dir::open_ambient_dir(path, cap_std::ambient_authority()).unwrap()
     }
 
-    fn buffered_seed(existing: OnExisting) -> SeedContext {
+    fn buffered_seed(placement: SeedPlacement) -> SeedContext {
         SeedContext {
             mode: FileCopyMode::Buffered,
             quota_authority: QuotaAuthority::Unsupported,
             access: SeedAccess::FromSource,
-            existing,
+            placement,
         }
     }
 
+    #[cfg(unix)]
     fn fixture_tree(root: &Path) {
         std::fs::create_dir_all(root.join("data/nested")).unwrap();
         std::fs::create_dir(root.join("static")).unwrap();
@@ -885,6 +921,7 @@ mod tests {
         assert!(excluded.contains(Path::new("directory")));
     }
 
+    #[cfg(unix)]
     #[test]
     fn listing_skips_excluded_paths_and_their_contents() {
         let source = tempfile::tempdir().unwrap();
@@ -928,6 +965,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn listing_refuses_a_file_that_is_not_regular() {
         let source = tempfile::tempdir().unwrap();
@@ -959,6 +997,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn listing_does_not_follow_a_symlink_to_a_directory() {
         let source = tempfile::tempdir().unwrap();
@@ -979,10 +1018,17 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn copy_contents_copies_everything_except_the_exclusions() {
         let source = tempfile::tempdir().unwrap();
         fixture_tree(source.path());
+        std::fs::set_permissions(source.path(), std::fs::Permissions::from_mode(0o750)).unwrap();
+        let root_modified = UNIX_EPOCH + Duration::from_secs(1_700_000_006);
+        File::open(source.path())
+            .unwrap()
+            .set_modified(root_modified)
+            .unwrap();
         let destination = tempfile::tempdir().unwrap();
 
         copy_contents(
@@ -994,6 +1040,9 @@ mod tests {
         )
         .unwrap();
 
+        let root = std::fs::metadata(destination.path()).unwrap();
+        assert_eq!(root.permissions().mode() & 0o777, 0o750);
+        assert_eq!(root.modified().unwrap(), root_modified);
         let mut expected = tree_listing(source.path());
         ["static/asset.bin", "data/nested", "data/nested/note.txt"]
             .into_iter()
@@ -1037,6 +1086,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn seed_recreates_the_tree_through_the_capability() {
         let source = tempfile::tempdir().unwrap();
@@ -1044,7 +1094,7 @@ mod tests {
         let destination = tempfile::tempdir().unwrap();
 
         seed_entry(
-            buffered_seed(OnExisting::Fail),
+            buffered_seed(SeedPlacement::CreateNew),
             &open(destination.path()),
             source.path(),
             Path::new(""),
@@ -1094,7 +1144,7 @@ mod tests {
         std::fs::write(destination.path().join("data/file"), b"old").unwrap();
 
         let error = seed_entry(
-            buffered_seed(OnExisting::Fail),
+            buffered_seed(SeedPlacement::CreateNew),
             &open(destination.path()),
             source.path(),
             Path::new(""),
@@ -1105,6 +1155,88 @@ mod tests {
         assert_eq!(
             std::fs::read(destination.path().join("data/file")).unwrap(),
             b"old"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_contents_copies_a_symlink_with_several_names_once_and_reports_its_names() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("target"), b"target").unwrap();
+        std::os::unix::fs::symlink("target", source.path().join("link")).unwrap();
+        std::fs::hard_link(source.path().join("link"), source.path().join("link-name")).unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let groups = copy_contents(
+            &open(source.path()),
+            Path::new(""),
+            &exclusions(&[]),
+            destination.path(),
+            FileCopyMode::Buffered,
+        )
+        .unwrap();
+
+        assert_eq!(
+            groups.as_ref(),
+            [LinkGroup {
+                first: Path::new("link").into(),
+                others: Box::new([Box::from(Path::new("link-name"))]),
+            }]
+        );
+        assert_eq!(
+            tree_listing(destination.path()),
+            ["link", "target"].map(String::from).into()
+        );
+        assert_eq!(
+            std::fs::read_link(destination.path().join("link")).unwrap(),
+            Path::new("target")
+        );
+    }
+
+    #[test]
+    fn copy_contents_copies_a_file_with_several_names_once_and_reports_its_names() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::create_dir(source.path().join("a")).unwrap();
+        std::fs::create_dir(source.path().join("b")).unwrap();
+        std::fs::write(source.path().join("a/file"), b"linked").unwrap();
+        std::fs::hard_link(source.path().join("a/file"), source.path().join("b/second")).unwrap();
+        std::fs::hard_link(source.path().join("a/file"), source.path().join("third")).unwrap();
+        std::fs::write(source.path().join("single"), b"single").unwrap();
+        std::fs::write(source.path().join("excluded"), b"excluded").unwrap();
+        std::fs::hard_link(source.path().join("excluded"), source.path().join("kept")).unwrap();
+        let destination = tempfile::tempdir().unwrap();
+
+        let groups = copy_contents(
+            &open(source.path()),
+            Path::new(""),
+            &exclusions(&["excluded"]),
+            destination.path(),
+            FileCopyMode::Buffered,
+        )
+        .unwrap();
+
+        assert_eq!(
+            groups.as_ref(),
+            [LinkGroup {
+                first: Path::new("a/file").into(),
+                others: [Path::new("b/second"), Path::new("third")]
+                    .map(Box::<Path>::from)
+                    .into(),
+            }]
+        );
+        assert_eq!(
+            tree_listing(destination.path()),
+            ["a", "a/file", "b", "kept", "single"]
+                .map(String::from)
+                .into()
+        );
+        assert_eq!(
+            std::fs::read(destination.path().join("a/file")).unwrap(),
+            b"linked"
+        );
+        assert_eq!(
+            std::fs::read(destination.path().join("kept")).unwrap(),
+            b"excluded"
         );
     }
 }

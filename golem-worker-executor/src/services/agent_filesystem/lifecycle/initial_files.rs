@@ -1,0 +1,1235 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::*;
+use crate::sandbox_filesystem::HostPath;
+use futures::{StreamExt as _, TryStreamExt as _};
+use std::collections::BTreeSet;
+use std::collections::hash_map::Entry;
+
+/// The declarations of initial files, at their paths relative to the filesystem root. Two maps
+/// that hold one declaration share its path and its file.
+pub(super) type Declarations = HashMap<Arc<Path>, Arc<InitialAgentFile>>;
+
+/// The declarations that one operation reads, borrowed from the maps that hold them.
+pub(super) type DeclarationView<'a> = HashMap<&'a Path, &'a InitialAgentFile>;
+
+/// The files that the lifecycle installed, at their paths relative to the filesystem root.
+pub(super) type InstalledFiles = HashMap<Arc<Path>, InstalledFile>;
+
+/// The number of bytes that one read takes when an install reads the content of a file.
+const CONTENT_READ_BYTES: usize = 64 * 1024;
+
+/// The initial files of one generation.
+///
+/// `initial` holds the declarations of the component revision, and `provisioned` the declarations
+/// of entity provisioning. `installed` holds, for read-only paths of the declarations, the file
+/// that the lifecycle installed at the path. The state does not change after it is made: an
+/// install makes a new state, which keeps the declarations of the old state that it does not
+/// replace.
+#[derive(Default)]
+pub(super) struct InitialFileState {
+    pub(super) initial: Arc<Declarations>,
+    pub(super) provisioned: Arc<Declarations>,
+    pub(super) installed: InstalledFiles,
+}
+
+impl InitialFileState {
+    /// Gives the initial and the provisioned declarations together.
+    pub(super) fn declarations(&self) -> DeclarationView<'_> {
+        declaration_view([&*self.initial, &*self.provisioned])
+    }
+}
+
+/// A read-only file that the lifecycle installed at a path.
+///
+/// The identity of the object lets a check of Golem's file skip the read of the content. An agent
+/// cannot make a file without write permission, so an object without write permission that has
+/// this identity is the file that the install put at the path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct InstalledFile {
+    object: SandboxObjectId,
+}
+
+impl InstalledFile {
+    /// Records the object that `attributes` describe.
+    pub(super) fn of(attributes: &SandboxAttributes) -> Self {
+        Self {
+            object: attributes.object.clone(),
+        }
+    }
+
+    /// Tells whether `attributes` describe this file: a regular file with the same identity and
+    /// without write permission.
+    pub(super) fn matches(&self, attributes: &SandboxAttributes) -> bool {
+        attributes.kind == SandboxObjectKind::File
+            && attributes.read_only
+            && self.object == attributes.object
+    }
+}
+
+/// What an install finds at a path whose declaration changes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PathState {
+    /// Nothing is at the path, or a directory above the path is missing.
+    Absent,
+    /// The path holds Golem's file of the old declaration: a regular file with the content of that
+    /// declaration and, where that declaration is read-only, without write permission. Only a path
+    /// that the old declarations have can hold Golem's file.
+    Golem,
+    /// Another object is at the path.
+    Other,
+    /// An object above the path is not a directory.
+    Blocked,
+    /// A directory is at a path that the old declarations do not have and the new declarations
+    /// have. Each object under the directory is Golem's file at a path that the new declarations do
+    /// not have, or a directory that holds at least one object.
+    DirectoryOfDroppedFiles,
+}
+
+/// One change of an install.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Step<'a> {
+    /// Puts the declared file at the path. `placement` is `CreateNew` where the path holds
+    /// nothing, and `Replace` where it holds Golem's file.
+    Seed {
+        path: &'a Path,
+        file: &'a InitialAgentFile,
+        placement: SeedPlacement,
+    },
+    /// Removes Golem's file from the path.
+    Unlink { path: &'a Path },
+    /// Removes the directory at the path after the unlinks of the install make it empty. A seed
+    /// then puts a file at the path or above it.
+    RemoveDirectory { path: &'a Path },
+}
+
+impl<'a> Step<'a> {
+    fn path(&self) -> &'a Path {
+        match self {
+            Self::Seed { path, .. } | Self::Unlink { path } | Self::RemoveDirectory { path } => {
+                path
+            }
+        }
+    }
+}
+
+/// Decides the changes of one install of initial files.
+///
+/// `old` holds the declarations before the install, and `new` the declarations after it. `state`
+/// gives what is at a path.
+///
+/// A path whose declarations in `old` and `new` are equal keeps what is at it. Two declarations
+/// are equal when their content hash, path, permissions and size are equal. At every other path,
+/// the install expects what `old` left there: Golem's file where `old` declares the path, and
+/// nothing where `old` does not declare it. Read-only and read-write declarations follow the same
+/// rules. Each such path follows one of three rules:
+///
+/// 1. A path that holds what the install expects gets what `new` declares. The new file goes on a
+///    path that holds nothing, or in place of Golem's file. Golem's file goes away where `new` does
+///    not declare the path.
+/// 2. A path that holds nothing, and that `new` does not declare, stays as it is.
+/// 3. Anything else at the path is a conflict.
+///
+/// The rules read the tree as the removals of the install leave it. Golem's file that the install
+/// removes does not block a path under it, so that path holds nothing. A directory of Golem's
+/// files that the install removes also holds nothing: the install removes that directory, and the
+/// directories in it, after the files and before the seeds.
+///
+/// The result gives the steps in path order, or the conflict of the first path in path order
+/// that has one.
+pub(super) fn plan<'a>(
+    old: &DeclarationView<'a>,
+    new: &DeclarationView<'a>,
+    state: impl Fn(&Path) -> PathState,
+) -> Result<Box<[Step<'a>]>, InitialFileConflict> {
+    let paths = old
+        .keys()
+        .chain(new.keys())
+        .copied()
+        .collect::<BTreeSet<&'a Path>>();
+    let unlinked = paths
+        .iter()
+        .copied()
+        .filter(|path| {
+            rule(old.get(path).copied(), new.get(path).copied(), state(path)) == Decision::Unlink
+        })
+        .collect::<BTreeSet<&Path>>();
+    paths
+        .into_iter()
+        .try_fold(Vec::new(), |mut steps, path| {
+            let observed = state(path);
+            // Only Golem's file can be unlinked, so an unlinked ancestor is the object that blocks.
+            let resolved = match observed {
+                PathState::Blocked
+                    if path
+                        .ancestors()
+                        .skip(1)
+                        .any(|ancestor| unlinked.contains(ancestor)) =>
+                {
+                    PathState::Absent
+                }
+                PathState::Blocked => PathState::Other,
+                PathState::DirectoryOfDroppedFiles => PathState::Absent,
+                observed => observed,
+            };
+            match rule(old.get(path).copied(), new.get(path).copied(), resolved) {
+                Decision::Keep => {}
+                Decision::Seed(file, placement) => {
+                    if observed == PathState::DirectoryOfDroppedFiles {
+                        steps.extend(
+                            emptied_directories(path, &unlinked)
+                                .into_iter()
+                                .map(|path| Step::RemoveDirectory { path }),
+                        );
+                    }
+                    steps.push(Step::Seed {
+                        path,
+                        file,
+                        placement,
+                    });
+                }
+                Decision::Unlink => steps.push(Step::Unlink { path }),
+                Decision::Conflict => {
+                    return Err(InitialFileConflict {
+                        path: Box::from(path),
+                        cause: conflict_cause(observed, resolved),
+                    });
+                }
+            }
+            Ok(steps)
+        })
+        .map(Vec::into_boxed_slice)
+}
+
+/// Why one path of an install has a conflict. `observed` is what is at the path, and `resolved` is
+/// what the rule of [`plan`] reads there once the removals of the install are taken into account.
+fn conflict_cause(observed: PathState, resolved: PathState) -> ConflictCause {
+    match (observed, resolved) {
+        // The removals of the install clear whatever is at the path, so nothing is left there.
+        (_, PathState::Absent) => ConflictCause::Missing,
+        (PathState::Blocked, _) => ConflictCause::Blocked,
+        _ => ConflictCause::Occupied,
+    }
+}
+
+/// Why an install of initial files stopped at one path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConflictCause {
+    /// Another object is at the path.
+    Occupied,
+    /// An object above the path is not a directory.
+    Blocked,
+    /// Nothing is at the path, and the old declarations put a file there.
+    Missing,
+}
+
+/// The first path, in path order, that stopped an install of initial files.
+///
+/// The message names the path and what is at it, because the agent, and not Golem, put it there.
+/// The install reads the whole tree before its first change, so an install that gives this error
+/// changed nothing, and it succeeds after the path holds what the old declarations left.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InitialFileConflict {
+    /// The path of the conflict, below the root of the agent filesystem.
+    path: Box<Path>,
+    /// What is at the path.
+    cause: ConflictCause,
+}
+
+impl InitialFileConflict {
+    /// The path of the conflict, below the root of the agent filesystem.
+    #[allow(dead_code)]
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Display for InitialFileConflict {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        let path = self.path.display();
+        match self.cause {
+            ConflictCause::Occupied => {
+                write!(
+                    formatter,
+                    "the agent filesystem holds another object at {path}"
+                )
+            }
+            ConflictCause::Blocked => {
+                write!(formatter, "the agent filesystem holds a file above {path}")
+            }
+            ConflictCause::Missing => write!(
+                formatter,
+                "the agent filesystem no longer holds the file that Golem installed at {path}"
+            ),
+        }?;
+        formatter.write_str(", so the initial files of the agent cannot be installed")
+    }
+}
+
+impl std::error::Error for InitialFileConflict {}
+
+/// Gives the directories that an install removes before it seeds a file at `path`: the directory at
+/// `path`, and each directory between it and a path in `unlinked` under it.
+fn emptied_directories<'a>(path: &'a Path, unlinked: &BTreeSet<&'a Path>) -> BTreeSet<&'a Path> {
+    unlinked
+        .iter()
+        .copied()
+        .flat_map(|unlinked| {
+            unlinked
+                .ancestors()
+                .skip(1)
+                .take_while(move |ancestor| ancestor.starts_with(path))
+        })
+        .collect()
+}
+
+/// What the rule of [`plan`] decides for one path.
+#[derive(Debug, Eq, PartialEq)]
+enum Decision<'a> {
+    Keep,
+    Seed(&'a InitialAgentFile, SeedPlacement),
+    Unlink,
+    Conflict,
+}
+
+/// Applies the rule of [`plan`] to one path.
+fn rule<'a>(
+    old: Option<&InitialAgentFile>,
+    new: Option<&'a InitialAgentFile>,
+    state: PathState,
+) -> Decision<'a> {
+    match (old, new, state) {
+        (old, new, _) if old == new => Decision::Keep,
+        (None, Some(new), PathState::Absent) => Decision::Seed(new, SeedPlacement::CreateNew),
+        (Some(_), Some(new), PathState::Golem) => Decision::Seed(new, SeedPlacement::Replace),
+        (Some(_), None, PathState::Golem) => Decision::Unlink,
+        (_, None, PathState::Absent) => Decision::Keep,
+        _ => Decision::Conflict,
+    }
+}
+
+/// Installs the initial files of `new` in place of the files of `old`.
+///
+/// `installed` holds the files that the lifecycle installed for `old`. `states` gives what is at
+/// the paths, as [`plan`] needs it. A path without a state holds nothing. A conflict fails the
+/// install with an [`InitialFileConflict`] that names the conflicting path and what is at it.
+/// The install loads every source before its first change, so a conflict or a failed load changes
+/// nothing. A failure after the plan
+/// passes and the sources load invalidates the generation. The result gives the files that the
+/// lifecycle installed for `new`.
+pub(super) async fn install<'a, Adapter: SandboxFilesystemAdapter>(
+    generation: &FilesystemGeneration<Adapter>,
+    sandbox: &Adapter,
+    sources: InitialFileSources,
+    old: &DeclarationView<'a>,
+    installed: &InstalledFiles,
+    new: &DeclarationView<'a>,
+    states: &HashMap<&Path, PathState>,
+) -> Result<InstalledFiles, Error> {
+    let steps = plan(old, new, |path| {
+        states.get(path).copied().unwrap_or(PathState::Absent)
+    })
+    .map_err(|conflict| Error::InitialFileConflict(Box::new(conflict)))?;
+    let sources = sources.load(&steps).await?;
+    match apply(generation, sandbox, &sources, &steps).await {
+        Ok(recorded) => Ok(installed_after(installed, new, &steps, recorded)),
+        Err(error) => {
+            generation.invalidate();
+            Err(error)
+        }
+    }
+}
+
+/// Makes the changes of `steps`: the unlinks, then the removals of directories with the deepest
+/// directory first, then the seeds. Gives the read-only files that it seeded.
+async fn apply<Adapter: SandboxFilesystemAdapter>(
+    generation: &FilesystemGeneration<Adapter>,
+    sandbox: &Adapter,
+    sources: &InitialFileSources,
+    steps: &[Step<'_>],
+) -> Result<Vec<(Arc<Path>, InstalledFile)>, Error> {
+    let unlinks = steps.iter().filter_map(|step| match *step {
+        Step::Unlink { path } => Some(path),
+        Step::Seed { .. } | Step::RemoveDirectory { .. } => None,
+    });
+    // The directories are sorted after they are collected, so they are a vector.
+    let mut directories = steps
+        .iter()
+        .filter_map(|step| match *step {
+            Step::RemoveDirectory { path } => Some(path),
+            Step::Seed { .. } | Step::Unlink { .. } => None,
+        })
+        .collect::<Vec<&Path>>();
+    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    let seeds = steps.iter().filter_map(|step| match *step {
+        Step::Seed {
+            path,
+            file,
+            placement,
+        } => Some((path, file, placement)),
+        Step::Unlink { .. } | Step::RemoveDirectory { .. } => None,
+    });
+    futures::stream::iter(unlinks)
+        .map(Ok)
+        .try_for_each(|path| async move {
+            sandbox
+                .unlink_file(SandboxPath::at_root(path))
+                .await
+                .map_err(Error::Sandbox)
+        })
+        .await?;
+    futures::stream::iter(directories)
+        .map(Ok)
+        .try_for_each(|path| async move {
+            sandbox
+                .remove_directory(SandboxPath::at_root(path))
+                .await
+                .map_err(Error::Sandbox)
+        })
+        .await?;
+    futures::stream::iter(seeds)
+        .map(Ok)
+        .try_fold(
+            Vec::new(),
+            |mut recorded, (path, file, placement)| async move {
+                let read_only = file.permissions == AgentFilePermissions::ReadOnly;
+                let entry = SeedEntry {
+                    source: sources.path(file, path)?,
+                    target: SandboxPath::at_root(path),
+                    access: if read_only {
+                        SeedAccess::ReadOnly
+                    } else {
+                        SeedAccess::ReadWrite
+                    },
+                    placement,
+                };
+                seed_with_retry(generation, sandbox, entry, RetryPreparation::None).await?;
+                if read_only {
+                    let attributes = sandbox
+                        .get_path_attributes(SandboxPath::at_root(path), SandboxFollow::No)
+                        .await
+                        .map_err(Error::Sandbox)?;
+                    recorded.push((Arc::from(path), InstalledFile::of(&attributes)));
+                }
+                Ok(recorded)
+            },
+        )
+        .await
+}
+
+/// Gives the files that the lifecycle installed after an install of `steps`.
+///
+/// A path keeps its entry while `new` declares it read-only and no step changed it. `recorded`
+/// holds the files that the install seeded. A recorded file removes an entry of the same object at
+/// another path, because that path no longer holds the file that the lifecycle installed there.
+fn installed_after(
+    previous: &InstalledFiles,
+    new: &DeclarationView<'_>,
+    steps: &[Step<'_>],
+    recorded: Vec<(Arc<Path>, InstalledFile)>,
+) -> InstalledFiles {
+    let changed = steps.iter().map(Step::path).collect::<HashSet<&Path>>();
+    // A later entry of one object replaces the earlier entry in the map by object.
+    previous
+        .iter()
+        .filter(|(path, _)| {
+            !changed.contains(path.as_ref())
+                && new
+                    .get(path.as_ref())
+                    .is_some_and(|file| file.permissions == AgentFilePermissions::ReadOnly)
+        })
+        .map(|(path, file)| (Arc::clone(path), file.clone()))
+        .chain(recorded)
+        .map(|(path, file)| (file.object, path))
+        .collect::<HashMap<SandboxObjectId, Arc<Path>>>()
+        .into_iter()
+        .map(|(object, path)| (path, InstalledFile { object }))
+        .collect()
+}
+
+/// What a retry of a seed does before it runs the seed again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RetryPreparation {
+    /// Nothing. A seed of one file writes a temporary file and gives it its name in one step, so a
+    /// failed attempt leaves nothing at the target.
+    None,
+    /// Removes all that is under the root of the sandbox. A seed of a tree keeps the entries that
+    /// it made before the failure, and the root of a new generation held nothing before the seed.
+    EmptyRoot,
+}
+
+/// Seeds one entry, with the retry, capacity reclaim and classification of initial-file seeding.
+///
+/// `preparation` runs before each retry, and a failure of it invalidates the generation. When the
+/// decision is a failure, what the failed attempts made stays in the sandbox: the cleanup of the
+/// sealed filesystem removes it with the sandbox.
+pub(super) async fn seed_with_retry<Adapter: SandboxFilesystemAdapter>(
+    generation: &FilesystemGeneration<Adapter>,
+    sandbox: &Adapter,
+    entry: SeedEntry,
+    preparation: RetryPreparation,
+) -> Result<(), Error> {
+    let entry = &entry;
+    // An attempt that retries gives no outcome. The stream stops after the first outcome.
+    let attempts = futures::stream::unfold(Some(RetryBudget::new(2)), |budget| async move {
+        let mut budget = budget?;
+        let outcome = match sandbox.seed(Box::new([entry.clone()])).await {
+            Ok(()) => Some(Ok(())),
+            Err(error) => {
+                match decide_write_effect(generation, &error, EffectEvidence::NoEffect, budget)
+                    .await
+                {
+                    EffectDecision::RetryAfterProvenNoEffect if budget.consume() => {
+                        match prepare_retry(sandbox, preparation).await {
+                            Ok(()) => None,
+                            Err(failure) => {
+                                tracing::warn!(
+                                    error = %failure,
+                                    "Failed to prepare the retry of an initial-file seed"
+                                );
+                                generation.invalidate();
+                                Some(Err(Error::RuntimeInvalidated))
+                            }
+                        }
+                    }
+                    EffectDecision::ReturnFailure(cause) => {
+                        Some(Err(classified_error(cause, error)))
+                    }
+                    EffectDecision::ReclaimCapacityThenRetry => {
+                        Some(Err(Error::PhysicalCapacity(error)))
+                    }
+                    EffectDecision::Invalidate
+                    | EffectDecision::RetryAfterProvenNoEffect
+                    | EffectDecision::RetryUnwrittenSuffix
+                    | EffectDecision::Succeed => {
+                        generation.invalidate();
+                        Some(Err(Error::RuntimeInvalidated))
+                    }
+                }
+            }
+        };
+        let next = outcome.is_none().then_some(budget);
+        Some((outcome, next))
+    });
+    let outcomes = attempts.filter_map(std::future::ready);
+    std::pin::pin!(outcomes)
+        .next()
+        .await
+        .expect("seed attempts end with an outcome")
+}
+
+/// Runs `preparation` before a retry of a seed.
+async fn prepare_retry<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    preparation: RetryPreparation,
+) -> Result<(), FilesystemStorageError> {
+    match preparation {
+        RetryPreparation::None => Ok(()),
+        RetryPreparation::EmptyRoot => remove_contents(sandbox, Path::new("")).await,
+    }
+}
+
+/// Removes all that is under the directory at the root-relative `path`, and keeps the directory.
+///
+/// The walk unlinks the files and symlinks of a directory when it reads the directory, and it
+/// removes a directory after the directories under it.
+async fn remove_contents<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+) -> Result<(), FilesystemStorageError> {
+    // The pending directories are a stack that the walk pushes to and pops from. A directory goes
+    // on the stack to be read, and then again, marked as read, to be removed after the directories
+    // under it.
+    futures::stream::try_unfold(
+        vec![(Box::<Path>::from(path), false)],
+        |mut pending| async move {
+            let Some((directory, read)) = pending.pop() else {
+                return Ok(None);
+            };
+            if read {
+                if directory.as_ref() != path {
+                    sandbox
+                        .remove_directory(SandboxPath::at_root(&*directory))
+                        .await?;
+                }
+                return Ok(Some(((), pending)));
+            }
+            let entries = directory_entries(sandbox, &directory).await?;
+            futures::stream::iter(
+                entries
+                    .iter()
+                    .filter(|entry| entry.kind != SandboxObjectKind::Directory),
+            )
+            .map(Ok)
+            .try_for_each(|entry| {
+                sandbox.unlink_file(SandboxPath::at_root(directory.join(&entry.name)))
+            })
+            .await?;
+            // The directory goes under the directories in it, so the walk pops it after them. The
+            // paths of those directories are built from its path, so it moves onto the stack after
+            // them, at the position before them.
+            let position = pending.len();
+            pending.extend(
+                entries
+                    .into_iter()
+                    .filter(|entry| entry.kind == SandboxObjectKind::Directory)
+                    .map(|entry| (directory.join(entry.name).into_boxed_path(), false)),
+            );
+            pending.insert(position, (directory, true));
+            Ok::<_, FilesystemStorageError>(Some(((), pending)))
+        },
+    )
+    .try_collect::<()>()
+    .await
+}
+
+/// Gives the sandbox path of the root-relative `path`. The sandbox refuses an empty path, as
+/// POSIX does, so the root is named `.`.
+pub(super) fn sandbox_path(path: &Path) -> SandboxPath {
+    if path.as_os_str().is_empty() {
+        SandboxPath::at_root(".")
+    } else {
+        SandboxPath::at_root(path)
+    }
+}
+
+/// The sources of the files that an install seeds, loaded once for each content hash.
+pub(super) struct InitialFileSources {
+    loader: Arc<FileLoader>,
+    environment_id: EnvironmentId,
+    loaded: HashMap<AgentFileContentHash, InitialFileSource>,
+}
+
+impl InitialFileSources {
+    pub(super) fn new(loader: Arc<FileLoader>, environment_id: EnvironmentId) -> Self {
+        Self {
+            loader,
+            environment_id,
+            loaded: HashMap::new(),
+        }
+    }
+
+    /// Loads the source of each file that `steps` seed, where it is not loaded yet.
+    async fn load(self, steps: &[Step<'_>]) -> Result<Self, Error> {
+        let seeded = steps.iter().filter_map(|step| match *step {
+            Step::Seed { path, file, .. } => Some((path, file)),
+            Step::Unlink { .. } | Step::RemoveDirectory { .. } => None,
+        });
+        futures::stream::iter(seeded)
+            .map(Ok)
+            .try_fold(self, |mut sources, (path, file)| async move {
+                match sources.loaded.get(&file.content_hash) {
+                    Some(source) if source.size() == file.size => Ok(sources),
+                    Some(_) => Err(Error::Sandbox(FilesystemStorageError::verification(
+                        "verify consistent initial-file source size",
+                        path,
+                    ))),
+                    None => {
+                        let source = sources
+                            .loader
+                            .get_source(sources.environment_id, file.content_hash, file.size)
+                            .await
+                            .map_err(|error| {
+                                Error::Sandbox(FilesystemStorageError::io(
+                                    "load verified initial-file source",
+                                    path,
+                                    std::io::Error::other(error),
+                                ))
+                            })?;
+                        sources.loaded.insert(file.content_hash, source);
+                        Ok(sources)
+                    }
+                }
+            })
+            .await
+    }
+
+    /// Gives the host path of the loaded source of `file`, which an install seeds at `path`.
+    fn path(&self, file: &InitialAgentFile, path: &Path) -> Result<HostPath, Error> {
+        self.loaded
+            .get(&file.content_hash)
+            .map(|source| source.path().clone())
+            .ok_or_else(|| {
+                Error::Sandbox(FilesystemStorageError::verification(
+                    "find the loaded initial-file source of",
+                    path,
+                ))
+            })
+    }
+}
+
+impl PreparedInitialFiles {
+    /// Gives the declarations and their loaded sources.
+    pub(super) fn into_parts(self) -> (Declarations, InitialFileSources) {
+        let count = self.files.len();
+        let (declarations, loaded) = self.files.into_iter().fold(
+            (Declarations::with_capacity(count), HashMap::new()),
+            |(mut declarations, mut loaded), file| {
+                loaded
+                    .entry(file.initial_file.content_hash)
+                    .or_insert(file.source);
+                declarations.insert(Arc::from(file.target), Arc::new(file.initial_file));
+                (declarations, loaded)
+            },
+        );
+        (
+            declarations,
+            InitialFileSources {
+                loader: self.loader,
+                environment_id: self.environment_id,
+                loaded,
+            },
+        )
+    }
+}
+
+/// Finds what is at each path whose declaration differs between `old` and `new`.
+///
+/// `installed` holds the files that the lifecycle installed for `old`. At each path that `old`
+/// declares, the function checks whether the path holds Golem's file of that declaration. A path
+/// that `old` does not declare never holds Golem's file. The function reads no path whose
+/// declarations in `old` and `new` are equal.
+///
+/// After all the paths, the function reads each directory that is at a path that `old` does not
+/// declare. Such a path is a path that `new` declares. The read of one directory stops at the first
+/// object that is not Golem's file at a path that `new` does not declare, and at the first
+/// directory that holds nothing.
+pub(super) async fn observe<'a, Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    old: &DeclarationView<'a>,
+    new: &DeclarationView<'a>,
+    installed: &InstalledFiles,
+) -> Result<HashMap<&'a Path, PathState>, FilesystemStorageError> {
+    let changed = old
+        .keys()
+        .chain(new.keys())
+        .copied()
+        .filter(|path| old.get(path) != new.get(path))
+        .collect::<BTreeSet<&'a Path>>();
+    // The directories are collected by the fold that reads the paths, so they are a vector.
+    let (_, states, directories) = futures::stream::iter(changed)
+        .map(Ok)
+        .try_fold(
+            (PathReader::default(), HashMap::new(), Vec::new()),
+            |(reader, mut states, mut directories), path| async move {
+                let (reader, lookup) = reader.read(sandbox, path).await?;
+                let state = match (lookup, old.get(path).copied()) {
+                    (PathLookup::Absent, _) => PathState::Absent,
+                    (PathLookup::Blocked, _) => PathState::Blocked,
+                    (PathLookup::Found(attributes), Some(declared)) => {
+                        if holds_golem_file(
+                            sandbox,
+                            path,
+                            declared,
+                            installed.get(path),
+                            &attributes,
+                        )
+                        .await?
+                        {
+                            PathState::Golem
+                        } else {
+                            PathState::Other
+                        }
+                    }
+                    (PathLookup::Found(attributes), None) => {
+                        if attributes.kind == SandboxObjectKind::Directory {
+                            directories.push(path);
+                        }
+                        PathState::Other
+                    }
+                };
+                states.insert(path, state);
+                Ok((reader, states, directories))
+            },
+        )
+        .await?;
+    futures::stream::iter(directories)
+        .map(Ok)
+        .try_fold(states, |mut states, path| async move {
+            if holds_only_dropped_files(sandbox, path, old, new, &states).await? {
+                states.insert(path, PathState::DirectoryOfDroppedFiles);
+            }
+            Ok(states)
+        })
+        .await
+}
+
+/// Tells whether the directory at `path` holds at least one object, and each object under it is
+/// Golem's file at a path that `old` declares and `new` does not declare, or a directory that holds
+/// at least one object. `states` gives what is at the paths whose declarations differ.
+///
+/// The function reads each directory under `path` one time. It stops after the first directory
+/// that holds nothing or an object that does not agree with these conditions.
+async fn holds_only_dropped_files<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+    old: &DeclarationView<'_>,
+    new: &DeclarationView<'_>,
+    states: &HashMap<&Path, PathState>,
+) -> Result<bool, FilesystemStorageError> {
+    // The pending directories are a stack that the read pushes to and pops from.
+    futures::stream::try_unfold(vec![Box::<Path>::from(path)], |mut pending| async move {
+        let Some(directory) = pending.pop() else {
+            return Ok(None);
+        };
+        let entries = directory_entries(sandbox, &directory).await?;
+        let agrees = !entries.is_empty()
+            && entries.iter().all(|entry| {
+                entry.kind == SandboxObjectKind::Directory
+                    || dropped_golem_file(&directory.join(&entry.name), old, new, states)
+            });
+        // A directory that does not agree ends the read, so no other directory is read.
+        let pending = if agrees {
+            pending
+                .into_iter()
+                .chain(
+                    entries
+                        .into_iter()
+                        .filter(|entry| entry.kind == SandboxObjectKind::Directory)
+                        .map(|entry| directory.join(entry.name).into_boxed_path()),
+                )
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok::<_, FilesystemStorageError>(Some((agrees, pending)))
+    })
+    .try_fold(true, |holds, agrees| {
+        std::future::ready(Ok(holds && agrees))
+    })
+    .await
+}
+
+/// Tells whether `object` is Golem's file at a path that `old` declares and `new` does not declare.
+/// `states` gives what is at the paths whose declarations differ.
+fn dropped_golem_file(
+    object: &Path,
+    old: &DeclarationView<'_>,
+    new: &DeclarationView<'_>,
+    states: &HashMap<&Path, PathState>,
+) -> bool {
+    old.contains_key(object)
+        && !new.contains_key(object)
+        && states.get(object) == Some(&PathState::Golem)
+}
+
+/// Lists the entries of the directory at the root-relative `path`, without following a final
+/// symlink.
+async fn directory_entries<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+) -> Result<Vec<crate::sandbox_filesystem::SandboxDirectoryEntry>, FilesystemStorageError> {
+    let node = sandbox
+        .open(
+            sandbox_path(path),
+            SandboxOpenOptions::Existing {
+                expected: SandboxObjectKind::Directory,
+                access: SandboxAccessMode::Read,
+                follow: SandboxFollow::No,
+            },
+        )
+        .await?
+        .into_node();
+    let entries = match &node {
+        SandboxNode::Directory(directory) => sandbox.read_directory(directory).await,
+        SandboxNode::File(_) => Err(FilesystemStorageError::verification(
+            "list the entries of an initial-file directory at",
+            path,
+        )),
+    };
+    let closed = sandbox.close(node).await;
+    let entries = entries?;
+    closed.map(|()| entries)
+}
+
+/// Tells whether the object at `path`, which `attributes` describe, is Golem's file of the
+/// declaration `declared`: a regular file with the declared content and, where the declaration is
+/// read-only, without write permission.
+///
+/// `installed` is the file that the lifecycle installed at the path, where it recorded one. An
+/// object that matches it needs no read of its content.
+pub(super) async fn holds_golem_file<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+    declared: &InitialAgentFile,
+    installed: Option<&InstalledFile>,
+    attributes: &SandboxAttributes,
+) -> Result<bool, FilesystemStorageError> {
+    let read_only = declared.permissions == AgentFilePermissions::ReadOnly;
+    if attributes.kind != SandboxObjectKind::File
+        || (read_only && !attributes.read_only)
+        || attributes.size != declared.size
+    {
+        Ok(false)
+    } else if installed.is_some_and(|installed| installed.matches(attributes)) {
+        Ok(true)
+    } else {
+        content_hash(sandbox, path)
+            .await
+            .map(|hash| hash == *declared.content_hash.0.as_blake3_hash())
+    }
+}
+
+/// Computes the content hash of the regular file at `path`.
+async fn content_hash<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+) -> Result<blake3::Hash, FilesystemStorageError> {
+    let node = sandbox
+        .open(
+            SandboxPath::at_root(path),
+            SandboxOpenOptions::Existing {
+                expected: SandboxObjectKind::File,
+                access: SandboxAccessMode::Read,
+                follow: SandboxFollow::No,
+            },
+        )
+        .await?
+        .into_node();
+    let hashed = match &node {
+        SandboxNode::File(file) => futures::stream::try_unfold(0u64, |offset| async move {
+            let bytes = sandbox
+                .read(
+                    file,
+                    SandboxReadRange {
+                        offset,
+                        length: CONTENT_READ_BYTES,
+                    },
+                )
+                .await?;
+            let next = offset + bytes.len() as u64;
+            Ok::<_, FilesystemStorageError>((!bytes.is_empty()).then_some((bytes, next)))
+        })
+        .try_fold(blake3::Hasher::new(), |mut hasher, bytes| async move {
+            hasher.update(&bytes);
+            Ok(hasher)
+        })
+        .await
+        .map(|hasher| hasher.finalize()),
+        SandboxNode::Directory(_) => Err(FilesystemStorageError::verification(
+            "hash the content of an initial file at",
+            path,
+        )),
+    };
+    let closed = sandbox.close(node).await;
+    let hash = hashed?;
+    closed.map(|()| hash)
+}
+
+/// What a read of a path found, without following a symlink anywhere on the path.
+pub(super) enum PathLookup {
+    /// Nothing is at the path, or a directory above it is missing.
+    Absent,
+    /// An object above the path is not a directory.
+    Blocked,
+    /// An object is at the path.
+    Found(SandboxAttributes),
+}
+
+/// Reads paths of a sandbox for one operation, and reads each directory above them once.
+#[derive(Default)]
+pub(super) struct PathReader {
+    directories: HashSet<Box<Path>>,
+}
+
+impl PathReader {
+    /// Reads what is at the root-relative `path`, without following a symlink anywhere on the
+    /// path, and gives the reader back.
+    pub(super) async fn read<Adapter: SandboxFilesystemAdapter>(
+        self,
+        sandbox: &Adapter,
+        path: &Path,
+    ) -> Result<(Self, PathLookup), FilesystemStorageError> {
+        // The ancestors are collected because the read goes through them from the root down.
+        let ancestors = path
+            .ancestors()
+            .skip(1)
+            .filter(|ancestor| !ancestor.as_os_str().is_empty())
+            .collect::<Box<[&Path]>>();
+        let (reader, stopped) = futures::stream::iter(ancestors.iter().rev().copied())
+            .map(Ok)
+            .try_fold((self, None), |(mut reader, stopped), ancestor| async move {
+                if stopped.is_some() || reader.directories.contains(ancestor) {
+                    return Ok((reader, stopped));
+                }
+                match read_path(sandbox, ancestor).await? {
+                    Some(attributes) if attributes.kind == SandboxObjectKind::Directory => {
+                        reader.directories.insert(Box::from(ancestor));
+                        Ok((reader, None))
+                    }
+                    Some(_) => Ok((reader, Some(PathLookup::Blocked))),
+                    None => Ok((reader, Some(PathLookup::Absent))),
+                }
+            })
+            .await?;
+        match stopped {
+            Some(lookup) => Ok((reader, lookup)),
+            None => read_path(sandbox, path).await.map(|attributes| {
+                (
+                    reader,
+                    attributes.map_or(PathLookup::Absent, PathLookup::Found),
+                )
+            }),
+        }
+    }
+}
+
+/// Reads the attributes of the object at the root-relative `path` without following a final
+/// symlink, or gives `None` when nothing is at the path.
+async fn read_path<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+) -> Result<Option<SandboxAttributes>, FilesystemStorageError> {
+    match sandbox
+        .get_path_attributes(SandboxPath::at_root(path), SandboxFollow::No)
+        .await
+    {
+        Ok(attributes) => Ok(Some(attributes)),
+        Err(error) if error.io_kind() == Some(std::io::ErrorKind::NotFound) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Applies the initial files of a new component revision to a generation.
+pub(super) async fn update<Adapter: SandboxFilesystemAdapter>(
+    generation: &FilesystemGeneration<Adapter>,
+    sources: InitialFileSources,
+    files: Vec<InitialAgentFile>,
+) -> Result<(), Error> {
+    let _update = generation.initial_file_updates.lock().await;
+    let initial = declarations_of(files, "materialize unique initial-file update target")?;
+    let state = Arc::clone(&generation.initial_files.lock().unwrap());
+    validate_compatible(
+        &declaration_view([&initial]),
+        &declaration_view([&*state.provisioned]),
+    )?;
+    let new = declaration_view([&initial, &*state.provisioned]);
+    let installed = install_resident(generation, sources, &state, &new).await?;
+    *generation.initial_files.lock().unwrap() = Arc::new(InitialFileState {
+        initial: Arc::new(initial),
+        provisioned: Arc::clone(&state.provisioned),
+        installed,
+    });
+    Ok(())
+}
+
+/// Adds entity-provisioned files to the initial files of a generation.
+pub(super) async fn provision<Adapter: SandboxFilesystemAdapter>(
+    generation: &FilesystemGeneration<Adapter>,
+    sources: InitialFileSources,
+    files: Vec<InitialAgentFile>,
+) -> Result<(), Error> {
+    let _update = generation.initial_file_updates.lock().await;
+    let requested = declarations_of(files, "materialize unique entity-provisioned file target")?;
+    let state = Arc::clone(&generation.initial_files.lock().unwrap());
+    validate_compatible(&declaration_view([&requested]), &state.declarations())?;
+    let provisioned = state
+        .provisioned
+        .iter()
+        .chain(&requested)
+        .map(|(path, file)| (Arc::clone(path), Arc::clone(file)))
+        .collect::<Declarations>();
+    if provisioned == *state.provisioned {
+        return Ok(());
+    }
+    let new = declaration_view([&*state.initial, &provisioned]);
+    let installed = install_resident(generation, sources, &state, &new).await?;
+    *generation.initial_files.lock().unwrap() = Arc::new(InitialFileState {
+        initial: Arc::clone(&state.initial),
+        provisioned: Arc::new(provisioned),
+        installed,
+    });
+    Ok(())
+}
+
+/// Installs `new` over the files of `state` in a generation that the agent uses.
+async fn install_resident<Adapter: SandboxFilesystemAdapter>(
+    generation: &FilesystemGeneration<Adapter>,
+    sources: InitialFileSources,
+    state: &InitialFileState,
+    new: &DeclarationView<'_>,
+) -> Result<InstalledFiles, Error> {
+    let sandbox = generation
+        .sandbox
+        .read()
+        .await
+        .as_ref()
+        .cloned()
+        .ok_or(Error::RuntimeInvalidated)?;
+    let old = state.declarations();
+    let states = observe(sandbox.as_ref(), &old, new, &state.installed)
+        .await
+        .map_err(|source| classify_query_error(generation, source))?;
+    install(
+        generation,
+        sandbox.as_ref(),
+        sources,
+        &old,
+        &state.installed,
+        new,
+        &states,
+    )
+    .await
+}
+
+/// Makes declarations from `files`, and refuses two files at one path. Each file is wrapped once.
+pub(super) fn declarations_of(
+    files: Vec<InitialAgentFile>,
+    duplicate_operation: &'static str,
+) -> Result<Declarations, Error> {
+    let count = files.len();
+    files.into_iter().try_fold(
+        Declarations::with_capacity(count),
+        |mut declarations, file| {
+            let path = Arc::<Path>::from(PathBuf::from(file.path.to_rel_string()));
+            match declarations.entry(path) {
+                Entry::Occupied(entry) => Err(Error::Sandbox(
+                    FilesystemStorageError::verification(duplicate_operation, entry.key()),
+                )),
+                Entry::Vacant(entry) => {
+                    entry.insert(Arc::new(file));
+                    Ok(declarations)
+                }
+            }
+        },
+    )
+}
+
+/// Refuses a declaration in `requested` that describes another file than `existing` at its path.
+pub(super) fn validate_compatible(
+    requested: &DeclarationView<'_>,
+    existing: &DeclarationView<'_>,
+) -> Result<(), Error> {
+    requested
+        .iter()
+        .find(|(path, file)| {
+            existing
+                .get(*path)
+                .is_some_and(|existing| existing != *file)
+        })
+        .map_or(Ok(()), |(path, _)| {
+            Err(Error::Sandbox(FilesystemStorageError::verification(
+                "resolve conflicting owner filesystem provision declarations at",
+                path,
+            )))
+        })
+}
+
+/// Gives one view of the declarations of `maps`, borrowed from the maps. Where two maps declare
+/// one path, the later map gives the declaration.
+pub(super) fn declaration_view<'a>(
+    maps: impl IntoIterator<Item = &'a Declarations>,
+) -> DeclarationView<'a> {
+    maps.into_iter()
+        .flatten()
+        .map(|(path, file)| (path.as_ref(), file.as_ref()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::component::AgentFilePath;
+    use test_r::test;
+
+    fn declaration(permissions: AgentFilePermissions, size: u64) -> InitialAgentFile {
+        InitialAgentFile {
+            content_hash: AgentFileContentHash(golem_common::model::diff::Hash::empty()),
+            path: AgentFilePath::from_abs_str("/file").unwrap(),
+            permissions,
+            size,
+        }
+    }
+
+    fn read_only(size: u64) -> InitialAgentFile {
+        declaration(AgentFilePermissions::ReadOnly, size)
+    }
+
+    fn read_write(size: u64) -> InitialAgentFile {
+        declaration(AgentFilePermissions::ReadWrite, size)
+    }
+
+    #[test]
+    fn installed_after_keeps_unchanged_read_only_paths_and_drops_an_older_path_of_one_object() {
+        let file = |object| InstalledFile {
+            object: SandboxObjectId::scripted(object),
+        };
+        let previous = InstalledFiles::from([
+            (Arc::<Path>::from(Path::new("kept")), file(1)),
+            (Arc::<Path>::from(Path::new("reused")), file(2)),
+            (Arc::<Path>::from(Path::new("dropped")), file(3)),
+            (Arc::<Path>::from(Path::new("made-writable")), file(4)),
+        ]);
+        let declared = Declarations::from([
+            (Arc::<Path>::from(Path::new("kept")), Arc::new(read_only(1))),
+            (
+                Arc::<Path>::from(Path::new("reused")),
+                Arc::new(read_only(1)),
+            ),
+            (
+                Arc::<Path>::from(Path::new("made-writable")),
+                Arc::new(read_write(1)),
+            ),
+            (
+                Arc::<Path>::from(Path::new("seeded")),
+                Arc::new(read_only(1)),
+            ),
+        ]);
+        let new = declaration_view([&declared]);
+        let seeded = new.get(Path::new("seeded")).unwrap();
+        let steps = [Step::Seed {
+            path: Path::new("seeded"),
+            file: seeded,
+            placement: SeedPlacement::CreateNew,
+        }];
+
+        let installed = installed_after(
+            &previous,
+            &new,
+            &steps,
+            vec![(Arc::from(Path::new("seeded")), file(2))],
+        );
+
+        assert_eq!(
+            installed,
+            InstalledFiles::from([
+                (Arc::<Path>::from(Path::new("kept")), file(1)),
+                (Arc::<Path>::from(Path::new("seeded")), file(2)),
+            ])
+        );
+    }
+
+    #[test]
+    fn an_installed_file_matches_a_regular_file_with_its_object_and_without_write_permission() {
+        let attributes = |object, read_only| SandboxAttributes {
+            kind: SandboxObjectKind::File,
+            link_count: 1,
+            size: 0,
+            accessed: None,
+            modified: None,
+            read_only,
+            object: SandboxObjectId::scripted(object),
+        };
+        let installed = InstalledFile::of(&attributes(1, true));
+
+        assert!(installed.matches(&attributes(1, true)));
+        assert!(!installed.matches(&attributes(1, false)));
+        assert!(!installed.matches(&attributes(2, true)));
+        assert!(!installed.matches(&SandboxAttributes {
+            kind: SandboxObjectKind::Directory,
+            ..attributes(1, true)
+        }));
+    }
+}

@@ -119,8 +119,10 @@ zstd = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
 linux-raw-sys = { workspace = true }
 rustix = { workspace = true }
 

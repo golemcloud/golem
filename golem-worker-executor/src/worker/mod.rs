@@ -69,7 +69,7 @@ use crate::services::agent_filesystem::{
     ReconstructingFilesystem, ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem,
     abort_reconstruction, bind_configured_resource_usage_metering,
     delete as delete_agent_filesystem, delete_created, finish_reconstruction, finish_replay,
-    materialize_initial_files, open as open_agent_filesystem, open_resource_usage_window,
+    materialize_baseline, open as open_agent_filesystem, open_resource_usage_window,
     prepare_initial_files, provision_initial_files, reconstruction_generation_handle,
     resident_generation_handle,
 };
@@ -7285,7 +7285,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .map(|config| config.files.clone())
             .unwrap_or_default();
         prepare_initial_files(
-            &self.file_loader(),
+            self.file_loader(),
             self.owned_agent_id.environment_id,
             &initial_files,
         )
@@ -9283,7 +9283,7 @@ impl RunningWorker {
                 }
             };
         let prepared = match prepare_initial_files(
-            &parent.file_loader(),
+            parent.file_loader(),
             parent.owned_agent_id.environment_id,
             &initial_files,
         )
@@ -9299,18 +9299,21 @@ impl RunningWorker {
                 .await);
             }
         };
-        let reconstructing = match materialize_initial_files(reconstructing, prepared).await {
-            Ok(filesystem) => filesystem,
-            Err(failure) => {
-                let startup_error = reconstruction_startup_error(failure.source);
-                return Err(cleanup_open_agent_filesystem(
-                    failure.filesystem,
-                    window,
-                    startup_error,
-                )
-                .await);
-            }
-        };
+        let reconstructing =
+            match materialize_baseline(reconstructing, prepared, None::<std::convert::Infallible>)
+                .await
+            {
+                Ok(filesystem) => filesystem,
+                Err(failure) => {
+                    let startup_error = reconstruction_startup_error(failure.source);
+                    return Err(cleanup_open_agent_filesystem(
+                        failure.filesystem,
+                        window,
+                        startup_error,
+                    )
+                    .await);
+                }
+            };
         let reconstruction_generation_handle =
             match reconstruction_generation_handle(&reconstructing) {
                 Ok(generation_handle) => generation_handle,

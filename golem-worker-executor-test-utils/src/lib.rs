@@ -2824,7 +2824,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         ))
     }
 
-    fn create_active_agents(
+    async fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
         shutdown_token: tokio_util::sync::CancellationToken,
@@ -2838,24 +2838,30 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         // granted accounting (exact and process-isolated) against the pinned
         // limit. The usable_ratio (worker_memory_ratio) still applies.
         match golem_config.memory.system_memory_override {
-            Some(limit) => Ok(Arc::new(ActiveAgents::new_with_probe(
-                Box::new(FixedProbe::new(limit, 0)),
-                &golem_config.active_agents,
-                &golem_config.memory,
-                &golem_config.filesystem_storage,
-                &golem_config.agent_status_flush,
-                shutdown_token,
-            )?)),
-            None => {
-                let mut memory_config = golem_config.memory.clone();
-                memory_config.enable_measured_admission = false;
-                Ok(Arc::new(ActiveAgents::new(
+            Some(limit) => Ok(Arc::new(
+                ActiveAgents::new_with_probe(
+                    Box::new(FixedProbe::new(limit, 0)),
                     &golem_config.active_agents,
-                    &memory_config,
+                    &golem_config.memory,
                     &golem_config.filesystem_storage,
                     &golem_config.agent_status_flush,
                     shutdown_token,
-                )?))
+                )
+                .await?,
+            )),
+            None => {
+                let mut memory_config = golem_config.memory.clone();
+                memory_config.enable_measured_admission = false;
+                Ok(Arc::new(
+                    ActiveAgents::new(
+                        &golem_config.active_agents,
+                        &memory_config,
+                        &golem_config.filesystem_storage,
+                        &golem_config.agent_status_flush,
+                        shutdown_token,
+                    )
+                    .await?,
+                ))
             }
         }
     }
@@ -3034,18 +3040,21 @@ struct ProductionContextTestServerBootstrap {
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
 {
-    fn create_active_agents(
+    async fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>> {
-        let active_agents = Arc::new(ActiveAgents::new(
-            &golem_config.active_agents,
-            &golem_config.memory,
-            &golem_config.filesystem_storage,
-            &golem_config.agent_status_flush,
-            shutdown_token,
-        )?);
+        let active_agents = Arc::new(
+            ActiveAgents::new(
+                &golem_config.active_agents,
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )
+            .await?,
+        );
         let _ = self.active_agents.set(active_agents.clone());
         Ok(active_agents)
     }

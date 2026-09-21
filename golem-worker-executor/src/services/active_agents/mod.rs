@@ -647,7 +647,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .is_some_and(|worker| worker.pending_startup_attempt().is_some())
     }
 
-    pub fn new(
+    pub async fn new(
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
@@ -666,13 +666,14 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             agent_status_flush_config,
             shutdown_token,
         )
+        .await
     }
 
     /// Like [`Self::new`] but with an explicitly provided memory probe instead of
     /// the one derived from the config. The in-process test harness uses this to
     /// supply a probe with a pinned limit and current usage, so the gate's
     /// decision is deterministic and isolated from the shared test process's RSS.
-    pub fn new_with_probe(
+    pub async fn new_with_probe(
         probe: Box<dyn MemoryProbe>,
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
@@ -680,7 +681,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
     ) -> Result<Self, FilesystemStorageError> {
-        let agent_filesystems = Arc::new(AgentFilesystems::new(storage_config)?);
+        let agent_filesystems = Arc::new(AgentFilesystems::new(storage_config).await?);
         let admission = memory_config.enable_measured_admission.then(|| {
             Arc::new(AdmissionController::new(
                 probe,
