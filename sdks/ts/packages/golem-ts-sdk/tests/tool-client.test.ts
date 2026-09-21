@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { createStdin, createStdout, ToolRpc, type RpcError } from 'golem:tool/host@0.1.0';
+import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
+import { createStdin, createStdout, ToolRpc } from 'golem:tool/host@0.1.0';
 import { type as arkType } from 'arktype';
 import { describe, expect, it, vi } from 'vitest';
 import * as z3 from 'zod3';
@@ -109,7 +110,7 @@ function byteStream(...values: number[]): ReadableStream<Uint8Array> {
 }
 
 describe('tool runtime client', () => {
-  it('constructs exact and partial clients from their owning definitions', async () => {
+  it('constructs definition-owned and caller-defined clients', async () => {
     const definition = toolDefinition('owned').body((body) => body.returns(z.string()));
     const transport = new FakeTransport(() => ({ result: wireValue(z.string(), 'ok') }));
     await expect(definition.client({ transport }).owned({})).resolves.toBe('ok');

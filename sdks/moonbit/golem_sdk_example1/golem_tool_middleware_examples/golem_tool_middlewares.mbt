@@ -503,17 +503,17 @@ fn[T :  @schema.IntoSchema + @schema.FromSchema, E] __golem_middleware_decode_ca
   try {
     @tool.decode_canonical_field(fields, name, context)
   } catch{
-    @toolCommon.ToolError::InvalidToolName(name) =>
+    @types.ToolError::InvalidToolName(name) =>
       Err(@toolMiddleware.ToolInvokeError::InvalidToolName(name))
-    @toolCommon.ToolError::InvalidCommandPath(path) =>
+    @types.ToolError::InvalidCommandPath(path) =>
       Err(@toolMiddleware.ToolInvokeError::InvalidCommandPath(path))
-    @toolCommon.ToolError::InvalidInput(message) =>
+    @types.ToolError::InvalidInput(message) =>
       Err(@toolMiddleware.ToolInvokeError::InvalidInput(message))
-    @toolCommon.ToolError::ConstraintViolation(message) =>
+    @types.ToolError::ConstraintViolation(message) =>
       Err(@toolMiddleware.ToolInvokeError::ConstraintViolation(message))
-    @toolCommon.ToolError::InvalidResult(message) =>
+    @types.ToolError::InvalidResult(message) =>
       Err(@toolMiddleware.ToolInvokeError::InvalidResult(message))
-    @toolCommon.ToolError::CustomError(value) => {
+    @types.ToolError::CustomError(value) => {
       @model.drop_wit_capabilities(value.payload.value)
       Err(
         @toolMiddleware.ToolInvokeError::InvalidResult(
@@ -584,6 +584,65 @@ pub async fn MessagesUnderlying::send(
 
 ///|
 ///
+pub async fn MessagesUnderlying::start_send(
+  self : MessagesUnderlying,
+  message : String,
+) -> Result[
+  @toolMiddleware.UnderlyingInvocation[String, @tool.NoToolError],
+  @toolMiddleware.ToolInvokeError[@tool.NoToolError],
+] {
+  let __golem_command_path = ["send"]
+  let __golem_def = __golem_middleware_tool_def_Messages()
+  let __golem_index =
+    match __golem_def.command_index_by_path(__golem_command_path) {
+      Some(__golem_index) => __golem_index
+      None => {
+        return Err(
+          @toolMiddleware.ToolInvokeError::InvalidCommandPath(
+            __golem_command_path,
+          ),
+        )
+      }
+    }
+  let __golem_model = try {
+    __golem_def.canonical_input_model(__golem_index)
+  } catch{
+    __golem_error => {
+      return Err(
+        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
+      )
+    }
+  }
+  let __golem_values :Array[(String, @model.SchemaValue)] = []
+  __golem_values.push(("message", @schema.to_value_as(message)))
+  let __golem_input = try {
+    @tool.build_canonical_input(__golem_model, __golem_values)
+  } catch{
+    __golem_error => {
+      return Err(
+        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
+      )
+    }
+  }
+  let __golem_result = {
+    match self
+      .underlying
+      .start_with(
+        __golem_command_path,
+        __golem_input,
+        None,
+        fn(_, _) { None },
+        @toolMiddleware.decode_result_value,
+      ) {
+      Ok(__golem_result) => __golem_result
+      Err(__golem_error) => return Err(__golem_error)
+    }
+  }
+  Ok(__golem_result)
+}
+
+///|
+///
 pub struct StorageUnderlying {
   priv underlying : @toolMiddleware.UnderlyingTool
 }
@@ -636,6 +695,65 @@ pub async fn StorageUnderlying::fetch(self : StorageUnderlying, key : String) ->
     }
   }
   @toolMiddleware.decode_result_value(__golem_result)
+}
+
+///|
+///
+pub async fn StorageUnderlying::start_fetch(
+  self : StorageUnderlying,
+  key : String,
+) -> Result[
+  @toolMiddleware.UnderlyingInvocation[String, @tool.NoToolError],
+  @toolMiddleware.ToolInvokeError[@tool.NoToolError],
+] {
+  let __golem_command_path = ["fetch"]
+  let __golem_def = __golem_middleware_tool_def_Storage()
+  let __golem_index =
+    match __golem_def.command_index_by_path(__golem_command_path) {
+      Some(__golem_index) => __golem_index
+      None => {
+        return Err(
+          @toolMiddleware.ToolInvokeError::InvalidCommandPath(
+            __golem_command_path,
+          ),
+        )
+      }
+    }
+  let __golem_model = try {
+    __golem_def.canonical_input_model(__golem_index)
+  } catch{
+    __golem_error => {
+      return Err(
+        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
+      )
+    }
+  }
+  let __golem_values :Array[(String, @model.SchemaValue)] = []
+  __golem_values.push(("key", @schema.to_value_as(key)))
+  let __golem_input = try {
+    @tool.build_canonical_input(__golem_model, __golem_values)
+  } catch{
+    __golem_error => {
+      return Err(
+        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
+      )
+    }
+  }
+  let __golem_result = {
+    match self
+      .underlying
+      .start_with(
+        __golem_command_path,
+        __golem_input,
+        None,
+        fn(_, _) { None },
+        @toolMiddleware.decode_result_value,
+      ) {
+      Ok(__golem_result) => __golem_result
+      Err(__golem_error) => return Err(__golem_error)
+    }
+  }
+  Ok(__golem_result)
 }
 
 ///|
@@ -803,6 +921,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
         examples: [],
       },
       scope: @toolMiddleware.ToolMiddlewareScope::Universal,
+      parameter_schema: @toolMiddleware.empty_parameter_schema(),
     },
     __golem_universal_tool_middleware_invoke_audit,
   )
@@ -822,6 +941,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
           expected: Some(__golem_middleware_tool_def_Messages().to_tool()),
         },
       ),
+      parameter_schema: @toolMiddleware.empty_parameter_schema(),
     },
     __golem_monomorphic_tool_middleware_invoke_MessagePolicy,
   )
@@ -841,6 +961,7 @@ fn __golem_register_tool_middlewares() -> Unit raise {
           expected: Some(__golem_middleware_tool_def_Storage().to_tool()),
         },
       ),
+      parameter_schema: @toolMiddleware.empty_parameter_schema(),
     },
     __golem_monomorphic_tool_middleware_invoke_FileAdapter,
   )

@@ -47,11 +47,11 @@ pub(crate) use decode::decode_value_by_ref;
 pub use decode::{
     DecodeError, GraphDecoder, decode_graph, decode_metadata, decode_typed, decode_value,
 };
-#[cfg(all(feature = "guest", not(feature = "host")))]
-pub use encode::encode_value_async;
 pub use encode::{
     EncodeError, GraphEncoder, encode_graph, encode_metadata, encode_typed, encode_value,
 };
+#[cfg(all(feature = "guest", not(feature = "host")))]
+pub use encode::{encode_typed_async, encode_value_async};
 
 #[cfg(all(feature = "guest", not(feature = "host")))]
 pub use decode::decode_typed_owned;

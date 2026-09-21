@@ -217,8 +217,12 @@ impl McpDeploymentService {
             })?;
 
         let id = McpDeploymentId::new();
-        let record =
-            McpDeploymentRevisionRecord::creation(id, auth.actor_account_id(), data.agents)?;
+        let record = McpDeploymentRevisionRecord::creation(
+            id,
+            auth.actor_account_id(),
+            data.agents,
+            data.tools,
+        )?;
 
         let stored_mcp_deployment: McpDeployment = self
             .mcp_deployment_repo
@@ -276,6 +280,9 @@ impl McpDeploymentService {
         mcp_deployment.revision = mcp_deployment.revision.next()?;
         if let Some(agents) = update.agents {
             mcp_deployment.agents = agents;
+        };
+        if let Some(tools) = update.tools {
+            mcp_deployment.tools = tools;
         };
 
         let record = McpDeploymentRevisionRecord::from_model(

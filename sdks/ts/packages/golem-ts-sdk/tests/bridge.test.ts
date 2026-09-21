@@ -3,7 +3,8 @@
 
 import { WasmRpc, type RpcError as AgentRpcError } from 'golem:agent/host@2.0.0';
 import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0';
-import { createStdin, ToolRpc, type ByteStreamFailure, type RpcError } from 'golem:tool/host@0.1.0';
+import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
+import { createStdin, ToolRpc, type ByteStreamFailure } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
 import { bridge } from '../src';
 import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';
@@ -802,7 +803,10 @@ describe('public bridge runtime', () => {
     rpc.scheduleInvocation.mockReturnValue(receipt);
     const at = { seconds: 1n, nanoseconds: 0 };
 
-    expect(remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]))).toBe(receipt);
+    const scheduled = remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]));
+    expect(scheduled).toStrictEqual(receipt);
+    expect(scheduled).not.toBe(receipt);
+    expect(Object.isFrozen(scheduled.metadata)).toBe(true);
     expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything(), undefined);
   });
 

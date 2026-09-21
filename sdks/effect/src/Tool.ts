@@ -320,7 +320,8 @@ export const toolClientDefinition = <D extends ToolDefinition<any, any>>(
     definition,
     client: (targetName?: string, options: Omit<ClientOptions, "lookupName"> = {}) => {
       const lookupName = name ?? targetName
-      if (!lookupName) throw new TypeError("a nameless tool client contract requires a target name")
+      if (!lookupName)
+        throw new TypeError("a nameless tool client definition requires a target name")
       return client(definition, { ...options, lookupName })
     },
   })

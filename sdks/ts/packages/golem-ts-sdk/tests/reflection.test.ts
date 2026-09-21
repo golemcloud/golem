@@ -263,7 +263,13 @@ describe('agent reflection', () => {
     expect(hostGetAgentTypeByAgentId).toHaveBeenLastCalledWith(rawId.value);
   });
 
-  it('creates a bare client without a discovery lookup', async () => {
+  it('uses discovery-packed values dynamically without inheriting reflected validation', async () => {
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType());
+    const reflected = getAgentType('ReflectedEcho')!;
+    const method = reflected.method('echo')!;
+    const discoveredInput = method.input.packJson({ message: 'hello' });
+    expect(method.input.validateValue(discoveredInput).success).toBe(true);
+
     vi.mocked(parseAgentId).mockReturnValueOnce([
       'ReflectedEcho',
       {
@@ -279,14 +285,19 @@ describe('agent reflection', () => {
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: { agentId: 'ReflectedEcho(one)', idempotencyKey: 'key' },
       future: {
-        get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('hello'))),
+        get: vi.fn().mockResolvedValue(schemaValueToWit(v.u32(7))),
         cancel: vi.fn(),
       },
     });
 
-    await expect(client.method('anything').invokeValue(v.record([]))).resolves.toMatchObject({
-      value: v.string('hello'),
+    const result = await client.method(method.name).invokeValue(discoveredInput);
+    expect(result).toMatchObject({
+      value: v.u32(7),
     });
+    expect(method.output!.validateValue(result.value!).success).toBe(false);
+
+    await expect(client.method(method.name).invokeValue(v.record([]))).resolves.toBeDefined();
+    expect(rpc.asyncInvokeAndAwait).toHaveBeenCalledTimes(2);
     expect(hostGetAgentType).toHaveBeenCalledTimes(before);
   });
 

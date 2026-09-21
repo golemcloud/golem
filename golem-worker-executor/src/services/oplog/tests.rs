@@ -29,7 +29,7 @@ use futures::FutureExt;
 use futures::stream::BoxStream;
 use golem_common::config::RedisConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, Principal};
+use golem_common::model::agent::{AgentMode, OwnerKind, Principal};
 use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -210,6 +210,7 @@ fn make_agent_metadata(
 ) -> AgentMetadata {
     AgentMetadata {
         agent_id,
+        owner_kind: OwnerKind::ComponentAgent,
         env: vec![],
         environment_id,
         created_by,
@@ -1164,6 +1165,7 @@ async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -1264,6 +1266,7 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -1380,6 +1383,7 @@ async fn fresh_ephemeral_create_with_compressed_layers_does_not_read_storage(_tr
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -1447,6 +1451,7 @@ async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -1491,6 +1496,221 @@ async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing
     assert!(indexed_storage.reads() > 0);
 
     drop(oplog);
+}
+
+#[test]
+async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blob_aliases(
+    _tracing: &Tracing,
+) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            16,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+        indexed_storage,
+        1,
+        RetryConfig::default(),
+    ));
+    let service = MultiLayerOplogService::new(primary.clone(), nev![archive], 1, 1);
+    let agent = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "staged".into(),
+    };
+    let owned = OwnedAgentId::new(EnvironmentId::new(), &agent);
+    let metadata = make_agent_metadata(agent.clone(), AccountId::new(), owned.environment_id);
+    let create = OplogEntry::create(
+        agent.clone(),
+        OwnerKind::ComponentAgent,
+        AgentMode::Durable,
+        ComponentRevision::INITIAL,
+        vec![],
+        owned.environment_id,
+        metadata.created_by,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        vec![],
+        None,
+        metadata.fingerprint.0,
+    )
+    .rounded();
+    let stage_id = Uuid::new_v4();
+    assert!(
+        service
+            .create_staged(&owned, AgentMode::Ephemeral, stage_id, metadata.clone())
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .publish_staged(&owned, AgentMode::Ephemeral, stage_id, OplogIndex::INITIAL)
+            .await
+            .is_err()
+    );
+    let stage = service
+        .create_staged(&owned, AgentMode::Durable, stage_id, metadata.clone())
+        .await
+        .unwrap();
+    // A crashed attempt leaves its committed stage behind. A fresh attempt must neither
+    // enumerate it as an agent nor reuse its contents when publishing the same target.
+    let orphan_id = Uuid::new_v4();
+    let orphan = service
+        .create_staged(&owned, AgentMode::Durable, orphan_id, metadata.clone())
+        .await
+        .unwrap();
+    orphan.add(create.clone()).await;
+    orphan.add(OplogEntry::no_op(None).rounded()).await;
+    orphan.commit(CommitLevel::Always).await;
+    drop(orphan);
+    let entries = [
+        create.clone(),
+        OplogEntry::suspend().rounded(),
+        OplogEntry::no_op(None).rounded(),
+    ];
+    for entry in &entries {
+        stage.add(entry.clone()).await;
+        stage.commit(CommitLevel::Always).await;
+        assert!(!service.exists(&owned, AgentMode::Durable).await);
+        assert_eq!(
+            service.get_last_index(&owned, AgentMode::Durable).await,
+            OplogIndex::NONE
+        );
+        assert!(
+            service
+                .scan_for_component(
+                    &owned.environment_id,
+                    &agent.component_id,
+                    Some(AgentMode::Durable),
+                    ScanCursor::default(),
+                    100,
+                )
+                .await
+                .unwrap()
+                .1
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        stage
+            .read_exact(OplogIndex::INITIAL, 3)
+            .await
+            .into_values()
+            .collect::<Vec<_>>(),
+        entries
+    );
+    let payload = stage.upload_raw_payload(vec![7; 4096]).await.unwrap();
+    let RawOplogPayload::External {
+        payload_id,
+        md5_hash,
+    } = payload
+    else {
+        panic!("expected external payload")
+    };
+    drop(stage);
+    assert!(
+        service
+            .publish_staged(
+                &owned,
+                AgentMode::Durable,
+                stage_id,
+                OplogIndex::from_u64(3)
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        service
+            .read_exact(&owned, AgentMode::Durable, OplogIndex::INITIAL, 3)
+            .await
+            .into_values()
+            .collect::<Vec<_>>(),
+        entries
+    );
+    service
+        .discard_staged(&owned, AgentMode::Durable, orphan_id)
+        .await
+        .unwrap();
+    let reopened = service
+        .open(
+            &mut service.lock_lifecycle(&owned.agent_id).await,
+            &owned,
+            AgentMode::Durable,
+            None,
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    assert_eq!(
+        reopened.current_oplog_index().await,
+        OplogIndex::from_u64(3)
+    );
+    assert_eq!(
+        reopened
+            .download_raw_payload(payload_id.clone(), md5_hash.clone())
+            .await
+            .unwrap(),
+        vec![7; 4096]
+    );
+
+    let losing_id = Uuid::new_v4();
+    let losing = service
+        .create_staged(&owned, AgentMode::Durable, losing_id, metadata)
+        .await
+        .unwrap();
+    losing.add(create).await;
+    losing.commit(CommitLevel::Always).await;
+    assert_eq!(losing.current_oplog_index().await, OplogIndex::INITIAL);
+    assert_eq!(
+        reopened.current_oplog_index().await,
+        OplogIndex::from_u64(3)
+    );
+    drop(losing);
+    assert!(
+        !service
+            .publish_staged(&owned, AgentMode::Durable, losing_id, OplogIndex::INITIAL)
+            .await
+            .unwrap()
+    );
+    MultiLayerOplog::try_archive_blocking(&reopened).await;
+    assert_eq!(
+        primary.get_last_index(&owned, AgentMode::Durable).await,
+        OplogIndex::NONE
+    );
+    assert!(
+        !service
+            .publish_staged(&owned, AgentMode::Durable, losing_id, OplogIndex::INITIAL)
+            .await
+            .unwrap()
+    );
+    service
+        .discard_staged(&owned, AgentMode::Durable, losing_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .download_raw_payload(payload_id, md5_hash)
+            .await
+            .unwrap(),
+        vec![7; 4096]
+    );
+    assert_eq!(
+        service
+            .read_exact(&owned, AgentMode::Durable, OplogIndex::INITIAL, 3)
+            .await
+            .into_values()
+            .collect::<Vec<_>>(),
+        entries
+    );
 }
 
 #[test]
@@ -1575,6 +1795,7 @@ async fn fresh_ephemeral_create_with_blob_layers_does_not_read_storage(_tracing:
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -1979,6 +2200,7 @@ async fn explicit_commit_reports_threshold_commits_once_and_preserves_add_receip
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Durable,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -2577,9 +2799,9 @@ async fn exhausted_primary_read_retries_panic(_tracing: &Tracing) {
 #[test]
 async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
-        DurableStreamHandle, StreamCancelReason, StreamCancelRecord, StreamCancelRole,
-        StreamEndRecord, StreamEndResult, StreamId, StreamInvocationId, StreamItemsPayload,
-        StreamItemsRecord, StreamOffset, StreamRegisteredRecord, StreamRegistrationCoordinate,
+        LocalStreamId, StreamCancelReason, StreamCancelRecord, StreamCancelRole, StreamEndRecord,
+        StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
+        StreamRegisteredRecord, StreamRegistrationInvocation, StreamRegistrationRecordCoordinate,
         StreamRootKind, StreamSessionFinishedRecord, StreamSessionRecord, StreamSourceKind,
         StreamTerminalAuthor,
     };
@@ -2615,7 +2837,6 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
             default_execution_status(AgentMode::Durable),
         )
         .await;
-    let stream_id = StreamId(Uuid::new_v4());
     let producer_fingerprint = AgentFingerprint(Uuid::new_v4());
     let invocation_id = StreamInvocationId {
         callee_environment_id: environment_id,
@@ -2625,6 +2846,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
     };
     let added = oplog
         .add_durable_stream_batch(Box::new(move |registration_index| {
+            let stream_id = LocalStreamId(registration_index);
             let item_index = registration_index.next();
             let end_index = item_index.next();
             let cancel_index = end_index.next();
@@ -2633,24 +2855,20 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                     None,
                     StreamRegisteredRecord {
                         format_version: 1,
-                        coordinate: StreamRegistrationCoordinate::Root {
-                            invocation_id: invocation_id.clone(),
+                        coordinate: StreamRegistrationRecordCoordinate::Root {
+                            invocation: StreamRegistrationInvocation::Local(
+                                invocation_id.idempotency_key.clone(),
+                            ),
                             root_kind: StreamRootKind::MethodResult,
                             recursive_value_path: Vec::new(),
                         },
-                        registration_oplog_index: registration_index,
-                        handle: DurableStreamHandle {
-                            format_version: 1,
-                            stream_id,
-                            producer_environment_id: environment_id,
-                            producer: agent_id,
-                            expected_producer_fingerprint: producer_fingerprint,
-                            source_invocation: invocation_id.clone(),
-                            component_revision: ComponentRevision::INITIAL,
-                            element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
-                        },
+                        source_invocation: StreamRegistrationInvocation::Local(
+                            invocation_id.idempotency_key.clone(),
+                        ),
+                        component_revision: ComponentRevision::INITIAL,
+                        element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
                         source_kind: StreamSourceKind::InvocationOutput,
-                        session_mapping: None,
+                        session_role: None,
                     },
                 ),
                 DurableStreamOplogRecord::Items(
@@ -2658,7 +2876,6 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                     StreamItemsRecord {
                         format_version: 1,
                         stream_id,
-                        producer_fingerprint,
                         first_sequence: 0,
                         nested_stream_ids: Vec::new(),
                         newly_registered_stream_ids: Vec::new(),
@@ -2671,7 +2888,6 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                     StreamEndRecord {
                         format_version: 1,
                         stream_id,
-                        producer_fingerprint,
                         sequence: 1,
                         offset: StreamOffset::new(end_index, 0),
                         authored_by: StreamTerminalAuthor::Guest,
@@ -2683,7 +2899,6 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                     StreamCancelRecord {
                         format_version: 1,
                         stream_id,
-                        producer_fingerprint,
                         sequence: 1,
                         offset: StreamOffset::new(cancel_index, 0),
                         authored_by: StreamTerminalAuthor::Protocol,
@@ -2696,7 +2911,9 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                     None,
                     Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                         format_version: 1,
-                        session_key: invocation_id,
+                        session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
+                            invocation_id.idempotency_key,
+                        ),
                         result: Err(vec![57; 1024]),
                     })),
                 ),
@@ -2759,7 +2976,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
 #[test_r::timeout("30s")]
 async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
-        StreamEndRecord, StreamEndResult, StreamId, StreamInvocationId, StreamOffset,
+        LocalStreamId, StreamEndRecord, StreamEndResult, StreamInvocationId, StreamOffset,
         StreamSessionFinishedRecord, StreamSessionRecord, StreamTerminalAuthor,
     };
     use golem_common::model::component::ComponentRevision;
@@ -2799,6 +3016,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
             AgentMode::Ephemeral,
             OplogEntry::create(
                 agent_id.clone(),
+                OwnerKind::ComponentAgent,
                 AgentMode::Ephemeral,
                 ComponentRevision::INITIAL,
                 Vec::new(),
@@ -2818,7 +3036,6 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
             default_execution_status(AgentMode::Ephemeral),
         )
         .await;
-    let stream_id = StreamId(Uuid::new_v4());
     let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
         callee: agent_id,
@@ -2833,8 +3050,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
                     None,
                     StreamEndRecord {
                         format_version: 1,
-                        stream_id,
-                        producer_fingerprint: AgentFingerprint(Uuid::new_v4()),
+                        stream_id: LocalStreamId(first_index),
                         sequence: 0,
                         offset: StreamOffset::new(first_index, 0),
                         authored_by: StreamTerminalAuthor::Guest,
@@ -2845,7 +3061,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
                     None,
                     Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                         format_version: 1,
-                        session_key,
+                        session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(session_key.idempotency_key),
                         result: Err(vec![91; 1024]),
                     })),
                 ),
@@ -2909,7 +3125,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
 #[test_r::timeout("30s")]
 async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_tracing: &Tracing) {
     use golem_common::base_model::durable_stream::{
-        StreamEndRecord, StreamEndResult, StreamId, StreamInvocationId, StreamOffset,
+        LocalStreamId, StreamEndRecord, StreamEndResult, StreamInvocationId, StreamOffset,
         StreamSessionFinishedRecord, StreamSessionRecord, StreamTerminalAuthor,
     };
 
@@ -2964,8 +3180,9 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
                         None,
                         StreamEndRecord {
                             format_version: 1,
-                            stream_id: StreamId(Uuid::new_v4()),
-                            producer_fingerprint: AgentFingerprint(Uuid::new_v4()),
+                            stream_id: LocalStreamId(OplogIndex::from_u64(
+                                first_index.as_u64() + position,
+                            )),
                             sequence: position,
                             offset: StreamOffset::new(
                                 OplogIndex::from_u64(first_index.as_u64() + position),
@@ -2983,7 +3200,9 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
                             None,
                             Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                                 format_version: 1,
-                                session_key,
+                                session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
+                                    session_key.idempotency_key,
+                                ),
                                 result: Err(vec![73; 1024]),
                             })),
                         )
@@ -3047,7 +3266,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
     };
     use golem_common::base_model::durable_stream::{
         StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamRegistrationCoordinate,
-        StreamRootKind, StreamSourceKind,
+        StreamRegistrationInvocation, StreamRootKind, StreamSourceKind,
     };
     use golem_common::model::component::ComponentRevision;
     use golem_schema::schema::SchemaFingerprintV1;
@@ -3083,7 +3302,7 @@ async fn durable_stream_producer_recovers_from_sqlite_storage_restart(_tracing: 
             root_kind: StreamRootKind::MethodResult,
             recursive_value_path: Vec::new(),
         },
-        source_invocation: invocation_id,
+        source_invocation: StreamRegistrationInvocation::Local(invocation_id.idempotency_key),
         component_revision: ComponentRevision::INITIAL,
         element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
         source_kind: StreamSourceKind::InvocationOutput,
@@ -4880,6 +5099,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let timestamp = Timestamp::now_utc();
     let create_entry = OplogEntry::Create {
         timestamp,
+        owner_kind: OwnerKind::ComponentAgent,
         agent_id: AgentId {
             component_id: ComponentId(Uuid::new_v4()),
             agent_id: "test".to_string(),
@@ -5020,6 +5240,7 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
     let timestamp = Timestamp::now_utc();
     let create_entry = OplogEntry::Create {
         timestamp,
+        owner_kind: OwnerKind::ComponentAgent,
         agent_id: AgentId {
             component_id: ComponentId(Uuid::new_v4()),
             agent_id: "test".to_string(),
@@ -6083,7 +6304,8 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
     assert_eq!(secondary_length, 0);
     assert_eq!(tertiary_length, 1);
 
-    assert!(!primary_exists);
+    // The primary key fences new creation even after all entries have been archived.
+    assert!(primary_exists);
     assert!(!secondary_exists);
     assert!(tertiary_exists);
 }
@@ -6334,6 +6556,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
         };
         let create_entry = OplogEntry::create(
             agent_id.clone(),
+            OwnerKind::ComponentAgent,
             AgentMode::Durable,
             ComponentRevision::new(1).unwrap(),
             Vec::new(),
@@ -6495,6 +6718,7 @@ async fn multilayer_scan_for_component_ephemeral(_tracing: &Tracing) {
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
         let create_entry = OplogEntry::create(
             agent_id.clone(),
+            OwnerKind::ComponentAgent,
             mode,
             ComponentRevision::new(1).unwrap(),
             Vec::new(),
@@ -6844,6 +7068,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
 
     let durable_create = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Durable,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),
@@ -6860,6 +7085,7 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
     .rounded();
     let ephemeral_create = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(2).unwrap(),
         Vec::new(),
@@ -6975,6 +7201,7 @@ async fn make_workers(
         };
         let create_entry = OplogEntry::create(
             agent_id.clone(),
+            OwnerKind::ComponentAgent,
             mode,
             ComponentRevision::new(1).unwrap(),
             Vec::new(),
@@ -7781,6 +8008,7 @@ async fn ephemeral_reserved_start_uploads_payload_eagerly(_tracing: &Tracing) {
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(
         agent_id.clone(),
+        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
         Vec::new(),

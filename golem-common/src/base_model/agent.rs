@@ -27,6 +27,71 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
 
+/// Authoritative kind of an execution owner.
+///
+/// This is persisted at creation time. In particular, an instance name that
+/// happens to look like an external-tool owner never grants that authority.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "kebab-case"))]
+#[serde(rename_all = "kebab-case")]
+pub enum OwnerKind {
+    #[default]
+    ComponentAgent,
+    EphemeralExternalTool,
+}
+
+impl OwnerKind {
+    pub const EXTERNAL_TOOL_INSTANCE_PREFIX: &'static str = "~golem-external-tool-owner-";
+
+    pub fn is_reserved_instance_name(name: &str) -> bool {
+        name.starts_with(Self::EXTERNAL_TOOL_INSTANCE_PREFIX)
+    }
+
+    /// Derives the stable virtual owner name solely from ordinary request
+    /// idempotency. Input, deployment revision, credentials and incarnation
+    /// fingerprint deliberately do not participate.
+    pub fn external_tool_instance_name(
+        idempotency_key: &crate::base_model::IdempotencyKey,
+    ) -> String {
+        const NAMESPACE: Uuid = uuid::uuid!("29e775df-87cf-48aa-a53d-a1bc52e8f950");
+        let id = Uuid::new_v5(&NAMESPACE, idempotency_key.value.as_bytes());
+        format!("{}{id}", Self::EXTERNAL_TOOL_INSTANCE_PREFIX)
+    }
+
+    pub fn validate_instance_name(self, name: &str) -> Result<(), String> {
+        let reserved = Self::is_reserved_instance_name(name);
+        match (self, reserved) {
+            (Self::ComponentAgent, true) => Err("agent instance names in the reserved external-tool owner namespace are not allowed".to_string()),
+            (Self::EphemeralExternalTool, false) => Err("external-tool owner metadata does not agree with its reserved instance name".to_string()),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl TryFrom<i32> for OwnerKind {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::ComponentAgent),
+            1 => Ok(Self::EphemeralExternalTool),
+            _ => Err(format!("unknown owner kind: {value}")),
+        }
+    }
+}
+
+impl From<OwnerKind> for i32 {
+    fn from(value: OwnerKind) -> Self {
+        match value {
+            OwnerKind::ComponentAgent => 0,
+            OwnerKind::EphemeralExternalTool => 1,
+        }
+    }
+}
+
 /// Content hash of an agent file. All files with identical content share the same hash.
 #[derive(Copy, Debug, Clone, PartialEq, Eq, std::hash::Hash, Serialize, Deserialize)]
 pub struct AgentFileContentHash(pub DiffHash);

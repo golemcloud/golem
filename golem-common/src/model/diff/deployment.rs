@@ -15,6 +15,7 @@
 use super::{BTreeSetDiff, HttpApiDeployment, McpDeployment};
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::AgentTypeName;
+use crate::model::component::{ComponentId, ComponentName};
 use crate::model::diff::DiffError;
 use crate::model::diff::component::Component;
 use crate::model::diff::hash::{Hash, HashOf, Hashable, hash_from_serialized_value};
@@ -123,6 +124,7 @@ pub struct RemoteToolDeployment {
     pub metadata_version: String,
     pub metadata_digest: Hash,
     pub provision: ToolProvisionConfig,
+    pub component_bindings: BTreeMap<String, EffectiveToolBinding>,
     pub bindings: BTreeMap<AgentTypeName, EffectiveToolBinding>,
 }
 
@@ -143,24 +145,37 @@ impl Diffable for RemoteToolDeployment {
 pub fn remote_tool_deployments(
     registered_tools: impl IntoIterator<Item = RegisteredTool>,
     bindings: impl IntoIterator<Item = CompiledToolBinding>,
+    component_names: &BTreeMap<ComponentId, ComponentName>,
     published_tools: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, HashOf<RemoteToolDeployment>>, DiffError> {
     let mut bindings_by_tool =
         BTreeMap::<ToolName, BTreeMap<AgentTypeName, EffectiveToolBinding>>::new();
+    let mut component_bindings_by_tool =
+        BTreeMap::<ToolName, BTreeMap<String, EffectiveToolBinding>>::new();
     for binding in bindings {
-        bindings_by_tool
-            .entry(binding.tool_name)
-            .or_default()
-            .insert(
-                binding.agent_type_name,
-                EffectiveToolBinding {
-                    parameters: binding.parameters,
-                    config_keys_readable: binding.config_keys_readable,
-                    secret_keys_readable: binding.secret_keys_readable,
-                    secret_keys_revealable: binding.secret_keys_revealable,
-                    filesystem_access: binding.filesystem_access,
-                },
-            );
+        let effective = EffectiveToolBinding {
+            parameters: binding.parameters,
+            config_keys_readable: binding.config_keys_readable,
+            secret_keys_readable: binding.secret_keys_readable,
+            secret_keys_revealable: binding.secret_keys_revealable,
+            filesystem_access: binding.filesystem_access,
+        };
+        match binding.owner {
+            crate::model::tool::ToolBindingOwner::AgentType { agent_type_name } => {
+                bindings_by_tool
+                    .entry(binding.tool_name)
+                    .or_default()
+                    .insert(agent_type_name, effective);
+            }
+            crate::model::tool::ToolBindingOwner::ComponentBaseline { component_id } => {
+                if let Some(component_name) = component_names.get(&component_id) {
+                    component_bindings_by_tool
+                        .entry(binding.tool_name)
+                        .or_default()
+                        .insert(component_name.0.clone(), effective);
+                }
+            }
+        }
     }
 
     registered_tools
@@ -196,6 +211,7 @@ pub fn remote_tool_deployments(
                 });
             };
             let bindings = bindings_by_tool.remove(&name).unwrap_or_default();
+            let component_bindings = component_bindings_by_tool.remove(&name).unwrap_or_default();
             Some(Ok((
                 name.to_string(),
                 RemoteToolDeployment {
@@ -207,6 +223,7 @@ pub fn remote_tool_deployments(
                     metadata_version: tool.metadata_version,
                     metadata_digest: tool.metadata_digest,
                     provision: tool.provision,
+                    component_bindings,
                     bindings,
                 }
                 .into(),
@@ -526,6 +543,7 @@ mod tests {
             metadata_version: "0.1.0".to_string(),
             metadata_digest: Hash::new(blake3::hash(b"metadata-a")),
             provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
             bindings: BTreeMap::new(),
         }
     }
@@ -557,6 +575,7 @@ mod tests {
                 aliases: Vec::new(),
                 doc: Doc::default(),
                 scope: ToolMiddlewareScope::Universal,
+                parameter_schema: SchemaGraph::empty(),
             },
             provision: ToolProvisionConfig::default(),
             source: ToolMiddlewareSource::Component {
@@ -729,6 +748,7 @@ mod tests {
                 schema: SchemaGraph::empty(),
             },
             provision: ToolProvisionConfig::default(),
+            component_bindings: BTreeMap::new(),
             source,
             owner_account_id: AccountId::new(),
             owner_account_email: AccountEmail::new("owner@example.com"),
@@ -771,6 +791,7 @@ mod tests {
         let classified = remote_tool_deployments(
             [local, published, remote],
             Vec::new(),
+            &BTreeMap::new(),
             &BTreeSet::from(["published".to_string()]),
         )
         .unwrap();
@@ -796,7 +817,8 @@ mod tests {
             None,
         );
 
-        let error = remote_tool_deployments([tool], Vec::new(), &BTreeSet::new()).unwrap_err();
+        let error = remote_tool_deployments([tool], Vec::new(), &BTreeMap::new(), &BTreeSet::new())
+            .unwrap_err();
 
         assert!(
             error
@@ -834,6 +856,23 @@ mod tests {
         changed_provision.provision.config =
             NormalizedJsonValue::new(serde_json::json!({ "consumer": true }));
         assert_ne!(base_hash, deployment_hash(changed_provision, false));
+
+        let mut changed_component_baseline = base.clone();
+        changed_component_baseline.component_bindings.insert(
+            "consumer".to_string(),
+            EffectiveToolBinding {
+                parameters: NormalizedJsonValue::new(serde_json::json!({ "limit": 5 })),
+                config_keys_readable: ConfigKeyScope::All,
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                filesystem_access: ToolFilesystemAccess::Unset,
+            },
+        );
+        assert!(changed_component_baseline.bindings.is_empty());
+        assert_ne!(
+            base_hash,
+            deployment_hash(changed_component_baseline, false)
+        );
 
         let mut changed_binding = base.clone();
         changed_binding.bindings.insert(

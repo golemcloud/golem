@@ -49,7 +49,7 @@ pub struct ToolInvocation[E] {
   priv future : @toolHost.FutureInvokeResult
   priv decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?
   priv stdout_source : @async-core.Stream[
-    Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ]?
   stdout : @async-core.Stream[Byte]?
 }
@@ -622,33 +622,33 @@ fn[E : @schema.FromSchema] decode_custom_tool_error(
 
 ///|
 fn[E] map_rpc_error(
-  error : @toolHost.RpcError,
+  error : @types.ToolRpcError,
   decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> ToolError[E] {
   match error {
-    @toolHost.RpcError::ProtocolError(message) =>
+    @types.ToolRpcError::ProtocolError(message) =>
       ToolError::Rpc(RpcError::Protocol(message))
-    @toolHost.RpcError::Denied(message) =>
+    @types.ToolRpcError::Denied(message) =>
       ToolError::Rpc(RpcError::Denied(message))
-    @toolHost.RpcError::NotFound(message) =>
+    @types.ToolRpcError::NotFound(message) =>
       ToolError::Rpc(RpcError::NotFound(message))
-    @toolHost.RpcError::RemoteInternalError(message) =>
+    @types.ToolRpcError::RemoteInternalError(message) =>
       ToolError::Rpc(RpcError::RemoteInternal(message))
-    @toolHost.RpcError::Cancelled => ToolError::Rpc(RpcError::Cancelled)
-    @toolHost.RpcError::ResourceExhausted(message) =>
+    @types.ToolRpcError::Cancelled => ToolError::Rpc(RpcError::Cancelled)
+    @types.ToolRpcError::ResourceExhausted(message) =>
       ToolError::Rpc(RpcError::ResourceExhausted(message))
-    @toolHost.RpcError::RemoteToolError(error) =>
+    @types.ToolRpcError::RemoteToolError(error) =>
       map_remote_tool_error(error, decode_error)
   }
 }
 
 ///|
 fn[E] map_remote_tool_error(
-  error : @toolCommon.ToolError,
+  error : @types.ToolError,
   decode_error : (String, @model.TypedSchemaValue) -> Result[E, String]?,
 ) -> ToolError[E] {
   match error {
-    @toolCommon.ToolError::CustomError(error) => {
+    @types.ToolError::CustomError(error) => {
       let decoded = @model_host.typed_schema_value_from_wit(error.payload) catch {
         e =>
           return tool_protocol_error(
@@ -664,15 +664,15 @@ fn[E] map_remote_tool_error(
         None => ToolError::UnknownToolError(error.name, decoded)
       }
     }
-    @toolCommon.ToolError::InvalidToolName(name) =>
+    @types.ToolError::InvalidToolName(name) =>
       ToolError::RemoteTool(RemoteToolError::InvalidToolName(name))
-    @toolCommon.ToolError::InvalidCommandPath(path) =>
+    @types.ToolError::InvalidCommandPath(path) =>
       ToolError::RemoteTool(RemoteToolError::InvalidCommandPath(path))
-    @toolCommon.ToolError::InvalidInput(message) =>
+    @types.ToolError::InvalidInput(message) =>
       ToolError::RemoteTool(RemoteToolError::InvalidInput(message))
-    @toolCommon.ToolError::ConstraintViolation(message) =>
+    @types.ToolError::ConstraintViolation(message) =>
       ToolError::RemoteTool(RemoteToolError::ConstraintViolation(message))
-    @toolCommon.ToolError::InvalidResult(message) =>
+    @types.ToolError::InvalidResult(message) =>
       ToolError::RemoteTool(RemoteToolError::InvalidResult(message))
   }
 }

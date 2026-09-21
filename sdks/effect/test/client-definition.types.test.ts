@@ -31,9 +31,9 @@ function checkDefinitions() {
   defineAgentClient({ name: "Echo", methods })
   // @ts-expect-error the id requires a name
   defineAgentClient({ id: { name: Schema.String }, methods })
-  // @ts-expect-error config is not allowed on a binding-only contract
+  // @ts-expect-error config is not allowed on a method-only client
   defineAgentClient({ methods, config: undefined })
-  // @ts-expect-error mode is not allowed on a binding-only contract
+  // @ts-expect-error mode is not allowed on a method-only client
   defineAgentClient({ methods, mode: "durable" })
 }
 

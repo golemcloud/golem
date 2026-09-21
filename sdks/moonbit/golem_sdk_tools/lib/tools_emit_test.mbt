@@ -631,8 +631,7 @@ test "custom tool errors encode the declared case payload" {
     generated.split("@asyncCore.Cancelled::Cancelled as error").count() - 1 >= 2,
   )
   assert_true(
-    generated.split("@toolCommon.ToolError::InvalidResult(message)").count() - 1 >=
-    2,
+    generated.split("@types.ToolError::InvalidResult(message)").count() - 1 >= 2,
   )
 }
 

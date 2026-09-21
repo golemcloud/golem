@@ -330,6 +330,24 @@ impl PrimaryOplogService {
         agent_id.to_redis_key()
     }
 
+    fn staged_oplog_key(agent_id: &AgentId, stage_id: uuid::Uuid) -> String {
+        format!("{}#{stage_id}", Self::oplog_key(agent_id))
+    }
+
+    fn namespace(agent_id: &AgentId, agent_mode: AgentMode) -> IndexedStorageNamespace {
+        IndexedStorageNamespace::OpLog {
+            agent_id: agent_id.clone(),
+            agent_mode,
+        }
+    }
+
+    fn staged_namespace(agent_id: &AgentId, agent_mode: AgentMode) -> IndexedStorageNamespace {
+        IndexedStorageNamespace::StagedOpLog {
+            agent_id: agent_id.clone(),
+            agent_mode,
+        }
+    }
+
     pub fn key_prefix(component_id: &ComponentId) -> String {
         component_id.0.to_string()
     }
@@ -478,6 +496,88 @@ impl OplogService for PrimaryOplogService {
 
     fn stream_session_index(&self) -> Option<Arc<super::StreamSessionIndexService>> {
         self.stream_session_index.get().cloned()
+    }
+
+    async fn create_staged(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+        initial_worker_metadata: AgentMetadata,
+    ) -> Result<Arc<dyn Oplog>, String> {
+        record_oplog_call("create_staged");
+        if agent_mode != AgentMode::Durable {
+            return Err("Only durable agents can have staged oplogs".into());
+        }
+        let key = Self::staged_oplog_key(&owned_agent_id.agent_id, stage_id);
+        let namespace = Self::staged_namespace(&owned_agent_id.agent_id, agent_mode);
+        Ok(Arc::new(PrimaryOplog::new(
+            self.indexed_storage.clone(),
+            self.blob_storage.clone(),
+            self.replicas,
+            self.max_operations_before_commit,
+            self.max_payload_size,
+            self.retry_config.clone(),
+            namespace,
+            key,
+            OplogIndex::NONE,
+            owned_agent_id.clone(),
+            agent_mode,
+            initial_worker_metadata.created_by,
+            None,
+            Box::new(|| {}),
+        )))
+    }
+
+    async fn publish_staged(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+        expected_last_index: OplogIndex,
+    ) -> Result<bool, String> {
+        record_oplog_call("publish_staged");
+        if agent_mode != AgentMode::Durable {
+            return Err("Only durable agents can publish staged oplogs".into());
+        }
+        let stage_key = Self::staged_oplog_key(&owned_agent_id.agent_id, stage_id);
+        let target_key = Self::oplog_key(&owned_agent_id.agent_id);
+        self.indexed_storage
+            .move_if_absent(
+                "oplog",
+                "publish_staged",
+                IndexedStorageNamespace::StagedOpLog {
+                    agent_id: owned_agent_id.agent_id.clone(),
+                    agent_mode,
+                },
+                &stage_key,
+                IndexedStorageNamespace::OpLog {
+                    agent_id: owned_agent_id.agent_id.clone(),
+                    agent_mode,
+                },
+                &target_key,
+                expected_last_index.into(),
+            )
+            .await
+            .map_err(|error| format!("Failed publishing staged oplog {stage_key}: {error}"))
+    }
+
+    async fn discard_staged(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+    ) -> Result<(), String> {
+        record_oplog_call("discard_staged");
+        let key = Self::staged_oplog_key(&owned_agent_id.agent_id, stage_id);
+        self.indexed_storage
+            .with("oplog", "discard_staged")
+            .delete(
+                Self::staged_namespace(&owned_agent_id.agent_id, agent_mode),
+                &key,
+            )
+            .await
+            .map_err(|error| format!("Failed discarding staged oplog {key}: {error}"))
     }
 
     async fn create(
@@ -877,6 +977,7 @@ impl OplogConstructor for CreateOplogConstructor {
             self.max_operations_before_commit,
             self.max_payload_size,
             self.retry_config,
+            PrimaryOplogService::namespace(&self.owned_agent_id.agent_id, self.agent_mode),
             self.key,
             last_oplog_idx,
             self.owned_agent_id,
@@ -1032,6 +1133,7 @@ impl PrimaryOplog {
         max_operations_before_commit: u64,
         max_payload_size: usize,
         retry_config: RetryConfig,
+        namespace: IndexedStorageNamespace,
         key: String,
         last_oplog_idx: OplogIndex,
         owned_agent_id: OwnedAgentId,
@@ -1049,6 +1151,7 @@ impl PrimaryOplog {
             max_operations_before_commit,
             max_payload_size,
             retry_config,
+            namespace,
             key: key.clone(),
             buffer: VecDeque::new(),
             last_committed_idx: last_oplog_idx,
@@ -1213,9 +1316,6 @@ impl PrimaryOplog {
                         let before = state.reader().length().await;
                         state.drop_prefix(last_dropped_id).await;
                         let remaining = state.reader().length().await;
-                        if remaining == 0 {
-                            state.delete().await;
-                        }
                         let dropped = before - remaining;
                         if dropped > 0 {
                             let account_id = state.account_id.to_string();
@@ -1340,9 +1440,8 @@ impl PrimaryOplog {
 struct OplogReader {
     indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
     retry_config: RetryConfig,
+    namespace: IndexedStorageNamespace,
     key: String,
-    owned_agent_id: OwnedAgentId,
-    agent_mode: AgentMode,
     last_committed_idx: OplogIndex,
     buffer: VecDeque<OplogEntry>,
     replicas: u8,
@@ -1364,16 +1463,12 @@ impl OplogReader {
 
         let entries: Vec<(u64, OplogEntry)> = {
             let is = self.indexed_storage.clone();
-            let agent_id = self.owned_agent_id.agent_id();
-            let agent_mode = self.agent_mode;
+            let namespace = self.namespace.clone();
             let key = self.key.clone();
             let idx: u64 = oplog_index.into();
             retry_storage_op(&self.retry_config, "read", &key, || {
                 let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
+                let ns = namespace.clone();
                 let key = key.clone();
                 async move { read_persisted_oplog_entries(is, ns, key, idx, idx).await }
             })
@@ -1406,17 +1501,13 @@ impl OplogReader {
         let mut result: BTreeMap<OplogIndex, OplogEntry> = if oplog_index <= self.last_committed_idx
         {
             let is = self.indexed_storage.clone();
-            let agent_id = self.owned_agent_id.agent_id();
-            let agent_mode = self.agent_mode;
+            let namespace = self.namespace.clone();
             let key = self.key.clone();
             let start: u64 = oplog_index.into();
             let end: u64 = min(last_idx, self.last_committed_idx).into();
             retry_storage_op(&self.retry_config, "read_exact", &key, || {
                 let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
+                let ns = namespace.clone();
                 let key = key.clone();
                 async move { read_persisted_oplog_entries(is, ns, key, start, end).await }
             })
@@ -1459,15 +1550,11 @@ impl OplogReader {
 
         {
             let is = self.indexed_storage.clone();
-            let agent_id = self.owned_agent_id.agent_id();
-            let agent_mode = self.agent_mode;
+            let namespace = self.namespace.clone();
             let key = self.key.clone();
             retry_storage_op(&self.retry_config, "length", &key, || {
                 let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
+                let ns = namespace.clone();
                 let key = key.clone();
                 async move { is.with("oplog", "length").length(ns, &key).await }
             })
@@ -1483,6 +1570,7 @@ struct PrimaryOplogState {
     max_operations_before_commit: u64,
     max_payload_size: usize,
     retry_config: RetryConfig,
+    namespace: IndexedStorageNamespace,
     key: String,
     buffer: VecDeque<OplogEntry>,
     last_oplog_idx: OplogIndex,
@@ -1616,10 +1704,7 @@ impl PrimaryOplogState {
             serialized_pairs.push((*id, Bytes::from(value)));
         }
         let serialized_pairs: Arc<[(u64, Bytes)]> = serialized_pairs.into();
-        let namespace = IndexedStorageNamespace::OpLog {
-            agent_id: self.owned_agent_id.agent_id(),
-            agent_mode: self.agent_mode,
-        };
+        let namespace = self.namespace.clone();
         retry_oplog_append(
             &self.retry_config,
             self.indexed_storage.as_ref(),
@@ -1674,9 +1759,8 @@ impl PrimaryOplogState {
         OplogReader {
             indexed_storage: self.indexed_storage.clone(),
             retry_config: self.retry_config.clone(),
+            namespace: self.namespace.clone(),
             key: self.key.clone(),
-            owned_agent_id: self.owned_agent_id.clone(),
-            agent_mode: self.agent_mode,
             last_committed_idx: self.last_committed_idx,
             buffer: self.buffer.clone(),
             replicas: self.replicas,
@@ -1727,43 +1811,18 @@ impl PrimaryOplogState {
 
         {
             let is = self.indexed_storage.clone();
-            let agent_id = self.owned_agent_id.agent_id();
-            let agent_mode = self.agent_mode;
+            let namespace = self.namespace.clone();
             let key = self.key.clone();
             let dropped_id: u64 = last_dropped_id.into();
             retry_storage_op(&self.retry_config, "drop_prefix", &key, || {
                 let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
+                let ns = namespace.clone();
                 let key = key.clone();
                 async move {
                     is.with("oplog", "drop_prefix")
                         .drop_prefix(ns, &key, dropped_id)
                         .await
                 }
-            })
-            .await;
-        }
-    }
-
-    async fn delete(&self) {
-        record_oplog_call("delete");
-
-        {
-            let is = self.indexed_storage.clone();
-            let agent_id = self.owned_agent_id.agent_id();
-            let agent_mode = self.agent_mode;
-            let key = self.key.clone();
-            retry_storage_op(&self.retry_config, "delete", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                async move { is.with("oplog", "delete").delete(ns, &key).await }
             })
             .await;
         }

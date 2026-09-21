@@ -606,6 +606,7 @@ fn canonical_option_type(option: &OptionSpec) -> SchemaType {
             option.shape,
             OptionShape::RepeatableList(_) | OptionShape::RepeatableMap(_)
         )
+        && !matches!(&collected, SchemaType::Option { .. })
     {
         SchemaType::option(collected)
     } else {
@@ -614,7 +615,10 @@ fn canonical_option_type(option: &OptionSpec) -> SchemaType {
 }
 
 fn canonical_positional_type(positional: &Positional) -> SchemaType {
-    if !positional.required && positional.default.is_none() {
+    if !positional.required
+        && positional.default.is_none()
+        && !matches!(&positional.type_, SchemaType::Option { .. })
+    {
         SchemaType::option(positional.type_.clone())
     } else {
         positional.type_.clone()
@@ -987,6 +991,35 @@ mod tests {
             SchemaType::option(SchemaType::u32())
         );
         assert_eq!(by_name("verbosity").type_, SchemaType::u32());
+    }
+
+    #[test]
+    fn optional_surfaces_do_not_nest_an_author_supplied_option_carrier() {
+        let mut root = node("optional");
+        let mut positional = positional("label", SchemaType::option(SchemaType::string()));
+        positional.required = false;
+        root.body = Some(CommandBody {
+            positionals: Positionals {
+                fixed: vec![positional],
+                tail: None,
+            },
+            options: vec![option(
+                "mode",
+                OptionShape::Scalar(SchemaType::option(SchemaType::string())),
+            )],
+            ..body()
+        });
+        let tool = Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: vec![root] },
+            schema: SchemaGraph::empty(),
+        };
+
+        let fields = tool.canonical_input_fields(0);
+        assert_eq!(fields[0].type_, SchemaType::option(SchemaType::string()));
+        assert_eq!(fields[1].type_, SchemaType::option(SchemaType::string()));
+        tool.canonical_input_model(0)
+            .expect("canonical input remains well formed");
     }
 
     #[test]

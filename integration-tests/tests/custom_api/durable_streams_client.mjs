@@ -20,6 +20,10 @@ function handle(url, contentType = json) {
   return new DurableStream({ url, contentType, warnOnHttp: false });
 }
 
+function forkUrl(url, clientId) {
+  return url.replace("/invocations/", `/forks/${clientId}/invocations/`);
+}
+
 async function create(url, contentType = json) {
   return DurableStream.create({ url, contentType, warnOnHttp: false });
 }
@@ -169,6 +173,129 @@ async function idempotentProducer() {
   ]);
 }
 
+async function jsonFork() {
+  const s = session();
+  const sourceUrl = s.slot("input");
+  const source = await create(sourceUrl);
+  await source.append(JSON.stringify("shared-left"));
+  const producerOptions = { epoch: 4, maxInFlight: 1, lingerMs: 0 };
+  const sourceProducer = new IdempotentProducer(
+    source,
+    "fork-reference-producer",
+    producerOptions,
+  );
+  sourceProducer.append(JSON.stringify("shared-右"));
+  await sourceProducer.flush();
+  const cut = (await source.head()).offset;
+
+  const forkId = `reference-${randomUUID()}`;
+  const targetUrl = forkUrl(sourceUrl, forkId);
+  const forkInit = {
+    method: "PUT",
+    headers: {
+      "content-type": json,
+      "stream-forked-from": new URL(sourceUrl).pathname,
+    },
+    body: JSON.stringify(["branch-north", "branch-南"]),
+  };
+  const created = await request(targetUrl, 201, forkInit);
+  assert.equal(created.headers.get("stream-forked-from"), null);
+  assert.equal(created.headers.get("stream-fork-offset"), null);
+  assert.equal(created.headers.get("stream-fork-sub-offset"), null);
+
+  await source.append(JSON.stringify("source-only-west"));
+  const advancedCut = (await source.head()).offset;
+  const repeated = await request(targetUrl, 200, forkInit);
+  assert.equal(repeated.headers.get("stream-fork-offset"), null);
+  assert.equal(repeated.headers.get("stream-fork-sub-offset"), null);
+  const manifest = await (await request(forkUrl(s.base, forkId), 200)).json();
+  assert.equal(manifest.fork.forkOffset, cut);
+  await request(targetUrl, 409, {
+    ...forkInit,
+    headers: { ...forkInit.headers, "stream-fork-offset": advancedCut },
+  });
+
+  const branch = handle(targetUrl);
+  assert.equal((await branch.head()).streamClosed, false);
+  const openRead = await branch.stream({ offset: "-1", live: false });
+  assert.deepEqual(await openRead.json(), [
+    "shared-left",
+    "shared-右",
+    "branch-north",
+    "branch-南",
+  ]);
+  assert.equal(openRead.streamClosed, false);
+
+  // Producer sequence state starts independently on the fork.
+  const branchProducer = new IdempotentProducer(
+    branch,
+    "fork-reference-producer",
+    producerOptions,
+  );
+  branchProducer.append(JSON.stringify("producer-branch"));
+  await branchProducer.flush();
+  await source.close({ body: JSON.stringify("source-final") });
+  await branch.append(JSON.stringify("branch-only-east"));
+  await branch.close({ body: JSON.stringify("branch-final") });
+
+  const sourceExpected = [
+    "shared-left",
+    "shared-右",
+    "source-only-west",
+    "source-final",
+  ];
+  const branchExpected = [
+    "shared-left",
+    "shared-右",
+    "branch-north",
+    "branch-南",
+    "producer-branch",
+    "branch-only-east",
+    "branch-final",
+  ];
+  assert.deepEqual(await readJson(source), sourceExpected);
+  assert.deepEqual(await readJson(branch), branchExpected);
+  for (const [url, expected] of [
+    [s.slot("output"), sourceExpected],
+    [forkUrl(s.slot("output"), forkId), branchExpected],
+  ]) {
+    const output = handle(url);
+    await closed(output);
+    assert.deepEqual(await readJson(output), expected);
+  }
+}
+
+async function bytesForkSuboffset() {
+  const s = session("echo-bytes");
+  const sourceUrl = s.slot("input");
+  const source = await create(sourceUrl, "application/octet-stream");
+  await source.append(Uint8Array.of(3, 241, 8));
+  const anchor = (await source.head()).offset;
+  await source.append(Uint8Array.of(199, 17, 222, 41));
+
+  const targetUrl = forkUrl(sourceUrl, `bytes-${randomUUID()}`);
+  const created = await request(targetUrl, 201, {
+    method: "PUT",
+    headers: {
+      "content-type": "application/octet-stream",
+      "stream-forked-from": new URL(sourceUrl).pathname,
+      "stream-fork-offset": anchor,
+      "stream-fork-sub-offset": "2",
+      "stream-closed": "true",
+    },
+  });
+  assert.equal(created.headers.get("stream-fork-sub-offset"), null);
+  const branch = handle(targetUrl, "application/octet-stream");
+  const response = await branch.stream({ offset: "-1", live: false });
+  assert.deepEqual(
+    new Uint8Array(await response.body()),
+    Uint8Array.of(3, 241, 8, 199, 17),
+  );
+  assert.equal(response.streamClosed, true);
+  assert.equal(response.headers.get("stream-fork-sub-offset"), null);
+  await source.close();
+}
+
 async function offsetsAndClientCancellation() {
   const s = session();
   const input = await create(s.slot("input"));
@@ -292,7 +419,10 @@ async function sessionCancellation() {
 }
 
 async function outputSessionCancellation() {
-  for (const [count, cancelled] of [[2, "true"], [1, null]]) {
+  for (const [count, cancelled] of [
+    [2, "true"],
+    [1, null],
+  ]) {
     const s = session(`cancellation-output/${count}`);
     // The second item waits longer than the driver's 180-second timeout, so an
     // active producer cannot finish normally during this scenario.
@@ -403,6 +533,8 @@ async function readerCapAndRelease() {
 for (const scenario of [
   echoAndSink,
   idempotentProducer,
+  jsonFork,
+  bytesForkSuboffset,
   offsetsAndClientCancellation,
   sessionCancellation,
   outputSessionCancellation,

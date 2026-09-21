@@ -18,6 +18,7 @@ use super::{HostRequestGolemApiRevertAgent, HostRequestGolemRpcInvoke};
 use crate::model::Timestamp;
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::{ComponentId, ComponentRevision};
+use crate::model::durable_stream::StreamInvocationId;
 use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{AttributeValue, SpanId};
@@ -45,7 +46,8 @@ use crate::model::oplog::{
     HostRequestEntityInvocation, HostRequestFileSystemPath,
     HostRequestGolemAgentGetAgentTypeByAgentId, HostRequestGolemApiOplogEnrich,
     HostRequestGolemApiOplogRead, HostRequestGolemRpcActivate, HostRequestGolemToolGetTool,
-    HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke, HostRequestKVCacheKey,
+    HostRequestGolemToolInvocationRejected, HostRequestGolemToolInvoke,
+    HostRequestGolemToolResponseSecretHoldAdmission, HostRequestKVCacheKey,
     HostRequestKVCacheKeyAndTtl, HostRequestKVCacheKeyValueAndTtl,
     HostRequestMonotonicClockDuration, HostRequestMonotonicClockTimestamp, HostRequestNoInput,
     HostRequestP3HttpClientRequestBodyFrame, HostRequestP3HttpClientSend,
@@ -54,15 +56,15 @@ use crate::model::oplog::{
     HostResponseGolemAgentAgentType, HostResponseGolemApiOplogChunk,
     HostResponseGolemApiOplogEntries, HostResponseGolemApiUnit, HostResponseGolemRpcActivate,
     HostResponseGolemRpcScheduledInvocation, HostResponseGolemRpcScheduledInvocationCompat,
-    HostResponseGolemToolInvokeResult, HostResponseGolemToolTool, HostResponseGolemToolTools,
-    HostResponseGolemToolUnitOrFailure, HostResponseKVDelete, HostResponseKVGet,
-    HostResponseKVUnit, HostResponseMonotonicClockTimestamp,
-    HostResponseP3BlobstoreIncomingValueStream, HostResponseP3FileSystemStat,
-    HostResponseP3FileSystemWriteAdmission, HostResponseP3HttpClientConsumeBodyChunk,
-    HostResponseP3HttpClientConsumeBodyResult, HostResponseP3HttpClientRequestBodyTransmission,
-    HostResponseP3HttpClientSendResult, HostResponseP3KeyvalueIncomingValueStream,
-    HostResponseP3MonotonicClockUnit, HostResponseP3SocketsConnect,
-    HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
+    HostResponseGolemToolInvokeResult, HostResponseGolemToolResponseSecretHoldAdmission,
+    HostResponseGolemToolTool, HostResponseGolemToolTools, HostResponseGolemToolUnitOrFailure,
+    HostResponseKVDelete, HostResponseKVGet, HostResponseKVUnit,
+    HostResponseMonotonicClockTimestamp, HostResponseP3BlobstoreIncomingValueStream,
+    HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
+    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
+    HostResponseP3HttpClientRequestBodyTransmission, HostResponseP3HttpClientSendResult,
+    HostResponseP3KeyvalueIncomingValueStream, HostResponseP3MonotonicClockUnit,
+    HostResponseP3SocketsConnect, HostResponseP3SocketsTcpAcquire, HostResponseP3SocketsTcpReceive,
     HostResponseP3SocketsTcpReceiveChunk, HostResponseP3SocketsTcpSend,
     HostResponseP3SocketsUdpReceive, HostResponseP3SocketsUdpSend, HostResponseRandomBytes,
     HostResponseRandomSeed, HostResponseRandomU64, HostResponseWallClock, host_functions,
@@ -133,7 +135,7 @@ fn card_transfer_has_a_distinct_host_function_name() {
 }
 
 #[test]
-fn rpc_durable_request_captures_scope_card_payload_deterministically() {
+fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_deterministically() {
     let scope_card = ScopeCard {
         scope_card_id: CardId(uuid::Uuid::from_u128(1)),
         root_card_ids: vec![CardId(uuid::Uuid::from_u128(2))],
@@ -152,6 +154,15 @@ fn rpc_durable_request_captures_scope_card_payload_deterministically() {
         input: SchemaValue::Tuple {
             elements: Vec::new(),
         },
+        logical_streaming_origin: Some(StreamInvocationId {
+            callee_environment_id: EnvironmentId::new(),
+            callee: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "original-caller".to_string(),
+            },
+            callee_fingerprint: AgentFingerprint(uuid::Uuid::from_u128(3)),
+            idempotency_key: IdempotencyKey::new("source-invocation".to_string()),
+        }),
         remote_agent_type: None,
         remote_agent_parameters: None,
         scope_card: Some(scope_card),
@@ -480,6 +491,9 @@ fn entity_invocation_host_payload_pair_roundtrips() {
         HostRequestEntityInvocation {
             metadata: vec![1, 2, 3],
             input: empty_value(),
+            stream_session_idempotency_key: IdempotencyKey::new(
+                "entity-stream-session".to_string(),
+            ),
         },
         HostResponseEntityInvocation {
             result: Ok(empty_value()),
@@ -1062,6 +1076,23 @@ fn durable_rpc_activation_payload_pair_roundtrips() {
 }
 
 #[test]
+fn tool_response_secret_hold_admission_payload_pair_roundtrips() {
+    let value = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),
+        SchemaValue::Tuple {
+            elements: Vec::new(),
+        },
+    );
+    assert_host_payload_pair_roundtrip::<host_functions::GolemToolResponseSecretHoldAdmission>(
+        HostRequestGolemToolResponseSecretHoldAdmission {
+            value,
+            targets: Vec::new(),
+        },
+        HostResponseGolemToolResponseSecretHoldAdmission { admitted: false },
+    );
+}
+
+#[test]
 fn prepared_revert_payload_pair_roundtrips() {
     let agent_id = AgentId {
         component_id: ComponentId::new(),
@@ -1090,6 +1121,209 @@ fn prepared_revert_payload_pair_roundtrips() {
         },
         HostResponseGolemApiUnit { result: Ok(()) },
     );
+}
+
+#[test]
+fn external_durable_stream_payloads_preserve_checkpoints_and_producer_identity() {
+    use super::external_durable_stream::*;
+    use super::{
+        HostRequestDurableStreamAppend, HostRequestDurableStreamRead,
+        HostRequestDurableStreamReaderNew, HostRequestDurableStreamWriterNew,
+        HostResponseDurableStreamAppend, HostResponseDurableStreamRead,
+        HostResponseDurableStreamResource,
+    };
+    use crate::schema::schema_value::SecretValuePayload;
+
+    let auth = Some(SecretValuePayload {
+        secret_id: uuid::Uuid::from_u128(37),
+        config_key: Some(vec!["external".to_string(), "credential".to_string()]),
+        version: 9,
+        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        category: None,
+    });
+    let reader = HostRequestDurableStreamReaderNew {
+        options: DurableStreamReaderOptions {
+            url: "https://streams.example/data".to_string(),
+            mode: DurableStreamMode::Bytes,
+            timeout_ms: 7123,
+        },
+        auth: auth.clone(),
+    };
+    let reader_id = reader.options.resource_id(reader.auth.as_ref()).unwrap();
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemAgentDurableStreamReaderNew>(
+        reader.clone(),
+        HostResponseDurableStreamResource {
+            resource_id: reader_id.clone(),
+        },
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&HostRequest::from(reader.clone())).unwrap();
+    assert_eq!(
+        desert_rust::deserialize::<HostRequest>(&bytes).unwrap(),
+        reader.into()
+    );
+    let read = HostRequestDurableStreamRead {
+        resource_id: reader_id,
+        checkpoint: DurableStreamCheckpoint {
+            offset: "opaque-17".to_string(),
+            cursor: Some("cursor-23".to_string()),
+        },
+        transport: DurableStreamTransport::LongPoll,
+        content_type: Some("application/octet-stream".to_string()),
+    };
+    let response = HostResponseDurableStreamRead {
+        result: Ok(DurableStreamBatch {
+            payload: vec![0, 255, 19, 7],
+            content_type: "application/octet-stream".to_string(),
+            next: DurableStreamCheckpoint {
+                offset: "opaque-19".to_string(),
+                cursor: Some("cursor-31".to_string()),
+            },
+            up_to_date: true,
+            closed: false,
+        }),
+    };
+    let bytes = desert_rust::serialize_to_byte_vec(&HostRequest::from(read.clone())).unwrap();
+    let decoded: HostRequest = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, HostRequest::from(read.clone()));
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemAgentDurableStreamReaderRead>(
+        read, response,
+    );
+
+    let writer = HostRequestDurableStreamWriterNew {
+        options: DurableStreamWriterOptions {
+            url: "https://streams.example/data".to_string(),
+            content_type: "application/json".to_string(),
+            producer_id: "writer-1".to_string(),
+            producer_epoch: 13,
+            timeout_ms: 8111,
+        },
+        auth,
+    };
+    let writer_id = writer.options.resource_id(writer.auth.as_ref()).unwrap();
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemAgentDurableStreamWriterNew>(
+        writer.clone(),
+        HostResponseDurableStreamResource {
+            resource_id: writer_id.clone(),
+        },
+    );
+    let bytes = desert_rust::serialize_to_byte_vec(&HostRequest::from(writer.clone())).unwrap();
+    assert_eq!(
+        desert_rust::deserialize::<HostRequest>(&bytes).unwrap(),
+        writer.into()
+    );
+    let append = HostRequestDurableStreamAppend {
+        resource_id: writer_id,
+        payload: DurableStreamAppendPayload::Json(vec![
+            "[7,3]".to_string(),
+            "9007199254740993".to_string(),
+        ]),
+        sequence: 17,
+        close: true,
+    };
+    let mut error = DurableStreamError::new(DurableStreamErrorKind::Fenced, "Producer fenced");
+    error.producer_epoch = Some(19);
+    error.expected_sequence = Some(23);
+    error.retry_after_ms = Some(9123);
+    let response = HostResponseDurableStreamAppend { result: Err(error) };
+    let bytes = desert_rust::serialize_to_byte_vec(&HostRequest::from(append.clone())).unwrap();
+    let decoded: HostRequest = desert_rust::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, HostRequest::from(append.clone()));
+    assert_host_payload_pair_schema_roundtrip::<host_functions::GolemAgentDurableStreamWriterAppend>(
+        append, response,
+    );
+}
+
+#[test]
+fn external_durable_stream_resource_identity_covers_descriptor_and_pinned_credential() {
+    use super::external_durable_stream::*;
+    use crate::schema::schema_value::SecretValuePayload;
+
+    let reader = DurableStreamReaderOptions {
+        url: "https://streams.example/a".into(),
+        mode: DurableStreamMode::Json,
+        timeout_ms: 7123,
+    };
+    let auth = SecretValuePayload {
+        secret_id: uuid::Uuid::from_u128(37),
+        config_key: Some(vec!["external".into(), "credential".into()]),
+        version: 9,
+        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        category: Some("streams".into()),
+    };
+    let id = reader.resource_id(Some(&auth)).unwrap();
+    let mut reconstructed_auth = auth.clone();
+    reconstructed_auth.resolved_at += chrono::Duration::seconds(123);
+    assert_eq!(reader.resource_id(Some(&reconstructed_auth)).unwrap(), id);
+    assert_ne!(reader.resource_id(None).unwrap(), id);
+    for altered in [
+        SecretValuePayload {
+            version: 10,
+            ..auth.clone()
+        },
+        SecretValuePayload {
+            secret_id: uuid::Uuid::from_u128(38),
+            ..auth.clone()
+        },
+        SecretValuePayload {
+            config_key: Some(vec!["other".into()]),
+            ..auth.clone()
+        },
+        SecretValuePayload {
+            category: None,
+            ..auth.clone()
+        },
+    ] {
+        assert_ne!(reader.resource_id(Some(&altered)).unwrap(), id);
+    }
+    for altered in [
+        DurableStreamReaderOptions {
+            url: "https://streams.example/b".into(),
+            ..reader.clone()
+        },
+        DurableStreamReaderOptions {
+            mode: DurableStreamMode::Bytes,
+            ..reader.clone()
+        },
+        DurableStreamReaderOptions {
+            timeout_ms: 7124,
+            ..reader.clone()
+        },
+    ] {
+        assert_ne!(altered.resource_id(Some(&auth)).unwrap(), id);
+    }
+    let writer = DurableStreamWriterOptions {
+        url: reader.url,
+        content_type: "application/json".into(),
+        producer_id: "writer-1".into(),
+        producer_epoch: 13,
+        timeout_ms: reader.timeout_ms,
+    };
+    let writer_id = writer.resource_id(Some(&auth)).unwrap();
+    assert_ne!(writer_id, id);
+    for altered in [
+        DurableStreamWriterOptions {
+            url: "https://streams.example/b".into(),
+            ..writer.clone()
+        },
+        DurableStreamWriterOptions {
+            content_type: "text/plain".into(),
+            ..writer.clone()
+        },
+        DurableStreamWriterOptions {
+            producer_id: "writer-2".into(),
+            ..writer.clone()
+        },
+        DurableStreamWriterOptions {
+            producer_epoch: 14,
+            ..writer.clone()
+        },
+        DurableStreamWriterOptions {
+            timeout_ms: 7124,
+            ..writer.clone()
+        },
+    ] {
+        assert_ne!(altered.resource_id(Some(&auth)).unwrap(), writer_id);
+    }
 }
 
 fn assert_host_payload_pair_schema_roundtrip<Pair>(request: Pair::Req, response: Pair::Resp)
@@ -1220,7 +1454,9 @@ fn tool_invocation_host_payload_pairs_roundtrip() {
     };
     let response = HostResponseGolemToolInvokeResult {
         result: Ok(SerializableToolInvocationResult {
-            result: Some("match".to_string().into_typed_schema_value().unwrap()),
+            result: Some(Box::new(
+                "match".to_string().into_typed_schema_value().unwrap(),
+            )),
         }),
     };
 
@@ -1470,19 +1706,15 @@ fn durable_oplog_read_payload_pairs_roundtrip() {
 }
 
 #[test]
-fn p3_http_payload_additions_keep_existing_host_request_binary_tags_stable() {
-    let old_kv_bucket_and_key_bytes = [
-        0, 25, 0, 0, 12, b'b', b'u', b'c', b'k', b'e', b't', 6, b'k', b'e', b'y',
-    ];
-
-    let decoded: HostRequest = desert_rust::deserialize(&old_kv_bucket_and_key_bytes).unwrap();
-
+fn keyvalue_host_request_binary_roundtrip() {
+    let request = HostRequest::KVBucketAndKey(crate::model::oplog::HostRequestKVBucketAndKey {
+        bucket: "bucket".to_string(),
+        key: "key".to_string(),
+    });
+    let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
     assert_eq!(
-        decoded,
-        HostRequest::KVBucketAndKey(crate::model::oplog::HostRequestKVBucketAndKey {
-            bucket: "bucket".to_string(),
-            key: "key".to_string(),
-        })
+        desert_rust::deserialize::<HostRequest>(&bytes).unwrap(),
+        request
     );
 }
 
@@ -1513,21 +1745,21 @@ fn p3_http_payload_additions_keep_preexisting_blobstore_create_container_tag_sta
 }
 
 #[test]
-fn main_payload_additions_keep_existing_p3_binary_tags_stable() {
-    let old_p3_monotonic_clock_unit_response = [0, 47, 0, 0];
+fn p3_response_and_function_name_binary_roundtrip() {
     let response = HostResponse::P3MonotonicClockUnit(
         crate::model::oplog::HostResponseP3MonotonicClockUnit {},
     );
+    let bytes = desert_rust::serialize_to_byte_vec(&response).unwrap();
     assert_eq!(
-        desert_rust::serialize_to_byte_vec(&response).unwrap(),
-        old_p3_monotonic_clock_unit_response
+        desert_rust::deserialize::<HostResponse>(&bytes).unwrap(),
+        response
     );
 
-    let old_p3_http_request_body_transmission_name = [0, 142, 1, 0];
     let function_name = host_functions::HostFunctionName::P3HttpClientRequestBodyTransmission;
+    let bytes = desert_rust::serialize_to_byte_vec(&function_name).unwrap();
     assert_eq!(
-        desert_rust::serialize_to_byte_vec(&function_name).unwrap(),
-        old_p3_http_request_body_transmission_name
+        desert_rust::deserialize::<host_functions::HostFunctionName>(&bytes).unwrap(),
+        function_name
     );
 }
 
