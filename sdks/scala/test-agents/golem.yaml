@@ -42,6 +42,12 @@ tools:
   grep: { }
   scala-streaming: { }
   tool-demo: { }
+  middleware:
+    middleware-fixture-transparent: { }
+    middleware-fixture-adapter: { }
+    middleware-fixture-universal: { }
+    middleware-fixture-typed-universal: { }
+    middleware-fixture-typed-monomorphic: { }
 
 httpApi:
   deployments:
