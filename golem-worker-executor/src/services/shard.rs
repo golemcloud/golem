@@ -365,13 +365,14 @@ impl OplogFenceObserver for ShardServiceDefault {
 }
 
 /// Records what every delivery updates: the resulting shard count, and, when the delivery was
-/// dropped for being older than the last applied, the staleness itself.
+/// dropped - older than the last applied, or pushed by a manager this executor does not follow -
+/// the drop itself.
 ///
 /// One function rather than a line per delivery, so a delivery added later cannot record the
 /// count and silently forget the staleness.
 fn record_delivery(delivery: ShardDelivery, outcome: &ShardDeliveryOutcome, assigned: usize) {
     record_assigned_shard_count(assigned);
-    if matches!(outcome, ShardDeliveryOutcome::Stale { .. }) {
+    if !matches!(outcome, ShardDeliveryOutcome::Applied { .. }) {
         record_stale_shard_delivery(delivery);
     }
 }
@@ -555,9 +556,9 @@ mod tests {
         // `ShardingNotReady` by refreshing its routing table and retrying, and answers an opaque
         // error by failing the call.
         for refused in [
-            service.assign_shards(SHARDS, &epochs([(0, 1)]), ShardLeaseRevision(1)),
-            service.update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision(1)),
-            service.revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision(1)),
+            service.assign_shards(SHARDS, &epochs([(0, 1)]), ShardLeaseRevision::of(1)),
+            service.update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision::of(1)),
+            service.revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision::of(1)),
         ] {
             assert!(
                 matches!(refused, Err(WorkerExecutorError::ShardingNotReady)),
@@ -578,12 +579,12 @@ mod tests {
             SHARDS,
             &epochs([(0, 1), (1, 1)]),
             Some(live()),
-            ShardLeaseRevision(5),
+            ShardLeaseRevision::of(5),
         );
 
         let before = stale_shard_delivery_count(ShardDelivery::Renewal);
         let outcome = service
-            .update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision(3))
+            .update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision::of(3))
             .expect("a registered executor can be renewed");
 
         assert!(
@@ -607,18 +608,18 @@ mod tests {
             SHARDS,
             &epochs([(0, 1), (1, 1)]),
             Some(live()),
-            ShardLeaseRevision(5),
+            ShardLeaseRevision::of(5),
         );
 
         let outcome = service
-            .revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision(3))
+            .revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision::of(3))
             .expect("a registered executor can be revoked from");
 
         assert_eq!(
             outcome,
             ShardDeliveryOutcome::Stale {
-                delivered: ShardLeaseRevision(3),
-                applied: ShardLeaseRevision(5),
+                delivered: ShardLeaseRevision::of(3),
+                applied: ShardLeaseRevision::of(5),
             }
         );
         assert_eq!(
@@ -633,7 +634,7 @@ mod tests {
 
         // ...while one at or above the applied revision does take the shard.
         let outcome = service
-            .revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision(5))
+            .revoke_shards(&HashSet::from([ShardId::new(0)]), ShardLeaseRevision::of(5))
             .expect("a registered executor can be revoked from");
         assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
         assert_eq!(
@@ -654,7 +655,7 @@ mod tests {
         assert!(service.check_worker(&on_kept).is_ok());
 
         service
-            .assign_shards(SHARDS, &epochs([(1, 1)]), ShardLeaseRevision(1))
+            .assign_shards(SHARDS, &epochs([(1, 1)]), ShardLeaseRevision::of(1))
             .unwrap();
 
         assert_eq!(
@@ -679,7 +680,7 @@ mod tests {
         assert!(service.check_admission(&agent).is_ok());
 
         service
-            .update_lease(&epochs([(0, 3)]), lapsed(), ShardLeaseRevision(1))
+            .update_lease(&epochs([(0, 3)]), lapsed(), ShardLeaseRevision::of(1))
             .unwrap();
 
         assert!(
@@ -754,19 +755,19 @@ mod tests {
             SHARDS,
             &epochs([(0, 1), (1, 1)]),
             Some(lapsed()),
-            ShardLeaseRevision(5),
+            ShardLeaseRevision::of(5),
         );
         assert!(!service.is_ready());
 
         let outcome = service
-            .update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision(3))
+            .update_lease(&epochs([(0, 1)]), live(), ShardLeaseRevision::of(3))
             .expect("a registered executor can be renewed");
 
         assert_eq!(
             outcome,
             ShardDeliveryOutcome::Stale {
-                delivered: ShardLeaseRevision(3),
-                applied: ShardLeaseRevision(5),
+                delivered: ShardLeaseRevision::of(3),
+                applied: ShardLeaseRevision::of(5),
             }
         );
         assert_eq!(

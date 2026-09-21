@@ -1950,7 +1950,7 @@ mod tests {
             1,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             None,
-            ShardLeaseRevision(0),
+            ShardLeaseRevision::of(0),
         );
         shard_service
     }
@@ -3232,7 +3232,7 @@ mod tests {
         stranded_ephemeral_oplog(&layers, &agent_id, environment_id).await;
 
         let shards = Arc::new(ShardServiceDefault::new());
-        shards.register(4, &HashMap::new(), None, ShardLeaseRevision(0));
+        shards.register(4, &HashMap::new(), None, ShardLeaseRevision::of(0));
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 
         sweeper.sweep_once(&CancellationToken::new()).await;
@@ -3263,7 +3263,7 @@ mod tests {
 
         // The shard moves to another executor before the agent ever went quiet for us.
         shards
-            .assign_shards(4, &HashMap::new(), ShardLeaseRevision(1))
+            .assign_shards(4, &HashMap::new(), ShardLeaseRevision::of(1))
             .expect("assignment");
         sweeper.sweep_once(&CancellationToken::new()).await;
 
@@ -3898,7 +3898,7 @@ mod tests {
             0,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             None,
-            ShardLeaseRevision(0),
+            ShardLeaseRevision::of(0),
         );
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 
@@ -3923,7 +3923,7 @@ mod tests {
             1,
             &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
             Some(Instant::now()),
-            ShardLeaseRevision(0),
+            ShardLeaseRevision::of(0),
         );
         let sweeper = build(&layers, manual(), shards, environment_id, HashSet::new());
 

@@ -173,7 +173,7 @@ fn shard_lease_from_wire(
     Ok(ShardLease {
         shard_epochs: shard_epochs_from_proto(lease.shard_epochs)?,
         expires_at: expires_at_from_ttl(lease.lease_ttl, sent_at)?,
-        revision: ShardLeaseRevision(lease.revision),
+        revision: ShardLeaseRevision::from_wire(&lease.incarnation_id, lease.revision),
     })
 }
 
@@ -345,7 +345,10 @@ impl ShardManager for GrpcShardManager {
                                         .map_err(ShardManagerError::ConversionError)?,
                                     expires_at: expires_at_from_ttl(success.lease_ttl, sent_at)
                                         .map_err(ShardManagerError::ConversionError)?,
-                                    revision: ShardLeaseRevision(success.revision),
+                                    revision: ShardLeaseRevision::from_wire(
+                                        &success.incarnation_id,
+                                        success.revision,
+                                    ),
                                 },
                             })
                         }
@@ -844,6 +847,7 @@ mod tests {
     /// earlier than one anchored on arrival would - by exactly the time it took.
     #[test]
     fn a_delayed_grant_is_anchored_where_the_request_was_sent_not_where_the_answer_arrived() {
+        let incarnation = Uuid::new_v4();
         let on_the_wire = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease {
             shard_epochs: vec![],
             lease_ttl: Some(prost_types::Duration {
@@ -851,6 +855,7 @@ mod tests {
                 nanos: 0,
             }),
             revision: 3,
+            incarnation_id: incarnation.to_string(),
         };
         let sent_at = Instant::now();
         // the answer took its time
@@ -863,6 +868,12 @@ mod tests {
             lease.expires_at < Instant::now() + Duration::from_secs(60),
             "time the answer spent in flight must come off the lease, never on to it"
         );
-        assert_eq!(lease.revision, ShardLeaseRevision(3));
+        assert_eq!(
+            lease.revision,
+            ShardLeaseRevision {
+                incarnation: Some(incarnation),
+                number: 3
+            }
+        );
     }
 }

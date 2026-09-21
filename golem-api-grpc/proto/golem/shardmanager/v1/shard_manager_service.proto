@@ -90,6 +90,16 @@ message RegisterSuccess {
   // least the last one it applied, so two deliveries that cross on the network
   // cannot leave the older set in place.
   uint64 revision = 4;
+  // Identifies the shard manager process that sent this, minted when it
+  // started. A revision orders the deliveries of one process only: a manager
+  // that failed over, or came back on a wiped or restored store, counts from a
+  // state the executor's last applied revision says nothing about. The executor
+  // follows the process that answered its latest request - a different id here
+  // or on ShardLease starts its revisions over - and ignores an AssignShards or
+  // RevokeShards from any other, renewing at once to hear from the one in
+  // charge. Empty from a manager that does not send one, and then deliveries
+  // are ordered by revision alone.
+  string incarnation_id = 5;
 }
 
 // An executor's shard lease: the complete set of shards it owns with the epoch
@@ -101,6 +111,8 @@ message ShardLease {
   google.protobuf.Duration lease_ttl = 2;
   // See RegisterSuccess.revision.
   uint64 revision = 3;
+  // See RegisterSuccess.incarnation_id.
+  string incarnation_id = 4;
 }
 
 // Extends the executor's shard lease before it expires. shard_epochs is the

@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::net::IpAddr;
+use std::sync::LazyLock;
 use std::time::Duration;
 use tracing::warn;
 use uuid::Uuid;
@@ -120,6 +121,19 @@ impl Display for ShardLeaseRevision {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
+}
+
+/// Names this shard manager process on every shard set it delivers, beside the revision.
+///
+/// A revision orders the deliveries of one store's history, and an executor keeps the last one
+/// it applied. A process that starts on a wiped or restored store counts from below that, so its
+/// sets would be dropped as stale. Minted per process and never stored, so a failover, a wipe
+/// and a restore all present a new one: the executor follows the process that answered its
+/// latest request, starts its revisions over when that changes, and ignores a push from any
+/// other process.
+pub fn incarnation_id() -> String {
+    static INCARNATION_ID: LazyLock<Uuid> = LazyLock::new(Uuid::new_v4);
+    INCARNATION_ID.to_string()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]

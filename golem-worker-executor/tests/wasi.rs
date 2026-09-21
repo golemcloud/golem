@@ -2082,6 +2082,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 1,
+            incarnation_id: String::new(),
         })
         .await?
         .into_inner();
@@ -2107,6 +2108,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
             // round trip does not depend on timing.
             revision: 1,
             number_of_shards: 1,
+            incarnation_id: String::new(),
         })
         .await?
         .into_inner();

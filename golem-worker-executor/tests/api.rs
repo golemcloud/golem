@@ -2058,6 +2058,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 1,
+            incarnation_id: String::new(),
         })
         .await?
         .into_inner();
@@ -2093,6 +2094,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
             }],
             number_of_shards: 1,
             revision: 2,
+            incarnation_id: String::new(),
         })
         .await?
         .into_inner();
@@ -2116,6 +2118,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
             }],
             number_of_shards: 1,
             revision: 3,
+            incarnation_id: String::new(),
         })
         .await?
         .into_inner();
@@ -7916,6 +7919,7 @@ async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
+            incarnation_id: String::new(),
         })
         .await?;
     Ok(())
@@ -7936,6 +7940,7 @@ async fn assign_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
             }],
             number_of_shards: 1,
             revision: 2,
+            incarnation_id: String::new(),
         })
         .await?;
     Ok(())

@@ -1197,19 +1197,24 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let proto_shard_ids = request.shard_ids;
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
-        let revision = ShardLeaseRevision(request.revision);
+        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision);
 
-        if let ShardDeliveryOutcome::Stale { delivered, applied } =
-            self.shard_service().revoke_shards(&shard_ids, revision)?
-        {
-            // A newer delivery has already been applied and its set is the
-            // authority; taking shards out of it would be acting on stale news.
-            tracing::warn!(
-                %delivered,
-                %applied,
-                "Ignoring a RevokeShards older than the last delivery applied"
-            );
-            return Ok(());
+        match self.shard_service().revoke_shards(&shard_ids, revision)? {
+            ShardDeliveryOutcome::Applied { .. } => {}
+            ShardDeliveryOutcome::Stale { delivered, applied } => {
+                // A newer delivery has already been applied and its set is the
+                // authority; taking shards out of it would be acting on stale news.
+                tracing::warn!(
+                    %delivered,
+                    %applied,
+                    "Ignoring a RevokeShards older than the last delivery applied"
+                );
+                return Ok(());
+            }
+            ShardDeliveryOutcome::FromAnotherManager { delivered, applied } => {
+                self.renew_after_a_push_from_another_manager("RevokeShards", delivered, applied);
+                return Ok(());
+            }
         }
 
         // Given up, not restarted: a restart in place would reopen each agent's oplog with the
@@ -1248,23 +1253,49 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let revision = ShardLeaseRevision(request.revision);
-        if let ShardDeliveryOutcome::Stale { delivered, applied } = self
+        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision);
+        match self
             .shard_service()
             .assign_shards(number_of_shards, &shard_epochs, revision)?
         {
-            // Crossed on the network with a newer delivery, which has already
-            // been applied; applying this one would put the older set back.
-            tracing::warn!(
-                %delivered,
-                %applied,
-                "Ignoring an AssignShards push older than the last delivery applied"
-            );
-            return Ok(());
+            ShardDeliveryOutcome::Applied { .. } => {}
+            ShardDeliveryOutcome::Stale { delivered, applied } => {
+                // Crossed on the network with a newer delivery, which has already
+                // been applied; applying this one would put the older set back.
+                tracing::warn!(
+                    %delivered,
+                    %applied,
+                    "Ignoring an AssignShards push older than the last delivery applied"
+                );
+                return Ok(());
+            }
+            ShardDeliveryOutcome::FromAnotherManager { delivered, applied } => {
+                self.renew_after_a_push_from_another_manager("AssignShards", delivered, applied);
+                return Ok(());
+            }
         }
 
         Self::apply_shard_assignment_effects(self).await?;
         Ok(())
+    }
+
+    /// A push from a shard manager process this executor does not follow is either a deposed
+    /// manager still sending, or a new one this executor has not heard a reply from yet. The
+    /// push cannot say which, so it is ignored either way and the renewal asks: its answer names
+    /// the process in charge and carries that process's set.
+    fn renew_after_a_push_from_another_manager(
+        &self,
+        push: &'static str,
+        delivered: ShardLeaseRevision,
+        applied: ShardLeaseRevision,
+    ) {
+        tracing::warn!(
+            push,
+            %delivered,
+            %applied,
+            "Ignoring a push from a shard manager process other than the one followed; renewing the lease to hear from the one in charge"
+        );
+        self.shard_manager_service().renew_now();
     }
 
     /// The one receipt path for a delivered shard set, whichever way it came:
