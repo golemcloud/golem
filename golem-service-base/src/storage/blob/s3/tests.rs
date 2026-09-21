@@ -16,7 +16,7 @@ use super::{RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage};
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::storage::blob::{
     BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
-    ExistsResult, ListedBlob,
+    ExistsResult, ListedBlob, PutIfAbsent, agent_path_segment,
 };
 use aws_runtime::retries::classifiers::{THROTTLING_ERRORS, TRANSIENT_ERRORS};
 use aws_sdk_s3::config::http::{HttpRequest, HttpResponse};
@@ -37,6 +37,8 @@ use axum::http::{Response, StatusCode as ServerStatus};
 use axum::routing::put;
 use bytes::Bytes;
 use futures::StreamExt;
+use golem_common::model::AgentId;
+use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use http_body::Frame;
 use http_body_util::StreamBody;
@@ -61,6 +63,7 @@ struct SentRequest {
     uri: String,
     range: Option<String>,
     copy_source: Option<String>,
+    if_none_match: Option<String>,
     body: String,
 }
 
@@ -74,6 +77,7 @@ impl SentRequest {
                 .headers()
                 .get("x-amz-copy-source")
                 .map(str::to_string),
+            if_none_match: request.headers().get("if-none-match").map(str::to_string),
             body: request
                 .body()
                 .bytes()
@@ -517,6 +521,16 @@ const SLOW_DOWN: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>Sl
 /// the classifier of the SDK reads the code and not the status of the response, so a 4xx that
 /// carries the code asks for one more attempt.
 const THROTTLING_EXCEPTION: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>ThrottlingException</Code><Message>Rate exceeded.</Message></Error>"#;
+
+/// The body of the error of a conditional write to a key that already has an object. S3 gives
+/// the code `PreconditionFailed` with the status 412 for a `PutObject` with `If-None-Match: *`,
+/// and so does MinIO (`ErrPreconditionFailed` in `cmd/api-errors.go`).
+const PRECONDITION_FAILED: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>PreconditionFailed</Code><Message>At least one of the pre-conditions you specified did not hold</Message><Condition>If-None-Match</Condition></Error>"#;
+
+/// The body of the error of a conditional write that met a request on the same key. S3 gives
+/// the code `ConditionalRequestConflict` with the status 409, and its documentation of
+/// conditional writes says that a `PutObject` can go again after it.
+const CONDITIONAL_REQUEST_CONFLICT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>ConditionalRequestConflict</Code><Message>A conflicting conditional operation is currently in progress against this resource.</Message></Error>"#;
 
 /// The body of the error of a request that is not valid. The S3 model names `InvalidRequest` as
 /// an error of `PutObject`, so the SDK gives the `PutObjectError::InvalidRequest` variant for
@@ -2450,5 +2464,273 @@ async fn put_raw_golem_retries_preserve_empty_payload_and_final_error() {
     assert_eq!(
         bodies.lock().unwrap().as_slice(),
         [Bytes::new(), Bytes::new(), Bytes::new()]
+    );
+}
+
+#[test]
+async fn put_raw_if_absent_sends_if_none_match_and_writes_where_the_key_has_no_object() {
+    // A 200 is the answer of S3 to a conditional write for a key that has no object. Without
+    // the header, S3 writes over an object that is there, so the header is what makes the
+    // write conditional.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+
+    let result = storage
+        .put_raw_if_absent(
+            "test",
+            "put-if-absent",
+            namespace(),
+            Path::new("blob"),
+            b"x",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            result,
+            sent(&requests)
+                .iter()
+                .map(|request| (request.method.clone(), request.if_none_match.clone()))
+                .collect::<Vec<_>>()
+        ),
+        (
+            PutIfAbsent::Written,
+            vec![("PUT".to_string(), Some("*".to_string()))]
+        )
+    );
+}
+
+#[test]
+async fn put_raw_if_absent_gives_already_exists_for_a_412_after_one_request_and_logs_no_error() {
+    // A 412 is the answer and not a failure: the key has an object. The loop sends no second
+    // request for it, records no error and counts no failure. The write that gets a server
+    // error is the control: it sends 3 requests, records an error and counts a failure.
+    let (storage, requests) = scripted_storage("", |request, _| {
+        // The URI of a `PutObject` ends with a query, so the script reads the path before it.
+        if request
+            .uri
+            .split('?')
+            .next()
+            .is_some_and(|path| path.ends_with("/exists"))
+        {
+            Answer::new(412, PRECONDITION_FAILED)
+        } else {
+            Answer::new(500, INTERNAL_ERROR)
+        }
+    });
+    let ops = ["put-if-absent-412", "put-if-absent-500"];
+    let failures_before = ops.map(external_call_failures);
+
+    let ((exists, failing), errors) = with_error_log(async {
+        (
+            storage
+                .put_raw_if_absent("test", ops[0], namespace(), Path::new("exists"), b"x")
+                .await
+                .map_err(|error| error.to_string()),
+            storage
+                .put_raw_if_absent("test", ops[1], namespace(), Path::new("failing"), b"x")
+                .await
+                .is_err(),
+        )
+    })
+    .await;
+    let failures = ops
+        .map(external_call_failures)
+        .iter()
+        .zip(failures_before)
+        .map(|(after, before)| after - before)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (exists, failing, errors, failures, sent(&requests).len()),
+        (
+            Ok(PutIfAbsent::AlreadyExists),
+            true,
+            vec![ops[1].to_string()],
+            vec![0.0, 1.0],
+            4
+        )
+    );
+}
+
+#[test]
+async fn put_raw_if_absent_sends_a_write_that_a_409_answers_again() {
+    // S3 gives a 409 when a request on the same key ran at the same time, for example a delete
+    // that finished before the write, and its documentation says that a `PutObject` can go
+    // again after it. The status rule of `put_raw` stops at a 4xx, so this is the one answer
+    // that the conditional write treats in another way.
+    let (storage, requests) = scripted_storage("", |_, earlier| match earlier {
+        0 => Answer::new(409, CONDITIONAL_REQUEST_CONFLICT),
+        _ => Answer::new(200, ""),
+    });
+
+    let result = storage
+        .put_raw_if_absent(
+            "test",
+            "put-if-absent",
+            namespace(),
+            Path::new("blob"),
+            b"x",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!((result, sent(&requests).len()), (PutIfAbsent::Written, 2));
+}
+
+#[test]
+async fn put_raw_if_absent_after_a_lost_response_can_find_its_own_object() {
+    // The first attempt reaches S3 and writes the object, but its response does not arrive.
+    // The transport gives an error, which keeps the loop, and the second attempt finds the
+    // object of the first. The call gives `AlreadyExists`, although it wrote the object, as the
+    // documentation of the method says.
+    let (storage, requests) = scripted_storage("", |_, earlier| match earlier {
+        0 => Answer::transport_error(ConnectorError::io("connection reset".into())),
+        _ => Answer::new(412, PRECONDITION_FAILED),
+    });
+
+    let result = storage
+        .put_raw_if_absent(
+            "test",
+            "put-if-absent",
+            namespace(),
+            Path::new("blob"),
+            b"x",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (result, sent(&requests).len()),
+        (PutIfAbsent::AlreadyExists, 2)
+    );
+}
+
+#[test]
+async fn put_raw_if_absent_stops_at_a_fault_of_the_request() {
+    // The conditional write keeps the rule of `put_raw` for every answer other than a 409: a
+    // 4xx that reports a fault of the request gets the same answer again, so the loop stops.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(400, ENTITY_TOO_LARGE));
+
+    let result = storage
+        .put_raw_if_absent(
+            "test",
+            "put-if-absent",
+            namespace(),
+            Path::new("blob"),
+            b"x",
+        )
+        .await;
+
+    assert_eq!((result.is_err(), sent(&requests).len()), (true, 1));
+}
+
+#[test]
+async fn put_raw_if_absent_rejects_a_name_that_breaks_a_rule_without_a_request() {
+    // The key of `namespace()` in a storage without an object prefix is the 36 bytes of the
+    // nil UUID, `/`, and the name. The last name has 988 bytes, so its key has 1025. A root
+    // path is a directory, and a blob cannot be where a directory is.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+    let names = [
+        "a\0b".to_string(),
+        "a/ .. /b".to_string(),
+        "dir/__dir_marker".to_string(),
+        "a".repeat(988),
+        "./".to_string(),
+    ];
+
+    let errors = futures::stream::iter(&names)
+        .then(|name| async {
+            storage
+                .put_raw_if_absent("test", "put-if-absent", namespace(), Path::new(name), b"x")
+                .await
+                .map_err(name_error)
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    assert_eq!(
+        (errors, sent(&requests).len()),
+        (
+            vec![
+                Err(Some(BlobNameError::NulByte)),
+                Err(Some(BlobNameError::DotSegment {
+                    segment: " .. ".to_string()
+                })),
+                Err(Some(BlobNameError::Reserved {
+                    marker: "__dir_marker"
+                })),
+                Err(Some(BlobNameError::TooLong {
+                    length: 1025,
+                    max: 1024
+                })),
+                Err(Some(BlobNameError::NoName {
+                    path: PathBuf::from("")
+                })),
+            ],
+            0
+        )
+    );
+}
+
+#[test]
+async fn a_filesystem_snapshot_blob_goes_to_its_own_bucket_and_to_the_key_of_its_agent() {
+    // The agent name holds a `..` segment, which the rules of a key refuse, so the key holds
+    // the bounded segment of the agent and not the agent name. The path style of the client
+    // puts the bucket first in the URI.
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::nil()),
+        agent_id: r#"counter("a/../b")"#.to_string(),
+    };
+    let namespace = BlobStorageNamespace::FilesystemSnapshots {
+        environment_id: EnvironmentId(Uuid::nil()),
+        agent_id: agent_id.clone(),
+    };
+    let segment = agent_path_segment(&agent_id);
+    let (plain, plain_requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+    let (prefixed, prefixed_requests) = scripted_storage("prefix", |_, _| Answer::new(200, ""));
+
+    plain
+        .put_raw(
+            "test",
+            "put-raw",
+            namespace.clone(),
+            Path::new("config"),
+            b"x",
+        )
+        .await
+        .unwrap();
+    prefixed
+        .put_raw("test", "put-raw", namespace, Path::new("config"), b"x")
+        .await
+        .unwrap();
+
+    let path_of = |requests: &SentRequests| {
+        sent(requests)
+            .iter()
+            .map(|request| {
+                request
+                    .uri
+                    .strip_prefix("http://s3.test")
+                    .unwrap_or(&request.uri)
+                    .split('?')
+                    .next()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        (path_of(&plain_requests), path_of(&prefixed_requests)),
+        (
+            vec![format!(
+                "/filesystem-snapshots/{}/{segment}/config",
+                Uuid::nil()
+            )],
+            vec![format!(
+                "/filesystem-snapshots/prefix/{}/{segment}/config",
+                Uuid::nil()
+            )]
+        )
     );
 }

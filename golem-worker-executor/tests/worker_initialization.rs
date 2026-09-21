@@ -25,7 +25,7 @@ use golem_common::{agent_id, data_value};
 use golem_schema::schema::SchemaFingerprintV1;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+use golem_service_base::storage::blob::agent_path_segment;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor::services::{
@@ -320,7 +320,7 @@ async fn partial_creation_reloads_identity_and_original_initialization(
             .join("oplog_payload")
             .join("ephemeral")
             .join(id.environment_id.to_string())
-            .join(FileSystemBlobStorage::filesystem_safe_oplog_payload_agent_key(&id.agent_id));
+            .join(agent_path_segment(&id.agent_id));
         let expected_error = if agent_type == "Counter" {
             faults.fail(
                 "update_status",

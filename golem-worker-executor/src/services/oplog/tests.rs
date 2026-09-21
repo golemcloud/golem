@@ -46,7 +46,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent,
 };
 use nonempty_collections::nev;
 use std::collections::{HashSet, VecDeque};
@@ -1041,6 +1041,19 @@ impl BlobStorage for ReadCountingBlobStorage {
         }
         self.inner
             .put_raw(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_raw_if_absent(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, anyhow::Error> {
+        self.inner
+            .put_raw_if_absent(target_label, op_label, namespace, path, data)
             .await
     }
 

@@ -120,6 +120,31 @@ pub trait BlobStorage: Debug + Send + Sync {
         data: &[u8],
     ) -> Result<(), Error>;
 
+    /// Writes the bytes as the blob at the path when the path has no blob.
+    ///
+    /// When the path has no blob, the call writes the blob and gives [`PutIfAbsent::Written`].
+    /// When the path has a blob, the call writes nothing and gives
+    /// [`PutIfAbsent::AlreadyExists`]. The check and the write are one step, so when two calls
+    /// write one path at the same time, one call gives `Written` and the other gives
+    /// `AlreadyExists`. The rules of [`BlobNameError`] apply as for `put_raw`, and a root path
+    /// gives [`BlobNameError::NoName`] on every backend.
+    ///
+    /// The S3 backend sends the request again after an error that one more attempt can pass, as
+    /// `put_raw` does. When the response to an attempt that wrote the blob does not arrive, the
+    /// next attempt finds that blob. The call then gives `AlreadyExists`, although the call
+    /// wrote the blob.
+    ///
+    /// The method has no default. A default would check the path and then write the blob in two
+    /// steps, and two calls could both write between the check and the write.
+    async fn put_raw_if_absent(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error>;
+
     /// Writes the bytes of the stream as the blob at the path, over the blob that was there.
     ///
     /// A blob cannot be where a directory is, so a root path is an error.
@@ -524,6 +549,53 @@ pub enum BlobStorageNamespace {
     Components {
         environment_id: EnvironmentId,
     },
+    /// The filesystem snapshots of one agent. Each agent has its own location on each backend.
+    FilesystemSnapshots {
+        environment_id: EnvironmentId,
+        agent_id: AgentId,
+    },
+}
+
+/// What [`BlobStorage::put_raw_if_absent`] did.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PutIfAbsent {
+    /// The path had no blob, and the call wrote the blob.
+    Written,
+    /// The path had a blob, and the call wrote nothing.
+    AlreadyExists,
+}
+
+/// Gives one path segment for an agent, which a backend can use as a directory name.
+///
+/// The segment is the agent name, with each character that is not an ASCII letter, a digit, `-`
+/// or `_` replaced by `_`, cut to 32 characters, then `-` and the blake3 hash of the full agent
+/// id, which holds the component id and the agent name. So the segment has at most 97 bytes and
+/// holds no separator and no `.` segment, and the hash makes it very unlikely that two agents get
+/// the same segment. An agent name can be longer than a file name can be, and it can hold `/`,
+/// `\` and `.` segments, so a backend does not use the agent name itself.
+pub fn agent_path_segment(agent_id: &AgentId) -> String {
+    let logical = agent_id.to_string();
+    let digest = blake3::hash(logical.as_bytes()).to_hex();
+
+    let mut sanitized_prefix = String::with_capacity(32);
+    for ch in agent_id.agent_id.chars() {
+        if sanitized_prefix.len() >= 32 {
+            break;
+        }
+
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+            sanitized_prefix.push(ch);
+        } else {
+            sanitized_prefix.push('_');
+        }
+    }
+
+    if sanitized_prefix.is_empty() {
+        sanitized_prefix.push_str("agent");
+    }
+
+    format!("{sanitized_prefix}-{digest}")
 }
 
 /// Returns the symmetric per-mode prefix used by all blob-storage backends for oplog data.

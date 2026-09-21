@@ -580,7 +580,7 @@ mod tests {
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use golem_service_base::storage::blob::{
         BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
-        BlobStorageNamespace, ExistsResult, ListedBlob,
+        BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent,
     };
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -638,6 +638,17 @@ mod tests {
             _path: &Path,
             _data: &[u8],
         ) -> Result<(), anyhow::Error> {
+            Self::error()
+        }
+
+        async fn put_raw_if_absent(
+            &self,
+            _target_label: &'static str,
+            _op_label: &'static str,
+            _namespace: BlobStorageNamespace,
+            _path: &Path,
+            _data: &[u8],
+        ) -> Result<PutIfAbsent, anyhow::Error> {
             Self::error()
         }
 

@@ -15,7 +15,7 @@
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath,
-    blob_child_path, normalized_blob_path,
+    PutIfAbsent, blob_child_path, normalized_blob_path,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -226,6 +226,34 @@ impl BlobStorage for InMemoryBlobStorage {
         self.data.upsert_async(key, entry).await;
 
         Ok(())
+    }
+
+    async fn put_raw_if_absent(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error> {
+        let path = normalized_blob_path(path)?;
+        path.reject_root()?;
+
+        // A directory that `create_dir` made has a key without a file name, so only a blob at
+        // the path holds this key. The insert refuses a key that is there, in one step.
+        let key = Self::blob_key(namespace, &path)?;
+        let entry = Entry::File {
+            data: data.to_vec(),
+            metadata: BlobMetadata {
+                size: data.len() as u64,
+                last_modified_at: Timestamp::now_utc(),
+            },
+        };
+
+        Ok(match self.data.insert_async(key, entry).await {
+            Ok(()) => PutIfAbsent::Written,
+            Err(_) => PutIfAbsent::AlreadyExists,
+        })
     }
 
     async fn put_stream(

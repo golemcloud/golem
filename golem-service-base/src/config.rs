@@ -141,6 +141,7 @@ pub struct S3BlobStorageConfig {
     pub compressed_oplog_buckets: Vec<String>,
     pub initial_agent_files_bucket: String,
     pub components_bucket: String,
+    pub filesystem_snapshots_bucket: String,
 }
 
 impl SafeDisplay for S3BlobStorageConfig {
@@ -187,6 +188,11 @@ impl SafeDisplay for S3BlobStorageConfig {
             self.initial_agent_files_bucket
         );
         let _ = writeln!(&mut result, "components bucket: {}", self.components_bucket);
+        let _ = writeln!(
+            &mut result,
+            "filesystem snapshots bucket: {}",
+            self.filesystem_snapshots_bucket
+        );
 
         result
     }
@@ -207,6 +213,7 @@ impl Default for S3BlobStorageConfig {
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
             initial_agent_files_bucket: "golem-initial-agent-files".to_string(),
             components_bucket: "component-store".to_string(),
+            filesystem_snapshots_bucket: "filesystem-snapshots".to_string(),
         }
     }
 }
