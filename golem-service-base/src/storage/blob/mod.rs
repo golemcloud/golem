@@ -578,7 +578,10 @@ pub struct BlobRangeError {
 /// deletes nothing. A guest picks the source container name and the source object name of
 /// `copy_object` and of `move_object`, so the path is of the guest. Each backend names the
 /// path as the guest wrote it, and not in the normalized form that the storage uses. Each
-/// [`BlobNameError`] does the same, because the guest reads the message.
+/// [`BlobNameError`] does the same, because the guest reads the message, except
+/// [`BlobNameError::NoName`], which names the one form of the path. The one form of a path
+/// with no name in it is the empty path, and each spelling of such a path says the same thing
+/// to the guest.
 ///
 /// The error is permanent. `blob_store_error` in
 /// `golem_worker_executor::services::blob_store` maps it to `BlobStoreError::NotFound`, and
