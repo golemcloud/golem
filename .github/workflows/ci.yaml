@@ -799,7 +799,7 @@ jobs:
       matrix:
         part:
           - name: check
-            test-args: --lib --bins --test agent --test tool_canonical --test schema_reexport
+            test-args: --lib --bins --test agent --test http_router --test tool_canonical --test schema_reexport
           - name: tool
             test-args: --test tool
           - name: tool-middleware-component
@@ -829,6 +829,7 @@ jobs:
         working-directory: sdks/rust
         run: |
           expected='agent
+          http_router
           schema_reexport
           tool
           tool_canonical
