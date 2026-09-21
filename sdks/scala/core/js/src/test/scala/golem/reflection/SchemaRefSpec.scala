@@ -218,7 +218,7 @@ object SchemaRefSpec extends ZIOSpecDefault {
           .isRight
       )
     },
-    test("caller-owned contracts expose two tiers and validate full identity shapes") {
+    test("caller-defined static clients expose method-only and full options and validate full identity shapes") {
       val binding: AgentClientDefinition[MethodOnly, Unit, NoConfig] = AgentClientDefinition.methodOnly
       val full: AgentClientDefinition[DurableFull, String, NoConfig] = AgentClientDefinition.full(
         name = "CounterAgent",
