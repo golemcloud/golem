@@ -445,19 +445,47 @@ fn malformed_raw_values_are_rejected_before_execution() {
         Err(RetryPolicyError::InvalidClampRange { .. })
     ));
 
-    let invalid_jitter = retry_api::RetryPolicy {
+    for factor in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let invalid_exponential = retry_api::RetryPolicy {
+            nodes: vec![retry_api::PolicyNode::Exponential(
+                retry_api::ExponentialConfig {
+                    base_delay: 1,
+                    factor,
+                },
+            )],
+        };
+        assert!(matches!(
+            RetrySchedule::try_from(&invalid_exponential),
+            Err(RetryPolicyError::InvalidExponentialFactor(_))
+        ));
+    }
+
+    for factor in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let invalid_jitter = retry_api::RetryPolicy {
+            nodes: vec![
+                retry_api::PolicyNode::Jitter(retry_api::JitterConfig { factor, inner: 1 }),
+                retry_api::PolicyNode::Immediate,
+            ],
+        };
+        assert!(matches!(
+            RetrySchedule::try_from(&invalid_jitter),
+            Err(RetryPolicyError::InvalidJitterFactor(_))
+        ));
+    }
+
+    let zero_jitter = retry_api::RetryPolicy {
         nodes: vec![
             retry_api::PolicyNode::Jitter(retry_api::JitterConfig {
-                factor: f64::NAN,
+                factor: 0.0,
                 inner: 1,
             }),
-            retry_api::PolicyNode::Immediate,
+            retry_api::PolicyNode::Periodic(1),
         ],
     };
-    assert!(matches!(
-        RetrySchedule::try_from(&invalid_jitter),
-        Err(RetryPolicyError::InvalidJitterFactor(factor)) if factor.is_nan()
-    ));
+    assert_eq!(
+        step_delays(&RetrySchedule::try_from(&zero_jitter).unwrap(), 1, &[]),
+        vec![Step::Retry(Duration::from_nanos(1))]
+    );
 }
 
 #[test]

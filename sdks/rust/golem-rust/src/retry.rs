@@ -1028,28 +1028,30 @@ mod tests {
 
     #[test]
     fn policy_builder_rejects_invalid_exponential_factors() {
-        let policy = Policy::exponential(Duration::from_millis(100), 0.0);
-
-        assert_eq!(
-            policy.try_to_raw().unwrap_err(),
-            RetryBuilderError::InvalidExponentialFactor { factor: 0.0 }
-        );
-
-        assert!(matches!(
-            Policy::exponential(Duration::from_millis(100), f64::NAN)
-                .try_to_raw()
-                .unwrap_err(),
-            RetryBuilderError::InvalidExponentialFactor { factor } if factor.is_nan()
-        ));
+        for factor in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(matches!(
+                Policy::exponential(Duration::from_millis(100), factor).try_to_raw(),
+                Err(RetryBuilderError::InvalidExponentialFactor { .. })
+            ));
+        }
     }
 
     #[test]
     fn policy_builder_rejects_invalid_jitter_factors() {
-        let policy = Policy::periodic(Duration::from_millis(100)).with_jitter(-0.1);
+        for factor in [-0.1, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(matches!(
+                Policy::periodic(Duration::from_millis(100))
+                    .with_jitter(factor)
+                    .try_to_raw(),
+                Err(RetryBuilderError::InvalidJitterFactor { .. })
+            ));
+        }
 
-        assert_eq!(
-            policy.try_to_raw().unwrap_err(),
-            RetryBuilderError::InvalidJitterFactor { factor: -0.1 }
+        assert!(
+            Policy::periodic(Duration::from_millis(100))
+                .with_jitter(0.0)
+                .try_to_raw()
+                .is_ok()
         );
     }
 
