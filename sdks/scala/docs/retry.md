@@ -31,7 +31,9 @@ val result: Future[String] = Retry.retry(
 }
 ```
 
-The property function is evaluated for every failed attempt, so filtered policies can react to changing failures. A raw policy returned by `RetryApi.resolveRetryPolicy` can be passed to the same overload. Invalid or cyclic raw policy trees produce a failed `Future` before the operation starts.
+The property function is evaluated for every failed attempt, so filtered policies can react to changing failures. A raw policy returned by `RetryApi.resolveRetryPolicy` can be passed to the same overload. Local raw-policy compilation applies the same validation as the Scala DSL: exponential factors must be finite and greater than zero, while jitter factors must be finite and non-negative. Invalid or cyclic raw policy trees produce a failed `Future` before the operation starts.
+
+Raw `RetryApi` methods are different: they are transparent host facades and do not validate policy trees in the Scala SDK. In particular, `RetryApi.setRetryPolicy(JsNamedRetryPolicy)` passes its argument directly to the host. Until host ingress validation is complete, callers constructing raw policies must not assume malformed values will be rejected. Prefer the typed Scala policy methods when constructing policies locally.
 
 For local `prop-matches` predicates, `Retry.retry` provides a small glob approximation: `*` matches zero or more characters and `?` matches one UTF-16 code unit. Every other character is literal. Matching uses an anchored JavaScript regular expression without flags, so wildcards do not match line terminators and `?` does not match an astral character such as `😀`. This is not the host's complete authoritative glob syntax; use host-driven retries when exact platform glob matching is required.
 
