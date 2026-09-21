@@ -18,6 +18,7 @@ import golem.host.js.schema.{
   JsOutputSchema,
   JsSchemaGraph,
   JsSchemaValueTree,
+  JsTypedSchemaValue,
   JsUuid => JsSchemaUuid
 }
 import golem.runtime.rpc.host.{AgentHostApi, WasmRpcApi}
@@ -124,7 +125,25 @@ object GolemReflectError {
   final case class SchemaEncode(message: String) extends GolemReflectError
   final case class SchemaDecode(message: String) extends GolemReflectError
   final case class Validation(message: String)   extends GolemReflectError
-  final case class Remote(message: String)       extends GolemReflectError
+  final case class Remote(error: AgentRpcError) extends GolemReflectError {
+    val message: String = error.message
+  }
+}
+
+sealed trait AgentRpcError extends Product with Serializable { def message: String }
+object AgentRpcError {
+  final case class Protocol(detail: String) extends AgentRpcError { val message = s"protocol-error: $detail" }
+  final case class Denied(detail: String) extends AgentRpcError { val message = s"denied: $detail" }
+  final case class NotFound(detail: String) extends AgentRpcError { val message = s"not-found: $detail" }
+  final case class RemoteInternal(detail: String) extends AgentRpcError { val message = s"remote-internal-error: $detail" }
+  final case class InvalidInput(detail: String) extends AgentRpcError { val message = s"invalid-input: $detail" }
+  final case class InvalidMethod(detail: String) extends AgentRpcError { val message = s"invalid-method: $detail" }
+  final case class InvalidType(detail: String) extends AgentRpcError { val message = s"invalid-type: $detail" }
+  final case class InvalidAgentId(detail: String) extends AgentRpcError { val message = s"invalid-agent-id: $detail" }
+  final case class Custom(payload: TypedSchemaValue) extends AgentRpcError { val message = "custom-error" }
+  final case class Unknown(kind: String, detail: Option[String]) extends AgentRpcError {
+    val message: String = detail.fold(kind)(value => s"$kind: $value")
+  }
 }
 
 final case class AgentMethod(
@@ -181,10 +200,12 @@ final class AgentType private[reflection] (
   def packConfigJson(entries: List[ReflectedConfigJson]): Either[GolemReflectError, List[ConfigOverride]] =
     ReflectionInternals.sequence(entries.map { entry =>
       configDeclaration(entry.path).flatMap { declaration =>
-        declaration.schema.packJson(entry.value).left.map(error => GolemReflectError.Validation(error.message)).map {
-          value =>
-            ConfigOverride(entry.path, TypedSchemaValue(declaration.schema.graph, value))
-        }
+        declaration.schema
+          .packJson(entry.value)
+          .left
+          .map(error => GolemReflectError.Validation(error.message))
+          .flatMap(value => validate(declaration.schema, value).map(_ => value))
+          .map(value => ConfigOverride(entry.path, TypedSchemaValue(declaration.schema.graph, value)))
       }
     })
 
@@ -482,14 +503,17 @@ private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient
   def invokeAndAwait(method: String, input: SchemaValue): Future[Either[GolemReflectError, Invocation[SchemaValue]]] =
     encodeAsync(input).flatMap { payload =>
       raw.asyncInvokeAndAwaitWithMetadata(method, payload) match {
-        case Left(error)                => Future.successful(Left(GolemReflectError.Remote(error.toString)))
+        case Left(error)                => Future.successful(Left(remoteError(error)))
         case Right((metadata, pending)) =>
           FutureInterop
             .fromPromise(pending.get())
             .map { result =>
               decodeOptional(result.toOption).map(value => Invocation(toMetadata(metadata), value))
             }
-            .recover { case NonFatal(error) => Left(GolemReflectError.Remote(error.getMessage)) }
+            .recover {
+              case js.JavaScriptException(error) => Left(remoteError(WasmRpcApi.decodeRpcError(error)))
+              case NonFatal(error)                => Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
+            }
       }
     }.recover { case NonFatal(error) => Left(GolemReflectError.SchemaEncode(error.getMessage)) }
 
@@ -498,7 +522,7 @@ private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient
       raw
         .invokeWithMetadata(method, payload)
         .left
-        .map(error => GolemReflectError.Remote(error.toString))
+        .map(remoteError)
         .map(toMetadata)
     )
 
@@ -507,12 +531,15 @@ private[reflection] final class Transport private (raw: WasmRpcApi.WasmRpcClient
       raw
         .scheduleCancelableInvocationWithMetadata(at, method, payload)
         .left
-        .map(error => GolemReflectError.Remote(error.toString))
+        .map(remoteError)
         .map(receipt => ScheduledInvocation(toMetadata(receipt.metadata), receipt.cancellationToken))
     )
 
   private def toMetadata(value: golem.runtime.rpc.InvocationMetadata): InvocationMetadata =
     InvocationMetadata(ParsedAgentId(value.agentId), value.idempotencyKey)
+
+  private def remoteError(error: WasmRpcApi.RpcError): GolemReflectError =
+    GolemReflectError.Remote(Transport.decodeRpcError(error))
 }
 
 private[reflection] object Transport {
@@ -534,12 +561,41 @@ private[reflection] object Transport {
         val phantomArg = phantom.fold[js.UndefOr[JsSchemaUuid]](js.undefined)(uuid =>
           JsSchemaUuid(js.BigInt(uuid.highBits.toString), js.BigInt(uuid.lowBits.toString))
         )
-        Right(
-          new Transport(
-            WasmRpcApi.newClient(typeName, payload, phantomArg, golem.config.ConfigOverrideEncoder.encode(config))
-          )
-        )
-      } catch { case NonFatal(error) => Left(GolemReflectError.Remote(error.getMessage)) }
+        WasmRpcApi
+          .createClient(typeName, payload, phantomArg, golem.config.ConfigOverrideEncoder.encode(config))
+          .left
+          .map(error => GolemReflectError.Remote(decodeRpcError(error)))
+          .map(new Transport(_))
+      } catch {
+        case NonFatal(error) =>
+          Left(GolemReflectError.Remote(AgentRpcError.Unknown("unknown", Option(error.getMessage))))
+      }
+    }
+
+  private def decodeRpcError(error: WasmRpcApi.RpcError): AgentRpcError =
+    error.agentError match {
+      case Some(agentError) =>
+        val value = agentError.asInstanceOf[js.Dynamic].selectDynamic("val")
+        agentError.tag match {
+          case "invalid-input"    => AgentRpcError.InvalidInput(String.valueOf(value))
+          case "invalid-method"   => AgentRpcError.InvalidMethod(String.valueOf(value))
+          case "invalid-type"     => AgentRpcError.InvalidType(String.valueOf(value))
+          case "invalid-agent-id" => AgentRpcError.InvalidAgentId(String.valueOf(value))
+          case "custom-error"     =>
+            AgentRpcError.Custom(
+              SchemaWire.typedSchemaValueFromWit(SchemaWireInterop.typedFromJs(value.asInstanceOf[JsTypedSchemaValue]))
+            )
+          case other => AgentRpcError.Unknown(other, None)
+        }
+      case None =>
+        val detail = error.message.getOrElse(error.kind)
+        error.kind match {
+          case "protocol-error"        => AgentRpcError.Protocol(detail)
+          case "denied"                => AgentRpcError.Denied(detail)
+          case "not-found"             => AgentRpcError.NotFound(detail)
+          case "remote-internal-error" => AgentRpcError.RemoteInternal(detail)
+          case other                   => AgentRpcError.Unknown(other, error.message)
+        }
     }
 }
 

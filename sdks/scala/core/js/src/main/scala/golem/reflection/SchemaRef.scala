@@ -80,20 +80,36 @@ private object CanonicalJson {
 
   private def schemaJson(graph: SchemaGraph, schema: SchemaType): Json = {
     def typed(name: String, extra: (String, Json)*): Json = Json.Object(("type" -> Json.String(name)) +: extra: _*)
-    def integer(min: BigInt, max: BigInt): Json           =
-      typed("integer", "minimum" -> number(BigDecimal(min)), "maximum" -> number(BigDecimal(max)))
+    def bound(value: NumericBound): BigDecimal = value match {
+      case NumericBound.Signed(value)    => BigDecimal(value)
+      case NumericBound.Unsigned(value)  => BigDecimal(BigInt(java.lang.Long.toUnsignedString(value)))
+      case NumericBound.FloatBits(value) => BigDecimal.decimal(java.lang.Double.longBitsToDouble(value))
+    }
+    def integer(min: BigInt, max: BigInt, restrictions: Option[NumericRestrictions]): Json = {
+      val minimum = restrictions.flatMap(_.min).map(bound).fold(BigDecimal(min))(_.max(BigDecimal(min)))
+      val maximum = restrictions.flatMap(_.max).map(bound).fold(BigDecimal(max))(_.min(BigDecimal(max)))
+      typed("integer", "minimum" -> number(minimum), "maximum" -> number(maximum))
+    }
+    def decimal(restrictions: Option[NumericRestrictions]): Json = {
+      val limits = restrictions.toList.flatMap { value =>
+        value.min.map(item => "minimum" -> number(bound(item))).toList ++
+          value.max.map(item => "maximum" -> number(bound(item))).toList
+      }
+      typed("number", limits: _*)
+    }
     schema.body match {
       case RefType(id)              => Json.Object("$ref" -> Json.String(s"#/$$defs/${id.replace("~", "~0").replace("/", "~1")}"))
       case BoolType                 => typed("boolean")
-      case S8Type(_)                => integer(-128, 127)
-      case S16Type(_)               => integer(-32768, 32767)
-      case S32Type(_)               => integer(Int.MinValue, Int.MaxValue)
-      case S64Type(_)               => integer(BigInt(Long.MinValue), BigInt(Long.MaxValue))
-      case U8Type(_)                => integer(0, 255)
-      case U16Type(_)               => integer(0, 65535)
-      case U32Type(_)               => integer(0, BigInt("4294967295"))
-      case U64Type(_)               => integer(0, (BigInt(1) << 64) - 1)
-      case F32Type(_) | F64Type(_)  => typed("number")
+      case S8Type(r)                => integer(-128, 127, r)
+      case S16Type(r)               => integer(-32768, 32767, r)
+      case S32Type(r)               => integer(Int.MinValue, Int.MaxValue, r)
+      case S64Type(r)               => integer(BigInt(Long.MinValue), BigInt(Long.MaxValue), r)
+      case U8Type(r)                => integer(0, 255, r)
+      case U16Type(r)               => integer(0, 65535, r)
+      case U32Type(r)               => integer(0, BigInt("4294967295"), r)
+      case U64Type(r)               => integer(0, (BigInt(1) << 64) - 1, r)
+      case F32Type(r)               => decimal(r)
+      case F64Type(r)               => decimal(r)
       case CharType                 => typed("string", "minLength" -> number(1), "maxLength" -> number(1))
       case StringType               => typed("string")
       case RecordType(recordFields) =>
@@ -159,19 +175,33 @@ private object CanonicalJson {
           "additionalProperties" -> Json.Boolean(false)
         )
         Json.Object("oneOf" -> Json.Array(side("ok", ok), side("err", err)))
-      case TextType(_) =>
+      case TextType(restrictions) =>
+        val textRestrictions = restrictions.minLength.map(value => "minLength" -> number(value)).toList ++
+          restrictions.maxLength.map(value => "maxLength" -> number(value)).toList ++
+          restrictions.regex.map(value => "pattern" -> Json.String(value)).toList
+        val language = restrictions.languages match {
+          case Some(values) => typed("string", "enum" -> Json.Array(values.map(Json.String): _*))
+          case None         => typed("string")
+        }
         typed(
           "object",
-          "properties"           -> Json.Object("text" -> typed("string"), "language" -> typed("string")),
+          "properties"           -> Json.Object("text" -> typed("string", textRestrictions: _*), "language" -> language),
           "required"             -> Json.Array(Json.String("text")),
           "additionalProperties" -> Json.Boolean(false)
         )
-      case BinaryType(_) =>
+      case BinaryType(restrictions) =>
+        def base64UrlLength(bytes: Int): Int = (bytes * 4 + 2) / 3
+        val byteRestrictions = restrictions.minBytes.map(value => "minLength" -> number(base64UrlLength(value))).toList ++
+          restrictions.maxBytes.map(value => "maxLength" -> number(base64UrlLength(value))).toList
+        val mimeType = restrictions.mimeTypes match {
+          case Some(values) => typed("string", "enum" -> Json.Array(values.map(Json.String): _*))
+          case None         => typed("string")
+        }
         typed(
           "object",
           "properties" -> Json.Object(
-            "bytes"    -> typed("string", "contentEncoding" -> Json.String("base64url")),
-            "mimeType" -> typed("string")
+            "bytes"    -> typed("string", ("contentEncoding" -> Json.String("base64url")) +: byteRestrictions: _*),
+            "mimeType" -> mimeType
           ),
           "required"             -> Json.Array(Json.String("bytes")),
           "additionalProperties" -> Json.Boolean(false)

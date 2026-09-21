@@ -99,6 +99,43 @@ object SchemaRefSpec extends ZIOSpecDefault {
         rendered.get("type").one == Right(Json.String("object"))
       )
     },
+    test("validates and renders numeric, text, and binary restrictions") {
+      val restricted = SchemaRef(
+        SchemaGraph(
+          ListMap.empty,
+          SchemaType(
+            RecordType(
+              List(
+                NamedFieldType(
+                  "count",
+                  SchemaType(S32Type(Some(NumericRestrictions(max = Some(NumericBound.Signed(3))))))
+                ),
+                NamedFieldType(
+                  "message",
+                  SchemaType(TextType(TextRestrictions(minLength = Some(12), regex = Some("^https://"))))
+                ),
+                NamedFieldType(
+                  "content",
+                  SchemaType(BinaryType(BinaryRestrictions(minBytes = Some(3), maxBytes = Some(6))))
+                )
+              )
+            )
+          )
+        )
+      )
+      val rendered   = restricted.toJsonSchema()
+      val properties = rendered.get("properties").one.toOption.get
+      val count      = properties.get("count").one.toOption.get
+      val text       = properties.get("message").one.toOption.get.get("properties").one.toOption.get.get("text").one
+      val bytes      = properties.get("content").one.toOption.get.get("properties").one.toOption.get.get("bytes").one
+      assertTrue(
+        count.get("maximum").one == Right(Json.Number(BigDecimal(3))),
+        text.flatMap(_.get("minLength").one) == Right(Json.Number(BigDecimal(12))),
+        text.flatMap(_.get("pattern").one) == Right(Json.String("^https://")),
+        bytes.flatMap(_.get("minLength").one) == Right(Json.Number(BigDecimal(4))),
+        bytes.flatMap(_.get("maxLength").one) == Right(Json.Number(BigDecimal(8)))
+      )
+    },
     test("union export keeps discriminator and branch body while packing enforces the rule") {
       val union = SchemaRef(
         SchemaGraph(
@@ -208,6 +245,12 @@ object SchemaRefSpec extends ZIOSpecDefault {
     },
     test("reflected config validates declared local paths before RPC creation") {
       val stringSchema = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(StringType)))
+      val countSchema = SchemaRef(
+        SchemaGraph(
+          ListMap.empty,
+          SchemaType(S32Type(Some(NumericRestrictions(max = Some(NumericBound.Signed(3))))))
+        )
+      )
       val agentType    = new AgentType(
         "ConfiguredCounterAgent",
         "",
@@ -218,6 +261,7 @@ object SchemaRefSpec extends ZIOSpecDefault {
         Nil,
         List(
           ReflectedConfigDeclaration(List("greeting"), "local", stringSchema),
+          ReflectedConfigDeclaration(List("count"), "local", countSchema),
           ReflectedConfigDeclaration(List("apiKey"), "secret", stringSchema)
         )
       )
@@ -225,7 +269,8 @@ object SchemaRefSpec extends ZIOSpecDefault {
       val unknown = agentType.packConfigJson(List(ReflectedConfigJson(List("unknown"), Json.String("x"))))
       val secret  = agentType.packConfigJson(List(ReflectedConfigJson(List("apiKey"), Json.String("x"))))
       val invalid = agentType.packConfigJson(List(ReflectedConfigJson(List("greeting"), Json.Number(BigDecimal(42)))))
-      assertTrue(good.isRight, unknown.isLeft, secret.isLeft, invalid.isLeft)
+      val restricted = agentType.packConfigJson(List(ReflectedConfigJson(List("count"), Json.Number(BigDecimal(4)))))
+      assertTrue(good.isRight, unknown.isLeft, secret.isLeft, invalid.isLeft, restricted.isLeft)
     },
     test("throwing config codecs return schema encode failures") {
       val definition = AgentClientDefinition.full[String, String](

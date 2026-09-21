@@ -25,6 +25,9 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.util.control.NonFatal
 
 private[reflection] object ToolReflectionFailures {
+  private def protocol(error: Throwable): ToolError[Nothing] =
+    ToolError.Rpc(RpcError.Protocol(Option(error.getMessage).getOrElse(error.toString)))
+
   def attempt[A](call: => Either[ToolError[NamedToolError], A]): Either[ToolError[NamedToolError], A] =
     try call
     catch {
@@ -38,6 +41,31 @@ private[reflection] object ToolReflectionFailures {
     future.recover { case NonFatal(error) =>
       Left(ToolError.Rpc(RpcError.Protocol(Option(error.getMessage).getOrElse(error.toString))))
     }
+
+  def collect[A](
+    stdout: Option[ToolInputStream],
+    result: Future[Either[ToolError[NamedToolError], A]]
+  )(implicit ec: ExecutionContext): Future[Either[ToolError[NamedToolError], (A, Array[Byte])]] = {
+    def drain(stream: ToolInputStream, chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
+      stream.read().flatMap {
+        case Right(Some(bytes)) => drain(stream, chunks :+ bytes)
+        case Right(None)        => Future.successful(chunks.flatten.toArray)
+        case Left(failure)      => Future.failed(new ToolStreamException(failure))
+      }
+    val terminal = result.map(Right(_): Either[Throwable, Either[ToolError[NamedToolError], A]]).recover {
+      case error => Left(error)
+    }
+    val output = stdout
+      .fold(Future.successful(Array.emptyByteArray))(drain(_, Vector.empty))
+      .map(Right(_): Either[Throwable, Array[Byte]])
+      .recover { case error => Left(error) }
+    terminal.zip(output).map {
+      case (Right(Left(error @ ToolError.Tool(_))), _) => Left(error)
+      case (Left(error), _)                            => Left(protocol(error))
+      case (_, Left(error))                            => Left(protocol(error))
+      case (Right(value), Right(bytes))                => value.map(_ -> bytes)
+    }
+  }
 }
 
 /**
@@ -217,9 +245,12 @@ final class ToolCommand private[reflection] (
 
   def packJson(input: Json): Either[ToolError[Nothing], SchemaValue] =
     try
-      inputSchema.packJson(input).left.map(issue => ToolError.InvalidInput(issue.message)).flatMap { value =>
-        validateConstraints(value).map(_ => value)
-      }
+      inputSchema
+        .packJson(input)
+        .left
+        .map(issue => ToolError.InvalidInput(issue.message))
+        .flatMap(value => inputSchema.validateValue(value).left.map(issues => ToolError.InvalidInput(issues.map(_.message).mkString("; "))))
+        .flatMap(validateConstraints)
     catch { case NonFatal(error) => Left(ToolError.InvalidInput(Option(error.getMessage).getOrElse(error.toString))) }
 
   private def checkedInput(value: SchemaValue): Either[ToolError[Nothing], TypedSchemaValue] =
@@ -302,7 +333,8 @@ final class ToolCommand private[reflection] (
         case Some((_, None)) if payload.value != TupleValue(Nil) =>
           ToolError.MalformedRemoteOutput(s"tool error '$name' has an unexpected payload")
         case Some((_, Some(schema)))
-            if payload.graph.root != schema.root || schema.validateValue(payload.value).isLeft =>
+            if !ToolGraphs.schemaShapesMatch(payload.graph, SchemaGraph(schema.graph.defs, schema.root)) ||
+              schema.validateValue(payload.value).isLeft =>
           ToolError.MalformedRemoteOutput(s"tool error '$name' has a malformed payload")
         case _ => ToolError.Tool(NamedToolError(name, payload))
       }
@@ -312,7 +344,8 @@ final class ToolCommand private[reflection] (
   private[reflection] def decodeResult(value: ToolInvokeResult): Either[ToolError[Nothing], Option[SchemaValue]] =
     (result, value.result) match {
       case (None, None)                                                       => Right(None)
-      case (Some(schema), Some(payload)) if payload.graph.root == schema.root =>
+      case (Some(schema), Some(payload))
+          if ToolGraphs.schemaShapesMatch(payload.graph, SchemaGraph(schema.graph.defs, schema.root)) =>
         schema
           .validateValue(payload.value)
           .left
@@ -406,16 +439,8 @@ final case class ReflectedToolInvocation(
 ) {
   def collect()(implicit
     ec: ExecutionContext
-  ): Future[Either[ToolError[NamedToolError], (Option[SchemaValue], Array[Byte])]] = {
-    def drain(stream: ToolInputStream, chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
-      stream.read().flatMap {
-        case Right(Some(bytes)) => drain(stream, chunks :+ bytes)
-        case Right(None)        => Future.successful(chunks.flatten.toArray)
-        case Left(failure)      => Future.failed(new ToolStreamException(failure))
-      }
-    val bytes = stdout.fold(Future.successful(Array.emptyByteArray))(drain(_, Vector.empty))
-    ToolReflectionFailures.recover(result.zip(bytes).map { case (terminal, output) => terminal.map(_ -> output) })
-  }
+  ): Future[Either[ToolError[NamedToolError], (Option[SchemaValue], Array[Byte])]] =
+    ToolReflectionFailures.collect(stdout, result)
 }
 
 final case class ReflectedToolJsonInvocation(
@@ -425,16 +450,8 @@ final case class ReflectedToolJsonInvocation(
 ) {
   def collect()(implicit
     ec: ExecutionContext
-  ): Future[Either[ToolError[NamedToolError], (Option[Json], Array[Byte])]] = {
-    def drain(stream: ToolInputStream, chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
-      stream.read().flatMap {
-        case Right(Some(bytes)) => drain(stream, chunks :+ bytes)
-        case Right(None)        => Future.successful(chunks.flatten.toArray)
-        case Left(failure)      => Future.failed(new ToolStreamException(failure))
-      }
-    val bytes = stdout.fold(Future.successful(Array.emptyByteArray))(drain(_, Vector.empty))
-    ToolReflectionFailures.recover(result.zip(bytes).map { case (terminal, output) => terminal.map(_ -> output) })
-  }
+  ): Future[Either[ToolError[NamedToolError], (Option[Json], Array[Byte])]] =
+    ToolReflectionFailures.collect(stdout, result)
 }
 
 /** Fully dynamic tool calls accept only caller-packed values. */
@@ -498,14 +515,6 @@ final case class DynamicToolInvocation(
 ) {
   def collect()(implicit
     ec: ExecutionContext
-  ): Future[Either[ToolError[NamedToolError], (ToolInvokeResult, Array[Byte])]] = {
-    def drain(stream: ToolInputStream, chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
-      stream.read().flatMap {
-        case Right(Some(bytes)) => drain(stream, chunks :+ bytes)
-        case Right(None)        => Future.successful(chunks.flatten.toArray)
-        case Left(failure)      => Future.failed(new ToolStreamException(failure))
-      }
-    val bytes = stdout.fold(Future.successful(Array.emptyByteArray))(drain(_, Vector.empty))
-    ToolReflectionFailures.recover(result.zip(bytes).map { case (terminal, output) => terminal.map(_ -> output) })
-  }
+  ): Future[Either[ToolError[NamedToolError], (ToolInvokeResult, Array[Byte])]] =
+    ToolReflectionFailures.collect(stdout, result)
 }

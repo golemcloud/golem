@@ -12,7 +12,7 @@ package golem.reflection
 
 import golem.Uuid
 import golem.schema._
-import golem.schema.SchemaTypeBody.StringType
+import golem.schema.SchemaTypeBody.{RecordType, RefType, S32Type, StringType}
 import golem.schema.SchemaValue._
 import golem.schema.wire.SchemaWire
 import golem.tool._
@@ -22,12 +22,14 @@ import zio.blocks.schema.json.Json
 import zio.test._
 
 import scala.collection.immutable.ListMap
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.{ExecutionContext, Future, Promise}
 
 object ToolReflectionSpec extends ZIOSpecDefault {
-  private def sample(): ToolType = {
+  private val stringGraph = SchemaGraph(ListMap.empty, SchemaType(StringType))
+
+  private def sample(valueGraph: SchemaGraph = stringGraph): ToolType = {
     val doc    = Doc("", "", Nil)
-    val schema = SchemaWire.schemaGraphToWit(SchemaGraph(ListMap.empty, SchemaType(StringType)))
+    val schema = SchemaWire.schemaGraphToWit(valueGraph)
     val body   = WitCommandBody(
       WitPositionals(
         List(WitPositional("message", doc, None, schema.root, None, required = true, acceptsStdio = false)),
@@ -166,6 +168,17 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       val invalid = command.startValue(RecordValue(List(S32Value(1))))
       assertTrue(invalid.left.toOption.exists(_.isInstanceOf[ToolError.InvalidInput]))
     },
+    test("command-level JSON packing enforces schema refinements") {
+      val restricted = SchemaGraph(
+        ListMap.empty,
+        SchemaType(S32Type(Some(NumericRestrictions(max = Some(NumericBound.Signed(3))))))
+      )
+      val command = sample(restricted).command(List("run")).toOption.get
+      assertTrue(
+        command.packJson(Json.Object("message" -> Json.Number(BigDecimal(3)))).isRight,
+        command.packJson(Json.Object("message" -> Json.Number(BigDecimal(4)))).isLeft
+      )
+    },
     test("missing and mismatched remote values are malformed output") {
       val command = sample().command(List("run")).toOption.get
       val wrong   = TypedSchemaValue(SchemaGraph(ListMap.empty, SchemaType(SchemaTypeBody.S32Type(None))), S32Value(1))
@@ -182,6 +195,19 @@ object ToolReflectionSpec extends ZIOSpecDefault {
           .exists(_.isInstanceOf[ToolError.MalformedRemoteOutput])
       )
     },
+    test("result graph comparison resolves references structurally") {
+      def graph(id: String, field: String) = SchemaGraph(
+        ListMap(id -> SchemaTypeDef(SchemaType(RecordType(List(NamedFieldType(field, SchemaType(StringType))))))),
+        SchemaType(RefType(id))
+      )
+      val command      = sample(graph("Expected", "name")).command(List("run")).toOption.get
+      val sameIdWrong  = TypedSchemaValue(graph("Expected", "password"), RecordValue(List(StringValue("hello"))))
+      val otherIdSame  = TypedSchemaValue(graph("Equivalent", "name"), RecordValue(List(StringValue("hello"))))
+      assertTrue(
+        command.decodeResult(ToolInvokeResult(Some(sameIdWrong))).isLeft,
+        command.decodeResult(ToolInvokeResult(Some(otherIdSame))).isRight
+      )
+    },
     test("stream failures remain recoverable for reflected calls") {
       val broken = new ToolInputStream {
         override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
@@ -191,6 +217,20 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       val invocation                                                               = ReflectedToolInvocation(Some(broken), terminal, () => ())
       ZIO.fromFuture(_ => invocation.collect()(using ExecutionContext.global)).map { result =>
         assertTrue(result.left.toOption.exists(_.isInstanceOf[ToolError.Rpc]))
+      }
+    },
+    test("declared tool errors win after stdout failure while both channels settle") {
+      val broken = new ToolInputStream {
+        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
+          Future.successful(Left(ByteStreamFailure.Failed("broken")))
+      }
+      val terminal = Promise[Either[ToolError[NamedToolError], Option[SchemaValue]]]()
+      val invocation = ReflectedToolInvocation(Some(broken), terminal.future, () => ())
+      val collected  = invocation.collect()(using ExecutionContext.global)
+      val payload    = TypedSchemaValue(stringGraph, StringValue("details"))
+      terminal.success(Left(ToolError.Tool(NamedToolError("declared", payload))))
+      ZIO.fromFuture(_ => collected).map { result =>
+        assertTrue(result == Left(ToolError.Tool(NamedToolError("declared", payload))))
       }
     }
   )

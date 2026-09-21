@@ -67,6 +67,17 @@ private[golem] object WasmRpcApi {
     new WasmRpcClient(new RawWasmRpc(agentTypeName, constructorPayload, phantomArg, agentConfig))
   }
 
+  def createClient(
+    agentTypeName: String,
+    constructorPayload: JsSchemaValueTree,
+    phantomId: js.UndefOr[JsUuid],
+    agentConfig: js.Array[JsTypedAgentConfigValue]
+  ): Either[RpcError, WasmRpcClient] = {
+    val phantomArg: js.Any = phantomId.getOrElse(js.undefined)
+    try Right(new WasmRpcClient(RawWasmRpc.create(agentTypeName, constructorPayload, phantomArg, agentConfig)))
+    catch { case js.JavaScriptException(error) => Left(decodeRpcError(error)) }
+  }
+
   private def datetimeToJs(datetime: Datetime): JsDatetime = {
     val totalMs            = datetime.epochMillis
     val truncatedWholeMs   = if (totalMs < 0.0) Math.ceil(totalMs) else Math.floor(totalMs)
@@ -82,7 +93,7 @@ private[golem] object WasmRpcApi {
     JsDatetime(seconds, nanos)
   }
 
-  private[rpc] def decodeRpcError(thrown: Any): RpcError = {
+  private[golem] def decodeRpcError(thrown: Any): RpcError = {
     // Read the discriminator defensively: a thrown value that is not the
     // expected `{ tag, val }` JS object (e.g. a bare string or a foreign error)
     // must degrade to `unknown` rather than triggering a hard cast failure.
@@ -273,5 +284,16 @@ private[golem] object WasmRpcApi {
       input: JsSchemaValueTree,
       scopeCard: js.Any
     ): RawCancelableScheduledInvocationReceipt = js.native
+  }
+
+  @js.native
+  @JSImport("golem:agent/host@2.0.0", "WasmRpc")
+  private object RawWasmRpc extends js.Object {
+    def create(
+      agentTypeName: String,
+      constructorPayload: JsSchemaValueTree,
+      phantomId: js.Any,
+      agentConfig: js.Array[JsTypedAgentConfigValue]
+    ): RawWasmRpc = js.native
   }
 }
