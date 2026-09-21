@@ -178,9 +178,9 @@ steps:
       `echo` method, and invoke `ReflectionTarget("target")` through the JSON
       convenience API with `"hello"`.
 
-      Define a partial caller-owned contract for `ReflectionTarget` with
+      Define a method-only caller-defined static client for `ReflectionTarget` with
       `#[agent_client]`, bind it to the reflected target ID without performing
-      discovery in the contract, and invoke `echo` with `"caller codec"`.
+      discovery in that client, and invoke `echo` with `"caller codec"`.
       Then explicitly pack `{ "message": "reflected value" }` with the
       reflected method's `SchemaRef`, invoke through `invoke_value`, and await
       `unpack_json`. Finally bind a dynamic client to the same ID, manually

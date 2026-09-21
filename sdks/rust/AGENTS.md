@@ -53,7 +53,7 @@ cargo test -p golem-rust --features export_golem_agentic  # Agent tests
 | `#[derive(FromSchema)]` | Derive schema/value decoding for structs/enums (re-exported from `golem-schema`) |
 | `#[agent_definition]` | Define an agent trait with metadata |
 | `#[agent_implementation]` | Implement an agent trait |
-| `#[agent_client]` | Define a partial caller-owned typed client contract |
+| `#[agent_client]` | Define a method-only or full caller-owned typed client |
 | `#[derive(AllowedLanguages)]` | Define allowed languages for unstructured text |
 | `#[derive(AllowedMimeTypes)]` | Define allowed MIME types for binary data |
 

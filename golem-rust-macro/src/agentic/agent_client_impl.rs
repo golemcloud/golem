@@ -142,7 +142,7 @@ fn expand(
     if constructors.len() > 1 {
         return Err(syn::Error::new_spanned(
             &item_trait.ident,
-            "complete agent_client traits must declare exactly one constructor returning Self",
+            "full agent_client traits must declare exactly one constructor returning Self",
         ));
     }
     if constructors.is_empty() && args.type_name.is_some() {
@@ -154,7 +154,7 @@ fn expand(
     if constructors.is_empty() && args.mode_specified {
         return Err(syn::Error::new_spanned(
             &item_trait.ident,
-            "mode requires a complete contract with type_name and a constructor",
+            "mode requires a full client with type_name and a constructor",
         ));
     }
     if !constructors.is_empty() && args.type_name.is_none() {
@@ -204,7 +204,7 @@ fn expand(
             {
                 return Err(syn::Error::new_spanned(
                     &method.sig,
-                    "complete agent_client traits may only contain one static constructor",
+                    "full agent_client traits may only contain one static constructor",
                 ));
             }
         }
@@ -217,6 +217,7 @@ fn expand(
             &config_idents,
             &[],
             args.agent_is_durable,
+            true,
         );
         AgentConfigAttrRemover.visit_item_trait_mut(&mut item_trait);
         return Ok(quote! { #item_trait #remote_client });

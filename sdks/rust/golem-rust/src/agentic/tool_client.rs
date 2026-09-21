@@ -35,6 +35,7 @@ use crate::bindings::golem::tool::host::{
     self, ToolRpc as HostToolRpc, ToolStdin as HostToolStdin, ToolStdout as HostToolStdout,
 };
 use crate::golem_agentic::golem::tool::host as agentic_host_api;
+use crate::schema::validation::subtyping::is_equivalent_cross_graph;
 use crate::schema::wit::wire::{ToolError as WitToolError, ToolRpcError as WitRpcError};
 use crate::schema::{FromSchema, FromSchemaError, IntoSchema};
 use crate::tool::RawCustomToolError;
@@ -199,12 +200,54 @@ fn decode_expected_value<T: FromSchema + IntoSchema, E>(
     let value = expect_value(value)?;
     let expected = crate::schema::try_into_schema_graph::<T>()
         .map_err(|error| protocol_error(error.to_string()))?;
-    if value.graph() != &expected {
+    if !is_equivalent_cross_graph(
+        value.graph(),
+        &value.graph().root,
+        &expected,
+        &expected.root,
+    ) {
         return Err(protocol_error(
             "tool result schema does not match the expected result schema".to_string(),
         ));
     }
     T::from_value(value.value()).map_err(|error| protocol_error(error.to_string()))
+}
+
+/// Validates a custom error payload against the caller-owned error declaration before decoding it.
+pub fn decode_declared_tool_error<E: super::ToolErrorSchema>(
+    name: String,
+    value: TypedSchemaValue,
+) -> Result<Option<E>, String> {
+    let cases = E::error_cases().map_err(|error| error.to_string())?;
+    let Some(case) = cases.iter().find(|case| case.name == name) else {
+        return Ok(None);
+    };
+    match &case.payload {
+        Some(expected) => {
+            if !is_equivalent_cross_graph(
+                value.graph(),
+                &value.graph().root,
+                expected,
+                &expected.root,
+            ) {
+                return Err(format!("custom error `{name}` has the wrong schema"));
+            }
+            crate::schema::validation::validate_value(expected, &expected.root, value.value())
+                .map_err(|errors| {
+                    errors
+                        .into_iter()
+                        .map(|error| error.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })?;
+        }
+        None if !matches!(value.value(), crate::SchemaValue::Tuple { elements } if elements.is_empty()) =>
+        {
+            return Err(format!("custom error `{name}` has an unexpected payload"));
+        }
+        None => {}
+    }
+    E::from_error_payload_value(name, value)
 }
 
 /// Requires the declared result value to be present in an invocation result.
@@ -761,6 +804,55 @@ mod tests {
         Usage(String),
     }
 
+    #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+    struct CallerPayload {
+        message: String,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+    struct RemotePayload {
+        message: String,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, crate::ToolError)]
+    enum DeclaredError {
+        #[tool_error(kind = "usage-error", exit_code = 2)]
+        Usage(CallerPayload),
+    }
+
+    #[test]
+    fn generated_result_decoder_accepts_resolved_graph_equivalence() {
+        let value = RemotePayload {
+            message: "ok".to_string(),
+        }
+        .into_typed_schema_value()
+        .unwrap();
+        assert_eq!(
+            decode_result_value::<CallerPayload, Infallible>(InvocationResult {
+                result: Some(value),
+            })
+            .unwrap(),
+            CallerPayload {
+                message: "ok".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn generated_error_decoder_accepts_resolved_graph_equivalence() {
+        let value = RemotePayload {
+            message: "bad".to_string(),
+        }
+        .into_typed_schema_value()
+        .unwrap();
+        assert_eq!(
+            decode_declared_tool_error::<DeclaredError>("usage".to_string(), value).unwrap(),
+            Some(DeclaredError::Usage(CallerPayload {
+                message: "bad".to_string(),
+            }))
+        );
+    }
+
     #[test]
     fn tool_rpc_errors_are_shared_with_oplog_bindings() {
         use crate::bindings::golem::api::oplog;
@@ -1105,23 +1197,23 @@ mod tests {
     fn all_structural_remote_tool_errors_keep_their_variant() {
         let cases = [
             (
-                host::ToolError::InvalidToolName("bad name".to_string()),
+                WitToolError::InvalidToolName("bad name".to_string()),
                 RemoteToolError::InvalidToolName("bad name".to_string()),
             ),
             (
-                host::ToolError::InvalidCommandPath(vec!["bad".to_string()]),
+                WitToolError::InvalidCommandPath(vec!["bad".to_string()]),
                 RemoteToolError::InvalidCommandPath(vec!["bad".to_string()]),
             ),
             (
-                host::ToolError::InvalidInput("input".to_string()),
+                WitToolError::InvalidInput("input".to_string()),
                 RemoteToolError::InvalidInput("input".to_string()),
             ),
             (
-                host::ToolError::ConstraintViolation("constraint".to_string()),
+                WitToolError::ConstraintViolation("constraint".to_string()),
                 RemoteToolError::ConstraintViolation("constraint".to_string()),
             ),
             (
-                host::ToolError::InvalidResult("result".to_string()),
+                WitToolError::InvalidResult("result".to_string()),
                 RemoteToolError::InvalidResult("result".to_string()),
             ),
         ];
@@ -1137,7 +1229,7 @@ mod tests {
         let driver = Rc::new(InvocationResultDriver::new(|| {
             Box::pin(async {
                 Err(map_rpc_error(
-                    WitRpcError::RemoteToolError(host::ToolError::ConstraintViolation(
+                    WitRpcError::RemoteToolError(WitToolError::ConstraintViolation(
                         "missing flag".to_string(),
                     )),
                     &|_, value| Ok(Some(value)),

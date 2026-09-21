@@ -42,17 +42,26 @@ fn main() {
     let _ = definition_is_caller_owned();
     if false {
         let _ = CompleteSearchApiClient::agent_id("default".to_string(), None);
-        let _ = CompleteSearchApiClient::get("default".to_string());
-        let _ = CompleteSearchApiClient::new_phantom("default".to_string());
+        let complete = CompleteSearchApiClient::get("default".to_string())
+            .expect("fallible full client creation");
+        let _status = complete.status();
+        let _pending = complete.pending_status();
+        let _ = CompleteSearchApiClient::new_phantom("default".to_string())
+            .expect("fallible phantom creation");
         let _ = CompleteSearchApiClient::get_phantom(
             golem_rust::Uuid::new_v4(),
             "default".to_string(),
-        );
-        let _ = EphemeralSearchApiClient::new_phantom("default".to_string());
+        )
+        .expect("fallible known phantom creation");
+        let ephemeral = EphemeralSearchApiClient::new_phantom("default".to_string())
+            .expect("fallible ephemeral creation");
+        let _status = ephemeral.status();
+        let _pending = ephemeral.pending_status();
         let _ = EphemeralSearchApiClient::get_phantom(
             golem_rust::Uuid::new_v4(),
             "default".to_string(),
-        );
+        )
+        .expect("fallible ephemeral phantom creation");
     }
 
     let durable = MethodOnlyAgentClientDefinition::builder()

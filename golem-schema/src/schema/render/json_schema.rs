@@ -632,7 +632,7 @@ pub(super) fn render_type(
         SchemaType::S8 { .. } => integer_schema(i8::MIN as i64, i8::MAX as i64),
         SchemaType::S16 { .. } => integer_schema(i16::MIN as i64, i16::MAX as i64),
         SchemaType::S32 { .. } => integer_schema(i32::MIN as i64, i32::MAX as i64),
-        SchemaType::S64 { .. } => integer_schema(i64::MIN, i64::MAX),
+        SchemaType::S64 { .. } => signed_64_schema(),
         SchemaType::U8 { .. } => integer_schema(0, u8::MAX as i64),
         SchemaType::U16 { .. } => integer_schema(0, u16::MAX as i64),
         SchemaType::U32 { .. } => integer_schema(0, u32::MAX as i64),
@@ -777,8 +777,17 @@ pub(super) fn render_type(
             ("format", Value::String("date-time".to_string())),
         ]),
         SchemaType::Duration { .. } => obj([
-            ("type", Value::String("string".to_string())),
-            ("format", Value::String("duration".to_string())),
+            ("type", Value::String("object".to_string())),
+            ("properties", obj([("nanoseconds", signed_64_schema())])),
+            (
+                "required",
+                Value::Array(vec![Value::String("nanoseconds".to_string())]),
+            ),
+            ("additionalProperties", Value::Bool(false)),
+            (
+                "title",
+                Value::String("Duration in nanoseconds".to_string()),
+            ),
         ]),
         SchemaType::Quantity { spec, .. } => Value::Object(quantity_schema(spec)),
 
@@ -868,9 +877,24 @@ fn integer_schema(min: i64, max: i64) -> Value {
 
 fn unsigned_64_schema() -> Value {
     obj([
-        ("type", Value::String("integer".to_string())),
-        ("minimum", Value::Number(Number::from(0u64))),
-        ("maximum", Value::Number(Number::from(u64::MAX))),
+        ("type", Value::String("string".to_string())),
+        ("format", Value::String("uint64".to_string())),
+        ("pattern", Value::String("^(?:0|[1-9][0-9]*)$".to_string())),
+        ("x-golem-minimum", Value::String("0".to_string())),
+        ("x-golem-maximum", Value::String(u64::MAX.to_string())),
+    ])
+}
+
+fn signed_64_schema() -> Value {
+    obj([
+        ("type", Value::String("string".to_string())),
+        ("format", Value::String("int64".to_string())),
+        (
+            "pattern",
+            Value::String("^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$".to_string()),
+        ),
+        ("x-golem-minimum", Value::String(i64::MIN.to_string())),
+        ("x-golem-maximum", Value::String(i64::MAX.to_string())),
     ])
 }
 
@@ -1099,10 +1123,7 @@ fn url_schema(restrictions: &UrlRestrictions) -> Map<String, Value> {
 
 fn quantity_schema(spec: &QuantitySpec) -> Map<String, Value> {
     let mut props = Map::new();
-    props.insert(
-        "mantissa".to_string(),
-        obj([("type", Value::String("integer".to_string()))]),
-    );
+    props.insert("mantissa".to_string(), signed_64_schema());
     props.insert(
         "scale".to_string(),
         obj([("type", Value::String("integer".to_string()))]),

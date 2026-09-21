@@ -1,9 +1,47 @@
 # Calling Agents with Runtime Reflection (Rust)
 
-Use generated clients when the target definition is available at compile time.
-The reflection API provides three other authority models: caller-owned Rust
-codecs, runtime-reflected schemas, and direct schema-free `SchemaValue`
-invocation.
+Choose the narrowest of four client approaches:
+
+| Client approach | Authority | Use it when |
+|---|---|---|
+| Normal RPC | A source definition shared through Rust's ordinary RPC mechanism | Producer and caller share a compile-time definition |
+| Caller-defined static clients | Caller-owned Rust types and codecs | The caller owns a stable typed subset without discovery |
+| Discovered clients | The environment's immutable metadata snapshot | Types or methods are selected at runtime and need validation or JSON projection |
+| Fully dynamic clients | Manually packed `SchemaValue` / `TypedSchemaValue` | Infrastructure deliberately retains no schema authority |
+
+A method-only agent client binds an existing durable identity and never creates
+or discovers one. A full client declares the type, constructor, lifecycle, and
+optional config, so it owns durable, phantom, and ephemeral creation. Dynamic
+agent clients start from an existing durable identity; the explicit ephemeral
+constructor is a one-shot invocation address whose final identity comes from
+invocation metadata. Tool namespaces are discoverable but only nodes
+with command bodies are callable.
+
+## Validation and Optional Values
+
+Validation happens at three different boundaries:
+
+| Boundary | What Rust validates | What remains authoritative remotely |
+|---|---|---|
+| Definition/build | Schema well-formedness, duplicate caller-owned tool paths, command-tree restrictions | Whether an optimistic caller-defined target is deployed |
+| Pack/create/start | JSON shape, exact integer range, constructor/config shape, required stdin/stdout, defaults, `Present`, nested `ValueIs`, and command constraints | Authorization, registered lifecycle, effective config and secrets |
+| Completion | Result cardinality, resolved graph equivalence, declared custom-error payloads, and value decoding | Execution failures and undeclared remote errors |
+
+Normal RPC and caller-defined Rust values use `Option<T>`. Reflected canonical JSON
+omits an optional record field or supplies its ordinary JSON value; when using
+`SchemaValue` directly, use `SchemaValue::Option { inner: None }` or
+`SchemaValue::Option { inner: Some(Box::new(value)) }`. Optional tool scalar
+positionals and options use that option carrier. Repeatable/tail inputs use an
+empty list for absence, flags use their effective boolean/count value, and an
+explicit default is represented by the default value. Do not replace an absent
+optional carrier with a zero, empty string, or `null` unless its declared schema
+actually permits that value.
+
+Canonical JSON represents `s64`, `u64`, duration nanoseconds, and quantity
+mantissas as canonical base-10 strings. Smaller integers remain JSON numbers.
+Packing rejects leading `+`, non-canonical leading zeroes, and out-of-range
+values before transport; projected JSON Schema uses the same string patterns
+and exposes the exact range as metadata.
 
 ## Discover Agent Types
 
@@ -24,7 +62,7 @@ for method in counter_type.methods() {
 Agent type names are environment-unique. `AgentType` exposes the current
 implementation component, lifecycle mode, constructor schema, and method
 schemas. Discovery is authoritative for reflected calls; it does not modify a
-caller-owned contract or retry a call after schema changes. Rust lookup helpers
+caller-owned definition or retry a call after schema changes. Rust lookup helpers
 are strict: a missing type is returned as `GolemReflectError::AgentTypeNotFound`.
 
 ## Inspect and Pack Schemas
@@ -79,9 +117,9 @@ inputs and outputs are supported by awaited `invoke_value` calls. They are not
 supported by trigger or scheduled calls; a pending call cannot accept a live
 stream input.
 
-## Define a Caller-Owned Typed Contract
+## Define a Caller-Owned Typed Client
 
-`#[agent_client]` has two contract tiers. A trait containing only instance
+`#[agent_client]` has two forms. A trait containing only instance
 methods is a method-only client: it can bind any existing durable `ParsedAgentId`, and
 the identity supplies the remote type name and constructor value. The trait's
 Rust `IntoSchema` and `FromSchema` codecs are the method-schema authority:
@@ -90,21 +128,21 @@ Rust `IntoSchema` and `FromSchema` codecs are the method-schema authority:
 use golem_rust::{ParsedAgentId, agent_client};
 
 #[agent_client]
-trait CounterContract {
+trait CounterApi {
     fn add(&self, by: u32) -> u32;
     fn reset(&self);
 }
 
-fn bind(agent_id: &ParsedAgentId) -> Result<CounterContractClient, golem_rust::GolemReflectError> {
-    CounterContractClient::bind(agent_id)
+fn bind(agent_id: &ParsedAgentId) -> Result<CounterApiClient, golem_rust::GolemReflectError> {
+    CounterApiClient::bind(agent_id)
 }
 ```
 
 Method-only clients do not declare a name, constructor, mode, or config and
-do not discover the remote lifecycle. Generated named methods are awaited
+do not discover the remote lifecycle. Statically named methods are awaited
 calls. The client also generates
 `trigger_<method>`, `pending_<method>`, and `schedule_<method>`. Binding checks
-no constructor shape because the contract does not own one.
+no constructor shape because the method-only client does not own one.
 Programmatic method-only definitions accept raw typed entries through
 `bind_with_entries(agent_id, entries)` without declaration-aware validation.
 
@@ -115,7 +153,7 @@ rules as `#[agent_definition]`:
 
 ```rust
 #[agent_client(type_name = "CounterAgent")]
-trait CounterContract {
+trait CounterApi {
     fn new(
         name: String,
         #[agent_config] config: golem_rust::agentic::Config<CounterConfig>,
@@ -123,18 +161,18 @@ trait CounterContract {
     fn add(&self, by: u32) -> u32;
 }
 
-let ordinary = CounterContractClient::get("main".to_string());
-let known = CounterContractClient::get_phantom(phantom_id, "main".to_string());
-let fresh = CounterContractClient::new_phantom("main".to_string());
-let exact = CounterContractClient::bind(&agent_id)?;
+let ordinary = CounterApiClient::get("main".to_string())?;
+let known = CounterApiClient::get_phantom(phantom_id, "main".to_string())?;
+let fresh = CounterApiClient::new_phantom("main".to_string())?;
+let bound = CounterApiClient::bind(&agent_id)?;
 ```
 
-Fully defined durable binding checks both the exact type name and the locally
+Fully defined durable binding checks both the declared type name and the locally
 declared constructor shape before creating RPC transport. A fully defined ephemeral
-contract uses `mode = "ephemeral"`, supports fresh and known phantom factories,
+client uses `mode = "ephemeral"`, supports fresh and known phantom factories,
 and deliberately has no generic `ParsedAgentId` binding.
 
-The programmatic equivalent starts in an explicit tier:
+The programmatic equivalent starts by selecting the method-only form:
 
 ```rust
 let method_only = MethodOnlyAgentClientDefinition::builder()
@@ -149,7 +187,7 @@ let full = MethodOnlyAgentClientDefinition::builder()
 
 let constructor = CounterId { name: "main".to_string() };
 let agent_id = full.agent_id(&constructor, None)?;
-let exact = full.bind(&agent_id)?;
+let bound = full.bind(&agent_id)?;
 let ordinary = full.get(&constructor)?;
 let known = full.get_phantom(phantom_id, &constructor)?;
 let fresh = full.new_phantom(&constructor)?;
@@ -166,14 +204,14 @@ let logical = ephemeral.new_phantom(&constructor)?;
 let known_ephemeral = ephemeral.get_phantom(phantom_id, &constructor)?;
 ```
 
-Only fully defined durable clients expose `bind`. It checks the exact agent
+Only fully defined durable clients expose `bind`. It checks the declared agent
 name and validates the parsed constructor value against `CounterId`; an ID
 with a different constructor shape is rejected before transport creation.
 Config-aware factories exist only after `.config::<C>()`, and accept
 `C::RpcType`, the typed override carrier generated by `ConfigSchema`.
 They also provide `bind_with_config(agent_id, config)` for fully defined durable
 clients. Every method on a fully defined caller-authored `#[agent_client]`
-reports invocation failures through `Result`; ordinary generated RPC clients
+reports invocation failures through `Result`; ordinary RPC clients
 keep their established call signatures. Malformed declared remote outputs,
 including unexpected unit values on awaited or pending calls, report
 `GolemReflectError::MalformedRemoteOutput`.
@@ -188,13 +226,13 @@ use serde_json::json;
 
 let agent_id = counter_type.agent_id_json(&json!({ "name": "main" }), None)?;
 let reflected = agent_id.reflected_client(&counter_type)?;
-let typed = CounterContractClient::bind(&agent_id)?;
+let typed = CounterApiClient::bind(&agent_id)?;
 ```
 
 `get_agent_type_for(&agent_id)` resolves the currently registered type for an
 existing identity. It does not create the agent.
 
-For schema-free infrastructure, construct an environment-scoped ID from a type
+For fully dynamic infrastructure, construct an environment-scoped ID from a type
 name, manually packed constructor record, and optional phantom UUID:
 
 ```rust
@@ -233,23 +271,159 @@ let result = agent_id
 Dynamic methods also support `trigger_value`, `pending_value`, and
 `schedule_value`. They never use caller-authored or reflected schemas.
 
+## Discovery to a Fully Dynamic Agent
+
+Keep the discovered schemas beside the dynamic client and apply their policy
+explicitly. Moving a packed value into `DynamicAgentClient` does not make that
+client validate it:
+
+```rust
+use golem_rust::{AgentMode, GolemReflectError, get_agent_type};
+use serde_json::{Value, json};
+
+async fn search_dynamically() -> Result<Value, GolemReflectError> {
+    let agent_type = get_agent_type("SearchAgent")?;
+    if agent_type.mode() != AgentMode::Durable {
+        return Err(GolemReflectError::InvalidType(
+            "SearchAgent must be durable".to_string(),
+        ));
+    }
+    let method = agent_type.method("search")?;
+
+    let input = method
+        .input()
+        .pack_json(&json!({ "query": "golem", "cursor": null }))?;
+    method.input().validate_value(&input)?;
+
+    let agent_id = agent_type.agent_id_json(&json!({ "tenant": "docs" }), None)?;
+    let result = match agent_id
+        .dynamic_client()?
+        .method(method.name())
+        .invoke_value(input)
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("dynamic search failed: {error}");
+            return Err(error);
+        }
+    };
+
+    let output = method.output().ok_or_else(|| {
+        GolemReflectError::MalformedRemoteOutput(
+            "search unexpectedly declares unit output".to_string(),
+        )
+    })?;
+    let value = result.value.ok_or_else(|| {
+        GolemReflectError::MalformedRemoteOutput(
+            "search returned unit instead of a value".to_string(),
+        )
+    })?;
+    output.validate_value(&value)?;
+    output.unpack_json(&value)
+}
+```
+
+This awaited example owns no stream or pending handle. If packed values contain
+owned streams, transfer each input once and consume or close every returned
+stream; cancel or await any pending invocation before abandoning it.
+
+## Discover and Call Tools
+
+Tool discovery returns one immutable registration snapshot. Walk `root()` or
+`node()` to show every namespace and its documentation; check `is_callable()`
+before converting a node to a `ToolCommand`:
+
+```rust
+use golem_rust::{SchemaValue, get_tool_type};
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let tool = get_tool_type("search")?;
+    for child in tool.root().children() {
+        println!("{} callable={}", child.name(), child.is_callable());
+    }
+
+    let command = tool.node(&["documents", "find"])
+        .ok_or("missing command")?
+        .command()?;
+    let result = command.invoke_value(SchemaValue::Record {
+        fields: vec![
+            SchemaValue::String("golem".to_string()),
+            SchemaValue::Option { inner: None },
+        ],
+    }).await?;
+    println!("{result:?}");
+    Ok(())
+}
+```
+
+`invoke_value` is the simple awaited path. For independently consumed stdout,
+call `start_value`; it consumes the optional stdin carrier and returns a
+`ToolInvocation` containing the stdout reader plus cancellation/result handles.
+Move stdout to a concurrent consumer or call `collect()`, which drives stdout
+and structured completion together. `collect()` reports the structured result
+error first when both channels fail. Call `cancel()` when abandoning work and
+`close()` on stdout when abandoning only that attachment. A declared custom
+error is returned as `ToolError::Tool(ReflectedToolCustomError)` with its typed
+payload; structural host failures and undeclared custom errors remain distinct.
+
+Use `ToolClientDefinition` for a caller-owned typed subset without discovery:
+
+```rust
+use golem_rust::{FromSchema, IntoSchema, ToolClientDefinition};
+
+#[derive(IntoSchema)]
+struct SearchInput {
+    query: String,
+    limit: Option<u32>,
+}
+
+#[derive(IntoSchema, FromSchema)]
+struct SearchOutput {
+    hits: Vec<String>,
+}
+
+async fn search() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let definition = ToolClientDefinition::unnamed()
+        .command::<SearchInput, SearchOutput, _, _>(["search"])?
+        .build()?;
+    let client = definition.client_for("document-search")?;
+    let command = client.command::<SearchInput, SearchOutput>(&["search"])?;
+    let output = command.invoke(&SearchInput {
+        query: "golem".to_string(),
+        limit: None,
+    }).await?;
+    Ok(output.hits)
+}
+```
+
+`client()` uses the definition's declared name; `client_for()` supplies a name
+for an unnamed reusable definition. Both are fallible. They validate the local
+typed schema before transport creation and invocation but intentionally do not
+discover the remote tool. Use `DynamicToolClient` only for already packed
+`TypedSchemaValue` inputs and explicit command paths.
+
 ## Phantom and Ephemeral Lifecycles
 
 Reflected durable factories support normal lookup, known phantom UUIDs, and
 new phantom UUIDs. A new durable phantom returns its client, reusable agent ID,
 and phantom UUID together.
 
-For raw ephemeral invocation, construct a one-shot address directly:
+Create ephemeral agents through a full reflected or caller-owned client. A
+reflected factory returns a one-shot client without a reusable pre-invocation
+identity:
 
 ```rust
-use golem_rust::{DynamicAgentClient, SchemaValue};
+use golem_rust::{NewPhantomClient, get_agent_type};
+use serde_json::json;
 
-let request = DynamicAgentClient::ephemeral(
-    "RequestAgent",
-    SchemaValue::Record {
-        fields: vec![SchemaValue::String("summarize".to_string())],
-    },
-)?;
+let request_type = get_agent_type("RequestAgent")?;
+let NewPhantomClient::Ephemeral(request) = request_type
+    .client()
+    .new_phantom_json(&json!({ "task": "summarize" }))?
+else {
+    return Err("RequestAgent must be ephemeral".into());
+};
 
 assert!(request.agent_id().is_none());
 let result = request
@@ -269,8 +443,8 @@ again.
 
 | Situation | Use |
 |---|---|
-| Generated definition available | Generated `<Agent>Client` |
-| Partial typed contract owned by the caller | `#[agent_client]` |
+| Shared source definition available | Normal RPC through `<Agent>Client` |
+| Caller-owned typed method subset | method-only or full `#[agent_client]` |
 | Type or method selected at runtime with JSON | `get_agent_type` plus `invoke_json` |
 | Explicit runtime-schema packing | `SchemaRef::pack_json`, `invoke_value`, `unpack_json` |
-| Schema-free infrastructure with Golem values | `ParsedAgentId::from_value` and `dynamic_client` |
+| Fully dynamic infrastructure with packed Golem values | `ParsedAgentId::from_value` and `dynamic_client` |

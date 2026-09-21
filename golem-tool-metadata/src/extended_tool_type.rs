@@ -1093,9 +1093,9 @@ impl ExtendedToolType {
     }
 
     /// The SDK-side field for one shared canonical surface reference: the
-    /// name/aliases from the descriptor plus the *original* embedded
-    /// self-contained graph of that surface (collected form for repeatable
-    /// options and the tail).
+    /// name/aliases from the descriptor plus the self-contained canonical
+    /// carrier graph for that surface (collected form for repeatable options
+    /// and the tail, optional form for absent scalar inputs).
     fn canonical_field_for_surface(
         &self,
         command_index: usize,
@@ -1114,7 +1114,7 @@ impl ExtendedToolType {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
                     short: option.short,
-                    schema: option_collected_graph(&option.shape),
+                    schema: canonical_option_graph(option),
                 })
             }
             CanonicalSurfaceRef::GlobalFlag { node, index } => {
@@ -1132,7 +1132,7 @@ impl ExtendedToolType {
                     name: positional.name.clone(),
                     aliases: Vec::new(),
                     short: None,
-                    schema: positional.type_.clone(),
+                    schema: canonical_positional_graph(positional),
                 })
             }
             CanonicalSurfaceRef::BodyTail => {
@@ -1150,7 +1150,7 @@ impl ExtendedToolType {
                     name: option.long.clone(),
                     aliases: option.aliases.clone(),
                     short: option.short,
-                    schema: option_collected_graph(&option.shape),
+                    schema: canonical_option_graph(option),
                 })
             }
             CanonicalSurfaceRef::BodyFlag { index } => {
@@ -1426,6 +1426,40 @@ pub fn option_collected_graph(s: &ExtendedOptionShape) -> SchemaGraph {
         ExtendedOptionShape::Scalar(g) | ExtendedOptionShape::OptionalScalar(g) => g.clone(),
         ExtendedOptionShape::RepeatableList(r) => list_wrapper_graph(&r.item_type),
         ExtendedOptionShape::RepeatableMap(r) => r.map_type.clone(),
+    }
+}
+
+fn canonical_option_graph(option: &ExtendedOptionSpec) -> SchemaGraph {
+    let collected = option_collected_graph(&option.shape);
+    if !option.required
+        && option.default.is_none()
+        && !matches!(
+            &option.shape,
+            ExtendedOptionShape::RepeatableList(_) | ExtendedOptionShape::RepeatableMap(_)
+        )
+        && !matches!(&collected.root, SchemaType::Option { .. })
+    {
+        option_wrapper_graph(&collected)
+    } else {
+        collected
+    }
+}
+
+fn canonical_positional_graph(positional: &ExtendedPositional) -> SchemaGraph {
+    if !positional.required
+        && positional.default.is_none()
+        && !matches!(&positional.type_.root, SchemaType::Option { .. })
+    {
+        option_wrapper_graph(&positional.type_)
+    } else {
+        positional.type_.clone()
+    }
+}
+
+fn option_wrapper_graph(inner: &SchemaGraph) -> SchemaGraph {
+    SchemaGraph {
+        defs: inner.defs.clone(),
+        root: SchemaType::option(inner.root.clone()),
     }
 }
 
@@ -3915,13 +3949,67 @@ mod tests {
     }
 
     #[test]
+    fn extended_and_native_canonical_input_schemas_match_optional_carriers() {
+        let mut tool = sample_tool();
+        let body = tool.commands[1].body.as_mut().unwrap();
+        body.positionals.fixed[0].required = false;
+        let extended = tool.canonical_input_model(1).unwrap();
+        let native = tool
+            .canonical_projection()
+            .canonical_input_model(1)
+            .unwrap();
+        assert_eq!(extended.record_schema, native.record_schema);
+
+        let SchemaType::Record { fields, .. } = &extended.record_schema.root else {
+            panic!("canonical input schema must be a record")
+        };
+        assert!(matches!(fields[0].body, SchemaType::Option { .. }));
+        assert!(matches!(fields[1].body, SchemaType::Option { .. }));
+        assert!(matches!(fields[2].body, SchemaType::Map { .. }));
+    }
+
+    #[test]
+    fn generated_client_input_model_encodes_absent_and_supplied_optional_values() {
+        let model = sample_tool().canonical_input_model(1).unwrap();
+        for verbose in [
+            SchemaValue::Option { inner: None },
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(3))),
+            },
+        ] {
+            let input = build_canonical_input(
+                &model,
+                vec![
+                    ("verbose", verbose.clone()),
+                    ("input", SchemaValue::String("in.txt".to_string())),
+                    (
+                        "config",
+                        SchemaValue::Map {
+                            entries: Vec::new(),
+                        },
+                    ),
+                    ("force", SchemaValue::Bool(false)),
+                ],
+            )
+            .unwrap();
+            assert_eq!(input.graph(), &model.record_schema);
+            let SchemaValue::Record { fields } = input.value() else {
+                panic!("canonical generated-client input must be a record")
+            };
+            assert_eq!(&fields[0], &verbose);
+        }
+    }
+
+    #[test]
     fn canonical_input_model_decodes_positional_record_by_index() {
         let tool = sample_tool();
         let model = tool.canonical_input_model(1).unwrap();
         let decoded = model
             .decode_record(SchemaValue::Record {
                 fields: vec![
-                    SchemaValue::U32(3),
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::U32(3))),
+                    },
                     SchemaValue::String("in.txt".to_string()),
                     SchemaValue::Map { entries: vec![] },
                     SchemaValue::Bool(true),
@@ -3936,7 +4024,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["verbose", "input", "config", "force"]
         );
-        assert_eq!(decoded[0].value, SchemaValue::U32(3));
+        assert_eq!(
+            decoded[0].value,
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(3))),
+            }
+        );
         assert_eq!(decoded[1].value, SchemaValue::String("in.txt".to_string()));
         assert_eq!(decoded[3].value, SchemaValue::Bool(true));
     }

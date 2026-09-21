@@ -1222,7 +1222,7 @@ fn start_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                     &__input,
                     #stdin_expr,
                     #decode,
-                    <#err as golem_rust::agentic::ToolErrorSchema>::from_error_payload_value,
+                    golem_rust::agentic::decode_declared_tool_error::<#err>,
                 )
             }
         },
@@ -1252,7 +1252,7 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                     &__input,
                     (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
                     ::std::option::Option::None,
-                    <#err as golem_rust::agentic::ToolErrorSchema>::from_error_payload_value,
+                    golem_rust::agentic::decode_declared_tool_error::<#err>,
                 ).await
             }
         },

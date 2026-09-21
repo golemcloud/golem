@@ -21,10 +21,20 @@ agent definitions that have no implementation anywhere.
 
 ## Runtime tool reflection
 
+Rust exposes four client approaches: Normal RPC through the ordinary client for
+a shared source definition; caller-defined static method-only or full clients;
+discovered clients driven by an immutable metadata snapshot; and fully dynamic
+schema-native clients. Method-only
+agent clients bind existing durable IDs. Full agent clients own creation and
+declare durable or ephemeral lifecycle. `ToolClientDefinition` is the
+caller-defined static tool approach and can be named or bound to a target name.
+
 With `export_golem_agentic` enabled, `golem_rust::agentic::reflection::get_tool_type`
-discovers a tool visible to the caller. Choose a command with `ToolType::command`;
-command aliases are accepted and `ToolCommand::path` returns the canonical path.
-The command exposes its ordered arguments, input schema, and declared output schema.
+discovers a tool visible to the caller. Walk `ToolType::root` or `ToolType::node`
+to inspect callable and namespace-only nodes; namespace nodes are visible but cannot
+be invoked. Choose a callable command with `ToolType::command`; command aliases are
+accepted and `ToolCommand::path` returns the canonical path. The command exposes its
+ordered arguments, input schema, and declared output schema.
 
 ```rust,ignore
 use golem_rust::agentic::reflection::get_tool_type;
@@ -45,3 +55,16 @@ it for a command with required stdout; `collect` drains stdout while awaiting th
 descriptor is available. It offers awaited, pending, and trigger calls, but has no
 deployed schema for local input or output validation. Reflected and dynamic calls return
 recoverable errors, including `MalformedRemoteOutput` for an invalid declared result.
+
+Schema definition and command-tree restrictions are checked while definitions are
+built. Constructors, config, canonical JSON, effective command constraints, defaults,
+and required streams are checked before creation or invocation. Result cardinality,
+resolved schema graphs, values, and declared custom-error payloads are checked when the
+call completes; authorization and deployed availability remain host decisions.
+
+Use Rust `Option<T>` for Normal RPC or caller-owned optional values. In reflected
+`SchemaValue` records, use `SchemaValue::Option { inner: None }` for absence and
+`Some(Box::new(value))` for presence. Optional scalar tool positionals and options use
+the same carrier, tails use an empty list, and flags use their effective value.
+Canonical JSON uses base-10 strings for `s64`, `u64`, duration nanoseconds, and
+quantity mantissas; smaller integers remain JSON numbers.
