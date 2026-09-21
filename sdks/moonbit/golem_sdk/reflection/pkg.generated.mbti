@@ -30,7 +30,7 @@ pub(all) suberror ReflectError {
   Identity(String)
   Schema(String)
   Json(String)
-  Remote(String)
+  Remote(AgentRpcError)
 } derive(Eq, @debug.Debug)
 
 // Types and methods
@@ -45,6 +45,18 @@ pub(all) struct AgentMethod {
 pub(all) enum AgentMode {
   Durable
   Ephemeral
+} derive(Eq, @debug.Debug)
+
+pub(all) enum AgentRpcError {
+  Protocol(String)
+  Denied(String)
+  NotFound(String)
+  RemoteInternal(String)
+  InvalidInput(String)
+  InvalidMethod(String)
+  InvalidType(String)
+  InvalidAgentId(String)
+  Custom(@schema_model.TypedSchemaValue)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct AgentType {
@@ -246,7 +258,8 @@ pub(all) struct ToolArgument {
 pub(all) struct ToolCommand {
   tool : ToolType
   path : Array[String]
-  body : @golemcloud/golem_sdk/interface/golem/tool/common.CommandBody
+  body : @golemcloud/golem_sdk/interface/golem/tool/common.CommandBody?
+  subcommands : Array[String]
   arguments : Array[ToolArgument]
   input_schema : SchemaRef
   result : SchemaRef?

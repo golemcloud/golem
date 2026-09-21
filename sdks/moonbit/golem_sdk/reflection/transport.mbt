@@ -47,9 +47,7 @@ async fn Transport::invoke_value(
   method_name : String,
   input : @model.SchemaValue,
 ) -> Invocation[@model.SchemaValue?] {
-  let wire = @model.schema_value_to_wit(input) catch {
-    error => raise Schema("failed to encode invocation input: \{repr(error)}")
-  }
+  let wire = encode_awaited_input(input)
   let pending = self.raw.async_invoke_and_await(method_name, wire, None)
   defer pending.future.drop()
   let result = {
@@ -72,6 +70,23 @@ async fn Transport::invoke_value(
     }
     Err(error) => raise rpc_error(error)
   }
+}
+
+///|
+async fn encode_awaited_input(
+  input : @model.SchemaValue,
+) -> @types.SchemaValueTree {
+  let wire = @model.schema_value_to_wit_async(input) catch {
+    @async-core.Cancelled::Cancelled as error => {
+      input.release_resources(@model_host.resource_drops())
+      raise error
+    }
+    error => {
+      input.release_resources(@model_host.resource_drops())
+      raise Schema("failed to encode invocation input: \{repr(error)}")
+    }
+  }
+  wire
 }
 
 ///|

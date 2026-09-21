@@ -6,7 +6,22 @@ pub(all) suberror ReflectError {
   Identity(String)
   Schema(String)
   Json(String)
-  Remote(String)
+  Remote(AgentRpcError)
+} derive(Debug, Eq)
+
+///|
+/// Structured RPC and remote-agent failures retained by every reflected,
+/// caller-defined static, and fully dynamic agent client.
+pub(all) enum AgentRpcError {
+  Protocol(String)
+  Denied(String)
+  NotFound(String)
+  RemoteInternal(String)
+  InvalidInput(String)
+  InvalidMethod(String)
+  InvalidType(String)
+  InvalidAgentId(String)
+  Custom(@model.TypedSchemaValue)
 } derive(Debug, Eq)
 
 ///|
@@ -78,11 +93,30 @@ fn agent_error_message(error : @common.AgentError) -> String {
 
 ///|
 fn rpc_error(error : @agentHost.RpcError) -> ReflectError {
-  match error {
-    ProtocolError(message) => Remote("RPC protocol error: " + message)
-    Denied(message) => Remote("RPC denied: " + message)
-    NotFound(message) => Remote("RPC target not found: " + message)
-    RemoteInternalError(message) => Remote("remote internal error: " + message)
-    RemoteAgentError(error) => Remote(agent_error_message(error))
-  }
+  Remote(
+    match error {
+      ProtocolError(message) => AgentRpcError::Protocol(message)
+      Denied(message) => AgentRpcError::Denied(message)
+      NotFound(message) => AgentRpcError::NotFound(message)
+      RemoteInternalError(message) => AgentRpcError::RemoteInternal(message)
+      RemoteAgentError(error) =>
+        match error {
+          InvalidInput(message) => AgentRpcError::InvalidInput(message)
+          InvalidMethod(message) => AgentRpcError::InvalidMethod(message)
+          InvalidType(message) => AgentRpcError::InvalidType(message)
+          InvalidAgentId(message) => AgentRpcError::InvalidAgentId(message)
+          CustomError(payload) => {
+            let decoded = @model_host.typed_schema_value_from_wit(payload) catch {
+              error =>
+                return Remote(
+                  AgentRpcError::RemoteInternal(
+                    "failed to decode custom remote agent error: \{repr(error)}",
+                  ),
+                )
+            }
+            AgentRpcError::Custom(decoded)
+          }
+        }
+    },
+  )
 }

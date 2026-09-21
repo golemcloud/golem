@@ -611,8 +611,18 @@ pub async fn ReflectedAgentClient::invoke_json(
   )
   let value = match (entry.output, invocation.value) {
     (None, None) => None
-    (Some(schema), Some(value)) => Some(schema.unpack_json(value))
-    (None, Some(_)) => raise Schema("unit method returned a value")
+    (Some(schema), Some(value)) => {
+      let json = {
+        errdefer value.release_resources(@model_host.resource_drops())
+        schema.unpack_json(value)
+      }
+      value.release_resources(@model_host.resource_drops())
+      Some(json)
+    }
+    (None, Some(value)) => {
+      value.release_resources(@model_host.resource_drops())
+      raise Schema("unit method returned a value")
+    }
     (Some(_), None) => raise Schema("value-returning method returned unit")
   }
   { metadata: invocation.metadata, value, }
@@ -694,10 +704,16 @@ fn validate_invocation_output(
   match (entry.output, invocation.value) {
     (None, None) => invocation
     (Some(schema), Some(value)) => {
-      schema.validate_value(value)
+      {
+        errdefer value.release_resources(@model_host.resource_drops())
+        schema.validate_value(value)
+      }
       invocation
     }
-    (None, Some(_)) => raise Schema("unit method returned a value")
+    (None, Some(value)) => {
+      value.release_resources(@model_host.resource_drops())
+      raise Schema("unit method returned a value")
+    }
     (Some(_), None) => raise Schema("single-output method returned no value")
   }
 }

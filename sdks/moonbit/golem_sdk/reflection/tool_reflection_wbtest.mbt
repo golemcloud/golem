@@ -98,6 +98,90 @@ test "reflected tool resolves aliases and rejects input before RPC" {
 }
 
 ///|
+test "namespace-only commands expose metadata and reject invocation locally" {
+  let metadata = sample_tool().command([])
+  assert_true(metadata.body is None)
+  assert_eq(metadata.subcommands, ["run"])
+  match metadata.start_value(@model.SchemaValue::Record([])) {
+    Err(@tool.ToolError::InvalidInput(message)) =>
+      assert_true(message.contains("namespace"))
+    _ => fail("expected namespace invocation to fail locally")
+  }
+}
+
+///|
+test "nested namespace lookup retains canonical child names" {
+  let tool = sample_tool()
+  let nodes = tool.definition.commands.nodes
+  let nested = ToolType::{
+    ..tool,
+    definition: {
+      ..tool.definition,
+      commands: {
+        nodes: [
+          { ..nodes[0], subcommands: [1], },
+          { ..nodes[0], name: "group", aliases: ["g"], subcommands: [2], },
+          nodes[1],
+        ],
+      },
+    },
+  }
+  let metadata = nested.command(["g"])
+  let command = nested.command(["g", "r"])
+  assert_eq(metadata.path, ["group"])
+  assert_eq(metadata.subcommands, ["run"])
+  assert_eq(command.path, ["group", "run"])
+}
+
+///|
+test "reflected input graph excludes definitions owned only by output" {
+  let input_def : @model.SchemaTypeDef = {
+    id: "Input",
+    name: Some("Input"),
+    body: @model.schema_type(String),
+  }
+  let output_def : @model.SchemaTypeDef = {
+    id: "Output",
+    name: Some("Output"),
+    body: @model.schema_type(
+      Record([@model.field("value", @model.schema_type(String))]),
+    ),
+  }
+  let encoder = @model.GraphEncoder::new([input_def, output_def])
+  let input_root = encoder.encode_type(@model.schema_type(Ref("Input")))
+  let output_root = encoder.encode_type(@model.schema_type(Ref("Output")))
+  let graph = encoder.finish()
+  let tool = sample_tool()
+  let nodes = tool.definition.commands.nodes
+  let body = nodes[1].body.unwrap()
+  let command = ToolType::{
+    ..tool,
+    definition: {
+      ..tool.definition,
+      schema: { ..graph, root: input_root, },
+      commands: {
+        nodes: [
+          nodes[0],
+          {
+            ..nodes[1],
+            body: Some({
+              ..body,
+              positionals: {
+                ..body.positionals,
+                fixed: [{ ..body.positionals.fixed[0], type_: input_root, }],
+              },
+              options: [],
+              result: Some({ ..body.result.unwrap(), type_: output_root, }),
+            }),
+          },
+        ],
+      },
+    },
+  }.command(["run"])
+  assert_eq(command.wire_input.defs.map(def => def.id), ["Input"])
+}
+
+///|
 test "reflected optional tool inputs share the canonical wire schema" {
   let command = sample_tool().command(["run"])
   assert_eq(command.input_schema.graph, command.wire_input)

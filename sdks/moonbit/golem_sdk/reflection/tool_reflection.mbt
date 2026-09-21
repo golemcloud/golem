@@ -28,7 +28,8 @@ pub(all) struct ReflectedToolClient {
 pub(all) struct ToolCommand {
   tool : ToolType
   path : Array[String]
-  body : @toolCommon.CommandBody
+  body : @toolCommon.CommandBody?
+  subcommands : Array[String]
   arguments : Array[ToolArgument]
   input_schema : SchemaRef
   priv wire_input : @model.SchemaGraph
@@ -189,25 +190,27 @@ pub fn ToolType::command(
     indices.push(index)
     canonical.push(nodes[index].name)
   }
-  let body = match nodes[index].body {
-    Some(body) => body
-    None => raise Discovery("tool command has no body")
-  }
+  let body = nodes[index].body
   let local_names : Array[String] = []
-  for item in body.positionals.fixed {
-    local_names.push(item.name)
-  }
-  match body.positionals.tail {
-    Some(item) => local_names.push(item.name)
+  match body {
+    Some(body) => {
+      for item in body.positionals.fixed {
+        local_names.push(item.name)
+      }
+      match body.positionals.tail {
+        Some(item) => local_names.push(item.name)
+        None => ()
+      }
+      for item in body.options {
+        local_names.push(item.long)
+        local_names.append(item.aliases)
+      }
+      for item in body.flags {
+        local_names.push(item.long)
+        local_names.append(item.aliases)
+      }
+    }
     None => ()
-  }
-  for item in body.options {
-    local_names.push(item.long)
-    local_names.append(item.aliases)
-  }
-  for item in body.flags {
-    local_names.push(item.long)
-    local_names.append(item.aliases)
   }
   let arguments : Array[ToolArgument] = []
   for node_index in indices {
@@ -231,51 +234,58 @@ pub fn ToolType::command(
       }
     }
   }
-  for item in body.positionals.fixed {
-    arguments.push({
-      kind: "positional",
-      name: item.name,
-      aliases: [],
-      short: None,
-      required: item.required,
-      default: match item.default {
-        Some(value) =>
-          Some(
-            @model_host.schema_value_from_wit(value) catch {
-              error =>
-                raise Schema("failed to decode tool default: \{Repr(error)}")
-            },
-          )
-        None => None
-      },
-      schema: tool_schema_at(self, item.type_),
-      optional_carrier: !item.required && item.default is None,
-    })
-  }
-  match body.positionals.tail {
-    Some(item) => {
-      let inner = tool_schema_at(self, item.item_type)
-      arguments.push({
-        kind: "tail",
-        name: item.name,
-        aliases: [],
-        short: None,
-        required: item.min > 0,
-        default: None,
-        schema: SchemaRef::new({
-          defs: inner.graph.defs,
-          root: @model.schema_type(List(inner.root)),
-        }),
-        optional_carrier: false,
-      })
+  match body {
+    Some(body) => {
+      for item in body.positionals.fixed {
+        arguments.push({
+          kind: "positional",
+          name: item.name,
+          aliases: [],
+          short: None,
+          required: item.required,
+          default: match item.default {
+            Some(value) =>
+              Some(
+                @model_host.schema_value_from_wit(value) catch {
+                  error =>
+                    raise Schema(
+                      "failed to decode tool default: \{Repr(error)}",
+                    )
+                },
+              )
+            None => None
+          },
+          schema: tool_schema_at(self, item.type_),
+          optional_carrier: !item.required && item.default is None,
+        })
+      }
+      match body.positionals.tail {
+        Some(item) => {
+          let inner = tool_schema_at(self, item.item_type)
+          arguments.push({
+            kind: "tail",
+            name: item.name,
+            aliases: [],
+            short: None,
+            required: item.min > 0,
+            default: None,
+            schema: SchemaRef::new({
+              defs: inner.graph.defs,
+              root: @model.schema_type(List(inner.root)),
+            }),
+            optional_carrier: false,
+          })
+        }
+        None => ()
+      }
+      for item in body.options {
+        arguments.push(tool_option_argument(self, item))
+      }
+      for item in body.flags {
+        arguments.push(tool_flag_argument(self, item))
+      }
     }
     None => ()
-  }
-  for item in body.options {
-    arguments.push(tool_option_argument(self, item))
-  }
-  for item in body.flags {
-    arguments.push(tool_flag_argument(self, item))
   }
   let input_fields : Array[@model.NamedFieldType] = []
   for argument in arguments {
@@ -292,18 +302,27 @@ pub fn ToolType::command(
   let decoded = @model.schema_graph_from_wit(self.definition.schema) catch {
     error => raise Schema("failed to decode tool schema: \{Repr(error)}")
   }
-  let result = match body.result {
-    Some(spec) => Some(tool_schema_at(self, spec.type_))
+  let result = match body {
+    Some(body) =>
+      match body.result {
+        Some(spec) => Some(tool_schema_at(self, spec.type_))
+        None => None
+      }
     None => None
   }
   let input_root = @model.schema_type(Record(input_fields))
+  let wire_input = @model.schema_graph_closure({
+    defs: decoded.defs,
+    root: input_root,
+  })
   {
     tool: self,
     path: canonical,
     body,
+    subcommands: nodes[index].subcommands.map(child => nodes[child].name),
     arguments,
-    input_schema: SchemaRef::new({ defs: decoded.defs, root: input_root, }),
-    wire_input: { defs: decoded.defs, root: input_root, },
+    input_schema: SchemaRef::new(wire_input),
+    wire_input,
     result,
   }
 }
@@ -326,6 +345,13 @@ pub fn ToolCommand::pack_json(
   self : ToolCommand,
   input : Json,
 ) -> Result[@model.SchemaValue, @tool.ToolError[ReflectedToolCustomError]] {
+  if self.body is None {
+    return Err(
+      @tool.ToolError::InvalidInput(
+        "selected command is a namespace and cannot be invoked",
+      ),
+    )
+  }
   let value = self.input_schema.pack_json(input) catch {
     error => return Err(@tool.ToolError::InvalidInput("\{Repr(error)}"))
   }
@@ -340,6 +366,13 @@ fn ToolCommand::checked_input(
   self : ToolCommand,
   input : @model.SchemaValue,
 ) -> Result[@model.TypedSchemaValue, @tool.ToolError[ReflectedToolCustomError]] {
+  if self.body is None {
+    return Err(
+      @tool.ToolError::InvalidInput(
+        "selected command is a namespace and cannot be invoked",
+      ),
+    )
+  }
   self.input_schema.validate_value(input) catch {
     error => return Err(@tool.ToolError::InvalidInput("\{Repr(error)}"))
   }
@@ -366,7 +399,16 @@ fn ToolCommand::check_constraints(
       ),
     )
   }
-  for constraint in self.body.constraints {
+  let constraints = match self.body {
+    Some(body) => body.constraints
+    None =>
+      return Err(
+        @tool.ToolError::InvalidInput(
+          "selected command is a namespace and cannot be invoked",
+        ),
+      )
+  }
+  for constraint in constraints {
     let okay = match constraint {
       RequiresAll(refs) => self.constraint_refs_match(refs, fields, true)
       RequiresAny(refs) => self.constraint_refs_match(refs, fields, false)
@@ -544,9 +586,11 @@ fn ToolCommand::decode_error(
   name : String,
   payload : @model.TypedSchemaValue,
 ) -> Result[ReflectedToolCustomError, String]? {
-  let declaration = self.body.errors
-    .iter()
-    .find_first(fn(item) { item.name == name })
+  let errors = match self.body {
+    Some(body) => body.errors
+    None => return None
+  }
+  let declaration = errors.iter().find_first(fn(item) { item.name == name })
   match declaration {
     None => None
     Some(declaration) =>
@@ -579,7 +623,16 @@ pub fn ToolCommand::start_value(
   input : @model.SchemaValue,
   stdin? : @async-core.Stream[Byte]? = None,
 ) -> Result[ReflectedToolInvocation, @tool.ToolError[ReflectedToolCustomError]] {
-  if self.body.stdin is Some(spec) && spec.required && stdin is None {
+  let body = match self.body {
+    Some(body) => body
+    None =>
+      return Err(
+        @tool.ToolError::InvalidInput(
+          "selected command is a namespace and cannot be invoked",
+        ),
+      )
+  }
+  if body.stdin is Some(spec) && spec.required && stdin is None {
     return Err(@tool.ToolError::InvalidInput("command requires stdin"))
   }
   let input = match self.checked_input(input) {
@@ -590,13 +643,12 @@ pub fn ToolCommand::start_value(
     Ok(client) => client
     Err(error) => return Err(error)
   }
-  let started = client.start(
-    self.path,
-    input,
-    stdin,
-    self.body.stdout is Some(_),
-    fn(name, payload) { self.decode_error(name, payload) },
-  )
+  let started = client.start(self.path, input, stdin, body.stdout is Some(_), fn(
+    name,
+    payload,
+  ) {
+    self.decode_error(name, payload)
+  })
   client.drop()
   match started {
     Ok(invocation) => Ok({ command: self, invocation, })
@@ -610,7 +662,16 @@ pub async fn ToolCommand::invoke_value(
   input : @model.SchemaValue,
   stdin? : @async-core.Stream[Byte]? = None,
 ) -> Result[@model.SchemaValue?, @tool.ToolError[ReflectedToolCustomError]] {
-  if self.body.stdout is Some(spec) && spec.required {
+  let body = match self.body {
+    Some(body) => body
+    None =>
+      return Err(
+        @tool.ToolError::InvalidInput(
+          "selected command is a namespace and cannot be invoked",
+        ),
+      )
+  }
+  if body.stdout is Some(spec) && spec.required {
     return Err(
       @tool.ToolError::InvalidInput("command requires caller-readable stdout"),
     )
@@ -620,7 +681,7 @@ pub async fn ToolCommand::invoke_value(
     Err(error) => return Err(error)
   }
   defer started.drop()
-  if self.body.stdout is Some(_) {
+  if body.stdout is Some(_) {
     match started.collect() {
       Ok((result, _)) => Ok(result)
       Err(error) => Err(error)
@@ -645,12 +706,16 @@ pub async fn ToolCommand::invoke_json(
     Err(error) => return Err(error)
   }
   match (self.result, result) {
-    (Some(schema), Some(value)) =>
-      try schema.unpack_json(value) catch {
-        error => Err(@tool.ToolError::MalformedRemoteOutput("\{Repr(error)}"))
-      } noraise {
-        json => Ok(Some(json))
+    (Some(schema), Some(value)) => {
+      let json = schema.unpack_json(value) catch {
+        error => {
+          value.release_resources(@model_host.resource_drops())
+          return Err(@tool.ToolError::MalformedRemoteOutput("\{Repr(error)}"))
+        }
       }
+      value.release_resources(@model_host.resource_drops())
+      Ok(Some(json))
+    }
     _ => Ok(None)
   }
 }
@@ -661,12 +726,21 @@ pub fn ToolCommand::trigger_value(
   input : @model.SchemaValue,
   stdin? : @async-core.Stream[Byte]? = None,
 ) -> Result[Unit, @tool.ToolError[ReflectedToolCustomError]] {
-  if self.body.stdout is Some(spec) && spec.required {
+  let body = match self.body {
+    Some(body) => body
+    None =>
+      return Err(
+        @tool.ToolError::InvalidInput(
+          "selected command is a namespace and cannot be invoked",
+        ),
+      )
+  }
+  if body.stdout is Some(spec) && spec.required {
     return Err(
       @tool.ToolError::InvalidInput("command requires caller-readable stdout"),
     )
   }
-  if self.body.stdin is Some(spec) && spec.required && stdin is None {
+  if body.stdin is Some(spec) && spec.required && stdin is None {
     return Err(@tool.ToolError::InvalidInput("command requires stdin"))
   }
   let input = match self.checked_input(input) {

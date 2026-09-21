@@ -286,13 +286,7 @@ pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] FullAgentClient::in
     @schema.to_value_as(input),
   )
   let value = match invocation.value {
-    Some(value) =>
-      @schema.from_value_as(value) catch {
-        error =>
-          raise ReflectError::Schema(
-            "failed to decode typed output: \{repr(error)}",
-          )
-      }
+    Some(value) => decode_typed_output(value)
     None => raise ReflectError::Schema("typed method returned unit")
   }
   { metadata: invocation.metadata, value, }
@@ -308,10 +302,32 @@ pub async fn[I : @schema.IntoSchema] FullAgentClient::invoke_unit(
     method_name,
     @schema.to_value_as(input),
   )
-  guard invocation.value is None else {
-    raise ReflectError::Schema("unit method returned a value")
-  }
+  require_unit_output(invocation.value)
   { metadata: invocation.metadata, value: (), }
+}
+
+///|
+fn[O : @schema.FromSchema] decode_typed_output(
+  value : @model.SchemaValue,
+) -> O raise ReflectError {
+  errdefer value.release_resources(@model_host.resource_drops())
+  @schema.from_value_as(value) catch {
+    error =>
+      raise ReflectError::Schema(
+        "failed to decode typed output: \{repr(error)}",
+      )
+  }
+}
+
+///|
+fn require_unit_output(value : @model.SchemaValue?) -> Unit raise ReflectError {
+  match value {
+    None => ()
+    Some(value) => {
+      value.release_resources(@model_host.resource_drops())
+      raise ReflectError::Schema("unit method returned a value")
+    }
+  }
 }
 
 ///|
