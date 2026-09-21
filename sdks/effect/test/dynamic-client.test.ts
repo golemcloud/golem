@@ -65,6 +65,7 @@ describe("DynamicClient", () => {
       let cancels = 0
       let drops = 0
       const connection = {
+        invoke: () => metadata,
         scheduleCancelableInvocation: () => ({
           metadata,
           token: {
@@ -85,9 +86,16 @@ describe("DynamicClient", () => {
         Effect.gen(function* () {
           const identity = yield* parse("valid")
           const client = yield* identity.dynamicClient()
+          const triggered = yield* client.method("run").trigger(tree)
+          expect(triggered).toEqual(metadata)
+          expect(triggered).not.toBe(metadata)
+          expect(Object.isFrozen(triggered)).toBe(true)
           const scheduled = yield* client
             .method("run")
             .schedule({ seconds: 1n, nanoseconds: 0 }, tree)
+          expect(scheduled.metadata).toEqual(metadata)
+          expect(scheduled.metadata).not.toBe(metadata)
+          expect(Object.isFrozen(scheduled.metadata)).toBe(true)
           yield* scheduled.cancel
           yield* scheduled.cancel
         }),

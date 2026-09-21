@@ -54,6 +54,10 @@ const makeRuntime = (
     tokenCancel: 0,
     tokenDrop: 0,
   }
+  const awaitedMetadata = metadata("await") as {
+    agentId: string
+    idempotencyKey: string
+  }
   let resolvePending: ((value: CoreTypes.SchemaValueTree | undefined) => void) | undefined
   const connect = (
     agentType: string,
@@ -88,7 +92,7 @@ const makeRuntime = (
       asyncInvokeAndAwait: (methodName, input) => {
         record("await", methodName, input)
         return {
-          metadata: metadata("await"),
+          metadata: awaitedMetadata,
           get: () => {
             if (options.error !== undefined) return Promise.reject(options.error)
             if (!options.pending) return Promise.resolve(options.response)
@@ -136,6 +140,8 @@ const makeRuntime = (
     layer: Layer.mergeAll(rpc, durability),
     calls,
     lifecycle,
+    awaitedMetadata,
+    hasPending: () => resolvePending !== undefined,
     resolve: (v?: CoreTypes.SchemaValueTree) => resolvePending?.(v),
   }
 }
@@ -429,6 +435,23 @@ describe("Client 1.6 durable lifecycle", () => {
     }),
   )
 
+  it.effect("snapshots invocation metadata before awaiting completion", () =>
+    Effect.gen(function* () {
+      const response = yield* encode(Schema.String, "done")
+      const runtime = makeRuntime({ pending: true })
+      const result = yield* Effect.gen(function* () {
+        const remote = yield* Worker.client.newPhantom({ job: "snapshot" })
+        const fiber = yield* Effect.forkChild(remote.run({ times: 1 }))
+        while (!runtime.hasPending()) yield* Effect.yieldNow
+        runtime.awaitedMetadata.agentId = "mutated-after-start"
+        runtime.resolve(response)
+        return yield* Fiber.join(fiber)
+      }).pipe(Effect.scoped, Effect.provide(runtime.layer))
+      expect(result.metadata).toEqual(metadata("await"))
+      expect(Object.isFrozen(result.metadata)).toBe(true)
+    }),
+  )
+
   it.effect("preserves typed RPC errors and does not misclassify arbitrary tagged values", () =>
     Effect.gen(function* () {
       for (const error of [
@@ -622,7 +645,7 @@ describe("Client 1.6 config and ephemeral receipts", () => {
     }),
   )
 
-  it.effect("binds method-only and exact durable contracts from one parsed identity", () =>
+  it.effect("binds method-only and full durable clients from one parsed identity", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime({ response: yield* encode(Schema.Number, 42) })
       const host = Layer.succeed(AgentHostClient, {
@@ -642,8 +665,8 @@ describe("Client 1.6 config and ephemeral receipts", () => {
           id: Counter.id,
           methods: Counter.methods,
         })
-        const exact = yield* identity.client(complete)
-        expect(yield* exact.value({})).toBe(42)
+        const full = yield* identity.client(complete)
+        expect(yield* full.value({})).toBe(42)
         expect(yield* (yield* complete.client.get({ initial: 7 })).value({})).toBe(42)
         expect((yield* complete.agentId({ initial: 7 })).encoded).toBe(identity.encoded)
 
@@ -675,8 +698,8 @@ describe("Client 1.6 config and ephemeral receipts", () => {
         expect(
           identity.constructorValue.valueNodes.filter((node) => node.tag === "record-value"),
         ).toHaveLength(1)
-        const exact = yield* Client.bind(identity, PrincipalTarget)
-        expect(yield* exact.value({})).toBe("ok")
+        const full = yield* Client.bind(identity, PrincipalTarget)
+        expect(yield* full.value({})).toBe("ok")
         const factory = yield* PrincipalTarget.client.get({ name: "main" })
         expect(yield* factory.value({})).toBe("ok")
       }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(runtime.layer, host)))
@@ -685,7 +708,7 @@ describe("Client 1.6 config and ephemeral receipts", () => {
     }),
   )
 
-  it.effect("rejects exact mismatches and ephemeral generic binding before opening RPC", () =>
+  it.effect("rejects full-client mismatches and ephemeral generic binding before opening RPC", () =>
     Effect.gen(function* () {
       const runtime = makeRuntime()
       const host = Layer.succeed(AgentHostClient, {
@@ -755,10 +778,12 @@ describe("Client 1.6 config and ephemeral receipts", () => {
       const phantomId = "12345678-1234-1234-1234-1234567890ab"
       yield* Effect.gen(function* () {
         const remote = yield* Worker.client.getPhantom({ job: "j" }, phantomId)
-        expect(yield* remote.run({ times: 1 })).toEqual({
+        const result = yield* remote.run({ times: 1 })
+        expect(result).toEqual({
           metadata: metadata("await"),
           value: "done",
         })
+        expect(Object.isFrozen(result.metadata)).toBe(true)
       }).pipe(Effect.scoped, Effect.provide(runtime.layer))
       expect(runtime.calls[0]?.phantom).toBeDefined()
     }),

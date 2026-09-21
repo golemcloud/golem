@@ -16,3 +16,4 @@ capable-streaming-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/in
 futures-concurrency = "7.6.3"
 golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 streaming-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/streaming-tool-guest-client" }
+typed-output-stream-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/typed-output-stream-tool-guest-client" }

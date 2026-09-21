@@ -34,7 +34,8 @@
 use super::*;
 use crate::schema::graph::SchemaGraph;
 use crate::schema::wit::{
-    DecodeError, EncodeError, GraphDecoder, GraphEncoder, decode_value_by_ref, encode_value,
+    DecodeError, EncodeError, GraphDecoder, GraphEncoder, decode_graph, decode_value_by_ref,
+    encode_graph, encode_value,
 };
 
 /// Generated `golem:tool/common@0.1.0` types used as the wire shape.
@@ -108,6 +109,7 @@ pub fn tool_middleware_to_wit(
         aliases: middleware.aliases.clone(),
         doc: wire::Doc::from(&middleware.doc),
         scope,
+        parameter_schema: encode_graph(&middleware.parameter_schema)?,
     })
 }
 
@@ -130,6 +132,7 @@ pub fn tool_middleware_from_wit(
         aliases: middleware.aliases,
         doc: Doc::from(&middleware.doc),
         scope,
+        parameter_schema: decode_graph(&middleware.parameter_schema)?,
     })
 }
 

@@ -28,6 +28,8 @@ type ConfigShapeField<S extends Schema.Top, Optional extends boolean = false> =
       : never
     : S extends Schema.Redacted<infer Inner>
       ? {
+          /** Fresh opaque capability without revealing its value. @since 1.6.0 @category secrets */
+          readonly borrow: Effect.Effect<CoreTypes.Secret, ConfigError>
           readonly get: Effect.Effect<
             Redacted.Redacted<OptionalValue<Inner["Type"], Optional>>,
             ConfigError
@@ -215,28 +217,29 @@ export const compileConfig = (
                 (cause) => new ConfigError(leaf.path, { _tag: "DecodeFailure", cause }),
               )
             })
+            const borrow = Effect.gen(function* () {
+              const tree = yield* Effect.try({
+                try: () =>
+                  config.getConfigValue(leaf.path, schemaGraphToWit(leaf.declarationGraph)),
+                catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
+              })
+              const node = tree.valueNodes[tree.root]
+              if (node?.tag !== "secret-value") {
+                return yield* Effect.fail(
+                  new ConfigError(leaf.path, {
+                    _tag: "Unsupported",
+                    reason: "expected secret handle",
+                  }),
+                )
+              }
+              return node.val
+            })
             const value =
               leaf.source === "secret"
                 ? {
+                    borrow,
                     get: Effect.gen(function* () {
-                      const tree = yield* Effect.try({
-                        try: () =>
-                          config.getConfigValue(leaf.path, schemaGraphToWit(leaf.declarationGraph)),
-                        catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
-                      })
-                      const sv = leaf.codec.codec // keep inner codec separate from capability graph
-                      const rawTree = tree as CoreTypes.SchemaValueTree
-                      const node = rawTree.valueNodes[rawTree.root]
-                      const raw = node?.tag === "secret-value" ? node.val : undefined
-                      if (raw === undefined) {
-                        return yield* Effect.fail(
-                          new ConfigError(leaf.path, {
-                            _tag: "Unsupported",
-                            reason: "expected secret handle",
-                          }),
-                        )
-                      }
-                      void sv
+                      const raw = yield* borrow
                       const revealed = yield* Effect.try({
                         try: () => secrets!.reveal(raw, leaf.codec.schemaGraph),
                         catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),

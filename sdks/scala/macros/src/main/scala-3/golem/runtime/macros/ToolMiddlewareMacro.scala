@@ -34,8 +34,22 @@ object ToolMiddlewareMacro {
   ): MonomorphicToolMiddlewareHandle =
     ${ handleImpl[Presented, Expected, Underlying, Surface, Impl]('underlying, true) }
 
+  inline def transparentHandleWithParameters[Presented, Underlying, Parameters, Surface, Impl <: Surface](
+    underlying: RawToolUnderlying => Underlying
+  ): MonomorphicToolMiddlewareHandle =
+    ${ handleWithParametersImpl[Presented, Presented, Underlying, Parameters, Surface, Impl]('underlying, false) }
+
+  inline def adapterHandleWithParameters[Presented, Expected, Underlying, Parameters, Surface, Impl <: Surface](
+    underlying: RawToolUnderlying => Underlying
+  ): MonomorphicToolMiddlewareHandle =
+    ${ handleWithParametersImpl[Presented, Expected, Underlying, Parameters, Surface, Impl]('underlying, true) }
+
   inline def universalHandle[Impl <: UniversalToolMiddleware]: UniversalToolMiddlewareHandle =
-    ${ universalHandleImpl[Impl] }
+    ${ universalHandleImpl[ToolMiddleware.NoParameters, Impl] }
+
+  inline def universalHandleWithParameters[Parameters, Impl <: UniversalToolMiddleware.WithParameters[Parameters]]
+    : UniversalToolMiddlewareHandle =
+    ${ universalHandleImpl[Parameters, Impl] }
 
   private def handleImpl[
     Presented: Type,
@@ -48,12 +62,31 @@ object ToolMiddlewareMacro {
     adapter: Boolean
   )(using Quotes): Expr[MonomorphicToolMiddlewareHandle] = {
     val core = new ToolMacroCore
-    new ToolMiddlewareAssembler(core).handleExpr[Presented, Expected, Underlying, Surface, Impl](underlying, adapter)
+    new ToolMiddlewareAssembler(core)
+      .handleExpr[Presented, Expected, Underlying, ToolMiddleware.NoParameters, Surface, Impl](underlying, adapter)
   }
 
-  private def universalHandleImpl[Impl: Type](using Quotes): Expr[UniversalToolMiddlewareHandle] = {
+  private def handleWithParametersImpl[
+    Presented: Type,
+    Expected: Type,
+    Underlying: Type,
+    Parameters: Type,
+    Surface: Type,
+    Impl: Type
+  ](
+    underlying: Expr[RawToolUnderlying => Underlying],
+    adapter: Boolean
+  )(using Quotes): Expr[MonomorphicToolMiddlewareHandle] = {
     val core = new ToolMacroCore
-    new ToolMiddlewareAssembler(core).universalHandleExpr[Impl]
+    new ToolMiddlewareAssembler(core).handleExpr[Presented, Expected, Underlying, Parameters, Surface, Impl](
+      underlying,
+      adapter
+    )
+  }
+
+  private def universalHandleImpl[Parameters: Type, Impl: Type](using Quotes): Expr[UniversalToolMiddlewareHandle] = {
+    val core = new ToolMacroCore
+    new ToolMiddlewareAssembler(core).universalHandleExpr[Parameters, Impl]
   }
 }
 
@@ -64,16 +97,21 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
 
   private final case class Leaf(path: List[String], method: core.MethodIR)
 
-  def universalHandleExpr[Impl: Type]: Expr[UniversalToolMiddlewareHandle] = {
+  def universalHandleExpr[Parameters: Type, Impl: Type]: Expr[UniversalToolMiddlewareHandle] = {
     val implRepr     = TypeRepr.of[Impl]
     val implSym      = implRepr.typeSymbol
-    val universalTpe = TypeRepr.of[UniversalToolMiddleware]
+    val universalTpe = TypeRepr.of[UniversalToolMiddleware.Internal]
     validateImplementation(universalTpe, implRepr, implSym)
-    validateDirectParent(universalTpe, implSym)
+    if (TypeRepr.of[Parameters] =:= TypeRepr.of[ToolMiddleware.NoParameters])
+      validateDirectParent(TypeRepr.of[UniversalToolMiddleware], implSym)
+    else
+      validateDirectParent(TypeRepr.of[UniversalToolMiddleware.WithParameters[Parameters]], implSym)
 
     val constructor                   = implSym.primaryConstructor
     val (name, version, aliases, doc) = core.universalToolMiddlewareMetadata(implSym)
     val instance                      = Apply(Select(New(TypeTree.of[Impl]), constructor), Nil).asExprOf[Impl]
+    val parameterSchema               = parameterSchemaExpr[Parameters]
+    val decodeParameters              = parameterDecoderExpr[Parameters]
 
     '{
       UniversalToolMiddlewareHandle(
@@ -82,9 +120,11 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
           ${ Expr(aliases) },
           ${ Expr(doc) },
           ToolMiddlewareScope.Universal,
+          $parameterSchema,
           ${ Expr(version) }
         ),
-        () => $instance.asInstanceOf[UniversalToolMiddleware]
+        $decodeParameters,
+        () => $instance.asInstanceOf[UniversalToolMiddleware.Internal]
       )
     }
   }
@@ -93,6 +133,7 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
     Presented: Type,
     Expected: Type,
     Underlying: Type,
+    Parameters: Type,
     Surface: Type,
     Impl: Type
   ](
@@ -107,7 +148,14 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
     val implSym        = implRepr.typeSymbol
 
     validateImplementation(surfaceRepr, implRepr, implSym)
-    validateGeneratedTypes(presentedRepr, expectedRepr, underlyingRepr, surfaceRepr, adapter)
+    validateGeneratedTypes(
+      presentedRepr,
+      expectedRepr,
+      underlyingRepr,
+      surfaceRepr,
+      adapter,
+      !(TypeRepr.of[Parameters] =:= TypeRepr.of[ToolMiddleware.NoParameters])
+    )
 
     val constructor                   = implSym.primaryConstructor
     val (name, version, aliases, doc) = core.toolMiddlewareMetadata(implSym)
@@ -118,7 +166,8 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
       bindingExpr[Underlying, Surface](leaf, surfaceRepr, underlyingFactory)
     })
 
-    val instance = Apply(Select(New(TypeTree.of[Impl]), constructor), Nil).asExpr
+    val instance        = Apply(Select(New(TypeTree.of[Impl]), constructor), Nil).asExpr
+    val parameterSchema = parameterSchemaExpr[Parameters]
 
     '{
       MonomorphicToolMiddlewareHandle(
@@ -133,6 +182,7 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
             ${ Expr(aliases) },
             ${ Expr(doc) },
             ToolMiddlewareScope.Monomorphic(presentedWire, Some(expectedWire)),
+            $parameterSchema,
             ${ Expr(version) }
           ),
         presented = $presentedDescriptor,
@@ -142,6 +192,32 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
       )
     }
   }
+
+  private def parameterSchemaExpr[P: Type]: Expr[golem.schema.SchemaGraph] =
+    if (TypeRepr.of[P] =:= TypeRepr.of[ToolMiddleware.NoParameters]) '{ ToolMiddleware.noParametersSchema }
+    else {
+      val into = Expr
+        .summon[IntoSchema[P]]
+        .getOrElse(
+          report.errorAndAbort(s"No implicit IntoSchema available for middleware parameter type ${Type.show[P]}")
+        )
+      '{ $into.graph }
+    }
+
+  private def parameterDecoderExpr[P: Type]: Expr[TypedSchemaValue => Either[String, Any]] =
+    if (TypeRepr.of[P] =:= TypeRepr.of[ToolMiddleware.NoParameters])
+      '{ value =>
+        if (value.value == golem.schema.SchemaValue.RecordValue(Nil)) Right(ToolMiddleware.NoParameters())
+        else Left("middleware parameters must be an empty record")
+      }
+    else {
+      val from = Expr
+        .summon[FromSchema[P]]
+        .getOrElse(
+          report.errorAndAbort(s"No implicit FromSchema available for middleware parameter type ${Type.show[P]}")
+        )
+      '{ value => $from.fromValue(value.value).left.map(_.message) }
+    }
 
   private def validateImplementation(surface: TypeRepr, impl: TypeRepr, implSym: Symbol): Unit = {
     val pos = implSym.pos.getOrElse(Position.ofMacroExpansion)
@@ -194,7 +270,8 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
     expected: TypeRepr,
     underlying: TypeRepr,
     surface: TypeRepr,
-    adapter: Boolean
+    adapter: Boolean,
+    parameterized: Boolean
   ): Unit = {
     core.parseTool(presented)
     core.parseTool(expected)
@@ -211,13 +288,23 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
       .declaredType(s"${presented.typeSymbol.name}Middleware")
       .find(_.flags.is(Flags.Trait))
       .getOrElse(report.errorAndAbort(s"expected generated middleware surface $middlewareFqn, found ${surface.show}"))
-    if (!adapter && (surface.typeSymbol != middlewareSymbol || surface.typeArgs.nonEmpty))
+    if (!adapter && !parameterized && (surface.typeSymbol != middlewareSymbol || surface.typeArgs.nonEmpty))
       report.errorAndAbort(s"expected generated middleware surface $middlewareFqn, found ${surface.show}")
-    if (adapter) {
-      val adapterSymbols = middlewareSymbol.companionModule.declaredType("Adapter")
+    if (adapter || parameterized) {
+      val memberName =
+        if (parameterized && adapter) "AdapterWithParameters"
+        else if (parameterized) "WithParameters"
+        else "Adapter"
+      val adapterSymbols = middlewareSymbol.companionModule.declaredType(memberName)
       surface.dealias match {
         case AppliedType(constructor, List(argument))
-            if adapterSymbols.contains(constructor.typeSymbol) && argument =:= underlying =>
+            if parameterized && !adapter && adapterSymbols.contains(constructor.typeSymbol) =>
+          ()
+        case AppliedType(constructor, List(argument, _))
+            if parameterized && adapter && adapterSymbols.contains(constructor.typeSymbol) && argument =:= underlying =>
+          ()
+        case AppliedType(constructor, List(argument))
+            if !parameterized && adapterSymbols.contains(constructor.typeSymbol) && argument =:= underlying =>
           ()
         case _ =>
           report.errorAndAbort(
@@ -322,7 +409,22 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
     method: core.MethodIR
   ): Expr[ToolMiddlewareParamDecoder] = {
     val pos = method.sym.pos.getOrElse(Position.ofMacroExpansion)
-    if (core.isPrincipal(tpe)) '{ ToolMiddlewareParamDecoder.PrincipalParam }
+    if (
+      symbol.annotations.exists(
+        _.tpe.typeSymbol.fullName == "golem.runtime.annotations.internalToolMiddlewareParameters"
+      )
+    )
+      tpe.asType match {
+        case '[t] =>
+          val from = Expr
+            .summon[FromSchema[t]]
+            .getOrElse(
+              report
+                .errorAndAbort(s"No implicit FromSchema available for middleware parameter type ${Type.show[t]}", pos)
+            )
+          '{ ToolMiddlewareParamDecoder.InstallationParameters($from.asInstanceOf[FromSchema[Any]]) }
+      }
+    else if (core.isPrincipal(tpe)) '{ ToolMiddlewareParamDecoder.PrincipalParam }
     else if (tpe =:= TypeRepr.of[ToolMiddlewareInputHandle]) '{ ToolMiddlewareParamDecoder.StdinParam }
     else if (core.isStdout(tpe))
       report.errorAndAbort("generated middleware input methods must not contain stdout parameters", pos)

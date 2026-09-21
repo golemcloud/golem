@@ -30,6 +30,9 @@ fn tool_middleware_roundtrip_preserves_independent_versions() {
             presented: tool("public-tool", "presented-2"),
             expected: Some(tool("private-tool", "expected-9")),
         })),
+        parameter_schema: SchemaGraph::anonymous(SchemaType::String {
+            metadata: Default::default(),
+        }),
     };
 
     let decoded = tool_middleware_from_wit(tool_middleware_to_wit(&middleware).unwrap()).unwrap();
@@ -44,6 +47,7 @@ fn universal_middleware_roundtrip_preserves_its_version() {
         aliases: vec![],
         doc: Doc::default(),
         scope: ToolMiddlewareScope::Universal,
+        parameter_schema: SchemaGraph::empty(),
     };
 
     let decoded = tool_middleware_from_wit(tool_middleware_to_wit(&middleware).unwrap()).unwrap();
@@ -61,6 +65,7 @@ fn malformed_embedded_tool_is_rejected() {
             presented: tool("public-tool", "1"),
             expected: None,
         })),
+        parameter_schema: SchemaGraph::empty(),
     };
     let mut wire = tool_middleware_to_wit(&middleware).unwrap();
     let wire::ToolMiddlewareScope::Monomorphic(scope) = &mut wire.scope else {

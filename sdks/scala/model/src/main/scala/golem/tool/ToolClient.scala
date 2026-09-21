@@ -203,6 +203,22 @@ object ToolClientRuntime {
   )(implicit from: FromSchema[E]): Either[String, E] =
     from.fromValue(value.value).left.map(e => s"failed to decode remote tool error: ${e.message}")
 
+  private def remoteToolErrorLabel(error: ToolInvokeError[TypedSchemaValue]): String =
+    error match {
+      case ToolInvokeError.InvalidToolName(name)        => s"invalid tool name `$name`"
+      case ToolInvokeError.InvalidCommandPath(path)     => s"invalid command path `${path.mkString(" ")}`"
+      case ToolInvokeError.InvalidInput(message)        => s"invalid input: $message"
+      case ToolInvokeError.ConstraintViolation(message) => s"constraint violation: $message"
+      case ToolInvokeError.InvalidResult(message)       => s"invalid result: $message"
+      case ToolInvokeError.ProtocolError(message)       => s"protocol error: $message"
+      case ToolInvokeError.Denied(message)              => s"denied: $message"
+      case ToolInvokeError.InternalError(message)       => s"internal error: $message"
+      case ToolInvokeError.Cancelled                    => "cancelled"
+      case ToolInvokeError.ResourceExhausted(message)   => s"resource exhausted: $message"
+      case ToolInvokeError.Tool(_)                      => "custom error"
+      case ToolInvokeError.UnknownToolError(name, _)    => s"custom error `$name`"
+    }
+
   // -------------------------------------------------------------------------
   // Generated-client helpers: parameter encoding
   // -------------------------------------------------------------------------

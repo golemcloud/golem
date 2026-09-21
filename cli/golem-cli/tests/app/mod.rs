@@ -21,6 +21,7 @@ mod app;
 mod build_and_deploy_all;
 mod cards;
 mod directory_source_ifs;
+mod external_durable_streams;
 mod moonbit_guest_streams;
 mod moonbit_tool_middleware;
 mod plugins;
@@ -46,6 +47,7 @@ tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(cards, deploy);
 tag_suite!(directory_source_ifs, deploy);
+tag_suite!(external_durable_streams, agents_streaming);
 tag_suite!(moonbit_guest_streams, agents_guest_bridge);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(plugins, deploy);
@@ -116,6 +118,7 @@ mod cmd {
     pub static REGISTER: &str = "register";
     pub static REPL: &str = "repl";
     pub static TEMPLATES: &str = "templates";
+    pub static TOOL: &str = "tool";
 }
 
 mod flag {

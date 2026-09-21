@@ -7,8 +7,9 @@ import { z } from 'zod/v4';
 import { c, toolDefinition, getExtendedToolDefinition } from '../src/tool';
 import { encodeTool } from '../src/internal/tool';
 import { compileSchema } from '../src/schema/adapter';
+import { ToolCallError } from '../src/toolClient';
 import { ToolRemoteOutputError, ToolType } from '../src/toolReflection';
-import type { ToolClientRuntime } from '../src/bridge/tool';
+import { createToolClientRuntime, type ToolClientRuntime } from '../src/bridge/tool';
 import {
   emptyMetadata,
   field,
@@ -129,6 +130,30 @@ describe('native tool reflection', () => {
     await expect(
       tool.client.command([]).invokeJson({ value: 'hello', maybe: null }),
     ).rejects.toBeInstanceOf(ToolRemoteOutputError);
+  });
+
+  it('preserves a structured reflected RPC creation error', async () => {
+    const definition = toolDefinition('creation-error').body((body) =>
+      body.positional('value', z.string()).returns(z.string()),
+    );
+    const denied = { tag: 'denied', val: 'not granted' } as const;
+    const runtime = createToolClientRuntime('creation-error', {
+      start() {
+        throw denied;
+      },
+    });
+    const tool = new ToolType(
+      {
+        lookupName: 'creation-error',
+        definition: encodeTool(getExtendedToolDefinition(definition)),
+        implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
+      },
+      runtime,
+    );
+
+    await expect(tool.client.command([]).invokeJson({ value: 'hello' })).rejects.toEqual(
+      new ToolCallError({ tag: 'rpc', error: denied }),
+    );
   });
 
   it('reports a non-canonical declared result as malformed remote output', async () => {

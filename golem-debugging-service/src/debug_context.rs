@@ -19,7 +19,7 @@ use golem_common::base_model::OplogIndex;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::entity::{
@@ -610,7 +610,7 @@ impl WorkerCtx for DebugContext {
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -659,7 +659,7 @@ impl WorkerCtx for DebugContext {
 
         let golem_ctx = DurableWorkerCtx::create(
             owned_agent_id,
-            agent_id,
+            owner_context,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -732,6 +732,10 @@ impl WorkerCtx for DebugContext {
 
     fn owned_agent_id(&self) -> &OwnedAgentId {
         self.durable_ctx.owned_agent_id()
+    }
+
+    fn owner_context(&self) -> &ResolvedOwnerContext {
+        self.durable_ctx.owner_context()
     }
 
     fn parsed_agent_id(&self) -> Option<ParsedAgentId> {

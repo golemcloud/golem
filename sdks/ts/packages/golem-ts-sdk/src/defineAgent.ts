@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // The config-object authoring surface. A `defineAgent` definition carries the
-// structural contract (name + identity + methods); the paired
+// structural definition (name + identity + methods); the paired
 // `.implement({ init, methods })` carries plain-async handlers whose `this` is
 // bound to the state returned by `init`. Schemas are Standard Schema values
 // (Zod / Valibot / ArkType / Effect Schema). No Effect runtime.
@@ -192,7 +192,7 @@ export interface AgentImpl {
   readonly name: string;
 }
 
-export interface FullAgentClientContract<
+export interface FullAgentClientShape<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
@@ -220,7 +220,7 @@ export interface FullAgentClientDefinition<
   Methods extends MethodsRecord,
   Config extends ConfigSpec = {},
   Mode extends 'durable' | 'ephemeral' = 'durable',
-> extends FullAgentClientContract<Id, Methods, Config, Mode> {
+> extends FullAgentClientShape<Id, Methods, Config, Mode> {
   /** Construct the environment-scoped identity for an agent addressed by this definition. */
   readonly agentId: Mode extends 'ephemeral'
     ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
@@ -412,7 +412,7 @@ export function defineAgent<
       `Definition failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const clientContract: FullAgentClientContract<Id, Methods, Config, Mode> & {
+  const clientDefinition: FullAgentClientShape<Id, Methods, Config, Mode> & {
     readonly name: string;
     readonly id: Id;
   } = {
@@ -437,9 +437,9 @@ export function defineAgent<
         >[typeof bindAgentClient];
       }
     | undefined;
-  const getSurface = () => (surface ??= buildAgentClientSurface(clientContract, false));
+  const getSurface = () => (surface ??= buildAgentClientSurface(clientDefinition, false));
   return {
-    ...clientContract,
+    ...clientDefinition,
     get agentId() {
       return getSurface().agentId;
     },

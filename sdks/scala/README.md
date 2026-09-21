@@ -298,6 +298,11 @@ The Scala SDK exposes host APIs in two layers:
 2) **Raw host modules** (forward-compatible, mirrors JS/WIT surface):
    - `golem.host.OplogApi`, `golem.host.ContextApi`, `golem.host.DurabilityApi`
 
+For external Durable Streams, `golem.streams.DurableStreams` provides JSON and
+byte readers as ordinary `AgentStream` values and serialized idempotent writers.
+See [External Durable Streams](docs/durable-streams.md) for retries, secret
+authentication, cancellation and producer/fork semantics.
+
 Example:
 
 ```scala

@@ -83,6 +83,7 @@ fn metadata(
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
+        owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
         agent_id,
         env: Vec::new(),
         environment_id,
