@@ -29,11 +29,11 @@ test "collect reports stdout failure after structured success" {
 
 ///|
 fn assert_remote_tool_error(
-  wire : @toolCommon.ToolError,
+  wire : @types.ToolError,
   expected : RemoteToolError,
 ) -> Unit raise {
   let result : ToolError[NoToolError] = map_rpc_error(
-    @toolHost.RpcError::RemoteToolError(wire),
+    @types.ToolRpcError::RemoteToolError(wire),
     fn(_, _) { None },
   )
   match result {
@@ -45,23 +45,23 @@ fn assert_remote_tool_error(
 ///|
 test "structural remote tool errors stay distinct from RPC errors" {
   assert_remote_tool_error(
-    @toolCommon.ToolError::InvalidToolName("bad name"),
+    @types.ToolError::InvalidToolName("bad name"),
     RemoteToolError::InvalidToolName("bad name"),
   )
   assert_remote_tool_error(
-    @toolCommon.ToolError::InvalidCommandPath(["bad"]),
+    @types.ToolError::InvalidCommandPath(["bad"]),
     RemoteToolError::InvalidCommandPath(["bad"]),
   )
   assert_remote_tool_error(
-    @toolCommon.ToolError::InvalidInput("input"),
+    @types.ToolError::InvalidInput("input"),
     RemoteToolError::InvalidInput("input"),
   )
   assert_remote_tool_error(
-    @toolCommon.ToolError::ConstraintViolation("constraint"),
+    @types.ToolError::ConstraintViolation("constraint"),
     RemoteToolError::ConstraintViolation("constraint"),
   )
   assert_remote_tool_error(
-    @toolCommon.ToolError::InvalidResult("result"),
+    @types.ToolError::InvalidResult("result"),
     RemoteToolError::InvalidResult("result"),
   )
 }

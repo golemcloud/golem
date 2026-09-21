@@ -1,5 +1,5 @@
 ///|
-/// Schema-free client for manually packed `SchemaValue` calls. Constructing
+/// Fully dynamic client for manually packed `SchemaValue` calls. Constructing
 /// this client performs no discovery or local lifecycle verification.
 pub(all) struct DynamicAgentClient {
   priv transport : Transport

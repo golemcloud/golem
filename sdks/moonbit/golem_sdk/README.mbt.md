@@ -441,7 +441,7 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 | `logging` | Structured logging with named loggers and level filtering |
 | `context` | Span-based tracing and invocation context |
 | `rpc` | Agent-to-agent RPC helpers |
-| `reflection` | Runtime discovery, reflected JSON packing, caller-codec clients, and schema-free value invocation |
+| `reflection` | Runtime discovery, reflected JSON packing, caller-defined static clients, and fully dynamic value invocation |
 | `tool-core` | Host-neutral tool descriptors, schemas, canonical input handling, and error model |
 | `tool` | Ordinary tool registry, dispatch, help rendering, and ambient typed RPC client runtime |
 | `tool-middleware` | Host-neutral middleware registry, opaque invocation carriers, typed/universal underlying capabilities, and ownership enforcement |

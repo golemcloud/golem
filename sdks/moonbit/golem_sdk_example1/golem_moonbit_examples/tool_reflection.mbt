@@ -78,16 +78,16 @@ pub async fn MoonBitToolReflectionCaller::round_trip(self : Self) -> String {
     Ok(value) => value
     Err(_) => return "input-error"
   }
+  command.input_schema.validate_value(packed) catch {
+    error => return "input-validation:\{Repr(error)}"
+  }
   let invalid = command.pack_json(Json::object({ "label": Json::number(42.0) }))
     is Err(_)
   let native = command.invoke_value(packed)
   let encoded = command.invoke_json(input)
-  let dynamic = @reflection.DynamicToolClient::new("moonbit-reflection-test").invoke_value(
-    ["echo"],
-    {
-      graph: command.input_schema.graph,
-      value: @model.SchemaValue::Record([@model.SchemaValue::String("moonbit")]),
-    },
+  let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name).invoke_value(
+    command.path,
+    { graph: command.input_schema.graph, value: packed, },
   )
   let native_text = match native {
     Ok(Some(@model.SchemaValue::String(value))) => value
@@ -99,13 +99,18 @@ pub async fn MoonBitToolReflectionCaller::round_trip(self : Self) -> String {
   }
   let dynamic_text = match dynamic {
     Ok(result) =>
-      match result.result {
-        Some(value) =>
-          match value.value {
-            @model.SchemaValue::String(text) => text
+      match (command.result, result.result) {
+        (Some(schema), Some(value)) => {
+          schema.validate_value(value.value) catch {
+            _ => return "dynamic-validation-error"
+          }
+          match schema.unpack_json(value.value) {
+            Json::String(text) => text
             _ => "dynamic-value-error"
           }
-        None => "dynamic-empty"
+        }
+        (None, None) => "dynamic-unit"
+        _ => "dynamic-empty"
       }
     Err(_) => "dynamic-error"
   }

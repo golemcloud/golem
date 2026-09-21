@@ -1,6 +1,6 @@
 ///|
 /// Constructs an agent ID from manually packed constructor values. This is a
-/// schema-free operation: the runtime is authoritative about whether the
+/// fully dynamic operation: the runtime is authoritative about whether the
 /// requested lifecycle operation is valid.
 pub fn ParsedAgentId::create(
   type_name : String,
