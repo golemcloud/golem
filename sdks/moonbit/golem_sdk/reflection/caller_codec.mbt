@@ -37,7 +37,7 @@ fn[C : @schema.IntoSchema] full_client_create(
 }
 
 ///|
-/// Constructs an ordinary durable client from its full local contract.
+/// Constructs an ordinary durable client from caller-owned schemas and codecs.
 pub fn[C : @schema.IntoSchema] FullAgentClient::get(
   type_name : String,
   constructor_input : C,
@@ -115,7 +115,7 @@ pub fn[C : @schema.IntoSchema, Config : @rpc.AgentConfigOverrides] FullAgentClie
 }
 
 ///|
-/// Constructs the reusable identity for a full durable contract.
+/// Constructs the reusable identity for a full caller-defined client.
 pub fn[C : @schema.IntoSchema] FullAgentClient::agent_id(
   type_name : String,
   constructor_input : C,
@@ -129,8 +129,8 @@ pub fn[C : @schema.IntoSchema] FullAgentClient::agent_id(
 }
 
 ///|
-/// Binds a full durable contract, rejecting an identity whose exact agent
-/// name or constructor shape differs from the local contract.
+/// Binds a full caller-defined client, rejecting an identity whose agent name
+/// or constructor shape differs from the caller-owned definition.
 pub fn[C : @schema.FromSchema] FullAgentClient::bind(
   type_name : String,
   agent_id : ParsedAgentId,
@@ -180,7 +180,7 @@ fn[C : @schema.FromSchema] validate_full_id(
   let _ : C = @schema.from_value_as(parts.constructor_value) catch {
     error =>
       raise Identity(
-        "agent ID constructor does not match the full contract: \{repr(error)}",
+        "agent ID constructor does not match the caller-defined schema: \{repr(error)}",
       )
   }
 }

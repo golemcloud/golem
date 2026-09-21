@@ -1,5 +1,5 @@
 ///|
-test "full binding accepts the exact name and constructor shape" {
+test "full binding accepts a matching name and constructor shape" {
   validate_full_id(
     "MarketAnalyst",
     {
