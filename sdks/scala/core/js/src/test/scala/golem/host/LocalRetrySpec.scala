@@ -23,6 +23,7 @@ import zio.test._
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.Future
 import scala.concurrent.duration._
+import scala.scalajs.js
 
 object LocalRetrySpec extends ZIOSpecDefault {
   private final class TestRuntime(randomValue: Double = 0.0) extends LocalRetry.Runtime {
@@ -156,6 +157,34 @@ object LocalRetrySpec extends ZIOSpecDefault {
         assertTrue(attempts == 4, delays == List(2.seconds, 2.seconds, 2.seconds))
       }
     },
+    test("default runtime uses the monotonic performance clock instead of the wall clock") {
+      val performance            = js.Dynamic.global.performance
+      val date                   = js.Dynamic.global.Date
+      val originalPerformanceNow = performance.selectDynamic("now")
+      val originalDateNow        = date.selectDynamic("now")
+      var monotonicMillis        = 10.0
+      var wallMillis             = 1.day.toMillis.toDouble
+
+      val readings =
+        try {
+          performance.updateDynamic("now")(js.Any.fromFunction0(() => monotonicMillis))
+          date.updateDynamic("now")(js.Any.fromFunction0(() => wallMillis))
+
+          val first = LocalRetry.DefaultRuntime.nowNanos()
+          wallMillis = -1.day.toMillis.toDouble
+          monotonicMillis = 20.0
+          val second = LocalRetry.DefaultRuntime.nowNanos()
+          wallMillis = 10.days.toMillis.toDouble
+          monotonicMillis = 30.0
+          val third = LocalRetry.DefaultRuntime.nowNanos()
+          List(first, second, third)
+        } finally {
+          performance.updateDynamic("now")(originalPerformanceNow)
+          date.updateDynamic("now")(originalDateNow)
+        }
+
+      assertTrue(readings == List(10.millis.toNanos, 20.millis.toNanos, 30.millis.toNanos))
+    },
     test("time box gives up at the inclusive elapsed-time boundary") {
       val runtime  = new TestRuntime()
       var attempts = 0
@@ -173,7 +202,12 @@ object LocalRetrySpec extends ZIOSpecDefault {
         )
         .exit
         .map { exit =>
-          assertTrue(attempts == 3, runtime.sleeps.toList == List(5.seconds, 5.seconds), exit.isFailure)
+          assertTrue(
+            attempts == 3,
+            runtime.now == 10.seconds.toNanos,
+            runtime.sleeps.toList == List(5.seconds, 5.seconds),
+            exit.isFailure
+          )
         }
     },
     test("clamp, delay addition, and positive jitter compose deterministically") {

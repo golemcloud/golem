@@ -25,6 +25,11 @@ import scala.scalajs.js.timers.setTimeout
 import scala.util.control.NonFatal
 
 private[host] object LocalRetry {
+  @js.native
+  private trait Performance extends js.Object {
+    def now(): Double = js.native
+  }
+
   private sealed trait State
   private final case class Counter(value: Long)                                 extends State
   private case object Terminal                                                  extends State
@@ -44,8 +49,10 @@ private[host] object LocalRetry {
     def random(): Double
   }
 
-  private object DefaultRuntime extends Runtime {
-    override def nowNanos(): Long = (js.Date.now() * 1000000.0).toLong
+  private[host] object DefaultRuntime extends Runtime {
+    private val performance = js.Dynamic.global.performance.asInstanceOf[Performance]
+
+    override def nowNanos(): Long = (performance.now() * 1000000.0).toLong
 
     override def sleep(delay: FiniteDuration): Future[Unit] = {
       def loop(remaining: FiniteDuration): Future[Unit] = {
