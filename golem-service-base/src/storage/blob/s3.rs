@@ -46,6 +46,7 @@ use golem_common::retries::with_retries_customized;
 use http_body::SizeHint;
 use http_body_util::BodyExt;
 use http_body_util::combinators::BoxBody;
+use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -1384,6 +1385,10 @@ impl BlobStorage for S3BlobStorage {
         let namespace_root = self.prefix_of(&namespace);
         let key = self.key_of(&namespace, &path)?;
 
+        // A blob and a directory can hold one path, and then S3 has the key of the blob and the
+        // marker of the directory. The set gives the path one time.
+        let mut listed = HashSet::new();
+
         Ok(self
             .list_objects(target_label, op_label, bucket, &key)
             .await?
@@ -1409,6 +1414,7 @@ impl BlobStorage for S3BlobStorage {
                     .ok()
                     .map(|p| p.to_path_buf())
             })
+            .filter(|path| listed.insert(path.clone()))
             .collect::<Vec<_>>())
     }
 

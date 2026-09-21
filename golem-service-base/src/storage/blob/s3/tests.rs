@@ -1184,6 +1184,49 @@ async fn a_put_that_one_more_attempt_can_pass_goes_again() {
     );
 }
 
+/// The key namespace of S3 is flat, so a blob at `a` and the marker of the directory `a` are two
+/// objects that S3 holds at the same time. `list_dir` gives the path `a` for the blob, and the
+/// parent of the marker, which is also the path `a`.
+///
+/// MinIO holds both objects, but its `ListObjectsV2` gives one key of the two, not both, so it
+/// cannot give this response. The scripted transport is the one seam that holds this rule.
+#[test]
+async fn list_dir_gives_a_blob_and_the_marker_of_its_directory_one_time() {
+    let prefix = namespace_prefix();
+    let listing = list_page(
+        &[
+            (format!("{prefix}/a"), 5),
+            (format!("{prefix}/a/__dir_marker"), 0),
+        ],
+        None,
+    );
+    let (storage, _) = scripted_storage("", move |_, _| Answer::new(200, listing.clone()));
+
+    let entries = storage
+        .list_dir("test", "list-dir", namespace(), Path::new(""))
+        .await
+        .unwrap();
+
+    assert_eq!(entries, vec![PathBuf::from("a")]);
+}
+
+/// A `delete` of the blob at `a` removes the key `a` and keeps the marker of the directory `a`,
+/// because the backend does not remove a marker on a write or on a delete of a blob. The
+/// directory that `create_dir` made is still there, so `list_dir` still gives the path `a`.
+#[test]
+async fn list_dir_gives_a_directory_whose_blob_is_deleted() {
+    let prefix = namespace_prefix();
+    let listing = list_page(&[(format!("{prefix}/a/__dir_marker"), 0)], None);
+    let (storage, _) = scripted_storage("", move |_, _| Answer::new(200, listing.clone()));
+
+    let entries = storage
+        .list_dir("test", "list-dir", namespace(), Path::new(""))
+        .await
+        .unwrap();
+
+    assert_eq!(entries, vec![PathBuf::from("a")]);
+}
+
 #[test]
 async fn list_blobs_below_skips_directory_markers_and_keeps_sizes() {
     let prefix = format!("objects/{}", namespace_prefix());
