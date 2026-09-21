@@ -982,6 +982,22 @@ pub(crate) fn blob_copy_changes_nothing(
     Ok(from == to)
 }
 
+/// Tells if the path names the root of its namespace.
+///
+/// A path names the root when it has no name in it: an empty path, and a path that only has `.`
+/// in it, because a `.` is not a name (`NormalizedBlobPath::is_root`). The root is a directory,
+/// so it names no blob.
+///
+/// A path that breaks a rule of a name does not name the root, whatever else it holds: a `..`
+/// path and an absolute path give `false` here, and the backend that reads such a path gives the
+/// rule that it breaks.
+///
+/// `golem_worker_executor::services::blob_store` reads this for the container name that a guest
+/// gives, because a name that names the root names the namespace and not a container.
+pub fn blob_path_is_root(path: &Path) -> bool {
+    normalized_blob_path(path).is_ok_and(|path| path.is_root())
+}
+
 /// Gives the text of the path, or a [`BlobNameError`], which is permanent.
 pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, BlobNameError> {
     path.to_str()
