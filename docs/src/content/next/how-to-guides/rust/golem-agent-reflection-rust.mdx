@@ -334,6 +334,11 @@ Tool discovery returns one immutable registration snapshot. Walk `root()` or
 `node()` to show every namespace and its documentation; check `is_callable()`
 before converting a node to a `ToolCommand`:
 
+Rust deliberately keeps metadata-only `ToolNode` separate from callable
+`ToolCommand`. Tool reflection uses `ToolReflectionError` so metadata and local
+input failures remain distinct from the nested transport and remote `ToolError`;
+agent schema helpers continue to use `GolemReflectError`.
+
 ```rust
 use golem_rust::{SchemaValue, get_tool_type};
 

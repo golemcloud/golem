@@ -34,7 +34,10 @@ discovers a tool visible to the caller. Walk `ToolType::root` or `ToolType::node
 to inspect callable and namespace-only nodes; namespace nodes are visible but cannot
 be invoked. Choose a callable command with `ToolType::command`; command aliases are
 accepted and `ToolCommand::path` returns the canonical path. The command exposes its
-ordered arguments, input schema, and declared output schema.
+ordered arguments, input schema, and declared output schema. This metadata/callable
+split is intentional. Tool reflection reports metadata and local-input failures
+through `ToolReflectionError`, which keeps them distinct from nested transport and
+remote tool failures.
 
 ```rust,ignore
 use golem_rust::agentic::reflection::get_tool_type;
