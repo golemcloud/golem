@@ -13,7 +13,6 @@ import path from 'path';
 // all so the SDK host surfaces (keyvalue/blobstore/websocket/rdbms) aren't bundled.
 const external = (id) =>
   id === 'agent-guest' ||
-  id === 'tool-middleware-guest' ||
   id === 'node:sqlite' ||
   id.startsWith('golem:') ||
   id.startsWith('wasi:');
@@ -23,35 +22,7 @@ function onwarn(warning, warn) {
   warn(warning);
 }
 
-function assertHostNeutralBundle() {
-  return {
-    name: 'assert-host-neutral-bundle',
-    generateBundle(_options, bundle) {
-      for (const output of Object.values(bundle)) {
-        if (output.type !== 'chunk') continue;
-        const forbiddenImports = [...output.imports, ...output.dynamicImports].filter((id) =>
-          id.startsWith('golem:tool/host'),
-        );
-        const forbiddenModules = Object.keys(output.modules).filter((id) => {
-          const normalized = id.replaceAll('\\', '/');
-          return (
-            normalized.endsWith('/src/bridge/tool.ts') || normalized.endsWith('/src/toolClient.ts')
-          );
-        });
-        if (forbiddenImports.length > 0 || forbiddenModules.length > 0) {
-          this.error(
-            `Host-neutral middleware bundle reached the ambient tool host:\n${[
-              ...forbiddenImports,
-              ...forbiddenModules,
-            ].join('\n')}`,
-          );
-        }
-      }
-    },
-  };
-}
-
-function javascript(input, output, { hostNeutral = false } = {}) {
+function javascript(input, output) {
   return {
     input,
     output: {
@@ -73,7 +44,6 @@ function javascript(input, output, { hostNeutral = false } = {}) {
           compilerOptions: { declaration: false },
         },
       }),
-      ...(hostNeutral ? [assertHostNeutralBundle()] : []),
       terser(),
     ],
   };
@@ -110,8 +80,8 @@ export default defineConfig([
   javascript('src/index.ts', 'dist/index.mjs'),
   javascript('src/schema/public.ts', 'dist/schema.mjs'),
   javascript('src/reflection.ts', 'dist/reflection.mjs'),
-  javascript('src/middleware.ts', 'dist/middleware.mjs', { hostNeutral: true }),
-  javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs', { hostNeutral: true }),
+  javascript('src/middleware.ts', 'dist/middleware.mjs'),
+  javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs'),
   declarations('src/index.ts', 'dist/index.d.mts'),
   declarations('src/schema/public.ts', 'dist/schema.d.mts'),
   declarations('src/reflection.ts', 'dist/reflection.d.mts'),

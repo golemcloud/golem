@@ -64,21 +64,3 @@ interface tool-middleware-guest {
     wrapped:         underlying-tool,
   ) -> result<invocation-result, tool-error>;
 }
-
-/// Pure middleware components cannot re-enter ambient tool dispatch. They can
-/// reach only the next inner layer through the runtime-owned resource.
-world tool-middleware {
-  import golem:api/host@1.5.0;
-  import golem:agent/host@2.0.0;
-  import common;
-  import streams;
-  import underlying;
-  export tool-middleware-guest;
-}
-
-/// Components may opt into exporting ordinary agents and tools together with
-/// middleware. The included tool world retains its ambient tool-host import.
-world tool-and-tool-middleware-guest {
-  include tool-guest;
-  export tool-middleware-guest;
-}

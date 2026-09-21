@@ -20,10 +20,7 @@ const sharedModules = [
 ]
 
 for (const template of templateMatrix) {
-  const modules = [
-    [template.sdkModuleName, template.sdkEntry],
-    ...(template.role === "tool-middleware" ? [["effect", "dist/effect.mjs"]] : sharedModules),
-  ]
+  const modules = [[template.sdkModuleName, template.sdkEntry], ...sharedModules]
   for (const [, entry] of modules) {
     if (!existsSync(join(packageDir, entry))) {
       throw new Error(`${entry} does not exist; run npm run build:bundle first`)

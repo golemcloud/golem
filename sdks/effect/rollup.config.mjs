@@ -16,31 +16,12 @@ import { defineConfig } from "rollup"
  */
 const external = (id) =>
   id === "agent-guest" ||
-  id === "tool-middleware-guest" ||
-  id === "agent-tool-middleware-guest" ||
   id === "node:sqlite" ||
   id === "effect" ||
   id === "@golemcloud/effect-golem" ||
   id.startsWith("@golemcloud/effect-golem/") ||
   id.startsWith("golem:") ||
   id.startsWith("wasi:")
-
-function assertMiddlewareHostNeutral() {
-  return {
-    name: "assert-middleware-host-neutral",
-    generateBundle(_options, bundle) {
-      for (const output of Object.values(bundle)) {
-        if (output.type !== "chunk") continue
-        const forbidden = [...output.imports, ...output.dynamicImports].filter(
-          (id) => id === "golem:tool/host@0.1.0" || id === "node:sqlite",
-        )
-        if (forbidden.length > 0) {
-          this.error(`Middleware bundle reached agent-only hosts:\n${forbidden.join("\n")}`)
-        }
-      }
-    },
-  }
-}
 
 export default defineConfig([
   {
@@ -97,7 +78,6 @@ export default defineConfig([
           },
         },
       }),
-      assertMiddlewareHostNeutral(),
       terser(),
     ],
   },

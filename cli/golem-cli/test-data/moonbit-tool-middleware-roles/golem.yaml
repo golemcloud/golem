@@ -16,7 +16,7 @@ components:
     templates: moonbit
   moonbit-tool-middleware-roles:middleware:
     dir: middleware
-    templates: moonbit-tool-middleware
+    templates: moonbit
   moonbit-tool-middleware-roles:combined:
     dir: combined
-    templates: moonbit-agent-tool-middleware
+    templates: moonbit

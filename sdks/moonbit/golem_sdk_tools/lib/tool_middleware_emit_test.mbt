@@ -20,11 +20,7 @@ test "universal middleware emitter registers metadata and a raw async adapter" {
   )
   let middlewares = @lib.parse_tool_middlewares([("audit.mbt", source)])
   let generated = @formatter.impls_to_string(
-    @lib.generate_tool_middleware_registration(
-      middlewares,
-      [],
-      @lib.ComponentRole::ToolMiddleware,
-    ),
+    @lib.generate_tool_middleware_registration(middlewares, []),
   )
   assert_true(
     generated.contains(
@@ -56,7 +52,6 @@ test "universal middleware emitter handles multiple declarations and empty input
     @lib.generate_tool_middleware_registration(
       @lib.parse_tool_middlewares([("middlewares.mbt", source)]),
       [],
-      @lib.ComponentRole::ToolMiddleware,
     ),
   )
   assert_true(
@@ -67,11 +62,7 @@ test "universal middleware emitter handles multiple declarations and empty input
   )
   assert_eq(
     @formatter.impls_to_string(
-      @lib.generate_tool_middleware_registration(
-        [],
-        [],
-        @lib.ComponentRole::ToolMiddleware,
-      ),
+      @lib.generate_tool_middleware_registration([], []),
     ),
     "",
   )
@@ -86,7 +77,6 @@ test "universal middleware emits typed installation parameters" {
     @lib.generate_tool_middleware_registration(
       @lib.parse_tool_middlewares([("audit.mbt", source)]),
       [],
-      @lib.ComponentRole::ToolMiddleware,
     ),
   )
   assert_true(generated.contains("AuditParameters"))
@@ -115,7 +105,6 @@ test "monomorphic emitter generates namespaced descriptors wrappers dispatch and
     @lib.generate_tool_middleware_registration(
       middlewares,
       @lib.parse_tools([("policy.mbt", source)]),
-      @lib.ComponentRole::ToolMiddleware,
     ),
   )
   assert_true(generated.contains("fn __golem_middleware_tool_def_Echo"))
@@ -155,11 +144,7 @@ test "checked-in authoring fixture generates middleware source" {
   let tools = @lib.parse_tools([(path, source)])
   let middlewares = @lib.parse_tool_middlewares([(path, source)])
   let generated = @formatter.impls_to_string(
-    @lib.generate_tool_middleware_registration(
-      middlewares,
-      tools,
-      @lib.ComponentRole::ToolMiddleware,
-    ),
+    @lib.generate_tool_middleware_registration(middlewares, tools),
   )
   assert_true(generated.contains("pub struct PresentedUnderlying"))
   assert_true(generated.contains("pub struct StorageUnderlying"))
@@ -184,31 +169,5 @@ test "checked-in authoring fixture generates middleware source" {
   assert_false(generated.contains("fn __golem_tool_def_Presented"))
   assert_false(generated.contains("fn __golem_tool_invoke_Presented"))
   assert_false(generated.contains("ToolClient"))
-  assert_true(generated.contains("pub impl @tool.ToolErrorSchema for RunError"))
-  let combined = @formatter.impls_to_string(
-    @lib.generate_tool_middleware_registration(
-      middlewares,
-      tools,
-      @lib.ComponentRole::Combined,
-    ),
-  )
-  assert_false(combined.contains("pub impl @tool.ToolErrorSchema for RunError"))
-  let error = try {
-    ignore(
-      @lib.generate_tool_middleware_registration(
-        middlewares,
-        tools,
-        @lib.ComponentRole::Ordinary,
-      ),
-    )
-    "NO ERROR"
-  } catch {
-    @lib.ToolMiddlewareEmitError(message) => message
-  } noraise {
-    value => value
-  }
-  inspect(
-    error,
-    content="component role 'ordinary' does not export tool middleware",
-  )
+  assert_false(generated.contains("pub impl @tool.ToolErrorSchema for RunError"))
 }

@@ -1,5 +1,5 @@
 // Generated using `moon info`, DON'T EDIT IT
-package "golemcloud/golem_sdk/gen-agent-tool-middleware/interface/golem/tool/tool-middleware-guest"
+package "golemcloud/golem_sdk/gen/interface/golem/tool/tool-middleware-guest"
 
 import {
   "golemcloud/golem_sdk/async-core",

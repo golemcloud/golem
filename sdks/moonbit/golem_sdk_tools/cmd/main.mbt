@@ -129,7 +129,7 @@ fn main {
   let args = @env.args()
   if args.length() < 2 {
     println(
-      "Usage: golem_sdk_tools <command> <args>\nCommands:\n  reexports <sdk-path> <target-dir> --role <role>\n  agents <project-root> --component-dir <component-dir> --role <role>",
+      "Usage: golem_sdk_tools <command> <args>\nCommands:\n  reexports <sdk-path> <target-dir>\n  agents <project-root> --component-dir <component-dir>",
     )
     @sys.exit(1)
     return
@@ -146,7 +146,7 @@ fn main {
         return
       }
     }
-    run_reexports(options.sdk_path, options.target_dir, options.role) catch {
+    run_reexports(options.sdk_path, options.target_dir) catch {
       @lib.ComponentRoleError(message) => {
         println("Error: \{message}")
         @sys.exit(1)
@@ -164,7 +164,7 @@ fn main {
         return
       }
     }
-    run_agents(options.project_root, options.component_dir, options.role) catch {
+    run_agents(options.project_root, options.component_dir) catch {
       @lib.ComponentRoleError(message) => {
         println("Error: \{message}")
         @sys.exit(1)
@@ -183,11 +183,7 @@ fn main {
 ///|
 /// Runs the `agents` subcommand: scans a project for shared schema context and
 /// writes generated code only to the selected component package.
-fn run_agents(
-  project_root : String,
-  component_dir : String,
-  role : @lib.ComponentRole,
-) -> Unit raise {
+fn run_agents(project_root : String, component_dir : String) -> Unit raise {
   let scans = @lib.discover_and_scan(project_root)
   let target_dir = @lib.component_target_dir(project_root, component_dir)
   if !scans.iter().any(fn(scan) { scan.pkg.dir == target_dir }) {
@@ -222,17 +218,11 @@ fn run_agents(
     let agents = @lib.parse_agents(files)
     let tools = @lib.parse_tools(files)
     let has_middleware_annotations = @lib.has_middleware_annotations(files)
-    @lib.validate_component_role(
-      role,
-      agents.length(),
-      has_middleware_annotations,
-    )
     let middlewares = if has_middleware_annotations {
       @lib.parse_tool_middlewares(files)
     } else {
       []
     }
-    validate_component_role_marker(pkg_dir, role)
     let has_derive = value_types.length() > 0 ||
       multimodal_enums.length() > 0 ||
       config_types.length() > 0
@@ -241,9 +231,9 @@ fn run_agents(
     let has_middlewares = middlewares.length() > 0
     let required_pkg_imports : Array[(String, String)] = []
     let file_plan = GeneratedFilePlan::new()
-    if has_middlewares && role.allows_tool_middleware_registration() {
+    if has_middlewares {
       let middleware_impls = @lib.generate_tool_middleware_registration(
-        middlewares, tools, role,
+        middlewares, tools,
       )
       let middleware_formatted = fix_broken_strings(
         @formatter.impls_to_string(middleware_impls),
@@ -263,16 +253,7 @@ fn run_agents(
       if middlewares.any(middleware => {
           middleware.scope is @lib.ToolMiddlewareScopeInfo::Monomorphic(_)
         }) {
-        required_pkg_imports.push(
-          (
-            if role is @lib.ComponentRole::ToolMiddleware {
-              "golemcloud/golem_sdk/tool-core"
-            } else {
-              "golemcloud/golem_sdk/tool"
-            },
-            "@tool",
-          ),
-        )
+        required_pkg_imports.push(("golemcloud/golem_sdk/tool", "@tool"))
         required_pkg_imports.push(("golemcloud/golem_sdk/schema", "@schema"))
         required_pkg_imports.push(
           ("golemcloud/golem_sdk/schema_model", "@model"),
@@ -289,7 +270,7 @@ fn run_agents(
     } else {
       file_plan.stage_removal("\{pkg_dir}/golem_tool_middlewares.mbt")
     }
-    if has_tools && role.allows_tool_registration() {
+    if has_tools {
       let tool_impls = @lib.generate_tool_registration(tools)
       let tool_formatted = fix_broken_strings(
         @formatter.impls_to_string(tool_impls),
@@ -330,7 +311,7 @@ fn run_agents(
       file_plan.stage_removal("\{pkg_dir}/golem_tools.mbt")
       file_plan.stage_removal("\{pkg_dir}/golem_tool_clients.mbt")
     }
-    if has_agents && role.allows_agent_registration() {
+    if has_agents {
       // --- Agent package: generate golem_agents.mbt, golem_derive.mbt, golem_clients.mbt ---
       if agents[0].has_init {
         println(
@@ -472,16 +453,13 @@ fn run_agents(
     let pkg_path = "\{pkg_dir}/moon.pkg"
     let pkg_content = @fs.read_file_to_string(pkg_path)
     let reconciled_pkg = @lib.reconcile_generated_pkg_imports(
-      pkg_content,
-      required_pkg_imports,
-      forbid_ambient_tool=role is @lib.ComponentRole::ToolMiddleware,
+      pkg_content, required_pkg_imports,
     )
     file_plan.preflight()
     file_plan.apply() |> ignore
     if reconciled_pkg != pkg_content {
       @fs.write_string_to_file(pkg_path, reconciled_pkg)
     }
-    commit_component_role_marker(pkg_dir, role)
   }
 }
 
@@ -583,45 +561,6 @@ fn validate_generated_removal_path(path : String) -> Unit raise {
 }
 
 ///|
-/// Validates that existing generated role state agrees with the selected role.
-fn validate_component_role_marker(
-  component_dir : String,
-  role : @lib.ComponentRole,
-) -> Unit raise {
-  let marker_path = "\{component_dir}/.golem-sdk-role"
-  if @fs.path_exists(marker_path) {
-    let selected = @lib.parse_component_role_marker(
-      @fs.read_file_to_string(marker_path),
-    )
-    if selected != role {
-      @lib.raise_component_role_error(
-        "Component role mismatch: '" +
-        component_dir +
-        "' was already generated as '" +
-        selected.name() +
-        "' but this command selected '" +
-        role.name() +
-        "'",
-      )
-    }
-  }
-}
-
-///|
-/// Commits role state after every other command operation has succeeded.
-fn commit_component_role_marker(
-  component_dir : String,
-  role : @lib.ComponentRole,
-) -> Unit raise {
-  validate_component_role_marker(component_dir, role)
-  let marker_path = "\{component_dir}/.golem-sdk-role"
-  if !@fs.path_exists(marker_path) {
-    @fs.write_string_to_file(marker_path, @lib.component_role_marker(role))
-    println("Generated \{marker_path} for role \{role.name()}")
-  }
-}
-
-///|
 /// Checks if any agent uses multimodal types in its constructor or methods.
 fn has_multimodal_agent(agents : Array[@lib.AgentInfo]) -> Bool {
   for a in agents {
@@ -646,22 +585,10 @@ fn has_multimodal_agent(agents : Array[@lib.AgentInfo]) -> Bool {
 }
 
 ///|
-/// Runs the `reexports` subcommand from the exact generated package selected by
-/// the component role, then updates `golem_reexports.mbt` and `moon.pkg`.
-fn run_reexports(
-  sdk_path : String,
-  target_dir : String,
-  role : @lib.ComponentRole,
-) -> Unit raise {
-  validate_component_role_marker(target_dir, role)
+fn run_reexports(sdk_path : String, target_dir : String) -> Unit raise {
   let target_pkg_path = "\{target_dir}/moon.pkg"
   let target_pkg_content = @fs.read_file_to_string(target_pkg_path)
-  let role_safe_pkg_content = if role is @lib.ComponentRole::ToolMiddleware {
-    @lib.reconcile_pure_role_pkg_imports(target_pkg_content)
-  } else {
-    target_pkg_content
-  }
-  let gen_package = role.gen_package()
+  let gen_package = "gen"
   let gen_dir = "\{sdk_path}/\{gen_package}"
   let entries = @fs.read_dir(gen_dir)
   entries.sort_by((left, right) => left.compare(right))
@@ -682,7 +609,7 @@ fn run_reexports(
   if write_generated_file(output_path, output) {
     println("Generated \{output_path} with \{fns.length()} functions")
   }
-  // Update target moon.pkg with the selected generated package's link section.
+  // Update target moon.pkg with the generated package's link section.
   let gen_pkg_path = if @fs.path_exists("\{gen_dir}/moon.pkg") {
     "\{gen_dir}/moon.pkg"
   } else {
@@ -690,18 +617,14 @@ fn run_reexports(
   }
   let gen_pkg_content = @fs.read_file_to_string(gen_pkg_path)
   let exports = @lib.transform_exports(@lib.parse_pkg_exports(gen_pkg_content))
-  // Generated wrappers consistently use @gen while the imported package is
-  // selected exactly from the component role.
-  let with_gen_import = @lib.ensure_role_gen_import(
-    role_safe_pkg_content,
+  let with_gen_import = @lib.ensure_pkg_import(
+    target_pkg_content,
     "golemcloud/golem_sdk/\{gen_package}",
+    "@gen",
   )
   let updated = @lib.update_pkg_link(with_gen_import, exports)
-  // Compare against the original on-disk content, not `role_safe_pkg_content`,
-  // which is already reconciled for the pure tool-middleware role.
   if updated != target_pkg_content {
     @fs.write_string_to_file(target_pkg_path, updated)
     println("Updated \{target_pkg_path} with \{exports.length()} exports")
   }
-  commit_component_role_marker(target_dir, role)
 }
