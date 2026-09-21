@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::S3BlobStorage;
+use super::{RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage};
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::storage::blob::{
     BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
     ExistsResult, ListedBlob,
 };
+use aws_runtime::retries::classifiers::{THROTTLING_ERRORS, TRANSIENT_ERRORS};
 use aws_sdk_s3::config::http::{HttpRequest, HttpResponse};
 use aws_sdk_s3::config::retry::RetryConfig;
 use aws_sdk_s3::config::{
@@ -507,6 +508,12 @@ const REQUEST_TIMEOUT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><C
 /// The body of the answer of a server that asks the client to send fewer requests. S3 and
 /// MinIO give the code `SlowDown` with the status 503.
 const SLOW_DOWN: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>"#;
+
+/// The body of another answer of a server that asks the client to send fewer requests.
+/// `THROTTLING_ERRORS` in `aws_runtime::retries::classifiers` holds `ThrottlingException`, and
+/// the classifier of the SDK reads the code and not the status of the response, so a 4xx that
+/// carries the code asks for one more attempt.
+const THROTTLING_EXCEPTION: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>ThrottlingException</Code><Message>Rate exceeded.</Message></Error>"#;
 
 /// The body of the error of a request that is not valid. The S3 model names `InvalidRequest` as
 /// an error of `PutObject`, so the SDK gives the `PutObjectError::InvalidRequest` variant for
@@ -1182,6 +1189,41 @@ async fn a_put_that_one_more_attempt_can_pass_goes_again() {
         ),
         ((true, 2), (false, 3), (false, 3))
     );
+}
+
+#[test]
+async fn a_put_that_a_throttling_code_answers_goes_again() {
+    // `RETRIABLE_SERVICE_ERROR_CODES` holds every code of `THROTTLING_ERRORS` and of
+    // `TRANSIENT_ERRORS`, which are the codes that the SDK itself sends again. A service behind
+    // the S3 API can give a throttling code with a 4xx that is not 408 and not 429, and the
+    // status rule alone would make a permanent error of that answer: the retry loop would stop
+    // at an answer which asks for one more attempt. The loop makes 3 attempts and makes all 3
+    // here. The filesystem snapshot of a worker writes to S3, so a `PutObject` that a throttle
+    // answers must not reach the caller as a permanent error.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(400, THROTTLING_EXCEPTION));
+
+    let written = storage
+        .put_raw("test", "put-raw", namespace(), Path::new("blob"), b"x")
+        .await;
+
+    assert_eq!((written.is_err(), sent(&requests).len()), (true, 3));
+}
+
+/// The backend holds its own copy of the codes that the SDK sends again, because `aws-runtime`
+/// is the runtime support of the SDK and says that nothing uses it directly. The crate is a dev
+/// dependency, so this test reads the two lists and the backend does not. A code that a later
+/// version of the SDK adds fails this test, which is the one thing that keeps the copy of
+/// `RETRIABLE_SERVICE_ERROR_CODES` with the lists of the SDK.
+#[test]
+fn the_retriable_codes_hold_every_code_that_the_sdk_sends_again() {
+    let missing = THROTTLING_ERRORS
+        .iter()
+        .chain(TRANSIENT_ERRORS)
+        .copied()
+        .filter(|code| !RETRIABLE_SERVICE_ERROR_CODES.contains(code))
+        .collect::<Vec<_>>();
+
+    assert_eq!(missing, Vec::<&str>::new());
 }
 
 /// The key namespace of S3 is flat, so a blob at `a` and the marker of the directory `a` are two

@@ -83,21 +83,41 @@ const RETRIABLE_CLIENT_ERROR_STATUSES: [u16; 2] = [408, 429];
 /// The codes of an error of the service that the backend sends again, whatever the status of
 /// the response is.
 ///
-/// `TRANSIENT_ERRORS` and `THROTTLING_ERRORS` in `aws_runtime::retries::classifiers` hold the
-/// codes that the SDK itself sends again. These are the codes of those two lists that an S3 or
-/// a MinIO answer carries, and the backend keeps them retriable so that it never stops at an
-/// error that the SDK would send again. S3 gives `RequestTimeout` with the status 400 and a
-/// service behind the same API can give a throttling code with the status 429, so the status
-/// alone would make a permanent error of an answer that asks for one more attempt. MinIO gives
-/// its own back-pressure codes (`SlowDownRead`, `SlowDownWrite`, `ServerBusy` and
-/// `RequestTimeout`) with the status 503 (`cmd/api-errors.go`), which is retriable by its
-/// status.
-const RETRIABLE_SERVICE_ERROR_CODES: [&str; 7] = [
+/// The list holds every code of `TRANSIENT_ERRORS` and of `THROTTLING_ERRORS` in
+/// `aws_runtime::retries::classifiers`, which are the codes that the SDK itself sends again,
+/// and the codes of the back-pressure of MinIO. The backend keeps every one of them retriable
+/// so that it never stops at an error that the SDK would send again. S3 gives `RequestTimeout`
+/// with the status 400 and a service behind the same API can give a throttling code with
+/// another 4xx, so the status alone would make a permanent error of an answer that asks for one
+/// more attempt. MinIO gives its own back-pressure codes (`SlowDownRead`, `SlowDownWrite`,
+/// `ServerBusy` and `RequestTimeout`) with the status 503 (`cmd/api-errors.go`), which is
+/// retriable by its status.
+///
+/// The codes of the SDK are a copy, because `aws-runtime` is the runtime support of the SDK and
+/// says that nothing uses it directly. The crate is a dev dependency, and
+/// `the_retriable_codes_hold_every_code_that_the_sdk_sends_again` holds this list against the
+/// two constants, so a code that the SDK adds cannot go missing here without notice.
+const RETRIABLE_SERVICE_ERROR_CODES: [&str; 19] = [
+    // `TRANSIENT_ERRORS`.
     "RequestTimeout",
     "RequestTimeoutException",
+    // `THROTTLING_ERRORS`.
+    "Throttling",
+    "ThrottlingException",
+    "ThrottledException",
+    "RequestThrottledException",
+    "TooManyRequestsException",
+    "ProvisionedThroughputExceededException",
+    "TransactionInProgressException",
     "RequestLimitExceeded",
-    "ServerBusy",
+    "BandwidthLimitExceeded",
+    "LimitExceededException",
+    "RequestThrottled",
     "SlowDown",
+    "PriorRequestNotComplete",
+    "EC2ThrottledException",
+    // The back-pressure of MinIO.
+    "ServerBusy",
     "SlowDownRead",
     "SlowDownWrite",
 ];
