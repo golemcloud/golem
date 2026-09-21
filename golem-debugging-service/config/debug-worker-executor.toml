@@ -48,9 +48,12 @@ time_to_idle = "12h"
 enable_fs_cache = false
 
 [indexed_storage]
-type = "KVStoreRedis"
+type = "Sqlite"
 
 [indexed_storage.config]
+database = "../data/worker-executor-indexed-storage.db"
+foreign_keys = false
+max_connections = 10
 
 [indexed_storage_retry]
 max_attempts = 3
@@ -357,9 +360,12 @@ without_time = false
 # enable_fs_cache = false
 #
 # [indexed_storage]
-# type = "KVStoreRedis"
+# type = "Sqlite"
 #
 # [indexed_storage.config]
+# database = "../data/worker-executor-indexed-storage.db"
+# foreign_keys = false
+# max_connections = 10
 #
 # [indexed_storage_retry]
 # max_attempts = 3
