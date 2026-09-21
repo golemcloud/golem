@@ -77,7 +77,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
     test("nested namespace metadata exposes canonical child names") {
       val original = sample()
       val nodes    = original.definition.commands.nodes
-      val nested = new ToolType(
+      val nested   = new ToolType(
         original.lookupName,
         original.definition.copy(commands =
           original.definition.commands.copy(nodes =

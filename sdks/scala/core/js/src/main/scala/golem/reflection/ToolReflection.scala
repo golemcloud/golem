@@ -154,10 +154,12 @@ final class ToolType private[reflection] (
     }
     resolved match {
       case Some((index, indices)) =>
-        val body = nodes(index).body
+        val body      = nodes(index).body
         val arguments = body.toList.flatMap { callable =>
           val localNames = (callable.positionals.fixed.map(_.name) ++ callable.positionals.tail.map(_.name) ++
-            callable.options.flatMap(o => o.long :: o.aliases) ++ callable.flags.flatMap(f => f.long :: f.aliases)).toSet
+            callable.options.flatMap(o => o.long :: o.aliases) ++ callable.flags.flatMap(f =>
+              f.long :: f.aliases
+            )).toSet
           val globals = (0 :: indices).flatMap { nodeIndex =>
             val node = nodes(nodeIndex)
             node.globals.options.map(argument) ++ node.globals.flags.map(argument)
