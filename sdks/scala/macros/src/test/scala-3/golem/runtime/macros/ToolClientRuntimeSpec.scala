@@ -100,8 +100,11 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
           .fromFuture(_ =>
             ToolClientRuntime.complete(
               ToolClientRuntime
-                .run[GitError](transport, List("status"), input, None, gitErrorSchema.fromErrorPayloadValue(_))
-            )(r => ToolClientRuntime.decodeValueResult(r, implicitly[FromSchema[String]]))
+                .run[GitError](transport, List("status"), input, None, gitErrorSchema.fromErrorValue(_))
+            )(r =>
+              ToolClientRuntime
+                .decodeValueResult(r, implicitly[FromSchema[String]], implicitly[IntoSchema[String]].graph)
+            )
           )
           .map { result =>
             val record = transport.lastInput.map(_.value)
@@ -138,7 +141,10 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
           .fromFuture(_ =>
             ToolClientRuntime.complete(
               ToolClientRuntime.runInfallible(transport, List("remote", "add"), input, None)
-            )(r => ToolClientRuntime.decodeValueResult(r, implicitly[FromSchema[String]]))
+            )(r =>
+              ToolClientRuntime
+                .decodeValueResult(r, implicitly[FromSchema[String]], implicitly[IntoSchema[String]].graph)
+            )
           )
           .map { result =>
             val record = transport.lastInput.map(_.value)
@@ -159,9 +165,9 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
           }
       },
       test("remote custom errors decode into the declared error type") {
-        val payload   = gitErrorSchema.toErrorPayloadValue(GitError.Bad("nope")).toOption.get
+        val payload   = gitErrorSchema.toErrorValue(GitError.Bad("nope")).toOption.get
         val transport = new RecordingTransport(
-          Left(ToolRpcFailure.RemoteToolError(ToolInvokeError.Tool(payload)))
+          Left(ToolRpcFailure.RemoteToolError(ToolInvokeError.UnknownToolError(payload.name, payload.payload)))
         )
         val params = ToolClientRuntime.encodeParams(
           List(
@@ -173,7 +179,7 @@ object ToolClientRuntimeSpec extends ZIOSpecDefault {
         ZIO
           .fromFuture(_ =>
             ToolClientRuntime
-              .run[GitError](transport, List("status"), input, None, gitErrorSchema.fromErrorPayloadValue(_))
+              .run[GitError](transport, List("status"), input, None, gitErrorSchema.fromErrorValue(_))
           )
           .map(result => assertTrue(result == Left(ToolError.Tool(GitError.Bad("nope")))))
       },

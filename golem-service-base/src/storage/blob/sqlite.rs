@@ -17,8 +17,9 @@ use crate::db::{DBValue, PoolApi};
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::repo::RepoError;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_file_name_to_string,
-    blob_parent_to_string, blob_path_to_string, validate_relative_blob_path,
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_child_path,
+    blob_file_name_to_string, blob_parent_to_string, blob_path_is_root, blob_path_to_string,
+    validate_relative_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -92,20 +93,6 @@ impl SqliteBlobStorage {
                 format!("components-{environment_id}")
             }
         }
-    }
-
-    fn escape_like(value: &str) -> String {
-        let mut result = String::with_capacity(value.len());
-        for ch in value.chars() {
-            match ch {
-                '%' | '_' | '!' => {
-                    result.push('!');
-                    result.push(ch);
-                }
-                _ => result.push(ch),
-            }
-        }
-        result
     }
 }
 
@@ -302,6 +289,49 @@ impl BlobStorage for SqliteBlobStorage {
         Ok(result)
     }
 
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        validate_relative_blob_path(path)?;
+        let directory = blob_path_to_string(path)?;
+
+        // Text comparisons use the BINARY collation, so the match is case-sensitive. A parent
+        // below `directory` is at least `directory/` and less than `directory0`, because `0` is
+        // the character after `/`. The OR keeps SQLite from a search on `parent`, so it searches
+        // the primary key for `namespace` and then reads the rows of that namespace.
+        let query = if directory.is_empty() {
+            sqlx::query_as::<_, (String, String, i64)>(
+                "SELECT parent, name, size FROM blob_storage WHERE namespace = ? AND is_directory = FALSE;",
+            )
+            .bind(Self::namespace(namespace))
+        } else {
+            sqlx::query_as::<_, (String, String, i64)>(
+                "SELECT parent, name, size FROM blob_storage WHERE namespace = ? AND is_directory = FALSE AND (parent = ? OR (parent >= ? AND parent < ?));",
+            )
+            .bind(Self::namespace(namespace))
+            .bind(directory.clone())
+            .bind(format!("{directory}/"))
+            .bind(format!("{directory}0"))
+        };
+
+        self.pool
+            .with_ro(target_label, op_label)
+            .fetch_all_as::<(String, String, i64), _>(query)
+            .await?
+            .into_iter()
+            .map(|(parent, name, size)| {
+                Ok(ListedBlob {
+                    path: blob_child_path(&parent, &name),
+                    size: u64::try_from(size)?,
+                })
+            })
+            .collect()
+    }
+
     async fn delete_dir(
         &self,
         target_label: &'static str,
@@ -311,49 +341,40 @@ impl BlobStorage for SqliteBlobStorage {
     ) -> Result<bool, Error> {
         validate_relative_blob_path(path)?;
 
-        if path.as_os_str().is_empty() {
+        if blob_path_is_root(path) {
             return Ok(false);
         }
 
         let parent = blob_parent_to_string(path)?;
         let name = blob_file_name_to_string(path)?;
 
-        let exists_query = sqlx::query_as::<_, (i64,)>(
-            "SELECT 1 FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = TRUE LIMIT 1;",
-        )
-        .bind(Self::namespace(namespace.clone()))
-        .bind(parent.clone())
-        .bind(name.clone());
-
-        let exists = self
-            .pool
-            .with_ro(target_label, op_label)
-            .fetch_optional_as(exists_query)
-            .await?
-            .is_some();
-
-        if !exists {
-            return Ok(false);
-        }
-
+        // A directory that only holds blobs has no row of its own, because put_raw writes no
+        // row for the parent. One statement removes the row of the directory and every row
+        // below it, so the number of removed rows tells whether the directory existed.
         let dir_path = if parent.is_empty() {
             name.clone()
         } else {
             format!("{parent}/{name}")
         };
-        let descendants_prefix = format!("{}/", dir_path);
-        let descendants_like = format!("{}%", Self::escape_like(&descendants_prefix));
+        // Text comparisons use the BINARY collation, so the match is case-sensitive, unlike LIKE,
+        // which ignores ASCII case. A parent below `dir_path` is at least `dir_path/` and less
+        // than `dir_path0`, because `0` is the character after `/`. The OR keeps SQLite from a
+        // search on `parent`, so it searches the primary key for `namespace` and then reads the
+        // rows of that namespace.
+        let descendants_start = format!("{dir_path}/");
+        let descendants_end = format!("{dir_path}0");
 
         let query = sqlx::query(
             r#"DELETE FROM blob_storage WHERE namespace = ? AND
-                     ((parent = ? AND name = ? AND is_directory = TRUE) OR (parent = ?) OR (parent LIKE ? ESCAPE '!'));
+                     ((parent = ? AND name = ? AND is_directory = TRUE) OR (parent = ?) OR (parent >= ? AND parent < ?));
             "#,
         )
         .bind(Self::namespace(namespace))
         .bind(parent)
         .bind(name)
         .bind(dir_path)
-        .bind(descendants_like);
+        .bind(descendants_start)
+        .bind(descendants_end);
 
         let result = self
             .pool

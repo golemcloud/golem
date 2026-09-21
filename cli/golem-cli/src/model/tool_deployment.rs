@@ -111,6 +111,7 @@ pub enum ToolValidationCode {
     AccountMismatch,
     InvalidParameters,
     InvalidProvision,
+    InvalidConfigScope,
     InvalidSecretScope,
     RevealableScopeNarrowed,
 }

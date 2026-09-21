@@ -24,7 +24,8 @@ import golem.schema.{
   FromSchema,
   FromSchemaError,
   IntoSchema,
-  SchemaGraph
+  SchemaGraph,
+  SchemaValue
 }
 import golem.schema.wire.SchemaWire
 import scala.concurrent.Future
@@ -64,12 +65,16 @@ object SchemaPayload {
     ev.fromValue(SchemaWire.schemaValueFromWit(SchemaWireInterop.valueTreeFromJs(tree)))
 
   /** Stream-aware encoding used by invocation boundaries. */
-  def encodeAsync[A](value: A)(implicit ev: IntoSchema[A]): Future[JsSchemaValueTree] = {
+  def encodeAsync[A](value: A)(implicit ev: IntoSchema[A]): Future[JsSchemaValueTree] =
+    encodeValueAsync(ev.toValue(value))
+
+  /** Includes typed conversion in the stream-transfer transaction. */
+  def encodeValueAsync(value: => SchemaValue): Future[JsSchemaValueTree] = {
     val transaction = new AgentStreamOutputTransaction
     val result      =
       try {
         val wire = AgentStreamOutputTransaction.capture(transaction) {
-          SchemaWire.schemaValueToWit(ev.toValue(value))
+          SchemaWire.schemaValueToWit(value)
         }
         try SchemaWireInterop.valueTreeToJsAsync(wire)
         catch {
@@ -82,6 +87,21 @@ object SchemaPayload {
     result.transformWith {
       case Success(tree)  => transaction.closeUncommitted().map(_ => tree)
       case Failure(error) => transaction.rollback().flatMap(_ => Future.failed(error))
+    }
+  }
+
+  /**
+   * Releases partial result acquisitions on failure, but hands successful
+   * streams to the caller.
+   */
+  def decodeResultAsync[A](decode: => A): Future[A] = {
+    val ownership = new AgentStreamOwnership
+    try {
+      val result = AgentStreamOwnership.capture(ownership)(decode)
+      ownership.handoff()
+      Future.successful(result)
+    } catch {
+      case NonFatal(error) => ownership.close().flatMap(_ => Future.failed(error))
     }
   }
 

@@ -14,6 +14,8 @@
 
 use crate::Tracing;
 use async_trait::async_trait;
+use axum::Router;
+use axum::routing::post;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::schema::{RecordValue, SchemaValueStreamReference, schema_value};
 use golem_api_grpc::proto::golem::worker::{
@@ -26,26 +28,31 @@ use golem_common::model::account::AccountId;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::ComponentDto;
-use golem_common::model::durable_stream::StreamSessionRecordV1;
-use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
+use golem_common::model::durable_stream::StreamSessionRecord;
+use golem_common::model::oplog::payload::HostRequestGolemRpcInvoke;
+use golem_common::model::oplog::{
+    OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+};
 use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, PromiseId};
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_service_base::model::auth::AuthCtx;
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{AgentResult, TestDsl};
 use golem_worker_executor::services::direct_invocation_auth::{
     DirectInvocationAuthService, EnvironmentOwnerAccountId,
 };
 use golem_worker_executor::services::rpc::RpcError;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_with_overrides,
+    FireAndForgetRpcCheckpoint, LastUniqueId, PrecompiledComponent, RecordingRpc, TestContext,
+    TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies, start,
+    start_with_concurrent_agent_limit_and_overrides, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use tokio::sync::mpsc;
@@ -67,10 +74,436 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("large_dynamic_memory")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
+
+#[test]
+#[timeout("2 minutes")]
+async fn memory_growth_before_rpc_activation_control(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    memory_growth_before_rpc_activation(last_unique_id, deps, component, false).await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn memory_growth_before_rpc_activation_recovers_after_oom(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    memory_growth_before_rpc_activation(last_unique_id, deps, component, true).await
+}
+
+async fn memory_growth_before_rpc_activation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &PrecompiledComponent,
+    inject_oom: bool,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let caller = agent_id!("CancelTester", "memory-growth");
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    if inject_oom {
+        executor.fail_memory_growth_after_rpc_creation(&worker);
+    }
+    let key = IdempotencyKey::fresh();
+    let result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "grow_memory_before_rpc_activation",
+            data_value!("memory-growth-target"),
+        )
+        .await;
+    let triggered = executor.rpc_memory_failure_triggered(&worker);
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    let boundary_matches = oplog.windows(3).any(|entries| {
+        matches!(&entries[0].entry, PublicOplogEntry::Start(start)
+            if start.function_name == "golem::rpc::wasm-rpc::new")
+            && matches!(&entries[1].entry, PublicOplogEntry::End(end)
+                if end.start_index == entries[0].oplog_index)
+            && matches!(&entries[2].entry, PublicOplogEntry::Error(error)
+                if error.error == "Out of memory")
+    });
+    eprintln!("Before restart: result={result:?}, injected={triggered}");
+    print_rpc_memory_oplog(&oplog);
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let restarted = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "grow_memory_before_rpc_activation",
+            data_value!("memory-growth-target"),
+        )
+        .await;
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    eprintln!("After restart: result={restarted:?}");
+    print_rpc_memory_oplog(&oplog);
+    assert_eq!(triggered, inject_oom);
+    if inject_oom {
+        assert!(
+            boundary_matches,
+            "OOM did not immediately follow RPC creation"
+        );
+    }
+    result?;
+    restarted?;
+    let count = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id!("RpcCounter", "memory-growth-target"),
+            "get_value",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(count, 1);
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum RpcMemoryTestBoundary {
+    Completion,
+    Delivery,
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn large_rpc_result_delivery_control(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    rpc_memory_boundary(
+        last_unique_id,
+        deps,
+        component,
+        "receive_large_rpc_result",
+        RpcMemoryTestBoundary::Completion,
+        false,
+        Some(4 * 1024 * 1024),
+    )
+    .await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn large_rpc_result_delivery_recovers_after_oom(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    rpc_memory_boundary(
+        last_unique_id,
+        deps,
+        component,
+        "receive_large_rpc_result",
+        RpcMemoryTestBoundary::Completion,
+        true,
+        Some(4 * 1024 * 1024),
+    )
+    .await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn rpc_span_finish_control(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    rpc_memory_boundary(
+        last_unique_id,
+        deps,
+        component,
+        "grow_memory_after_rpc_result",
+        RpcMemoryTestBoundary::Delivery,
+        false,
+        None,
+    )
+    .await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn rpc_span_finish_recovers_after_oom(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    rpc_memory_boundary(
+        last_unique_id,
+        deps,
+        component,
+        "grow_memory_after_rpc_result",
+        RpcMemoryTestBoundary::Delivery,
+        true,
+        None,
+    )
+    .await
+}
+
+async fn rpc_memory_boundary(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &PrecompiledComponent,
+    method: &str,
+    boundary: RpcMemoryTestBoundary,
+    inject_oom: bool,
+    expected: Option<u64>,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let caller = agent_id!("CancelTester", method);
+    let target_name = format!("{method}-target");
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    if inject_oom {
+        match boundary {
+            RpcMemoryTestBoundary::Completion => {
+                executor.fail_memory_growth_after_rpc_completion(&worker)
+            }
+            RpcMemoryTestBoundary::Delivery => {
+                executor.fail_memory_growth_after_rpc_delivery(&worker)
+            }
+        }
+    }
+    let key = IdempotencyKey::fresh();
+    let result = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            method,
+            data_value!(target_name.clone()),
+        )
+        .await;
+    let triggered = executor.rpc_memory_failure_triggered(&worker);
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    eprintln!("Before restart: result={result:?}, injected={triggered}");
+    print_rpc_memory_oplog(&oplog);
+    if inject_oom {
+        assert!(rpc_memory_boundary_matches(&oplog, boundary));
+    }
+    assert_eq!(triggered, inject_oom);
+    check_rpc_memory_result(result?, expected)?;
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    let restarted = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            method,
+            data_value!(target_name.clone()),
+        )
+        .await?;
+    check_rpc_memory_result(restarted, expected)?;
+    let count = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id!("RpcCounter", target_name),
+            "get_value",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(count, 1);
+    Ok(())
+}
+
+fn check_rpc_memory_result(result: AgentResult, expected: Option<u64>) -> anyhow::Result<()> {
+    if let Some(expected) = expected {
+        assert_eq!(result.into_typed::<u64>()?, expected);
+    }
+    Ok(())
+}
+
+fn rpc_memory_boundary_matches(
+    oplog: &[PublicOplogEntryWithIndex],
+    boundary: RpcMemoryTestBoundary,
+) -> bool {
+    let rpc_start = oplog.iter().find_map(|entry| match &entry.entry {
+        PublicOplogEntry::Start(start)
+            if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await" =>
+        {
+            Some(entry.oplog_index)
+        }
+        _ => None,
+    });
+    match boundary {
+        RpcMemoryTestBoundary::Completion => oplog.windows(3).any(|entries| {
+            matches!(&entries[0].entry, PublicOplogEntry::End(end)
+                if Some(end.start_index) == rpc_start)
+                && matches!(&entries[1].entry, PublicOplogEntry::FinishSpan(_))
+                && matches!(&entries[2].entry, PublicOplogEntry::Error(error)
+                    if error.error == "Out of memory")
+        }),
+        RpcMemoryTestBoundary::Delivery => oplog.windows(2).any(|entries| {
+            matches!(&entries[0].entry, PublicOplogEntry::CompletionDelivered(delivered)
+                if Some(delivered.start_index) == rpc_start)
+                && matches!(&entries[1].entry, PublicOplogEntry::Error(error)
+                    if error.error == "Out of memory")
+        }),
+    }
+}
+
+fn print_rpc_memory_oplog(oplog: &[PublicOplogEntryWithIndex]) {
+    for entry in oplog {
+        let description = match &entry.entry {
+            PublicOplogEntry::Start(start) => format!("Start {}", start.function_name),
+            PublicOplogEntry::End(end) => format!("End {:?}", end.start_index),
+            PublicOplogEntry::Error(error) => format!("Error {}", error.error),
+            _ => continue,
+        };
+        eprintln!("{:?}: {description}", entry.oplog_index);
+    }
+}
+
+#[test]
+#[timeout("8 minutes")]
+async fn durable_operations_after_rpc_delivery_recover_at_live_tail(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for operation in [
+        "kv-get",
+        "config-get",
+        "fire-and-forget-rpc",
+        "async-rpc",
+        "span",
+        "atomic",
+        "commit",
+        "retry-policy",
+    ] {
+        durable_operation_after_rpc_delivery(last_unique_id, deps, component, operation).await?;
+    }
+    Ok(())
+}
+
+async fn durable_operation_after_rpc_delivery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &PrecompiledComponent,
+    operation: &str,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let caller = agent_id!("CancelTester", format!("tail-{operation}"));
+    let target_name = format!("tail-{operation}-target");
+    let worker = executor.start_agent(&component.id, caller.clone()).await?;
+    executor.fail_memory_growth_after_rpc_delivery(&worker);
+    let key = IdempotencyKey::fresh();
+
+    executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "durable_operation_after_rpc_result",
+            data_value!(target_name.clone(), operation),
+        )
+        .await?;
+    assert!(
+        executor.rpc_memory_failure_triggered(&worker),
+        "delivery fault did not trigger for {operation}: {:#?}",
+        executor.get_oplog(&worker, OplogIndex::INITIAL).await?
+    );
+    drop(executor);
+
+    let executor = start(deps, &context).await?;
+    executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &caller,
+            &key,
+            "durable_operation_after_rpc_result",
+            data_value!(target_name.clone(), operation),
+        )
+        .await?;
+
+    let count = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id!("RpcCounter", target_name.clone()),
+            "get_value",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<u64>()?;
+    let expected = if matches!(operation, "fire-and-forget-rpc" | "async-rpc") {
+        8
+    } else {
+        1
+    };
+    assert_eq!(count, expected, "RPC side effect repeated for {operation}");
+
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_live_tail_operation(&oplog, operation);
+    Ok(())
+}
+
+fn assert_live_tail_operation(oplog: &[PublicOplogEntryWithIndex], operation: &str) {
+    let oom_index = oplog
+        .iter()
+        .rposition(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Error(error)
+            if error.error == "Out of memory")
+        })
+        .unwrap_or_else(|| panic!("missing injected OOM for {operation}"));
+    let live_tail = &oplog[oom_index + 1..];
+    let found = live_tail
+        .iter()
+        .any(|entry| match (operation, &entry.entry) {
+            ("kv-get", PublicOplogEntry::Start(start)) => start.function_name.contains("keyvalue"),
+            ("config-get", PublicOplogEntry::Start(start)) => {
+                start.function_name.contains("config")
+            }
+            ("fire-and-forget-rpc" | "async-rpc", PublicOplogEntry::Start(start)) => {
+                start.function_name.contains("rpc")
+            }
+            ("span", PublicOplogEntry::StartSpan(_)) => true,
+            ("atomic", PublicOplogEntry::BeginAtomicRegion(_)) => true,
+            ("commit", PublicOplogEntry::NoOp(_)) => true,
+            ("retry-policy", PublicOplogEntry::SetRetryPolicy(_)) => true,
+            _ => false,
+        });
+    assert!(found, "missing live {operation} oplog boundary after OOM");
+}
 
 struct DenyDirectInvocationAuth;
 
@@ -386,12 +819,21 @@ async fn durable_streaming_output_recovers_after_executor_restart(
             agent_id!("StreamingRpcTarget", "output-restart"),
         )
         .await?;
+    let gate = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id!("StreamingRpcTarget", "output-restart"),
+            "create_output_gate",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<PromiseId>()?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let (_, input) = data_value!().into_parts();
+    let (_, input) = data_value!(gate.clone()).into_parts();
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
             agent_id: Some(worker_agent_id.into()),
-            method_name: Some("produce_siblings".to_string()),
+            method_name: Some("produce_gated_siblings".to_string()),
             input: Some(input.try_into().map_err(anyhow::Error::msg)?),
             idempotency_key: Some(IdempotencyKey::fresh().into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -453,6 +895,7 @@ async fn durable_streaming_output_recovers_after_executor_restart(
             observed_output_items += 1;
         }
     }
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(requests);
     drop(responses);
     drop(executor);
@@ -470,7 +913,7 @@ async fn durable_streaming_output_recovers_after_executor_restart(
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: start.expected_callee_fingerprint,
             expected_epoch: accepted.epoch,
-            operation: ResumeOperation::Resume as i32,
+            operation: ResumeOperation::Takeover as i32,
             cursors: cursors.into_values().collect(),
             auth_ctx: start.auth_ctx.clone(),
             principal: start.principal.clone(),
@@ -497,7 +940,10 @@ async fn durable_streaming_output_recovers_after_executor_restart(
             .validate_response(&response)
             .map_err(anyhow::Error::msg)?;
         match response.response {
-            Some(invocation_response::Response::Accepted(_)) => {}
+            Some(invocation_response::Response::Accepted(resumed)) => {
+                assert_eq!(resumed.epoch, accepted.epoch + 1);
+                executor.complete_promise(&gate, Vec::new()).await?;
+            }
             Some(invocation_response::Response::Result(result)) => {
                 mapped_outputs = result.new_stream_mappings.len();
             }
@@ -1322,9 +1768,9 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
             {
                 if let PublicOplogEntry::StreamSession(session) = entry.entry
                     && matches!(
-                        StreamSessionRecordV1::from_value(session.record.value())
+                        StreamSessionRecord::from_value(session.record.value())
                             .map_err(anyhow::Error::msg)?,
-                        StreamSessionRecordV1::Detached(record)
+                        StreamSessionRecord::Detached(record)
                             if record.epoch == first_accepted.epoch
                     )
                 {
@@ -2039,6 +2485,211 @@ async fn generated_rust_client_streaming_rpc_e2e(
 #[test]
 #[timeout("2 minutes")]
 #[tracing::instrument]
+async fn rpc_suspension_retries_after_concurrent_http_wait_finishes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let rpc_attempt_keys = Arc::new(Mutex::new(Vec::new()));
+    let executor = start_with_concurrent_agent_limit_and_overrides(
+        deps,
+        &context,
+        1,
+        TestExecutorOverrides {
+            wrap_rpc: Some(Arc::new({
+                let rpc_attempt_keys = rpc_attempt_keys.clone();
+                move |rpc| {
+                    Arc::new(RecordingRpc::new(
+                        rpc,
+                        "increment_scalar",
+                        rpc_attempt_keys.clone(),
+                    ))
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let name = "rpc-suspension-retry-after-http";
+    let target_id = agent_id!("StreamingRpcTarget", name);
+    let caller_id = agent_id!("StreamingRpcCaller", name);
+    let target = executor
+        .start_agent(&component.id, target_id.clone())
+        .await?;
+    wait_for_agent_initialization(&executor, &target).await?;
+    let caller = executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+    wait_for_agent_initialization(&executor, &caller).await?;
+
+    let request_received = Arc::new(tokio::sync::Semaphore::new(0));
+    let response_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let server = {
+        let request_received = request_received.clone();
+        let response_gate = response_gate.clone();
+        let request_count = request_count.clone();
+        tokio::spawn(async move {
+            let app = Router::new().route(
+                "/gate",
+                post(move || {
+                    let request_received = request_received.clone();
+                    let response_gate = response_gate.clone();
+                    let request_count = request_count.clone();
+                    async move {
+                        request_count.fetch_add(1, Ordering::AcqRel);
+                        request_received.add_permits(1);
+                        response_gate
+                            .acquire()
+                            .await
+                            .expect("response gate closed")
+                            .forget();
+                        "released"
+                    }
+                }),
+            );
+            axum::serve(listener, app).await.unwrap();
+        })
+    };
+
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let caller_id = caller_id.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &caller_id,
+                    "call_stream_free_while_fetching",
+                    data_value!("127.0.0.1", port),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(10), request_received.acquire())
+        .await
+        .map_err(|_| anyhow::anyhow!("caller did not issue the HTTP request"))??
+        .forget();
+
+    tokio::time::sleep(Duration::from_secs(31)).await;
+    assert_eq!(
+        executor.get_worker_metadata(&caller).await?.status,
+        AgentStatus::Running,
+        "the concurrent HTTP wait must conservatively block RPC suspension"
+    );
+    let caller_oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+    assert!(
+        caller_oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Suspend(_))),
+        "the first suspension attempt must not persist a Suspend entry"
+    );
+    let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    assert!(
+        target_oplog.iter().all(|entry| !matches!(
+            &entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(started)
+                if matches!(&started.invocation,
+                    PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.method_name == "increment_scalar")
+        )),
+        "the target increment ran while it was waiting for the only active-agent slot"
+    );
+
+    response_gate.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let oplog = executor
+                .get_oplog(&caller, OplogIndex::INITIAL)
+                .await
+                .expect("failed to read caller oplog");
+            if oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_)))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("RPC suspension was not retried after HTTP completed"))?;
+
+    let first = tokio::time::timeout(Duration::from_secs(10), invocation)
+        .await
+        .map_err(|_| anyhow::anyhow!("RPC did not complete after its scheduled wake"))???
+        .into_typed::<u64>()?;
+    assert_eq!(first, 1);
+    assert_eq!(request_count.load(Ordering::Acquire), 1);
+
+    let rpc_attempt_keys = rpc_attempt_keys.lock().unwrap().clone();
+    assert!(
+        rpc_attempt_keys.len() >= 2,
+        "RPC suspension must cause at least two dispatch attempts"
+    );
+    let rpc_idempotency_key = rpc_attempt_keys[0]
+        .as_ref()
+        .expect("durable RPC attempt must have an idempotency key");
+    assert!(
+        rpc_attempt_keys
+            .iter()
+            .all(|key| key.as_ref() == Some(rpc_idempotency_key)),
+        "all RPC attempts must reuse the same idempotency key"
+    );
+
+    let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let started = target_oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(&started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name == "increment_scalar"
+                                && &method.idempotency_key == rpc_idempotency_key)
+            )
+        })
+        .count();
+    let finished = target_oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if finished.method_name.as_deref() == Some("increment_scalar")
+            )
+        })
+        .count();
+    assert_eq!(started, 1, "target must start the logical RPC exactly once");
+    assert_eq!(
+        finished, 1,
+        "target must finish the logical RPC exactly once"
+    );
+
+    let second = executor
+        .invoke_and_await_agent(&component, &target_id, "increment_scalar", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(second, 2);
+
+    server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
 async fn typescript_client_streaming_rpc_e2e(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2214,6 +2865,301 @@ async fn typescript_client_streaming_rpc_e2e(
 #[test]
 #[timeout("2 minutes")]
 #[tracing::instrument]
+async fn typescript_early_output_drop_releases_streaming_cleanup_before_next_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let name = "early-output-drop-cleanup";
+    let caller_agent_id = agent_id!("TsStreamingRpcCaller", name);
+    executor
+        .start_agent(&component.id, caller_agent_id.clone())
+        .await?;
+    let target_agent_id = agent_id!("TsStreamingRpcTarget", name);
+    let target = executor
+        .start_agent(&component.id, target_agent_id.clone())
+        .await?;
+    wait_for_agent_initialization(&executor, &target).await?;
+    let mut transform_success = executor.gate_next_agent_invocation_success(&target);
+
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let caller_agent_id = caller_agent_id.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(
+                    &component,
+                    &caller_agent_id,
+                    "earlyOutputDropThenPing",
+                    data_value!(),
+                )
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(30), transform_success.entered())
+        .await
+        .map_err(|_| anyhow::anyhow!("transform did not reach its success barrier"))?;
+    transform_success.release();
+
+    let result = invocation.await??.into_typed::<(u32, u32)>()?;
+    assert_eq!(result, (0, 42));
+
+    let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let (transform_started, transform_key) = oplog
+        .iter()
+        .enumerate()
+        .find_map(|(position, entry)| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name == "transform" =>
+                {
+                    Some((position, method.idempotency_key.clone()))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .ok_or_else(|| anyhow::anyhow!("target transform has no Started entry"))?;
+    let transform_finished = oplog
+        .iter()
+        .enumerate()
+        .skip(transform_started + 1)
+        .find_map(|(position, entry)| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if finished.method_name.as_deref() == Some("transform")
+            )
+            .then_some(position)
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!("target transform {transform_key} has no matching Finished entry")
+        })?;
+    let ping_started = oplog
+        .iter()
+        .enumerate()
+        .skip(transform_finished + 1)
+        .find_map(|(position, entry)| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(
+                        &started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name == "ping"
+                    )
+            )
+            .then_some(position)
+        })
+        .ok_or_else(|| anyhow::anyhow!("target ping has no Started entry"))?;
+    assert!(
+        oplog[transform_finished + 1..ping_started]
+            .iter()
+            .all(|entry| !matches!(
+                entry.entry,
+                PublicOplogEntry::Start(_) | PublicOplogEntry::End(_)
+            )),
+        "stream cleanup appended positional durable calls after the streaming invocation finished: {:#?}",
+        &oplog[transform_finished..=ping_started]
+    );
+    assert!(
+        oplog[transform_finished + 1..ping_started]
+            .iter()
+            .any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::StreamSession(session)
+                    if matches!(
+                        StreamSessionRecord::from_value(session.record.value()),
+                        Ok(StreamSessionRecord::Finished(_))
+                    )
+            )),
+        "streaming session was not durably finished before the next invocation started: {:#?}",
+        &oplog[transform_finished..=ping_started]
+    );
+
+    let ping_finished = oplog
+        .iter()
+        .enumerate()
+        .skip(ping_started + 1)
+        .find_map(|(position, entry)| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if finished.method_name.as_deref() == Some("ping")
+            )
+            .then_some(position)
+        })
+        .ok_or_else(|| anyhow::anyhow!("subsequent invocation has no Finished entry"))?;
+    assert!(
+        oplog[ping_finished + 1..].iter().all(|entry| !matches!(
+            entry.entry,
+            PublicOplogEntry::Start(_) | PublicOplogEntry::End(_)
+        )),
+        "positional durable calls were appended after the final Finished entry: {:#?}",
+        &oplog[ping_finished..]
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn streaming_rpc_identity_survives_atomic_rollback(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    for (synchronous, with_input) in [(false, false), (true, false), (false, true)] {
+        let name = format!("atomic-streaming-{synchronous}-{with_input}");
+        let caller_id = agent_id!("StreamingRpcCaller", name.clone());
+        let target_id = agent_id!("StreamingRpcTarget", name);
+        let caller = executor
+            .start_agent(&component.id, caller_id.clone())
+            .await?;
+        let target = executor
+            .start_agent(&component.id, target_id.clone())
+            .await?;
+        wait_for_agent_initialization(&executor, &caller).await?;
+        wait_for_agent_initialization(&executor, &target).await?;
+        let gate = executor
+            .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let invocation = {
+            let executor = executor.clone();
+            let component = component.clone();
+            let caller_id = caller_id.clone();
+            let gate = gate.clone();
+            tokio::spawn(async move {
+                executor
+                    .invoke_and_await_agent(
+                        &component,
+                        &caller_id,
+                        "atomic_streaming_increment",
+                        data_value!(gate, synchronous, with_input),
+                    )
+                    .await
+            })
+        };
+        executor
+            .wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(30))
+            .await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &target_id, "scalar_value", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            1,
+            "the provider must mutate before the caller crashes"
+        );
+        let before = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        let requests = |entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+            entries
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Start(start)
+                        if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await" =>
+                    {
+                        start.request.as_ref().map(|request| {
+                            HostRequestGolemRpcInvoke::from_value(request.value())
+                                .map(|request| (entry.oplog_index, request))
+                        })
+                    }
+                    _ => None,
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let first = requests(&before)?;
+        assert_eq!(first.len(), 1);
+        let _ = executor.simulated_crash(&caller).await;
+        executor.complete_promise(&gate, Vec::new()).await?;
+        invocation.await??;
+
+        let after = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        assert!(
+            after
+                .iter()
+                .any(|entry| matches!(&entry.entry, PublicOplogEntry::Jump(_)))
+        );
+        let attempts = requests(&after)?;
+        let second = attempts.last().expect("missing retried RPC Start");
+        assert_ne!(
+            first[0].0, second.0,
+            "rollback must create a new physical Start"
+        );
+        let mutations = executor
+            .invoke_and_await_agent(&component, &target_id, "scalar_value", data_value!())
+            .await?
+            .into_typed::<u64>()?;
+        let provider = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+        let executions = provider
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                    PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.method_name == "increment_stream"
+                            || method.method_name == "increment_stream_input" =>
+                    {
+                        Some(&method.idempotency_key)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (&second.1.idempotency_key, mutations, executions),
+            (
+                &first[0].1.idempotency_key,
+                1,
+                vec![&first[0].1.idempotency_key]
+            ),
+            "two caller attempts must retain one target identity and execute one provider mutation (sync={synchronous}, input={with_input})"
+        );
+
+        // Reconstruct both agents after the region and its streams have completed.
+        drop(executor);
+        executor = start(deps, &context).await?;
+        executor
+            .invoke_and_await_agent(&component, &caller_id, "create_input_gate", data_value!())
+            .await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &target_id, "scalar_value", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            1
+        );
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &target_id, "increment_scalar", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            2,
+            "a fresh provider invocation must continue from the single committed mutation"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
 async fn caller_recovery_restarts_input_drain_after_rpc_result_commit(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2262,7 +3208,15 @@ async fn caller_recovery_restarts_input_drain_after_rpc_result_commit(
         .wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(30))
         .await?;
 
-    let _ = executor.simulated_crash(&caller).await;
+    executor.simulated_crash(&caller).await?;
+    let oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Interrupted(_))),
+        "a simulated crash of a suspended caller must not permanently interrupt it"
+    );
+    assert!(!invocation.is_finished());
     executor.complete_promise(&gate, Vec::new()).await?;
 
     let result = invocation
@@ -2604,6 +3558,60 @@ async fn rust_rpc_missing_target(
             .contains("Agent type not registered")
     );
 
+    let oplog = executor
+        .get_oplog(&parent, golem_common::model::oplog::OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().any(|entry| matches!(
+        entry.entry,
+        golem_common::model::oplog::PublicOplogEntry::Error(_)
+    )));
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn rust_rpc_missing_target_is_recoverable_with_fallible_create(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let parent_agent_id = agent_id!("RustParent", "fallible-create-missing-target");
+    let parent = executor
+        .start_agent(&component.id, parent_agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &parent_agent_id,
+            "inspect_missing_rpc_type",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    assert!(result.contains("RemoteAgentError"));
+    assert!(result.contains("InvalidType"));
+    assert!(result.contains("MissingReflectedType"));
+
+    let oplog = executor
+        .get_oplog(&parent, golem_common::model::oplog::OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().all(|entry| !matches!(
+        entry.entry,
+        golem_common::model::oplog::PublicOplogEntry::Error(_)
+    )));
+
     Ok(())
 }
 
@@ -2748,6 +3756,239 @@ async fn counter_resource_test_2_with_restart(
     assert_eq!(result_value2, 2);
 
     Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn completed_fire_and_forget_rpc_replays_span_before_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let counter_component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let caller = agent_id!("GolemHostApi", "fire-and-forget-replay-caller");
+    let counter = agent_id!("Counter", "fire-and-forget-replay-target");
+
+    executor
+        .start_agent(&caller_component.id, caller.clone())
+        .await?;
+    let invoked = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &caller,
+            "outbound_agent_rpc_invoke_result",
+            data_value!("Counter", "fire-and-forget-replay-target", "increment"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()?;
+    assert_eq!(invoked, Ok(()));
+
+    let after_delivery = executor
+        .invoke_and_await_agent(&counter_component, &counter, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(after_delivery, 2);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    executor
+        .invoke_and_await_agent(&caller_component, &caller, "get_self_uri", data_value!())
+        .await?;
+
+    let after_replay = executor
+        .invoke_and_await_agent(&counter_component, &counter, "increment", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    assert_eq!(after_replay, 3);
+
+    Ok(())
+}
+
+#[test]
+#[timeout("6m")]
+#[tracing::instrument]
+async fn fire_and_forget_rpc_recovers_from_committed_crash_prefixes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for (checkpoint, suffix) in [
+        (FireAndForgetRpcCheckpoint::Start, "start"),
+        (FireAndForgetRpcCheckpoint::StartSpan, "start-span"),
+        (FireAndForgetRpcCheckpoint::End, "end"),
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start(deps, &context).await?;
+        let caller_component = executor
+            .component_dep(&context.default_environment_id, host_api_tests)
+            .store()
+            .await?;
+        let counter_component = executor
+            .component_dep(&context.default_environment_id, agent_counters)
+            .store()
+            .await?;
+        let caller_id = agent_id!("GolemHostApi", format!("fire-and-forget-{suffix}-caller"));
+        let caller = executor
+            .start_agent(&caller_component.id, caller_id.clone())
+            .await?;
+        let counter_name = format!("fire-and-forget-{suffix}-target");
+        let counter_id = agent_id!("Counter", counter_name.clone());
+        let invocation_key = IdempotencyKey::fresh();
+        let mut gate = executor
+            .gate_next_fire_and_forget_rpc_commit(&caller, checkpoint)
+            .await;
+
+        let invocation = {
+            let executor = executor.clone();
+            let caller_component = caller_component.clone();
+            let caller_id = caller_id.clone();
+            let invocation_key = invocation_key.clone();
+            let counter_name = counter_name.clone();
+            tokio::spawn(async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &caller_component,
+                        &caller_id,
+                        &invocation_key,
+                        "outbound_agent_rpc_invoke_result",
+                        data_value!("Counter", counter_name, "increment"),
+                    )
+                    .await
+            })
+        };
+        gate.committed().await;
+
+        let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        let rpc_starts = rpc_start_indices(&prefix);
+        assert_eq!(rpc_starts.len(), 1, "checkpoint {checkpoint:?}");
+        let prefix_span_count = prefix
+            .iter()
+            .filter(|entry| {
+                entry.oplog_index > rpc_starts[0]
+                    && matches!(&entry.entry, PublicOplogEntry::StartSpan(_))
+            })
+            .count();
+        let prefix_end_count = prefix
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == rpc_starts[0]))
+            .count();
+        assert_eq!(
+            prefix_span_count,
+            usize::from(checkpoint != FireAndForgetRpcCheckpoint::Start),
+            "wrong span prefix at {checkpoint:?}: {prefix:#?}"
+        );
+        assert_eq!(
+            prefix_end_count,
+            usize::from(checkpoint == FireAndForgetRpcCheckpoint::End),
+            "wrong terminal prefix at {checkpoint:?}: {prefix:#?}"
+        );
+        assert_eq!(
+            prefix
+                .iter()
+                .filter(|entry| {
+                    entry.oplog_index > rpc_starts[0]
+                        && matches!(&entry.entry, PublicOplogEntry::FinishSpan(_))
+                })
+                .count(),
+            0,
+            "checkpoint {checkpoint:?} must precede FinishSpan: {prefix:#?}"
+        );
+
+        gate.abort_return();
+        invocation.abort();
+        drop(gate);
+        drop(executor);
+
+        let executor = start(deps, &context).await?;
+
+        let reused = executor
+            .invoke_and_await_agent_with_key(
+                &caller_component,
+                &caller_id,
+                &invocation_key,
+                "outbound_agent_rpc_invoke_result",
+                data_value!("Counter", counter_name, "increment"),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(reused, Ok(()), "checkpoint {checkpoint:?}");
+
+        let next_counter_value = executor
+            .invoke_and_await_agent(&counter_component, &counter_id, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?;
+        assert_eq!(
+            next_counter_value, 2,
+            "recovery must execute one callee effect at {checkpoint:?}"
+        );
+
+        let recovered = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            rpc_start_indices(&recovered),
+            rpc_starts,
+            "recovery must retain the original RPC identity at {checkpoint:?}"
+        );
+        assert_eq!(
+            recovered
+                .iter()
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == rpc_starts[0]))
+                .count(),
+            1,
+            "recovery must attach one terminal to the original RPC Start at {checkpoint:?}"
+        );
+        let span_ids = recovered
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::StartSpan(span) if entry.oplog_index > rpc_starts[0] => {
+                    Some(span.span_id.clone())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(span_ids.len(), 1, "checkpoint {checkpoint:?}");
+        assert_eq!(
+            recovered
+                .iter()
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::FinishSpan(span) if span.span_id == span_ids[0]))
+                .count(),
+            1,
+            "recovery must repair the original invocation span at {checkpoint:?}"
+        );
+    }
+
+    Ok(())
+}
+
+fn rpc_start_indices(
+    oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+) -> Vec<OplogIndex> {
+    oplog
+        .iter()
+        .filter_map(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "golem::rpc::wasm-rpc::invoke"
+            )
+            .then_some(entry.oplog_index)
+        })
+        .collect()
 }
 
 #[test]
@@ -3427,6 +4668,185 @@ async fn ts_abort_after_complete_is_noop(
 
     // The counter was incremented by 5, so getValue should return 5.0
     assert_eq!(result_value, 5.0);
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn ts_ephemeral_final_identity_cannot_be_reused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let agent_id = agent_id!("TestAgent", "ts_ephemeral_final_identity_cannot_be_reused");
+
+    let report = executor
+        .invoke_and_await_agent(&component, &agent_id, "ephemeralReuseTest", data_value!())
+        .await?
+        .into_return_value()
+        .expect("expected an ephemeral reuse report");
+    let SchemaValue::Record { fields } = report else {
+        panic!("expected an ephemeral reuse report record");
+    };
+    let [
+        value,
+        final_agent_id,
+        idempotency_key,
+        category,
+        error_tag,
+        details,
+    ] = fields.as_slice()
+    else {
+        panic!("expected six fields in the ephemeral reuse report");
+    };
+
+    assert_eq!(value, &SchemaValue::String("captured".to_string()));
+    assert!(
+        matches!(final_agent_id, SchemaValue::String(value) if !value.is_empty()),
+        "final ephemeral agent ID must be non-empty"
+    );
+    assert!(
+        matches!(idempotency_key, SchemaValue::String(value) if !value.is_empty()),
+        "ephemeral invocation idempotency key must be non-empty"
+    );
+    assert_eq!(
+        category,
+        &SchemaValue::String("remote-agent-error".to_string())
+    );
+    assert_eq!(error_tag, &SchemaValue::String("invalid-input".to_string()));
+    assert!(
+        matches!(details, SchemaValue::String(value) if value.contains("An ephemeral agent cannot accept another invocation or be resumed")),
+        "unexpected ephemeral reuse details: {details:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn ts_reflection_discovers_binds_and_invokes_durable_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let target_component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    assert_ne!(component.id, target_component.id);
+    let agent_id = agent_id!(
+        "TestAgent",
+        "ts_reflection_discovers_binds_and_invokes_durable_agent"
+    );
+
+    let report = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "reflectionDiscoveryTest",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .expect("expected a reflection discovery report");
+    let SchemaValue::Record { fields } = report else {
+        panic!("expected a reflection discovery report record");
+    };
+    let [
+        listed,
+        type_name,
+        method_name,
+        first_value,
+        second_value,
+        missing_name,
+        missing_id,
+    ] = fields.as_slice()
+    else {
+        panic!("expected seven fields in the reflection discovery report");
+    };
+
+    assert_eq!(listed, &SchemaValue::Bool(true));
+    assert_eq!(type_name, &SchemaValue::String("Counter".to_string()));
+    assert_eq!(method_name, &SchemaValue::String("get_value".to_string()));
+    assert_eq!(
+        first_value,
+        &SchemaValue::String(
+            "counter-reflection-ts_reflection_discovers_binds_and_invokes_durable_agent"
+                .to_string()
+        )
+    );
+    assert_eq!(second_value, first_value);
+    assert_eq!(missing_name, &SchemaValue::Bool(true));
+    assert_eq!(missing_id, &SchemaValue::Bool(true));
+
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn ts_reflected_ephemeral_invocation_returns_final_metadata(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+    let agent_id = agent_id!(
+        "TestAgent",
+        "ts_reflected_ephemeral_invocation_returns_final_metadata"
+    );
+
+    let report = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "reflectedEphemeralTest",
+            data_value!(),
+        )
+        .await?
+        .into_return_value()
+        .expect("expected a reflected ephemeral report");
+    let SchemaValue::Record { fields } = report else {
+        panic!("expected a reflected ephemeral report record");
+    };
+    let [value, final_agent_id, idempotency_key, proxy_has_agent_id] = fields.as_slice() else {
+        panic!("expected four fields in the reflected ephemeral report");
+    };
+
+    assert_eq!(value, &SchemaValue::String("reflected".to_string()));
+    assert!(
+        matches!(final_agent_id, SchemaValue::String(value) if !value.is_empty()),
+        "final reflected ephemeral agent ID must be non-empty"
+    );
+    assert!(
+        matches!(idempotency_key, SchemaValue::String(value) if !value.is_empty()),
+        "reflected ephemeral idempotency key must be non-empty"
+    );
+    assert_eq!(proxy_has_agent_id, &SchemaValue::Bool(false));
 
     Ok(())
 }

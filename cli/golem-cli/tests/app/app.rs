@@ -1,13 +1,15 @@
 use crate::app::{
     TestContext, check_component_metadata, cmd, copy_placeholder_wasm,
-    extracted_component_metadata_path_hash, flag, pattern, placeholder_component_wasm,
-    seed_extracted_metadata, seed_extraction_marker,
+    extracted_component_metadata_path_hash, extracted_metadata_json, flag, pattern,
+    placeholder_component_wasm, seed_extracted_metadata, seed_extraction_marker,
+    seed_full_extracted_metadata,
 };
 use crate::{Tracing, workspace_path};
 
 use golem_cli::fs;
 use golem_cli::model::language::GuestLanguage;
 use golem_cli::versions;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::schema::SchemaType;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::{
@@ -24,6 +26,13 @@ use toml_edit::{DocumentMut, value};
 
 inherit_test_dep!(Tracing);
 
+fn write_extracted_agent_types(
+    path: impl AsRef<Path>,
+    json: impl AsRef<str>,
+) -> anyhow::Result<()> {
+    fs::write_str(path, extracted_metadata_json(json.as_ref()))
+}
+
 #[test]
 async fn app_help_in_empty_folder(_tracing: &Tracing) {
     let ctx = TestContext::new();
@@ -32,6 +41,89 @@ async fn app_help_in_empty_folder(_tracing: &Tracing) {
     assert!(outputs.stderr_contains(pattern::HELP_USAGE));
     assert!(!outputs.stderr_contains(pattern::HELP_APPLICATION_COMPONENTS));
     assert!(!outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
+}
+
+/// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the
+/// command help go to stderr with exit code 2.
+#[test]
+async fn app_new_without_input_in_non_interactive_mode_shows_help_on_stderr(_tracing: &Tracing) {
+    let ctx = TestContext::new();
+
+    let outputs = ctx.cli([flag::YES, cmd::NEW]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("APPLICATION_PATH must be specified"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert!(outputs.stderr_contains("Available languages"));
+    assert!(!outputs.stdout_contains("APPLICATION_PATH must be specified"));
+    assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+    assert!(!outputs.stdout_contains("Available languages"));
+
+    let outputs = ctx.cli([flag::YES, cmd::NEW, "test-app-no-template"]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("at least one template must be specified"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+
+    // With structured output formats stdout stays clean
+    let outputs = ctx.cli([flag::YES, flag::FORMAT, "json", cmd::NEW]).await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+    assert_eq!(outputs.stdout().count(), 0);
+}
+
+/// `profile new` without a name starts an interactive wizard; in non-interactive mode that is a
+/// usage error reported like clap does, with or without `--yes`. The same goes for
+/// `--auth static` without a token.
+#[test]
+async fn profile_new_without_input_in_non_interactive_mode_shows_help_on_stderr(
+    _tracing: &Tracing,
+) {
+    let ctx = TestContext::new();
+
+    for args in [
+        vec![cmd::PROFILE, cmd::NEW],
+        vec![flag::YES, cmd::PROFILE, cmd::NEW],
+    ] {
+        let outputs = ctx.cli(args).await;
+        assert_eq!(outputs.exit_code(), Some(2));
+        assert!(outputs.stderr_contains("NAME must be specified"));
+        assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+        assert!(!outputs.stdout_contains(pattern::HELP_USAGE));
+    }
+
+    let outputs = ctx
+        .cli([cmd::PROFILE, cmd::NEW, "my-profile", "--auth", "static"])
+        .await;
+    assert_eq!(outputs.exit_code(), Some(2));
+    assert!(outputs.stderr_contains("--auth static requires --static-token"));
+    assert!(outputs.stderr_contains(pattern::HELP_USAGE));
+
+    // Creating and then re-creating the same profile is refused
+    let outputs = ctx
+        .cli([
+            cmd::PROFILE,
+            cmd::NEW,
+            "my-profile",
+            "--auth",
+            "static",
+            "--static-token",
+            "token",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx
+        .cli([
+            cmd::PROFILE,
+            cmd::NEW,
+            "my-profile",
+            "--auth",
+            "static",
+            "--static-token",
+            "token",
+        ])
+        .await;
+    assert!(!outputs.success());
+    assert!(outputs.stdout_contains("already exists"));
 }
 
 #[test]
@@ -151,11 +243,14 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
     );
     fs::write_str(
         ctx.cwd_path_join(&producer_extracted_component_metadata),
-        fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
+        extracted_metadata_json(
+            &fs::read_to_string(
+                crate::crate_path().join(
+                    "test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json",
+                ),
+            )
+            .unwrap(),
+        ),
     )
     .unwrap();
     let consumer_final_wasm_hash =
@@ -167,7 +262,11 @@ async fn custom_rust_component_build_waits_for_guest_bridge_sdks(_tracing: &Trac
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -242,18 +341,25 @@ async fn moonbit_component_build_waits_for_independently_buildable_agent_provide
         format!("app:producer-{producer_final_wasm_hash}.json");
     fs::write_str(
         ctx.cwd_path_join("producer-agent-types.json"),
-        fs::read_to_string(
-            crate::crate_path()
-                .join("test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json"),
-        )
-        .unwrap(),
+        extracted_metadata_json(
+            &fs::read_to_string(
+                crate::crate_path().join(
+                    "test-data/goldenfiles/extracted-agent-types/code_first_snippets_ts.json",
+                ),
+            )
+            .unwrap(),
+        ),
     )
     .unwrap();
     let consumer_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::create_dir_all(ctx.cwd_path_join("golem-temp/extracted-component-metadata")).unwrap();
     for component_name in ["app:producer", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
@@ -550,15 +656,16 @@ async fn custom_scala_component_build_waits_for_agent_and_tool_guest_bridge_sdks
         .unwrap(),
     )
     .unwrap();
-    let metadata = serde_json::json!({
-        "agentTypes": agent_types,
-        "tools": [echo_tool()]
-    });
+    let metadata = ExtractedComponentMetadata {
+        agent_types: serde_json::from_value(agent_types).unwrap(),
+        tools: vec![echo_tool()],
+        tool_middlewares: Vec::new(),
+    };
 
     let extracted_component_metadata_dir =
         ctx.cwd_path_join("golem-temp/extracted-component-metadata");
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
+    seed_full_extracted_metadata(
         &ctx,
         "app:producer",
         &producer_final_wasm,
@@ -573,7 +680,11 @@ async fn custom_scala_component_build_waits_for_agent_and_tool_guest_bridge_sdks
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -653,15 +764,16 @@ async fn custom_typescript_component_build_waits_for_agent_and_tool_guest_bridge
         .unwrap(),
     )
     .unwrap();
-    let metadata = serde_json::json!({
-        "agentTypes": agent_types,
-        "tools": [echo_tool()]
-    });
+    let metadata = ExtractedComponentMetadata {
+        agent_types: serde_json::from_value(agent_types).unwrap(),
+        tools: vec![echo_tool()],
+        tool_middlewares: Vec::new(),
+    };
 
     let extracted_component_metadata_dir =
         ctx.cwd_path_join("golem-temp/extracted-component-metadata");
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
-    seed_extracted_metadata(
+    seed_full_extracted_metadata(
         &ctx,
         "app:producer",
         &producer_final_wasm,
@@ -676,7 +788,11 @@ async fn custom_typescript_component_build_waits_for_agent_and_tool_guest_bridge
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -825,11 +941,12 @@ async fn tool_publication_only_plan_qualifies_stage_comparison(_tracing: &Tracin
         .cli([cmd::BUILD, flag::STEP, "build", flag::STEP, "add-metadata"])
         .await;
     assert!(build.success_or_dump());
-    let metadata = serde_json::json!({
-        "agentTypes": [],
-        "tools": [echo_tool()]
-    });
-    seed_extracted_metadata(
+    let metadata = ExtractedComponentMetadata {
+        agent_types: Vec::new(),
+        tools: vec![echo_tool()],
+        tool_middlewares: Vec::new(),
+    };
+    seed_full_extracted_metadata(
         &ctx,
         "app:tools",
         &final_wasm,
@@ -915,7 +1032,11 @@ async fn dependency_and_explicit_guest_bridge_default_output_dedupe_with_matcher
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -997,7 +1118,11 @@ async fn dependency_guest_bridge_coexists_with_default_external_bridge_output(_t
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -1094,7 +1219,11 @@ async fn dependency_guest_bridge_coexists_with_external_bridge_using_same_output
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -1736,7 +1865,7 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("producer-agent-types.json"),
         producer_agent_types,
     )
@@ -1745,7 +1874,11 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:producer", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -2175,7 +2308,7 @@ async fn selected_dependency_guest_bridge_does_not_build_unrelated_component_whe
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir
             .join(format!("app:producer-{producer_final_wasm_hash}.json")),
         producer_agent_types,
@@ -2185,7 +2318,11 @@ async fn selected_dependency_guest_bridge_does_not_build_unrelated_component_whe
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:producer", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -2364,7 +2501,7 @@ async fn selected_unresolved_dependency_does_not_build_unrelated_component_with_
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
     let unrelated_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:unrelated", &unrelated_final_wasm);
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir
             .join(format!("app:unrelated-{unrelated_final_wasm_hash}.json")),
         "[]",
@@ -2463,7 +2600,7 @@ async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependenc
     fs::create_dir_all(&extracted_component_metadata_dir).unwrap();
     let base_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:base", &base_final_wasm);
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         base_agent_types,
     )
@@ -2471,7 +2608,7 @@ async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependenc
     let middle_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:middle", &middle_final_wasm);
     let middle_extracted_component_metadata = format!("app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("middle-agent-types.json"),
         middle_agent_types,
     )
@@ -2480,7 +2617,11 @@ async fn selected_dependency_guest_bridge_resolves_transitive_provider_dependenc
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:base", "app:middle", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -2660,7 +2801,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -2677,7 +2818,7 @@ async fn dependency_guest_bridge_includes_producers_that_also_consume_guest_brid
     .unwrap();
     let middle_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -2794,7 +2935,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -2811,7 +2952,7 @@ async fn dependency_guest_bridge_uses_manifest_dependencies_for_rust_consumers(_
     .unwrap();
     let middle_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -2946,7 +3087,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -2963,7 +3104,7 @@ async fn selected_dependency_guest_bridge_uses_transitive_manifest_dependencies(
     .unwrap();
     let middle_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -3109,7 +3250,7 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!(
             "app:rust-producer-{rust_producer_final_wasm_hash}.json"
         )),
@@ -3126,7 +3267,7 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!(
             "app:ts-producer-{ts_producer_final_wasm_hash}.json"
         )),
@@ -3144,7 +3285,11 @@ async fn selected_dependency_guest_bridge_only_generates_for_rust_dependency_pat
 
     fs::create_dir_all(ctx.cwd_path_join("rust-consumer")).unwrap();
     fs::create_dir_all(ctx.cwd_path_join("ts-consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     let rust_consumer_final_wasm = ctx.cwd_path_join("rust-consumer/rust-consumer-final.wasm");
     let rust_consumer_final_wasm_hash = extracted_component_metadata_path_hash(
         &ctx,
@@ -3281,7 +3426,11 @@ async fn selected_typed_dependency_guest_bridge_does_not_build_unselected_compon
         "not wasm",
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
     let consumer_final_wasm_hash =
         extracted_component_metadata_path_hash(&ctx, "app:consumer", &consumer_final_wasm);
@@ -3495,7 +3644,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -3511,7 +3660,7 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
     )
     .unwrap();
     let middle_extracted_component_metadata = format!("app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(&middle_extracted_component_metadata),
         &middle_agent_types,
     )
@@ -3520,12 +3669,16 @@ async fn selected_typed_dependency_guest_bridge_includes_provider_dependencies(_
         seed_extraction_marker(&ctx, component_name);
     }
 
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("middle-agent-types.json"),
         &middle_agent_types,
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
     let consumer_final_wasm = ctx.cwd_path_join("consumer/consumer-final.wasm");
     let consumer_final_wasm_hash =
@@ -3627,7 +3780,7 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:base-{base_final_wasm_hash}.json")),
         &base_agent_types,
     )
@@ -3641,13 +3794,13 @@ async fn selected_explicit_guest_bridge_uses_transitive_manifest_dependencies(_t
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:middle-{middle_final_wasm_hash}.json")),
         &middle_agent_types,
     )
     .unwrap();
     let middle_extracted_component_metadata = format!("app:middle-{middle_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("middle-agent-types.json"),
         middle_agent_types,
     )
@@ -3852,17 +4005,21 @@ async fn selected_dependency_guest_bridge_does_not_expand_explicit_guest_bridge_
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
 
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("provider-agent-types.json"),
         provider_agent_types,
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("unrelated-agent-types.json"),
         unrelated_agent_types,
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:provider", "app:unrelated", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -3981,12 +4138,16 @@ async fn selected_dependency_provider_agent_type_does_not_satisfy_explicit_guest
     let consumer_extracted_component_metadata =
         format!("app:consumer-{consumer_final_wasm_hash}.json");
 
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("provider-agent-types.json"),
         provider_agent_types,
     )
     .unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     for component_name in ["app:provider", "app:consumer"] {
         seed_extraction_marker(&ctx, component_name);
     }
@@ -4348,7 +4509,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -4365,7 +4526,7 @@ async fn dependency_guest_bridge_builds_rust_consumers_after_post_build_guest_cl
     .unwrap();
     let base_extracted_component_metadata =
         format!("golem-temp/extracted-component-metadata/app:base-{base_final_wasm_hash}.json");
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&base_extracted_component_metadata),
         &base_agent_types,
     )
@@ -4518,7 +4679,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -4533,7 +4694,7 @@ async fn dependency_guest_bridge_waits_for_unseeded_producer_consumers(_tracing:
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("base-agent-types.json"),
         &base_agent_types,
     )
@@ -4666,7 +4827,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!("app:seed-{seed_final_wasm_hash}.json")),
         &seed_agent_types,
     )
@@ -4681,7 +4842,7 @@ async fn dependency_guest_bridge_counts_explicit_pre_build_clients_when_scheduli
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join("base-agent-types.json"),
         &base_agent_types,
     )
@@ -4805,7 +4966,7 @@ async fn custom_build_env_guest_bridge_path_waits_for_guest_bridge_sdks(_tracing
     let producer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:producer-{producer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&producer_extracted_component_metadata),
         fs::read_to_string(
             crate::crate_path()
@@ -4959,7 +5120,7 @@ async fn dependency_guest_bridge_build_targets_do_not_make_component_require_gue
     let producer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:producer-{producer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&producer_extracted_component_metadata),
         fs::read_to_string(
             crate::crate_path()
@@ -5736,7 +5897,11 @@ async fn rust_no_build_producer_generates_guest_bridge_before_consumer_build(_tr
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -5879,7 +6044,11 @@ async fn custom_unknown_language_build_consumer_waits_for_custom_guest_bridge_ou
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -6010,7 +6179,11 @@ async fn rust_template_no_build_producer_generates_guest_bridge_before_consumer_
     }
 
     fs::create_dir_all(ctx.cwd_path_join("consumer")).unwrap();
-    fs::write_str(ctx.cwd_path_join("empty-metadata.json"), "[]").unwrap();
+    fs::write_str(
+        ctx.cwd_path_join("empty-metadata.json"),
+        extracted_metadata_json("[]"),
+    )
+    .unwrap();
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {r#"
@@ -6300,7 +6473,7 @@ async fn guest_bridge_output_dir_overlap_with_default_external_dir_is_rejected_b
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &consumer_agent_types,
     )
@@ -6628,7 +6801,7 @@ async fn post_build_guest_bridge_scan_rejects_duplicate_agent_output_dir(_tracin
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &bar_agent_types,
     )
@@ -7077,7 +7250,7 @@ async fn guest_and_repl_bridge_output_dir_overlap_with_different_agent_is_reject
             .collect::<Vec<_>>(),
     )
     .unwrap();
-    fs::write_str(
+    write_extracted_agent_types(
         extracted_component_metadata_dir.join(format!(
             "app:repl-source-{repl_source_final_wasm_hash}.json"
         )),
@@ -7182,7 +7355,7 @@ async fn guest_and_build_produced_repl_bridge_output_dir_overlap_with_different_
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &consumer_agent_types,
     )
@@ -7391,7 +7564,7 @@ async fn guest_and_build_produced_external_bridge_output_dir_overlap_is_rejected
     let consumer_extracted_component_metadata = format!(
         "golem-temp/extracted-component-metadata/app:consumer-{consumer_final_wasm_hash}.json"
     );
-    fs::write_str(
+    write_extracted_agent_types(
         ctx.cwd_path_join(&consumer_extracted_component_metadata),
         &consumer_agent_types,
     )
@@ -7770,10 +7943,11 @@ async fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
     let outputs = ctx.cli([flag::YES, cmd::NEW, "dummy-app-name"]).await;
     assert!(!outputs.success());
-    assert!(outputs.stdout_contains("Available languages:"));
+    // Missing template is a usage error, so the help (with the languages) goes to stderr
+    assert!(outputs.stderr_contains("Available languages:"));
 
     let languages_without_templates = GuestLanguage::iter()
-        .filter(|language| !outputs.stdout_contains(format!("- {language}")))
+        .filter(|language| !outputs.stderr_contains(format!("- {language}")))
         .collect::<Vec<_>>();
 
     assert!(
@@ -7787,6 +7961,7 @@ async fn app_new_language_hints(_tracing: &Tracing) {
 async fn app_new_unpacks_embedded_bootstrap_skills(_tracing: &Tracing) {
     for (app_name, language) in [
         ("test-app-embedded-skills-ts", "ts"),
+        ("test-app-embedded-skills-effect", "effect"),
         ("test-app-embedded-skills-rust", "rust"),
         ("test-app-embedded-skills-scala", "scala"),
     ] {
@@ -7803,6 +7978,30 @@ async fn app_new_unpacks_embedded_bootstrap_skills(_tracing: &Tracing) {
                 .exists(),
             "missing embedded bootstrap skill for {language}",
         );
+
+        if language == "ts" {
+            assert!(
+                ctx.cwd_path_join(".agents/skills/golem-add-npm-package/SKILL.md")
+                    .exists(),
+                "missing TypeScript npm-package skill",
+            );
+            assert!(
+                !ctx.cwd_path_join(".agents/skills/golem-add-npm-package-effect/SKILL.md",)
+                    .exists(),
+                "Effect npm-package skill leaked into TypeScript template",
+            );
+        } else if language == "effect" {
+            assert!(
+                ctx.cwd_path_join(".agents/skills/golem-add-npm-package-effect/SKILL.md",)
+                    .exists(),
+                "missing Effect npm-package skill",
+            );
+            assert!(
+                !ctx.cwd_path_join(".agents/skills/golem-add-npm-package/SKILL.md")
+                    .exists(),
+                "TypeScript npm-package skill leaked into Effect template",
+            );
+        }
 
         let claude_link = ctx.cwd_path_join(".claude");
         assert!(

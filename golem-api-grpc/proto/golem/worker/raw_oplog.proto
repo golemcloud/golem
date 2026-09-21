@@ -20,6 +20,7 @@ message RawOplogEntry {
   reserved "filesystem_storage_usage_update";
 
   google.protobuf.Timestamp timestamp = 1;
+  optional uint64 entity_parent_start_index = 3;
   oneof entry {
     RawCreateParameters create = 2;
     RawAgentInvocationStartedParameters agent_invocation_started = 4;
@@ -78,7 +79,9 @@ message RawOplogEntry {
     RawDurableStreamRecordParameters stream_end = 61;
     RawDurableStreamRecordParameters stream_cancel = 62;
     RawDurableStreamRecordParameters stream_session = 63;
-    RawSnapshotConfirmedParameters snapshot_confirmed = 64;
+    RawTimestampOnly resumed = 64;
+    RawTimestampOnly recovery_succeeded = 65;
+    RawSnapshotConfirmedParameters snapshot_confirmed = 66;
   }
 }
 
@@ -220,6 +223,7 @@ message RawErrorParameters {
   uint64 retry_from = 2;
   bool inside_atomic_region = 3;
   optional bytes retry_policy_state = 4;
+  OplogErrorKind kind = 5;
 }
 
 message RawJumpParameters {

@@ -87,6 +87,7 @@ export type {
   SpanData,
   LocalSpanData,
   ExternalSpanData,
+  OplogErrorKind,
   ErrorParameters,
   OplogRegion,
   JumpParameters,
@@ -196,6 +197,7 @@ export type PublicOplogEntry =
   | { tag: 'agent-invocation-finished'; val: AgentInvocationFinishedParameters }
   | { tag: 'suspend'; val: Timestamp }
   | { tag: 'error'; val: ErrorParameters }
+  | { tag: 'recovery-succeeded'; val: Timestamp }
   | { tag: 'no-op'; val: Timestamp }
   | { tag: 'jump'; val: JumpParameters }
   | { tag: 'interrupted'; val: Timestamp }

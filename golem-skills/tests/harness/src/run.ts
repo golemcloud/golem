@@ -27,12 +27,17 @@ import {
 } from "./html-report.js";
 import * as log from "./log.js";
 import { formatScenarioMatrixLabel, renderGitHubStepSummary } from "./summary.js";
-import { detectGolemWorkspaceRoot, resolveGolemTargetDir, GolemServer } from "./workspace.js";
+import {
+  detectGolemWorkspaceRoot,
+  resolveGolemTargetDir,
+  resolveRunRouterPort,
+  GolemServer,
+} from "./workspace.js";
 
 const DEFAULT_SCENARIO_RETRIES = 5;
 
 const SUPPORTED_AGENTS = ["amp", "claude-code", "opencode", "codex", "gemini"] as const;
-const SUPPORTED_LANGUAGES = ["ts", "rust", "scala", "moonbit"] as const;
+const SUPPORTED_LANGUAGES = ["ts", "effect", "rust", "scala", "moonbit"] as const;
 
 type SupportedAgent = (typeof SUPPORTED_AGENTS)[number];
 type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
@@ -312,7 +317,7 @@ async function main() {
 
   // Resolve the target directory containing the golem binary and prepend it
   // to PATH so all spawned processes (including agent drivers) use the correct binary.
-  const golemTargetDir = resolveGolemTargetDir(golemPath);
+  const golemTargetDir = resolveGolemTargetDir(golemPath, process.env.GOLEM_TARGET_DIR);
   const pathSep = process.platform === "win32" ? ";" : ":";
   process.env.PATH = golemTargetDir + pathSep + (process.env.PATH ?? "");
   log.info(`Using golem binary from: ${golemTargetDir}`);
@@ -499,7 +504,16 @@ Options:
   log.dim(`Run ID: ${runId}`);
   const serverDataDir = path.join(workspacesRoot, "golem-server-data");
   log.info("Starting Golem server...");
-  await golemServer.start(9881, serverDataDir);
+  const selectedSpecs = scenarioFilter
+    ? allSpecs.filter((spec) => spec.name === scenarioFilter)
+    : allSpecs;
+  const routerPort = resolveRunRouterPort(
+    process.env.GOLEM_ROUTER_PORT,
+    selectedSpecs.map((spec) => spec.settings?.golem_server?.router_port),
+  );
+  process.env.GOLEM_ROUTER_PORT = String(routerPort);
+  process.env.GOLEM_BUILTIN_LOCAL_URL = `http://localhost:${routerPort}`;
+  await golemServer.start(routerPort, serverDataDir);
   log.success("Golem server is ready.");
 
   // Set up graceful Ctrl+C handling

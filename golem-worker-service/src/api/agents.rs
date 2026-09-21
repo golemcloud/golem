@@ -15,7 +15,7 @@ use golem_common::model::invocation_session_public::{
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::recorded_http_api_request;
-use golem_common::schema::{SchemaValue, TypedSchemaValue};
+use golem_common::schema::{ExternalSchemaValue, ExternalTypedSchemaValue};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket, WebSocketConfig};
@@ -227,13 +227,13 @@ pub struct AgentInvocationRequest {
     pub app_name: ApplicationName,
     pub env_name: EnvironmentName,
     pub agent_type_name: AgentTypeName,
-    pub parameters: SchemaValue,
+    pub parameters: ExternalSchemaValue,
     pub phantom_id: Option<Uuid>,
     #[oai(default)]
     #[serde(default)]
     pub config: Vec<AgentConfigEntryDto>,
     pub method_name: String,
-    pub method_parameters: SchemaValue,
+    pub method_parameters: ExternalSchemaValue,
     pub mode: AgentInvocationMode,
     pub schedule_at: Option<DateTime<Utc>>,
     pub idempotency_key: Option<IdempotencyKey>,
@@ -247,7 +247,7 @@ pub struct AgentInvocationRequest {
 pub struct AgentInvocationResult {
     pub agent_id: AgentId,
     pub idempotency_key: IdempotencyKey,
-    pub result: Option<TypedSchemaValue>,
+    pub result: Option<ExternalTypedSchemaValue>,
     pub component_revision: Option<ComponentRevision>,
 }
 
@@ -258,7 +258,7 @@ pub struct CreateAgentRequest {
     pub app_name: ApplicationName,
     pub env_name: EnvironmentName,
     pub agent_type_name: AgentTypeName,
-    pub parameters: SchemaValue,
+    pub parameters: ExternalSchemaValue,
     pub phantom_id: Option<Uuid>,
     #[oai(default)]
     #[serde(default)]
@@ -279,9 +279,12 @@ mod tests {
         AgentInvocationRequest, CreateAgentRequest, INVOCATION_SESSION_MAX_MESSAGE_SIZE,
         invocation_session_websocket_config,
     };
+    use chrono::{TimeZone, Utc};
+    use golem_common::schema::{SchemaValue, SecretValuePayload};
     use poem_openapi::types::{ParseFromJSON, ToJSON};
     use serde_json::{Value, json};
     use test_r::test;
+    use uuid::Uuid;
 
     fn empty_parameter_record() -> Value {
         json!({ "kind": "record", "value": { "fields": [] } })
@@ -340,6 +343,37 @@ mod tests {
         });
 
         assert!(CreateAgentRequest::parse_from_json(Some(request_json)).is_err());
+    }
+
+    #[test]
+    fn agent_requests_reject_forged_host_managed_parameters() {
+        let forged = serde_json::to_value(SchemaValue::Secret(SecretValuePayload {
+            secret_id: Uuid::nil(),
+            config_key: None,
+            version: 1,
+            resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+            category: None,
+        }))
+        .unwrap();
+
+        let create = json!({
+            "appName": "app",
+            "envName": "env",
+            "agentTypeName": "agent",
+            "parameters": forged,
+        });
+        assert!(CreateAgentRequest::parse_from_json(Some(create)).is_err());
+
+        let invoke = json!({
+            "appName": "app",
+            "envName": "env",
+            "agentTypeName": "agent",
+            "parameters": empty_parameter_record(),
+            "methodName": "run",
+            "methodParameters": forged,
+            "mode": "await",
+        });
+        assert!(AgentInvocationRequest::parse_from_json(Some(invoke)).is_err());
     }
 
     #[test]

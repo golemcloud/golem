@@ -591,8 +591,8 @@ object JsToolError {
     JsShape.tagged[JsToolError]("constraint-violation", message)
   def invalidResult(message: String): JsToolError =
     JsShape.tagged[JsToolError]("invalid-result", message)
-  def customError(payload: JsTypedSchemaValue): JsToolError =
-    JsShape.tagged[JsToolError]("custom-error", payload)
+  def customError(name: String, payload: JsTypedSchemaValue): JsToolError =
+    JsShape.tagged[JsToolError]("custom-error", js.Dynamic.literal("name" -> name, "payload" -> payload))
 }
 
 @js.native
@@ -640,6 +640,7 @@ object JsToolMiddlewareScope {
 @js.native
 sealed trait JsToolMiddleware extends js.Object {
   def name: String                 = js.native
+  def version: String              = js.native
   def aliases: js.Array[String]    = js.native
   def doc: JsDoc                   = js.native
   def scope: JsToolMiddlewareScope = js.native
@@ -647,12 +648,13 @@ sealed trait JsToolMiddleware extends js.Object {
 object JsToolMiddleware {
   def apply(
     name: String,
+    version: String,
     aliases: js.Array[String],
     doc: JsDoc,
     scope: JsToolMiddlewareScope
   ): JsToolMiddleware =
     js.Dynamic
-      .literal("name" -> name, "aliases" -> aliases, "doc" -> doc, "scope" -> scope)
+      .literal("name" -> name, "version" -> version, "aliases" -> aliases, "doc" -> doc, "scope" -> scope)
       .asInstanceOf[JsToolMiddleware]
 }
 

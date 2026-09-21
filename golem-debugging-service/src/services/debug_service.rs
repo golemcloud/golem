@@ -192,6 +192,7 @@ impl DebugServiceDefault {
             .worker_service()
             .get(&owned_agent_id)
             .await
+            .map_err(|e| DebugServiceError::internal(e.to_string(), Some(agent_id.clone())))?
             .ok_or_else(|| {
                 DebugServiceError::conflict(
                     agent_id.clone(),
@@ -213,7 +214,9 @@ impl DebugServiceDefault {
 
         self.all.shard_service().register(
             shard_assignment.number_of_shards,
-            &shard_assignment.shard_ids,
+            &shard_assignment.shard_epochs,
+            shard_assignment.expires_at,
+            shard_assignment.revision,
         );
 
         let worker = Worker::get_or_create_suspended(
@@ -1089,6 +1092,7 @@ mod tests {
     fn noop_entry() -> OplogEntry {
         OplogEntry::NoOp {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
         }
     }
 
@@ -1118,6 +1122,7 @@ mod tests {
     fn jump_entry(start: u64, end: u64) -> OplogEntry {
         OplogEntry::Jump {
             timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
             jump: OplogRegion {
                 start: OplogIndex::from_u64(start),
                 end: OplogIndex::from_u64(end),
@@ -1399,6 +1404,7 @@ mod tests {
                 // Any other oplog entry other than export function completed
                 OplogEntry::NoOp {
                     timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
                 }
             }
         }

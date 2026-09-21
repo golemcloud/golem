@@ -15,7 +15,9 @@
 use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::types::ObjectMetadata;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
+use golem_service_base::storage::blob::{
+    BlobRangeError, BlobStorage, BlobStorageNamespace, ExistsResult,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -95,8 +97,8 @@ pub trait BlobStoreService: Send + Sync {
     async fn delete_objects(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_names: Vec<String>,
+        container_name: &str,
+        object_names: &[String],
     ) -> Result<(), BlobStoreError>;
 
     async fn get_container(
@@ -105,6 +107,12 @@ pub trait BlobStoreService: Send + Sync {
         container_name: String,
     ) -> Result<Option<u64>, BlobStoreError>;
 
+    /// Reads the bytes from `start` to `end` of an object. Both offsets are inclusive, so the
+    /// result has `end - start + 1` bytes.
+    ///
+    /// A range with a byte that is not in the object gives [`BlobStoreError::InvalidInput`],
+    /// which is permanent, so the caller gets it on the first attempt: an `end` at or after the
+    /// size of the object, a `start` after `end`, and each range of an empty object.
     async fn get_data(
         &self,
         environment_id: EnvironmentId,
@@ -146,9 +154,9 @@ pub trait BlobStoreService: Send + Sync {
     async fn write_data(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_name: String,
-        data: Vec<u8>,
+        container_name: &str,
+        object_name: &str,
+        data: &[u8],
     ) -> Result<(), BlobStoreError>;
 }
 
@@ -280,12 +288,12 @@ impl BlobStoreService for DefaultBlobStoreService {
     async fn delete_objects(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_names: Vec<String>,
+        container_name: &str,
+        object_names: &[String],
     ) -> Result<(), BlobStoreError> {
         let paths: Vec<PathBuf> = object_names
             .iter()
-            .map(|object_name| Path::new(&container_name).join(object_name))
+            .map(|object_name| Path::new(container_name).join(object_name))
             .collect();
         self.blob_storage
             .delete_many(
@@ -334,7 +342,10 @@ impl BlobStoreService for DefaultBlobStoreService {
                 end,
             )
             .await
-            .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
+            .map_err(|err| match err.downcast_ref::<BlobRangeError>() {
+                Some(range) => BlobStoreError::InvalidInput(range.to_string()),
+                None => BlobStoreError::TransientBackend(err.to_string()),
+            })?;
 
         match data {
             Some(data) => Ok(data.to_vec()),
@@ -440,17 +451,17 @@ impl BlobStoreService for DefaultBlobStoreService {
     async fn write_data(
         &self,
         environment_id: EnvironmentId,
-        container_name: String,
-        object_name: String,
-        data: Vec<u8>,
+        container_name: &str,
+        object_name: &str,
+        data: &[u8],
     ) -> Result<(), BlobStoreError> {
         self.blob_storage
             .put_raw(
                 "blob_store",
                 "write_data",
                 BlobStorageNamespace::CustomStorage { environment_id },
-                &Path::new(&container_name).join(&object_name),
-                &data,
+                &Path::new(container_name).join(object_name),
+                data,
             )
             .await
             .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))
@@ -459,7 +470,9 @@ impl BlobStoreService for DefaultBlobStoreService {
 
 #[cfg(test)]
 mod tests {
-    use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
+    use crate::durable_host::blobstore::classify_blob_store_error;
+    use crate::durable_host::durability::HostFailureKind;
+    use crate::services::blob_store::{BlobStoreError, BlobStoreService, DefaultBlobStoreService};
     use golem_common::model::environment::EnvironmentId;
     use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -522,12 +535,7 @@ mod tests {
 
         let original_data = vec![1, 2, 3, 4];
         blob_store
-            .write_data(
-                environment_id,
-                "container1".to_string(),
-                "obj1".to_string(),
-                original_data.clone(),
-            )
+            .write_data(environment_id, "container1", "obj1", &original_data)
             .await
             .unwrap();
 
@@ -537,7 +545,7 @@ mod tests {
                 "container1".to_string(),
                 "obj1".to_string(),
                 0,
-                4,
+                3,
             )
             .await
             .unwrap();
@@ -573,12 +581,7 @@ mod tests {
 
         let original_data = vec![1, 2, 3, 4];
         blob_store
-            .write_data(
-                environment_id,
-                "container1".to_string(),
-                "obj1".to_string(),
-                original_data.clone(),
-            )
+            .write_data(environment_id, "container1", "obj1", &original_data)
             .await
             .unwrap();
 
@@ -627,6 +630,42 @@ mod tests {
                 .await
                 .unwrap(),
             vec!["obj3"]
+        );
+    }
+
+    async fn test_get_data_outside_the_object_is_invalid_input(blob_store: &impl BlobStoreService) {
+        let environment_id = EnvironmentId::new();
+        blob_store
+            .create_container(environment_id, "container1".to_string())
+            .await
+            .unwrap();
+        blob_store
+            .write_data(environment_id, "container1", "obj1", &[1, 2, 3, 4])
+            .await
+            .unwrap();
+        let read = |start, end| {
+            blob_store.get_data(
+                environment_id,
+                "container1".to_string(),
+                "obj1".to_string(),
+                start,
+                end,
+            )
+        };
+
+        assert_eq!(read(1, 2).await.unwrap(), vec![2, 3]);
+
+        let outside = futures::future::join_all(
+            [(0, 4), (4, 4), (2, 1)].map(|(start, end)| read(start, end)),
+        )
+        .await;
+        assert!(
+            outside.iter().all(|result| matches!(
+                result,
+                Err(error @ BlobStoreError::InvalidInput(_))
+                    if classify_blob_store_error(error) == HostFailureKind::Permanent
+            )),
+            "{outside:?}"
         );
     }
 
@@ -690,5 +729,18 @@ mod tests {
         let tempdir = TempDir::new().unwrap();
         let blob_store = fs_blob_store(tempdir.path()).await;
         test_container_list_copy_move_list(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_get_data_outside_the_object_is_invalid_input_in_memory() {
+        let blob_store = in_memory_blob_store();
+        test_get_data_outside_the_object_is_invalid_input(&blob_store).await;
+    }
+
+    #[test]
+    async fn test_get_data_outside_the_object_is_invalid_input_local() {
+        let tempdir = TempDir::new().unwrap();
+        let blob_store = fs_blob_store(tempdir.path()).await;
+        test_get_data_outside_the_object_is_invalid_input(&blob_store).await;
     }
 }

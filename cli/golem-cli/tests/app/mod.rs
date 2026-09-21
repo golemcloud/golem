@@ -21,11 +21,15 @@ mod app;
 mod build_and_deploy_all;
 mod cards;
 mod directory_source_ifs;
+mod moonbit_guest_streams;
 mod moonbit_tool_middleware;
 mod plugins;
 mod remote_releases;
+mod rust_streams;
+mod scala_guest_streams;
 mod scala_tool_middleware;
 mod tool_middleware;
+mod typescript_guest_streams;
 
 inherit_test_dep!(Tracing);
 
@@ -35,16 +39,21 @@ inherit_test_dep!(Tracing);
 // The `agents` module is split further by per-test `#[tag(agents_guest_bridge)]` and
 // `#[tag(agents_streaming)]` attributes; the `agents` CI shard skips those two tags.
 tag_suite!(agents, agents);
-// Everything except `app::agents` and `app::app` runs in the `deploy` shard; the untagged
-// remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+// Native guest bridge suites run in `agents_guest_bridge`; other tagged app suites run in
+// `deploy`.
+// The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(cards, deploy);
 tag_suite!(directory_source_ifs, deploy);
+tag_suite!(moonbit_guest_streams, agents_guest_bridge);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(plugins, deploy);
+tag_suite!(rust_streams, agents_guest_bridge);
+tag_suite!(scala_guest_streams, agents_guest_bridge);
 tag_suite!(scala_tool_middleware, deploy);
 tag_suite!(tool_middleware, deploy);
+tag_suite!(typescript_guest_streams, agents_guest_bridge);
 
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
@@ -61,7 +70,9 @@ use golem_cli::model::app::extracted_component_metadata_path;
 use golem_cli::sdk_overrides::sdk_overrides;
 use golem_client::Security;
 use golem_client::api::HealthCheckClient;
+use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;
+use golem_common::schema::agent::AgentTypeSchema;
 use itertools::Itertools;
 use lenient_bool::LenientBool;
 use serde::Deserialize;
@@ -101,6 +112,7 @@ mod cmd {
     pub static LIST: &str = "list";
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
+    pub static PROFILE: &str = "profile";
     pub static REGISTER: &str = "register";
     pub static REPL: &str = "repl";
     pub static TEMPLATES: &str = "templates";
@@ -261,6 +273,18 @@ impl Output {
             CommandOutput::Stdout(_) => None,
             CommandOutput::Stderr(line) => Some(line.as_str()),
         })
+    }
+
+    fn exit_code(&self) -> Option<i32> {
+        self.status.code()
+    }
+
+    fn stdout_text(&self) -> String {
+        self.stdout().join("\n")
+    }
+
+    fn stderr_text(&self) -> String {
+        self.stderr().join("\n")
     }
 
     #[must_use]
@@ -1143,7 +1167,7 @@ fn extracted_component_metadata_path_hash(
 /// Planner tests intentionally pair placeholder wasm bytes with goldenfile metadata for agent
 /// types that are not present in the component. A future content-based cache key or
 /// metadata-vs-wasm consistency check should update this helper and all callers together.
-fn seed_extracted_metadata(
+fn seed_full_extracted_metadata(
     ctx: &TestContext,
     component_name: &str,
     source_wasm_path: &Path,
@@ -1155,8 +1179,33 @@ fn seed_extracted_metadata(
         source_wasm_path,
     ));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write_str(&path, json).unwrap();
+    let metadata: ExtractedComponentMetadata = serde_json::from_str(json).unwrap();
+    fs::write_str(&path, serde_json::to_string(&metadata).unwrap()).unwrap();
     path
+}
+
+fn extracted_metadata_json(json: &str) -> String {
+    let agent_types: Vec<AgentTypeSchema> = serde_json::from_str(json).unwrap();
+    serde_json::to_string(&ExtractedComponentMetadata {
+        agent_types,
+        tools: Vec::new(),
+        tool_middlewares: Vec::new(),
+    })
+    .unwrap()
+}
+
+fn seed_extracted_metadata(
+    ctx: &TestContext,
+    component_name: &str,
+    source_wasm_path: &Path,
+    json: &str,
+) -> PathBuf {
+    seed_full_extracted_metadata(
+        ctx,
+        component_name,
+        source_wasm_path,
+        &extracted_metadata_json(json),
+    )
 }
 
 fn seed_extraction_marker(ctx: &TestContext, component_name: &str) {

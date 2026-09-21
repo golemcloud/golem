@@ -75,8 +75,21 @@ impl InitialAgentFilesService {
         environment_id: EnvironmentId,
         data: impl ReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<AgentFileContentHash, Error> {
-        let hash = data.content_hash().await?;
-        let key = PathBuf::from(hash.into_blake3().to_hex().to_string());
+        let hash = AgentFileContentHash(data.content_hash().await?);
+        self.put_if_not_exists_with_hash(environment_id, hash, data)
+            .await
+    }
+
+    /// Stores initial agent file data using a content hash already computed while reading it.
+    ///
+    /// Callers must calculate `hash` from the exact bytes produced by `data`.
+    pub async fn put_if_not_exists_with_hash(
+        &self,
+        environment_id: EnvironmentId,
+        hash: AgentFileContentHash,
+        data: impl ReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+    ) -> Result<AgentFileContentHash, Error> {
+        let key = PathBuf::from(hash.0.into_blake3().to_hex().to_string());
 
         let metadata = self
             .blob_storage
@@ -90,7 +103,7 @@ impl InitialAgentFilesService {
             .context("Failed getting metadata")?;
 
         if metadata.is_none() {
-            debug!("Storing initial agent file with hash: {}", hash);
+            debug!("Storing initial agent file with hash: {}", hash.0);
 
             self.blob_storage
                 .put_stream(
@@ -103,6 +116,6 @@ impl InitialAgentFilesService {
                 .await
                 .context("Failed storing blob storage data")?;
         };
-        Ok(AgentFileContentHash(hash))
+        Ok(hash)
     }
 }

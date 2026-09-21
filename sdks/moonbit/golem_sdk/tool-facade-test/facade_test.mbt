@@ -14,7 +14,10 @@ impl @tool.ToolErrorSchema for FacadeError with fn to_error_payload_value(_) {
 }
 
 ///|
-impl @tool.ToolErrorSchema for FacadeError with fn from_error_payload_value(_) {
+impl @tool.ToolErrorSchema for FacadeError with fn from_error_payload_value(
+  _,
+  _,
+) {
   Ok(Rejected)
 }
 

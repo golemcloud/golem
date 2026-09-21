@@ -44,11 +44,11 @@ The policy controls **when** a snapshot is taken. It can be given directly (`sna
 
 ## Typed State Snapshotting (recommended)
 
-Give `snapshotting` a `state` schema to snapshot **only the schema-declared fields** of your state — typed and scoped, so scratch/ephemeral fields are not persisted. On recovery the executor restores those fields from the last snapshot and replays the oplog tail. This is the declarative replacement for overriding `save`/`loadSnapshot`.
+Give `snapshotting` a `state` schema that describes every ordinary field needed to restore the complete state. Saving rejects undeclared ordinary fields rather than silently dropping them; SDK helpers and configuration are attached separately and are not part of the snapshot. On recovery the executor restores the validated state from the last snapshot and replays the oplog tail. This is the declarative replacement for a custom `snapshot.save`/`snapshot.load` pair.
 
 ```typescript
 export const CounterAgentImpl = CounterAgent.implement({
-    // `count` is persisted; any other field returned here is not.
+    // Every ordinary state field returned here must be declared by the schema.
     init: () => ({ count: 0 }),
     methods: {
         increment() {
@@ -59,11 +59,11 @@ export const CounterAgentImpl = CounterAgent.implement({
 });
 ```
 
-A bare policy without a `state` schema (e.g. `snapshotting: 'default'` or `snapshotting: { everyNInvocations: 5 }`) falls back to reflective JSON serialization of the whole state (config fields are excluded). Prefer the typed `state` form.
+A bare enabled policy without a `state` schema (e.g. `snapshotting: 'default'` or `snapshotting: { everyNInvocations: 5 }`) requires a custom `snapshot: { save, load }` implementation. Automatic loading is generated only when a `state` schema provides a JSON-deserializable state contract.
 
 ## Custom Snapshotting
 
-For state the default JSON path can't represent (a compact binary format, cross-version migration logic), supply a `snapshot: { save, load }` block on `.implement(...)`. `this` is the agent state; `save()` returns the raw snapshot bytes and `load(bytes)` restores from them:
+For state the default JSON path can't represent (a compact binary format, cross-version migration logic), supply a `snapshot: { save, load }` block on `.implement(...)`. `save()` runs on the live agent state and returns raw snapshot bytes. `load(bytes, context)` is a separate restoration factory: it has no `this`, does not call `init`, and must return a complete fresh state object.
 
 ```typescript
 import { z } from 'zod';
@@ -97,12 +97,15 @@ export const CounterWithSnapshotImpl = CounterWithSnapshot.implement({
         save() {
             const snapshot = new Uint8Array(4);
             new DataView(snapshot.buffer).setUint32(0, this.value);
-            console.info(`Saved snapshot: ${this.value}`);
             return snapshot;
         },
-        load(bytes) {
-            this.value = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
-            console.info(`Loaded snapshot: ${this.value}`);
+        load(bytes, _context) {
+            const value = new DataView(
+                bytes.buffer,
+                bytes.byteOffset,
+                bytes.byteLength,
+            ).getUint32(0);
+            return { value };
         },
     },
 });
@@ -114,18 +117,24 @@ export const CounterWithSnapshotImpl = CounterWithSnapshot.implement({
 // save: serialize the agent's state into raw snapshot bytes.
 save(): Uint8Array | Promise<Uint8Array>
 
-// load: restore the agent's state from previously saved snapshot bytes.
-load(bytes: Uint8Array): void | Promise<void>
+// load: construct complete state from snapshot bytes and restore context.
+load(bytes: Uint8Array, context: SnapshotRestoreContext): State | Promise<State>
 ```
 
-A custom `snapshot` block overrides the default serialization entirely. `load` may throw to signal that an update should fail and the agent should revert to the old version.
+A custom `snapshot` block overrides the default serialization entirely. The restore context provides the parsed identity, full agent ID, restored principal, phantom ID, and fresh config view.
+
+## Restoration Is Read-Only
+
+Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. Golem runs `load` in read-only mode and does not write anything it does to the oplog. Decoding, local computation, fresh randomness, config reads, and other permitted reads can be used to build the returned state. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect.
+
+The SDK installs the returned state only after `load` succeeds. If it throws or rejects, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component and replays without the failed automatic snapshot; it does not try an older automatic snapshot.
 
 ## Best Practices
 
 1. **Prefer the typed `state` schema** unless you need a compact binary format or cross-version migration logic.
 2. **Keep snapshots small** — large snapshots impact recovery and update time.
 3. **Version your snapshot format** — include a version byte or marker so `load` can handle snapshots from older versions.
-4. **Test round-trips** — verify that `save` → `load` produces equivalent state.
+4. **Test round-trips** — verify that `save` → `load` produces equivalent state without calling `init`.
 5. **Handle migration** — when the state schema changes between versions, `load` in the new version should be able to parse snapshots from the old version.
 6. **Define both or neither** — always provide `save` and `load` together to keep serialization consistent.
 

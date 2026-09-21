@@ -34,7 +34,6 @@ pub struct State {
     pub agent_types: RefCell<AgentTypes>,
     pub agent_instance: RefCell<AgentInstance>,
     pub agent_initiators: RefCell<AgentInitiators>,
-    pub initialized_principal: RefCell<Option<Principal>>,
 }
 
 #[derive(Default)]
@@ -103,6 +102,7 @@ pub fn get_state() -> &'static State {
 #[derive(Default)]
 pub struct AgentInstance {
     pub resolved_agent: Option<Rc<ResolvedAgent>>,
+    pub principal: Option<Principal>,
 }
 
 #[derive(Default)]
@@ -141,16 +141,10 @@ pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentTy
     enriched.map(|e| e.to_agent_type())
 }
 
-pub fn register_principal(principal: &Principal) {
-    let state = get_state();
-
-    *state.initialized_principal.borrow_mut() = Some(principal.clone());
-}
-
 pub fn get_principal() -> Option<Principal> {
     let state = get_state();
 
-    state.initialized_principal.borrow().clone()
+    state.agent_instance.borrow().principal.clone()
 }
 
 pub fn register_agent_type(agent_type_name: AgentTypeName, mut agent_type: ExtendedAgentType) {
@@ -176,10 +170,12 @@ pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentI
         .insert(agent_type_name, initiator);
 }
 
-pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
+pub fn register_initialized_agent(principal: Principal, resolved_agent: ResolvedAgent) {
     let state = get_state();
-
-    state.agent_instance.borrow_mut().resolved_agent = Some(Rc::new(resolved_agent));
+    *state.agent_instance.borrow_mut() = AgentInstance {
+        resolved_agent: Some(Rc::new(resolved_agent)),
+        principal: Some(principal),
+    };
 }
 
 // To be used only in agent implementation

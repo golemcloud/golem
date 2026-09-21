@@ -43,8 +43,10 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod namespace_routed_key_value_storage;
 pub mod observability;
+pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
 pub mod oplog_metrics;
+pub mod oplog_sweep;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod readonly;
@@ -54,12 +56,14 @@ pub mod retry_policies;
 pub mod revert;
 pub mod rpc;
 pub mod scalability;
+pub mod scheduler_storage;
 pub mod scope_cards;
 pub mod tool_discovery;
 pub mod tool_streaming;
 pub mod transactions;
 pub mod wasi;
 pub mod websocket;
+pub mod worker_initialization;
 
 test_r::enable!();
 
@@ -91,6 +95,7 @@ pub fn raw_params(
 
 tag_suite!(api, group1);
 tag_suite!(retry_lifecycle, group1);
+tag_suite!(worker_initialization, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 tag_suite!(in_function_retry, in_function_retry);
@@ -126,6 +131,7 @@ tag_suite!(tool_streaming, group1);
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
 sequential_suite!(indexed_storage);
+sequential_suite!(scheduler_storage);
 sequential_suite!(oplog_blob_archive);
 sequential_suite!(resource_limits);
 

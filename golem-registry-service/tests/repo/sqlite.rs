@@ -24,12 +24,15 @@ use golem_registry_service::repo::component::DbComponentRepo;
 use golem_registry_service::repo::deployment::DbDeploymentRepo;
 use golem_registry_service::repo::environment::DbEnvironmentRepo;
 use golem_registry_service::repo::environment_tool_grant::DbEnvironmentToolGrantRepo;
+use golem_registry_service::repo::environment_tool_middleware_grant::DbEnvironmentToolMiddlewareGrantRepo;
 use golem_registry_service::repo::http_api_deployment::DbHttpApiDeploymentRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::DbRegistryChangeRepo;
+use golem_registry_service::repo::retry_policy::DbRetryPolicyRepo;
+use golem_registry_service::repo::tool_middleware_release::DbToolMiddlewareReleaseRepo;
 use golem_registry_service::repo::tool_release::DbToolReleaseRepo;
 use golem_service_base::db;
 use golem_service_base::db::sqlite::SqlitePool;
@@ -92,9 +95,13 @@ async fn deps(db: &SqliteDb) -> Deps {
             db.pool.clone(),
         )),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
+        retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(db.pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(db.pool.clone())),
         environment_repo: Box::new(DbEnvironmentRepo::logged(db.pool.clone())),
         environment_tool_grant_repo: Box::new(DbEnvironmentToolGrantRepo::logged(db.pool.clone())),
+        environment_tool_middleware_grant_repo: Box::new(
+            DbEnvironmentToolMiddlewareGrantRepo::logged(db.pool.clone()),
+        ),
         plan_repo: Box::new(DbPlanRepo::logged(db.pool.clone())),
         component_repo: Box::new(DbComponentRepo::logged(db.pool.clone())),
         http_api_deployment_repo: Box::new(DbHttpApiDeploymentRepo::logged(db.pool.clone())),
@@ -104,6 +111,9 @@ async fn deps(db: &SqliteDb) -> Deps {
         plugin_repo: Box::new(DbPluginRepo::logged(db.pool.clone())),
         registry_change_repo: Box::new(DbRegistryChangeRepo::new(db.pool.clone())),
         tool_release_repo: Box::new(DbToolReleaseRepo::logged(db.pool.clone())),
+        tool_middleware_release_repo: Box::new(DbToolMiddlewareReleaseRepo::logged(
+            db.pool.clone(),
+        )),
         test_db: TestDb::Sqlite(db.pool.clone()),
     };
     deps.setup().await;
@@ -165,6 +175,14 @@ async fn test_application_delete(deps: &Deps) {
 #[test]
 async fn test_environment_create(deps: &Deps) {
     crate::repo::common::test_environment_create(deps).await;
+}
+
+#[test]
+async fn test_environment_service_persists_and_updates_tool_compatibility_mode(deps: &Deps) {
+    crate::repo::common::test_environment_service_persists_and_updates_tool_compatibility_mode(
+        deps,
+    )
+    .await;
 }
 
 #[test]
@@ -230,6 +248,11 @@ async fn test_environment_default_card_tracks_application_rename(deps: &Deps) {
 #[test]
 async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
     crate::repo::common::test_agent_secret_get_revision_include_deleted(deps).await;
+}
+
+#[test]
+async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps) {
+    crate::repo::common::test_retry_policy_and_agent_secret_natural_key_lookups(deps).await;
 }
 
 #[test]
@@ -394,4 +417,9 @@ async fn test_registry_change_mixed_event_types(deps: &Deps) {
 #[test]
 async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
     crate::repo::common::test_tool_release_and_grant_repository_contracts(deps).await;
+}
+
+#[test]
+async fn test_tool_middleware_release_and_grant_repository_contracts(deps: &Deps) {
+    crate::repo::common::test_tool_middleware_release_and_grant_repository_contracts(deps).await;
 }

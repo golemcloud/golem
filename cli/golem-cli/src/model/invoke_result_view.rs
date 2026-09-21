@@ -154,6 +154,6 @@ impl InvokeResultView {
             return Ok((false, None));
         };
 
-        Ok((false, Some(typed.clone())))
+        Ok((false, Some(typed.as_inner().clone())))
     }
 }

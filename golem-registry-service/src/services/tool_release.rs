@@ -13,6 +13,11 @@
 // limitations under the License.
 
 use super::account::{AccountError, AccountService};
+use super::component::ComponentService;
+use super::release_grant_lifecycle::{
+    PublicationDecision, ReleaseLifecycle, ReleaseManagementDecision, publication_decision,
+    release_management_decision,
+};
 use crate::repo::model::tool_release::{
     TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_PUBLISHED,
     TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, ToolReleaseRecord,
@@ -86,26 +91,23 @@ error_forwarding!(ToolReleaseError, AccountError, ToolReleaseRepoError);
 pub struct ToolReleaseService {
     tool_release_repo: Arc<dyn ToolReleaseRepo>,
     account_service: Arc<AccountService>,
+    component_service: Arc<ComponentService>,
     builtin_tool_owner_account_id: AccountId,
 }
 
-enum PublicationAssessment {
-    NoChange(ToolReleaseId),
-    Publish,
-    ImmutableConflict,
-    StrictFollowingGrantConflict,
-    DePublishedConflict,
-}
+type PublicationAssessment = PublicationDecision<ToolReleaseId>;
 
 impl ToolReleaseService {
     pub fn new(
         tool_release_repo: Arc<dyn ToolReleaseRepo>,
         account_service: Arc<AccountService>,
+        component_service: Arc<ComponentService>,
         builtin_tool_owner_account_id: AccountId,
     ) -> Self {
         Self {
             tool_release_repo,
             account_service,
+            component_service,
             builtin_tool_owner_account_id,
         }
     }
@@ -270,33 +272,28 @@ impl ToolReleaseService {
             .get_by_coordinates(owner_account_id.0, name.as_str(), &definition.version)
             .await?
         else {
-            return Ok(PublicationAssessment::Publish);
+            return Ok(publication_decision(None, immutable, false));
         };
-        match existing.release.lifecycle {
-            TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED => Ok(PublicationAssessment::DePublishedConflict),
-            TOOL_RELEASE_LIFECYCLE_SUPERSEDED => Ok(PublicationAssessment::Publish),
-            TOOL_RELEASE_LIFECYCLE_PUBLISHED => {
-                let content_matches = existing.release.tool_definition.value() == definition
-                    && existing.release.metadata_version == metadata_version
-                    && diff::Hash::from(existing.release.metadata_digest) == metadata_digest;
-                if content_matches {
-                    Ok(PublicationAssessment::NoChange(ToolReleaseId(
-                        existing.release.tool_release_id,
-                    )))
-                } else if immutable {
-                    Ok(PublicationAssessment::ImmutableConflict)
-                } else if self
-                    .tool_release_repo
-                    .strict_following_grant_exists(existing.release.tool_release_id)
-                    .await?
-                {
-                    Ok(PublicationAssessment::StrictFollowingGrantConflict)
-                } else {
-                    Ok(PublicationAssessment::Publish)
-                }
-            }
-            lifecycle => Err(anyhow::anyhow!("unknown tool release lifecycle {lifecycle}").into()),
-        }
+        let lifecycle = release_lifecycle(existing.release.lifecycle)?;
+        let content_matches = existing.release.tool_definition.value() == definition
+            && existing.release.metadata_version == metadata_version
+            && diff::Hash::from(existing.release.metadata_digest) == metadata_digest;
+        let strict_following_grant_exists = lifecycle == ReleaseLifecycle::Published
+            && !content_matches
+            && !immutable
+            && self
+                .tool_release_repo
+                .strict_following_grant_exists(existing.release.tool_release_id)
+                .await?;
+        Ok(publication_decision(
+            Some((
+                ToolReleaseId(existing.release.tool_release_id),
+                lifecycle,
+                content_matches,
+            )),
+            immutable,
+            strict_following_grant_exists,
+        ))
     }
 
     pub async fn get(
@@ -357,11 +354,18 @@ impl ToolReleaseService {
         let record = self
             .authorize_management(release_id, AccountToolReleaseVerb::DePublish, auth)
             .await?;
-        if record.release.origin == TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM {
-            return Err(ToolReleaseError::ProtectedToolRelease);
-        }
-        if record.release.lifecycle != TOOL_RELEASE_LIFECYCLE_PUBLISHED {
-            return Err(ToolReleaseError::ToolReleaseNotPublished);
+        match release_management_decision(
+            record.release.origin == TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM,
+            release_lifecycle(record.release.lifecycle)?,
+            ReleaseLifecycle::Published,
+        ) {
+            ReleaseManagementDecision::Protected => {
+                return Err(ToolReleaseError::ProtectedToolRelease);
+            }
+            ReleaseManagementDecision::InvalidLifecycle => {
+                return Err(ToolReleaseError::ToolReleaseNotPublished);
+            }
+            ReleaseManagementDecision::Change => {}
         }
         self.tool_release_repo
             .de_publish(release_id.0, auth.actor_account_id().0)
@@ -380,11 +384,18 @@ impl ToolReleaseService {
         let record = self
             .authorize_management(release_id, AccountToolReleaseVerb::Restore, auth)
             .await?;
-        if record.release.origin == TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM {
-            return Err(ToolReleaseError::ProtectedToolRelease);
-        }
-        if record.release.lifecycle != TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED {
-            return Err(ToolReleaseError::ToolReleaseNotDePublished);
+        match release_management_decision(
+            record.release.origin == TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM,
+            release_lifecycle(record.release.lifecycle)?,
+            ReleaseLifecycle::DePublished,
+        ) {
+            ReleaseManagementDecision::Protected => {
+                return Err(ToolReleaseError::ProtectedToolRelease);
+            }
+            ReleaseManagementDecision::InvalidLifecycle => {
+                return Err(ToolReleaseError::ToolReleaseNotDePublished);
+            }
+            ReleaseManagementDecision::Change => {}
         }
         self.tool_release_repo
             .restore(release_id.0, auth.actor_account_id().0)
@@ -469,6 +480,49 @@ impl ToolReleaseService {
         &self,
         provision: SystemToolReleaseProvision,
     ) -> Result<ToolRelease, ToolReleaseError> {
+        if !is_valid_system_release_source(&provision.source, provision.availability) {
+            return Err(ToolReleaseError::InternalError(anyhow::anyhow!(
+                "system tool release availability does not match its source"
+            )));
+        }
+        if let ToolSource::Component {
+            component_id,
+            component_revision,
+            component_name,
+        } = &provision.source
+        {
+            let component = self
+                .component_service
+                .get_component_revision(
+                    *component_id,
+                    *component_revision,
+                    false,
+                    &AuthCtx::system(),
+                )
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!("invalid system tool component source: {error}")
+                })?;
+            let deployed = self
+                .component_service
+                .get_all_deployed_component_versions(*component_id, &AuthCtx::system())
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!("invalid system tool component source: {error}")
+                })?;
+            let exported = component.metadata.tools().get(&provision.name);
+            if component.account_id != self.builtin_tool_owner_account_id
+                || component.component_name != *component_name
+                || !deployed
+                    .iter()
+                    .any(|value| value.revision == *component_revision)
+                || exported.map(|value| &value.definition) != Some(&provision.definition)
+            {
+                return Err(ToolReleaseError::InternalError(anyhow::anyhow!(
+                    "system tool component source does not match its owner, deployed revision, name, or exported metadata"
+                )));
+            }
+        }
         let candidate = ToolReleaseRecord::from_system_provision(
             self.builtin_tool_owner_account_id,
             provision,
@@ -493,6 +547,65 @@ impl ToolReleaseService {
             }
             Err(other) => Err(other.into()),
         }
+    }
+
+    pub(crate) async fn preflight_system_component_release(
+        &self,
+        name: &ToolName,
+        version: &str,
+        definition: &Tool,
+        component_name: &golem_common::model::component::ComponentName,
+        wasm_hash: diff::Hash,
+    ) -> Result<(), ToolReleaseError> {
+        let Some(existing) = self
+            .tool_release_repo
+            .get_by_coordinates(self.builtin_tool_owner_account_id.0, name.as_str(), version)
+            .await?
+        else {
+            return Ok(());
+        };
+        let release: ToolRelease = existing.release.try_into()?;
+        let ToolSource::Component {
+            component_id,
+            component_revision,
+            component_name: recorded_name,
+        } = release.source
+        else {
+            return Err(ToolReleaseError::ImmutableReleaseConflict);
+        };
+        let component = self
+            .component_service
+            .get_component_revision(component_id, component_revision, false, &AuthCtx::system())
+            .await
+            .map_err(|_| ToolReleaseError::ImmutableReleaseConflict)?;
+        let deployed = self
+            .component_service
+            .get_all_deployed_component_versions(component_id, &AuthCtx::system())
+            .await
+            .map_err(|_| ToolReleaseError::ImmutableReleaseConflict)?;
+        if release.definition != *definition
+            || release.metadata_version != TOOL_METADATA_WIT_VERSION
+            || !release.immutable
+            || release.lifecycle != ToolReleaseLifecycle::Published
+            || release.origin != ToolReleaseOrigin::ProtectedSystem
+            || release.system_availability != Some(SystemToolAvailability::Grantable)
+            || recorded_name != *component_name
+            || component.component_name != *component_name
+            || component.account_id != self.builtin_tool_owner_account_id
+            || component.wasm_hash != wasm_hash
+            || !deployed
+                .iter()
+                .any(|value| value.revision == component_revision)
+            || component
+                .metadata
+                .tools()
+                .get(name)
+                .map(|tool| &tool.definition)
+                != Some(definition)
+        {
+            return Err(ToolReleaseError::ImmutableReleaseConflict);
+        }
+        Ok(())
     }
 
     async fn authorize_management(
@@ -531,11 +644,35 @@ impl ToolReleaseService {
     }
 }
 
+fn release_lifecycle(value: i16) -> Result<ReleaseLifecycle, ToolReleaseError> {
+    match value {
+        TOOL_RELEASE_LIFECYCLE_PUBLISHED => Ok(ReleaseLifecycle::Published),
+        TOOL_RELEASE_LIFECYCLE_SUPERSEDED => Ok(ReleaseLifecycle::Superseded),
+        TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED => Ok(ReleaseLifecycle::DePublished),
+        value => Err(anyhow::anyhow!("unknown tool release lifecycle {value}").into()),
+    }
+}
+
 fn is_user_grantable(
     origin: ToolReleaseOrigin,
     availability: Option<SystemToolAvailability>,
 ) -> bool {
     origin == ToolReleaseOrigin::Ordinary || availability == Some(SystemToolAvailability::Grantable)
+}
+
+fn is_valid_system_release_source(
+    source: &ToolSource,
+    availability: SystemToolAvailability,
+) -> bool {
+    matches!(
+        (availability, source),
+        (SystemToolAvailability::Ambient, ToolSource::Host { .. })
+            | (
+                SystemToolAvailability::Grantable,
+                ToolSource::Component { .. }
+            )
+            | (SystemToolAvailability::AutoGranted, _)
+    )
 }
 
 fn authorize_account_tool_release_permission(
@@ -557,7 +694,9 @@ fn authorize_account_tool_release_permission(
 
 #[cfg(test)]
 mod tests {
-    use super::is_user_grantable;
+    use super::{is_user_grantable, is_valid_system_release_source};
+    use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use golem_common::model::tool::{HostToolId, ToolSource};
     use golem_common::model::tool_release::{SystemToolAvailability, ToolReleaseOrigin};
     use test_r::test;
 
@@ -575,6 +714,44 @@ mod tests {
         assert!(!is_user_grantable(
             ToolReleaseOrigin::ProtectedSystem,
             Some(SystemToolAvailability::Ambient)
+        ));
+    }
+
+    #[test]
+    fn protected_release_source_matches_availability() {
+        let host = ToolSource::Host {
+            host_tool_id: HostToolId::try_from("native".to_string()).unwrap(),
+            implementation_version: "1".to_string(),
+        };
+        let component = ToolSource::Component {
+            component_id: ComponentId::new(),
+            component_revision: ComponentRevision::INITIAL,
+            component_name: ComponentName("builtin".to_string()),
+        };
+
+        assert!(is_valid_system_release_source(
+            &host,
+            SystemToolAvailability::Ambient
+        ));
+        assert!(is_valid_system_release_source(
+            &component,
+            SystemToolAvailability::Grantable
+        ));
+        assert!(!is_valid_system_release_source(
+            &component,
+            SystemToolAvailability::Ambient
+        ));
+        assert!(!is_valid_system_release_source(
+            &host,
+            SystemToolAvailability::Grantable
+        ));
+        assert!(is_valid_system_release_source(
+            &host,
+            SystemToolAvailability::AutoGranted
+        ));
+        assert!(is_valid_system_release_source(
+            &component,
+            SystemToolAvailability::AutoGranted
         ));
     }
 }

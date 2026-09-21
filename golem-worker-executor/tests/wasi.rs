@@ -2388,7 +2388,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     deps: &WorkerExecutorTestDependencies,
     initial_file_system: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_api_grpc::proto::golem::shardmanager::ShardId;
+    use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
         AssignShardsRequest, RevokeShardsRequest, assign_shards_response, revoke_shards_response,
     };
@@ -2457,6 +2457,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     let revoked = client
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
+            revision: 1,
         })
         .await?
         .into_inner();
@@ -2474,7 +2475,14 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
     assert!(!executor.worker_is_loaded(&owned_agent_id).await);
     let assigned = client
         .assign_shards(AssignShardsRequest {
-            shard_ids: vec![shard],
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(shard),
+                epoch: 0,
+            }],
+            // A lease TTL is required on the wire; one long enough that this
+            // round trip does not depend on timing.
+            revision: 1,
+            number_of_shards: 1,
         })
         .await?
         .into_inner();
@@ -3841,6 +3849,8 @@ async fn interrupt_while_parked_in_p3_sleep(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+    use std::collections::HashSet;
 
     let context = TestContext::new(last_unique_id);
     // Keep the parked wait from suspending during the test, so the interrupt must be delivered
@@ -3851,7 +3861,7 @@ async fn interrupt_while_parked_in_p3_sleep(
         })),
         ..Default::default()
     };
-    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -3861,6 +3871,22 @@ async fn interrupt_while_parked_in_p3_sleep(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    // Loading the worker does not wait for initialization to finish. Keep its Finished entry
+    // before the baseline so it cannot be counted as completion of the interrupted sleep.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            if entries
+                .iter()
+                .any(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    let before_invocation = executor.oplog_max_index(&worker_id).await?;
 
     let executor_clone = executor.clone();
     let component_clone = component.clone();
@@ -3906,12 +3932,132 @@ async fn interrupt_while_parked_in_p3_sleep(
         )
         .await?;
 
-    // Resuming replays the worker; the retained invocation re-enters the wait and completes
-    // once the originally recorded deadline elapses.
+    let interrupted_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let terminal_starts = interrupted_oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) => Some(end.start_index),
+            PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let incomplete_waits = interrupted_oplog
+        .iter()
+        .filter(|entry| entry.oplog_index > before_invocation)
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name.contains("wait")
+                    && !terminal_starts.contains(&entry.oplog_index) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        incomplete_waits.len(),
+        1,
+        "the interrupted P3 clock wait must have one incomplete Start"
+    );
+    let wait_start = incomplete_waits[0];
+
+    // The Resumed hint must immediately make the retained invocation visible as running, while
+    // its original durable wait is still incomplete.
     executor.resume(&worker_id, false).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(2))
+        .await?;
+    let after_first_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let starts = after_first_resume
+        .iter()
+        .filter(|entry| entry.oplog_index == wait_start)
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(_)))
+        .count();
+    let ends = after_first_resume
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == wait_start)
+        })
+        .count();
+    let admitted = after_first_resume
+        .iter()
+        .filter(|entry| entry.oplog_index > before_invocation)
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .count();
+    let finished = after_first_resume
+        .iter()
+        .filter(|entry| entry.oplog_index > before_invocation)
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .count();
+    assert_eq!((starts, ends, admitted, finished), (1, 0, 1, 0));
+    let first_interrupted = after_first_resume
+        .iter()
+        .rposition(|entry| matches!(&entry.entry, PublicOplogEntry::Interrupted(_)))
+        .expect("missing first Interrupted hint");
+    assert!(
+        after_first_resume[first_interrupted + 1..]
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::Resumed(_))),
+        "resume must commit a Resumed hint after Interrupted"
+    );
+    let interrupts_after_first_resume = after_first_resume
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Interrupted(_)))
+        .count();
+
+    // A stale Interrupted status used to make this second interrupt a no-op.
+    executor.interrupt(&worker_id).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, Duration::from_secs(2))
+        .await?;
+    let after_second_interrupt = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        after_second_interrupt
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Interrupted(_)))
+            .count()
+            > interrupts_after_first_resume,
+        "the second interrupt must append another Interrupted hint"
+    );
+
+    executor.resume(&worker_id, false).await?;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(2))
+        .await?;
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
     executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(60))
         .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let starts = oplog
+        .iter()
+        .filter(|entry| entry.oplog_index == wait_start)
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Start(_)))
+        .count();
+    let ends = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == wait_start)
+        })
+        .count();
+    let admitted = oplog
+        .iter()
+        .filter(|entry| entry.oplog_index > before_invocation)
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .count();
+    let finished = oplog
+        .iter()
+        .filter(|entry| entry.oplog_index > before_invocation)
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .count();
+    assert_eq!(
+        (starts, ends, admitted, finished),
+        (1, 1, 1, 1),
+        "restart must complete the original wait and invocation exactly once"
+    );
 
     let start = Instant::now();
     executor

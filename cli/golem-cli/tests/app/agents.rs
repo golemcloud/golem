@@ -851,9 +851,15 @@ async fn test_streaming_invocation_cli_end_to_end() {
             .is_some_and(|cursors| !cursors.is_empty()),
         "checkpoint did not record the item emitted before interruption: {saved_checkpoint}"
     );
-    // Process exit does not wait for the server to persist the transport detach.
-    let detach_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let expected_idempotency_key = saved_checkpoint["idempotencyKey"]
+        .as_str()
+        .expect("checkpoint did not record the invocation idempotency key");
+    let delivered_output_cursors = saved_checkpoint["deliveredOutputCursors"].clone();
+    let resume_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut resume_attempts = 0;
+    let mut initial_rejections = 0;
     let resumed = loop {
+        resume_attempts += 1;
         let resumed = ctx
             .cli([
                 cmd::AGENT,
@@ -868,28 +874,51 @@ async fn test_streaming_invocation_cli_end_to_end() {
                 resume_checkpoint.to_str().unwrap(),
             ])
             .await;
-        if resumed.success() {
-            break resumed;
-        }
         let events = resumed.stdout_json::<serde_json::Value>();
-        if events.len() != 1
-            || events[0]["kind"] != "rejected"
-            || events[0]["reason"] != "invalid-attachment-state"
-        {
+        let retryable_initial_rejection = !resumed.success()
+            && events.len() == 1
+            && events[0]["$type"] == "agent.invoke-session"
+            && events[0]["kind"] == "rejected"
+            && events[0]["reason"] == "invalid-attachment-state"
+            && events[0]["agentId"] == resume_agent
+            && events[0]["idempotencyKey"] == expected_idempotency_key;
+        if !retryable_initial_rejection {
             break resumed;
         }
-        assert!(
-            tokio::time::Instant::now() < detach_deadline,
-            "the killed invocation session did not become resumable"
+        initial_rejections += 1;
+        let retry_checkpoint: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&resume_checkpoint).unwrap()).unwrap();
+        assert_eq!(
+            retry_checkpoint["deliveredOutputCursors"], delivered_output_cursors,
+            "resume rejection changed delivered cursors on attempt {resume_attempts}: {retry_checkpoint}"
         );
+        if tokio::time::Instant::now() >= resume_deadline {
+            panic!(
+                "checkpoint resume exhausted retries after {resume_attempts} attempts \
+                 ({initial_rejections} initial invalid-attachment-state rejections; exit {:?})\n\
+                 --- stdout ---\n{}\n--- stderr ---\n{}",
+                resumed.exit_code(),
+                resumed.stdout_text(),
+                resumed.stderr_text()
+            );
+        }
         tokio::time::sleep(Duration::from_millis(10)).await;
     };
     assert!(
-        resumed.success_or_dump(),
-        "checkpoint resume failed ({:?}): {:?}",
-        resumed.status,
-        resumed.stderr().collect::<Vec<_>>()
+        resumed.success(),
+        "checkpoint resume failed after {resume_attempts} attempts \
+         ({initial_rejections} initial invalid-attachment-state rejections; exit {:?})\n\
+         --- stdout ---\n{}\n--- stderr ---\n{}",
+        resumed.exit_code(),
+        resumed.stdout_text(),
+        resumed.stderr_text()
     );
+    if initial_rejections > 0 {
+        eprintln!(
+            "checkpoint resume succeeded after {resume_attempts} attempts with \
+             {initial_rejections} initial invalid-attachment-state rejections"
+        );
+    }
     let resumed_events = resumed
         .stdout()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
@@ -2226,55 +2255,63 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 
     run_and_assert(&ctx, "fun_enum_with_only_literals", &["A"]).await;
 
-    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_multi_modal",
-    //     &[r#"[text("foo"), text("foo"), data({id: 1, name: "foo"})]"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_multi_modal_basic",
-    //     &[r#"[text(url("foo"))]"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text",
-    //     &[r#"url("foo")"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text",
-    //     &[r#"inline({data: "foo", text-type: none})"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text_lc",
-    //     &[r#"url("foo")"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_text_lc",
-    //     &[r#"inline({data: "foo", text-type: some({language-code: "en"})})"#],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "fun_unstructured_binary",
-    //     &[r#"url("foo")"#],
-    // )
-    // .await;
+    // Multimodal with user-defined element types
+    run_and_assert(
+        &ctx,
+        "fun_multi_modal",
+        &[r#"[Text("foo"), Image([1, 2, 3]), Data(Data { id: 1, name: "foo" })]"#],
+    )
+    .await;
+
+    // Multimodal with the built-in unstructured text / binary element types
+    run_and_assert(
+        &ctx,
+        "fun_multi_modal_basic",
+        &[
+            r#"[Text(Url(Url("https://example.com/foo"))), Binary(Inline(Binary("data:text/plain;base64,Zm9v")))]"#,
+        ],
+    )
+    .await;
+
+    // Unstructured text
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_text",
+        &[r#"Url(Url("https://example.com/foo"))"#],
+    )
+    .await;
+
+    run_and_assert(&ctx, "fun_unstructured_text", &[r#"Inline(Text("foo"))"#]).await;
+
+    // Unstructured text with language restrictions
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_text_lc",
+        &[r#"Url(Url("https://example.com/foo"))"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_text_lc",
+        &[r#"Inline(Text("foo", "en"))"#],
+    )
+    .await;
+
+    // Unstructured binary with mime type restrictions
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_binary",
+        &[r#"Url(Url("https://example.com/foo"))"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "fun_unstructured_binary",
+        &[r#"Inline(Binary("data:text/plain;base64,Zm9v"))"#],
+    )
+    .await;
 }
 
 /// End-to-end test for the Rust guest tool bridge: a provider component
@@ -3425,6 +3462,131 @@ async fn test_ts_counter() {
 }
 
 #[test]
+async fn test_previous_invocation_failed_revert_workflow() {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, "failed-revert", flag::TEMPLATE, "ts"])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd("failed-revert");
+
+    fs::write_str(
+        ctx.cwd_path_join("src/counter-agent.ts"),
+        indoc! { r#"
+            import { z } from 'zod';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
+
+            export const CounterAgent = defineAgent({
+              name: 'CounterAgent',
+              id: { name: z.string() },
+              methods: {
+                value: method({ input: {}, returns: z.number() }),
+                increment: method({ input: {}, returns: z.number() }),
+                fail: method({ input: {}, returns: z.number() }),
+              },
+            });
+
+            export const CounterAgentImpl = CounterAgent.implement({
+              init: () => ({ count: 0 }),
+              methods: {
+                value() {
+                  return this.count;
+                },
+                increment() {
+                  this.count += 1;
+                  return this.count;
+                },
+                fail() {
+                  console.error('intentional failure stderr');
+                  throw new Error('intentional invocation failure');
+                },
+              },
+            });
+        "# },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+    let outputs = ctx
+        .cli([
+            "retry-policy",
+            "create",
+            "no-retries",
+            "--priority",
+            "100",
+            "--predicate",
+            "true",
+            "--policy",
+            "never",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let agent_id = r#"CounterAgent("quote ' and space")"#;
+    let outputs = ctx
+        .cli([cmd::AGENT, cmd::INVOKE, agent_id, "increment"])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("1"));
+
+    let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, agent_id, "fail"]).await;
+    assert!(!outputs.success());
+
+    let outputs = ctx.cli([cmd::AGENT, "resume", agent_id]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains("Previous Invocation Failed"));
+    assert!(outputs.stderr_contains("agent revert"));
+
+    let outputs = ctx.cli([cmd::AGENT, "stream", agent_id]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains("Previous Invocation Failed"));
+    assert!(outputs.stderr_contains("agent revert"));
+
+    let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, agent_id, "value"]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains_ordered([
+        "Previous Invocation Failed",
+        "intentional failure stderr",
+        "intentional invocation failure",
+        "To discard the failed invocation",
+        "agent revert",
+        "External side effects",
+    ]));
+    assert!(outputs.stderr_contains("--number-of-invocations 1"));
+    assert!(!outputs.stderr_contains("agent revert --yes"));
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "revert",
+            agent_id,
+            "--number-of-invocations",
+            "1",
+        ])
+        .await;
+    assert!(!outputs.success());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            "revert",
+            agent_id,
+            "--number-of-invocations",
+            "1",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::AGENT, cmd::INVOKE, agent_id, "value"]).await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("1"));
+}
+
+#[test]
 async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
     let mut ctx = TestContext::new();
     let app_name = "long-agent-id-rejected";
@@ -3463,7 +3625,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
         &component_source_code_main_file,
         indoc! { r#"
             import { z } from 'zod';
-            import { defineAgent, method, clientFor } from '@golemcloud/golem-ts-sdk';
+            import { defineAgent, method } from '@golemcloud/golem-ts-sdk';
 
             export const TargetAgent = defineAgent({
               name: 'TargetAgent',
@@ -3482,8 +3644,6 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               },
             });
 
-            const targetClient = clientFor(TargetAgent);
-
             export const CallerAgent = defineAgent({
               name: 'CallerAgent',
               id: { id: z.string() },
@@ -3496,7 +3656,7 @@ async fn test_long_agent_id_rejected_in_invoke_repl_and_rpc() {
               init: ({ id }) => ({ id: id.id }),
               methods: {
                 async callTarget({ targetId }) {
-                  return await targetClient({ id: targetId }).ping();
+                  return await TargetAgent.client.get({ id: targetId }).ping();
                 },
               },
             });
@@ -3716,27 +3876,50 @@ async fn test_ts_code_first_with_rpc_and_all_types() {
     // Union that has only literals
     run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""foo""#]).await;
 
-    // TODO: Re-enable once the CLI's argument parsing supports multimodal/unstructured types
-    // // Unstructured text type
-    // run_and_assert(&ctx, "funUnstructuredText", &["url(\"foo\")"]).await;
-    //
-    // // Unstructured binary
-    // run_and_assert(&ctx, "funUnstructuredBinary", &["url(\"foo\")"]).await;
-    //
-    // // Multimodal
-    // run_and_assert(
-    //     &ctx,
-    //     "funMultimodal",
-    //     &["[text(inline({data: \"data\", text-type: none}))]"],
-    // )
-    // .await;
-    //
-    // run_and_assert(
-    //     &ctx,
-    //     "funMultimodalAdvanced",
-    //     &["[text(\"foo\")]"],
-    // )
-    // .await;
+    // Unstructured text type
+    run_and_assert(
+        &ctx,
+        "funUnstructuredText",
+        &[r#"{tag: "url", value: Url("https://example.com/foo")}"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "funUnstructuredText",
+        &[r#"{tag: "inline", value: Text("foo")}"#],
+    )
+    .await;
+
+    // Unstructured binary
+    run_and_assert(
+        &ctx,
+        "funUnstructuredBinary",
+        &[r#"{tag: "url", value: Url("https://example.com/foo")}"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "funUnstructuredBinary",
+        &[r#"{tag: "inline", value: Binary("data:application/json;base64,e30")}"#],
+    )
+    .await;
+
+    // Multimodal
+    run_and_assert(
+        &ctx,
+        "funMultimodal",
+        &[r#"[{tag: "text", value: {tag: "inline", value: Text("data")}}, {tag: "binary", value: {tag: "url", value: Url("https://example.com/foo")}}]"#],
+    )
+    .await;
+
+    run_and_assert(
+        &ctx,
+        "funMultimodalAdvanced",
+        &[r#"[{tag: "text", value: "foo"}, {tag: "image", value: [1, 2, 3]}]"#],
+    )
+    .await;
 
     // Union that has only literals
     run_and_assert(&ctx, "funUnionWithOnlyLiterals", &[r#""bar""#]).await;

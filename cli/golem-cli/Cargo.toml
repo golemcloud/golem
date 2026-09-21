@@ -32,6 +32,7 @@ harness = false
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-schema = { workspace = true }
 
 # External deps
 anyhow = { workspace = true }
@@ -53,6 +54,7 @@ crossterm = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
 dotenvy = { workspace = true }
+fd-lock = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
@@ -144,4 +146,5 @@ wat = { workspace = true }
 
 [build-dependencies]
 lenient_bool = { workspace = true }
+serde_json = { workspace = true }
 shadow-rs = { workspace = true }

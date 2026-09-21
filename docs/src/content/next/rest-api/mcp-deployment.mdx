@@ -1,15 +1,10 @@
 # Mcp Deployment API
 
 ## List MCP deployments in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/mcp-deployments`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -37,13 +32,10 @@ Path|Method|Protected
 ```
 
 ## Create a new MCP deployment in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/mcp-deployments`|POST|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -82,15 +74,10 @@ Path|Method|Protected
 ```
 
 ## Get MCP deployment by domain in the environment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/mcp-deployments/{domain}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -114,15 +101,10 @@ Path|Method|Protected
 ```
 
 ## Get MCP deployment by ID
+
 Path|Method|Protected
 ---|---|---
 `/v1/mcp-deployments/{mcp_deployment_id}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -146,11 +128,10 @@ Path|Method|Protected
 ```
 
 ## Delete MCP deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/mcp-deployments/{mcp_deployment_id}`|DELETE|Yes
-
-
 
 **Query Parameters**
 
@@ -158,18 +139,11 @@ Name|Type|Required|Description
 ---|---|---|---
 current_revision|integer|Yes|-
 
-
-
-
-
 ## Update MCP deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/mcp-deployments/{mcp_deployment_id}`|PATCH|Yes
-
-
-
-
 
 **Example Request JSON**
 ```json copy
@@ -208,15 +182,10 @@ Path|Method|Protected
 ```
 
 ## Get a specific MCP deployment revision
+
 Path|Method|Protected
 ---|---|---
 `/v1/mcp-deployment/{mcp_deployment_id}/revisions/{revision}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -240,15 +209,10 @@ Path|Method|Protected
 ```
 
 ## Get MCP deployment by domain in the deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-deployments/{domain}`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 
@@ -272,15 +236,10 @@ Path|Method|Protected
 ```
 
 ## List MCP deployments by domain in the deployment
+
 Path|Method|Protected
 ---|---|---
 `/v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-deployments`|GET|Yes
-
-
-
-
-
-
 
 **Example Response JSON**
 

@@ -58,11 +58,13 @@ pub fn invalid_result(msg: impl ToString) -> ToolError {
     ToolError::InvalidResult(msg.to_string())
 }
 
-pub fn custom_tool_error<T: IntoTypedSchemaValue>(value: T) -> ToolError {
+pub fn custom_tool_error<T: IntoTypedSchemaValue>(name: impl Into<String>, value: T) -> ToolError {
     let typed = value
         .into_typed_schema_value()
         .expect("failed to encode custom tool error");
-    ToolError::CustomError(
-        crate::encode_typed_schema_value(&typed).expect("failed to encode custom tool error"),
-    )
+    ToolError::CustomError(crate::schema::tool::wit::wire::CustomToolError {
+        name: name.into(),
+        payload: crate::encode_typed_schema_value(&typed)
+            .expect("failed to encode custom tool error"),
+    })
 }

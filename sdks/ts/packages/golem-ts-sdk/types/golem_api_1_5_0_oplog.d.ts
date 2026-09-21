@@ -256,8 +256,10 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'external-span'
     val: ExternalSpanData
   };
+  export type OplogErrorKind = "invocation" | "recovery";
   export type ErrorParameters = {
     timestamp: Datetime;
+    kind: OplogErrorKind;
     error: string;
     retryFrom: OplogIndex;
     insideAtomicRegion: boolean;
@@ -775,6 +777,7 @@ declare module 'golem:api/oplog@1.5.0' {
   };
   export type RawErrorParameters = {
     timestamp: Datetime;
+    kind: OplogErrorKind;
     error: WorkerError;
     retryFrom: OplogIndex;
     insideAtomicRegion: boolean;
@@ -904,6 +907,11 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'error'
     val: RawErrorParameters
   } |
+  /** A previously failed startup or replay completed successfully. */
+  {
+    tag: 'recovery-succeeded'
+    val: Timestamp
+  } |
   /**
    * Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
    * more predictable.
@@ -995,6 +1003,11 @@ declare module 'golem:api/oplog@1.5.0' {
   /** The agent has been restarted, forgetting all its history */
   {
     tag: 'restart'
+    val: Timestamp
+  } |
+  /** An unfinished durable invocation was admitted to resume */
+  {
+    tag: 'resumed'
     val: Timestamp
   } |
   /** Activates a plugin */
@@ -1201,6 +1214,11 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'error'
     val: ErrorParameters
   } |
+  /** A previously failed startup or replay completed successfully. */
+  {
+    tag: 'recovery-succeeded'
+    val: Timestamp
+  } |
   /**
    * Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
    * more predictable.
@@ -1292,6 +1310,11 @@ declare module 'golem:api/oplog@1.5.0' {
   /** The agent's has been restarted, forgetting all its history */
   {
     tag: 'restart'
+    val: Timestamp
+  } |
+  /** An unfinished durable invocation was admitted to resume */
+  {
+    tag: 'resumed'
     val: Timestamp
   } |
   /** Activates a plugin */

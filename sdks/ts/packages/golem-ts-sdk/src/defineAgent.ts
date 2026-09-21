@@ -21,7 +21,7 @@
 import { StandardSchemaV1 } from './schema/standardSchema';
 import { MethodSpec } from './method';
 import type { InputRecord, MethodHasHttpOf } from './method';
-import { ParsedAgentId } from './agentId';
+import { bindAgentClient, ParsedAgentId, type AgentClientBinding } from './agentId';
 import { Principal } from './principal';
 import { Uuid } from './uuid';
 import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './runtime';
@@ -31,6 +31,8 @@ import type { MountSpecCovering, WebhookVarsValid } from './httpTypes';
 import type { MarkerKindOf, SecretInnerOf } from './schema/markers';
 import type { Secret } from './secret';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
+import { buildAgentClientSurface } from './client';
+import type { AgentClientFactory } from './client';
 
 export type { ConfigSpec } from './config';
 
@@ -109,6 +111,14 @@ type InferRecord<R extends Record<string, StandardSchemaV1>> = {
   [K in keyof R]: StandardSchemaV1.InferOutput<R[K]>;
 };
 
+/** Keys whose values are supplied by the host rather than an RPC caller. */
+type AutoInjectedKeys<R extends Record<string, StandardSchemaV1>> = {
+  [K in keyof R & string]: [MarkerKindOf<R[K]>] extends ['principal'] ? K : never;
+}[keyof R & string];
+
+/** The schema fields an RPC caller supplies after host-injected fields are removed. */
+export type CallerInput<R extends Record<string, StandardSchemaV1>> = Omit<R, AutoInjectedKeys<R>>;
+
 /** The handler signature inferred for a method spec (no-arg when input is empty). */
 type HandlerFor<M> =
   M extends MethodSpec<infer Input, infer Output, boolean>
@@ -138,11 +148,20 @@ export interface InitContext<Id extends IdRecord, Config extends ConfigSpec = {}
   readonly config: ConfigView<Config>;
 }
 
+/** Context supplied when constructing an agent from a snapshot. */
+export interface SnapshotRestoreContext<
+  Id extends IdRecord,
+  Config extends ConfigSpec = {},
+> extends InitContext<Id, Config> {
+  readonly agentId: ParsedAgentId;
+}
+
 export interface AgentImplementation<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec,
   State extends object,
+  HasSnapshotState extends boolean = false,
 > {
   init: (ctx: InitContext<Id, Config>) => State | Promise<State>;
   /** One handler per declared method; `this` is bound to `State` + SDK helpers. */
@@ -150,20 +169,63 @@ export interface AgentImplementation<
     State & AgentContext<Config>
   >;
   /**
-   * Optional custom snapshot serializer — overrides the default (reflective or
-   * typed-`state`) serialization entirely. `this` is the agent instance. `save`
-   * returns the raw snapshot bytes; `load` restores from them. Use for state the
-   * default JSON path can't represent (mirrors the decorator SDK's
-   * `BaseAgent.save/loadSnapshot` and effect's `Snapshot.custom`).
+   * Optional custom snapshot serializer and restoration factory. Restoration is
+   * an alternative to `init`: it must return a complete fresh state object. When
+   * a snapshot state schema is declared, `save` may be omitted to use typed saving.
    */
   snapshot?: {
-    save: () => Uint8Array | Promise<Uint8Array>;
-    load: (bytes: Uint8Array) => void | Promise<void>;
-  } & ThisType<State & AgentContext<Config>>;
+    load: (
+      this: void,
+      bytes: Uint8Array,
+      ctx: SnapshotRestoreContext<Id, Config>,
+    ) => State | Promise<State>;
+  } & (HasSnapshotState extends true
+    ? {
+        save?: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
+      }
+    : {
+        save: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
+      });
 }
 
 export interface AgentImpl {
   readonly name: string;
+}
+
+export interface AgentClientContract<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> {
+  readonly name: string;
+  readonly id: Id;
+  readonly methods: Methods;
+  readonly mode: Mode;
+  /** The agent's config schema used to encode RPC config overrides. */
+  readonly config?: Config;
+}
+
+export interface AgentClientBindingDefinition<
+  Methods extends MethodsRecord,
+> extends AgentClientBinding<import('./client').RemoteClient<Methods>> {
+  readonly name?: string;
+  readonly methods: Methods;
+}
+
+export interface AgentClientDefinition<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+> extends AgentClientContract<Id, Methods, Config, Mode> {
+  /** Construct the environment-scoped identity for an agent addressed by this definition. */
+  readonly agentId: Mode extends 'ephemeral'
+    ? (id: InferRecord<CallerInput<Id>>, phantomId: Uuid) => ParsedAgentId
+    : (id: InferRecord<CallerInput<Id>>, phantomId?: Uuid) => ParsedAgentId;
+  /** A client factory compiled from this definition's local schemas. */
+  readonly client: AgentClientFactory<Id, Methods, Mode>;
+  [bindAgentClient](agentId: ParsedAgentId): import('./client').RemoteClient<Methods, Mode>;
 }
 
 export interface AgentDefinition<
@@ -172,16 +234,11 @@ export interface AgentDefinition<
   Config extends ConfigSpec = {},
   StateSchema extends StandardSchemaV1 = StandardSchemaV1,
   Mode extends 'durable' | 'ephemeral' = 'durable',
-> {
-  readonly name: string;
-  readonly id: Id;
-  readonly methods: Methods;
-  readonly mode: Mode;
-  /** The agent's config schema (used by `clientFor` to encode config overrides). */
-  readonly config?: Config;
+  HasSnapshotState extends boolean = false,
+> extends AgentClientDefinition<Id, Methods, Config, Mode> {
   /** Supply the runtime behaviour. Registers the agent at module-load time. */
   implement<State extends object & StandardSchemaV1.InferOutput<StateSchema>>(
-    impl: AgentImplementation<Id, Methods, Config, State>,
+    impl: AgentImplementation<Id, Methods, Config, State, HasSnapshotState>,
   ): AgentImpl;
 }
 
@@ -199,11 +256,9 @@ export type SnapshotPolicy =
   | { everyNInvocations: number };
 
 /**
- * Snapshotting configuration. Either a bare {@link SnapshotPolicy} (the SDK
- * snapshots all of `this` by reflection — back-compat default), or `{ policy,
- * state }` where `state` is a Standard Schema: only the schema-declared fields of
- * `this` are serialized (typed + scoped), fixing over-broad snapshots. For fully
- * custom serialization supply `snapshot: { save, load }` on `implement(...)`.
+ * Snapshotting configuration. Use `{ policy, state }` for automatic schema-driven
+ * save and restoration. A bare {@link SnapshotPolicy} requires a custom
+ * `snapshot: { save, load }` implementation when enabled.
  */
 export type SnapshottingSpec<StateSchema extends StandardSchemaV1 = StandardSchemaV1> =
   | SnapshotPolicy
@@ -228,7 +283,7 @@ interface AgentSpecBase<
    * `agent-dependency` record built from the dependency's already-registered
    * `AgentType`. The dependency MUST have been `defineAgent`-ed before this one.
    */
-  dependencies?: AgentDefinition<any, any, any, any, any>[];
+  dependencies?: AgentDefinition<any, any, any, any, any, any>[];
   /** Snapshotting policy; defaults to `'disabled'`. Surfaced as `agent-type.snapshotting`. */
   snapshotting?: SnapshottingSpec<StateSchema>;
   /**
@@ -306,8 +361,32 @@ export function defineAgent<
   StateSchema extends StandardSchemaV1 = StandardSchemaV1,
   Mode extends 'durable' | 'ephemeral' = 'durable',
 >(
+  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode> & {
+    snapshotting: { policy?: SnapshotPolicy; state: StateSchema };
+  },
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, true>;
+export function defineAgent<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+>(
   spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode>,
-): AgentDefinition<Id, Methods, Config, StateSchema, Mode> {
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, false>;
+export function defineAgent<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+>(
+  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode>,
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, boolean> {
   const name = spec.name;
   let registered: RegisteredAgent | undefined;
   try {
@@ -328,15 +407,38 @@ export function defineAgent<
       `Definition failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  let implemented = false;
-  return {
+  const clientContract: AgentClientContract<Id, Methods, Config, Mode> & {
+    readonly name: string;
+    readonly id: Id;
+  } = {
     name,
     id: spec.id,
     methods: spec.methods,
     mode: spec.mode ?? ('durable' as Mode),
-    // Expose the config schema on the def so `clientFor` can encode config
+    // Expose the config schema so the client can encode config
     // overrides for RPC (config-on-RPC); undefined when the agent has no config.
     config: spec.config,
+  };
+  let implemented = false;
+  let surface:
+    | {
+        client: AgentClientFactory<Id, Methods, Mode>;
+        agentId: AgentClientDefinition<Id, Methods, Config, Mode>['agentId'];
+        [bindAgentClient]: AgentClientDefinition<Id, Methods, Config, Mode>[typeof bindAgentClient];
+      }
+    | undefined;
+  const getSurface = () => (surface ??= buildAgentClientSurface(clientContract, false));
+  return {
+    ...clientContract,
+    get agentId() {
+      return getSurface().agentId;
+    },
+    get client() {
+      return getSurface().client;
+    },
+    [bindAgentClient](agentId) {
+      return getSurface()[bindAgentClient](agentId);
+    },
     implement(impl) {
       if (implemented) {
         AgentTypeRegistry.recordRegistrationError(
@@ -348,9 +450,30 @@ export function defineAgent<
       implemented = true;
       if (registered) {
         try {
+          const policy = spec.snapshotting;
+          const enabled = policy !== undefined && policy !== 'disabled';
+          const hasStateSchema = typeof policy === 'object' && policy !== null && 'state' in policy;
+          const hasCustomSnapshot = impl.snapshot !== undefined;
+          if (
+            hasCustomSnapshot &&
+            (typeof impl.snapshot?.load !== 'function' ||
+              (typeof impl.snapshot?.save !== 'function' &&
+                !(hasStateSchema && impl.snapshot?.save === undefined)))
+          ) {
+            throw new Error('custom snapshotting requires both snapshot.save and snapshot.load');
+          }
+          if (
+            enabled &&
+            !hasStateSchema &&
+            (!hasCustomSnapshot || typeof impl.snapshot?.save !== 'function')
+          ) {
+            throw new Error(
+              'snapshotting without a state schema requires snapshot.save and snapshot.load',
+            );
+          }
           registerAgentInitiator(
             registered,
-            impl as AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object>,
+            impl as AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>,
           );
         } catch (error) {
           AgentTypeRegistry.recordRegistrationError(

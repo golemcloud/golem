@@ -20,6 +20,7 @@ pub mod grpc;
 pub mod identity;
 pub mod metrics;
 pub mod model;
+pub mod native_tool;
 pub mod preview2;
 pub(crate) mod sandbox_filesystem;
 pub mod services;
@@ -70,6 +71,7 @@ use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
+use crate::services::oplog_sweep::OplogSweeper;
 use crate::services::promise::{DefaultPromiseService, DefaultPromiseWorkerAccess, PromiseService};
 use crate::services::quota::QuotaService;
 use crate::services::registry_event_subscriber::WorkerExecutorRegistryInvalidationHandler;
@@ -98,6 +100,7 @@ use crate::storage::keyvalue::multi_sqlite::MultiSqliteKeyValueStorage;
 use crate::storage::keyvalue::namespace_routed::NamespaceRoutedKeyValueStorage;
 use crate::storage::keyvalue::postgres::PostgresKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
+use crate::storage::keyvalue::retrying::RetryingKeyValueStorage;
 use crate::storage::scheduler::SchedulerStorage;
 use crate::storage::scheduler::memory::InMemorySchedulerStorage;
 use crate::storage::scheduler::postgres::PostgresSchedulerStorage;
@@ -109,7 +112,6 @@ use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::config::DbSqliteConfig;
-use golem_common::model::RetryConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
 use golem_service_base::config::BlobStorageConfig;
@@ -174,6 +176,12 @@ impl Drop for RunDetails {
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
+    fn create_native_tool_catalog(
+        &self,
+    ) -> anyhow::Result<Arc<crate::native_tool::NativeToolCatalog<Ctx>>> {
+        Ok(Arc::new(crate::native_tool::NativeToolCatalog::default()))
+    }
+
     /// Creates the [`ActiveAgents`] service, including the measured-headroom
     /// admission gate. The default builds the memory probe from the config
     /// (cgroup/process/override). The in-process test harness overrides this to
@@ -196,11 +204,27 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         ))
     }
 
+    /// Takes the whole [`services::shutdown::Shutdown`] rather than just its
+    /// token: the lease renewal loop has work to finish after the token trips
+    /// (it deregisters), so it spawns through the tracker that `main` waits on.
     fn create_shard_manager_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        shard_service: Arc<dyn ShardService>,
+        shutdown: services::shutdown::Shutdown,
     ) -> Arc<dyn ShardManagerService> {
-        Arc::new(crate::services::shard_manager::GrpcShardManagerService::new(shard_manager_client))
+        crate::services::shard_manager::GrpcShardManagerService::new(
+            shard_manager_client,
+            shard_service,
+            shutdown,
+        )
+    }
+
+    /// Overridable so a test can watch or fake shard ownership. Everything that
+    /// gates on ownership goes through this one service, including the periodic
+    /// re-check a caller parked in `Worker::wait_for_invocation_result` runs.
+    fn create_shard_service(&self) -> Arc<dyn ShardService> {
+        Arc::new(ShardServiceDefault::new())
     }
 
     fn create_quota_service(
@@ -273,6 +297,16 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
     fn create_worker_proxy(&self, golem_config: &GolemConfig) -> Arc<dyn WorkerProxy> {
         Arc::new(RemoteWorkerProxy::new(&golem_config.public_worker_api))
+    }
+
+    /// Wraps the key-value storage every service is built on, after the retry decorator has been
+    /// applied. The default is the identity. The in-process test harness uses it to inject
+    /// storage failures above the retry budget, standing in for an outage that outlived it.
+    fn wrap_key_value_storage(
+        &self,
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        key_value_storage
     }
 
     fn create_key_value_service(
@@ -354,6 +388,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         websocket_connection_pool: crate::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>> {
+        let native_tool_catalog = self.create_native_tool_catalog()?;
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -385,6 +420,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             environment_state_service.clone(),
+            native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             shutdown_token.clone(),
@@ -427,6 +463,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             resource_limits.clone(),
             shutdown_token.clone(),
             environment_state_service.clone(),
+            native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
             http_connection_pool.clone(),
@@ -470,6 +507,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             http_connection_pool,
             websocket_connection_pool.clone(),
             environment_state_service.clone(),
+            native_tool_catalog,
             additional_deps,
             leak_sentinel,
         ))
@@ -551,7 +589,7 @@ pub async fn create_worker_executor_impl<
     bootstrap: &BootstrapImpl,
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
-    shutdown_token: tokio_util::sync::CancellationToken,
+    shutdown: services::shutdown::Shutdown,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
@@ -562,6 +600,7 @@ pub async fn create_worker_executor_impl<
     ),
     anyhow::Error,
 > {
+    let shutdown_token = shutdown.token();
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
         Option<SqlitePool>,
@@ -576,12 +615,9 @@ pub async fn create_worker_executor_impl<
             (Some(pool), None, key_value_storage)
         }
         KeyValueStorageConfig::Postgres(postgres) => {
-            let kv = PostgresKeyValueStorage::configured(
-                postgres,
-                golem_config.key_value_storage_retry.clone(),
-            )
-            .await
-            .map_err(|err| anyhow!(err))?;
+            let kv = PostgresKeyValueStorage::configured(postgres)
+                .await
+                .map_err(|err| anyhow!(err))?;
             let kv_metrics = kv.clone();
             join_set.spawn(async move { kv_metrics.run_metrics_loop("key_value_storage").await });
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(kv);
@@ -591,7 +627,6 @@ pub async fn create_worker_executor_impl<
             let (cache_redis, cache_sqlite, cache_storage) = build_inner_key_value_storage(
                 &namespace_routed.cache,
                 "key_value_storage_cache",
-                golem_config.key_value_storage_retry.clone(),
                 join_set,
             )
             .await?;
@@ -599,7 +634,6 @@ pub async fn create_worker_executor_impl<
                 build_inner_key_value_storage(
                     &namespace_routed.persistent,
                     "key_value_storage_persistent",
-                    golem_config.key_value_storage_retry.clone(),
                     join_set,
                 )
                 .await?;
@@ -618,12 +652,9 @@ pub async fn create_worker_executor_impl<
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))
         }
         KeyValueStorageConfig::Sqlite(sqlite) => {
-            let storage = SqliteKeyValueStorage::configured(
-                sqlite,
-                golem_config.key_value_storage_retry.clone(),
-            )
-            .await
-            .map_err(|err| anyhow!(err))?;
+            let storage = SqliteKeyValueStorage::configured(sqlite)
+                .await
+                .map_err(|err| anyhow!(err))?;
             let pool = storage.pool();
             let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(storage);
             (None, Some(pool), key_value_storage)
@@ -634,11 +665,18 @@ pub async fn create_worker_executor_impl<
                     &multi_sqlite.root_dir,
                     multi_sqlite.max_connections,
                     multi_sqlite.foreign_keys,
-                    golem_config.key_value_storage_retry.clone(),
                 ));
             (None, None, key_value_storage)
         }
     };
+
+    // Applied outermost, above the namespace router, so every backend - and every namespace - gets
+    // the identical retry policy for transient failures.
+    let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = bootstrap
+        .wrap_key_value_storage(Arc::new(RetryingKeyValueStorage::new(
+            key_value_storage,
+            golem_config.key_value_storage_retry.clone(),
+        )));
 
     let scheduler_storage = build_scheduler_storage(&golem_config.scheduler_storage).await?;
 
@@ -786,7 +824,7 @@ pub async fn create_worker_executor_impl<
     );
     let golem_config = Arc::new(golem_config);
 
-    let shard_service = Arc::new(ShardServiceDefault::new());
+    let shard_service = bootstrap.create_shard_service();
 
     let mut oplog_archives: Vec<Arc<dyn OplogArchiveService>> = Vec::new();
     for idx in 1..golem_config.oplog.indexed_storage_layers {
@@ -802,6 +840,8 @@ pub async fn create_worker_executor_impl<
             Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), idx));
         oplog_archives.push(svc);
     }
+    // The sweeper is built further down, once the worker activator exists.
+    let sweep_archives = oplog_archives.clone();
     let oplog_archives = NEVec::try_from_vec(oplog_archives);
 
     let base_oplog_service: Arc<dyn OplogService> = match oplog_archives {
@@ -863,8 +903,11 @@ pub async fn create_worker_executor_impl<
             ),
         );
 
-    let shard_manager_service =
-        bootstrap.create_shard_manager_service(shard_manager_client.clone());
+    let shard_manager_service = bootstrap.create_shard_manager_service(
+        shard_manager_client.clone(),
+        shard_service.clone(),
+        shutdown.clone(),
+    );
 
     let quota_service = bootstrap.create_quota_service(
         shard_manager_client,
@@ -962,6 +1005,23 @@ pub async fn create_worker_executor_impl<
         golem_config.scheduler.max_concurrent_action_processing,
         shutdown_token.clone(),
     );
+
+    // Tracked by `shutdown` rather than the join set, so on termination the sweeper gets
+    // `SHUTDOWN_GRACE` to finish the archive step it is in before the join set is aborted.
+    let oplog_sweeper = OplogSweeper::over_layers(
+        golem_config.oplog.sweep.clone(),
+        indexed_storage.clone(),
+        &sweep_archives,
+        shard_service.clone(),
+        component_service.clone(),
+        Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx>>),
+    );
+    shutdown.spawn({
+        let shutdown_token = shutdown_token.clone();
+        async move {
+            oplog_sweeper.run(shutdown_token).await;
+        }
+    });
 
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
 
@@ -1101,7 +1161,7 @@ pub async fn bootstrap_and_run_worker_executor<
             bootstrap,
             runtime.clone(),
             &lazy_worker_activator,
-            shutdown.token(),
+            shutdown.clone(),
             join_set,
         )
         .await?;
@@ -1226,7 +1286,6 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
 async fn build_inner_key_value_storage(
     config: &KeyValueStorageInnerConfig,
     svc_name: &'static str,
-    retry_config: RetryConfig,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
@@ -1246,7 +1305,7 @@ async fn build_inner_key_value_storage(
             Ok((Some(pool), None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Postgres(postgres) => {
-            let kv = PostgresKeyValueStorage::configured(postgres, retry_config)
+            let kv = PostgresKeyValueStorage::configured(postgres)
                 .await
                 .map_err(|err| anyhow!(err))?;
             let kv_metrics = kv.clone();
@@ -1260,7 +1319,7 @@ async fn build_inner_key_value_storage(
             Ok((None, None, key_value_storage))
         }
         KeyValueStorageInnerConfig::Sqlite(sqlite) => {
-            let storage = SqliteKeyValueStorage::configured(sqlite, retry_config)
+            let storage = SqliteKeyValueStorage::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
             let pool = storage.pool();
@@ -1273,7 +1332,6 @@ async fn build_inner_key_value_storage(
                     &multi_sqlite.root_dir,
                     multi_sqlite.max_connections,
                     multi_sqlite.foreign_keys,
-                    retry_config,
                 ));
             Ok((None, None, key_value_storage))
         }

@@ -696,6 +696,7 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
     agent_type: Option<String>,
     max_delay: Duration,
     begin_index: OplogIndex,
+    entity_parent_start_index: Option<OplogIndex>,
 ) -> FutureIncomingResponseHandle {
     // No span: this task waits for the guest to finish its outgoing body, so its
     // duration is decided by guest code rather than by an operation the executor
@@ -741,6 +742,7 @@ pub(crate) fn spawn_http_status_retry_after_body_finish<Ctx: crate::workerctx::W
             .cloned();
         let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
             retry_point: begin_index,
+            entity_parent_start_index,
             environment_state_service,
             environment_id,
             default_retry_policy,
@@ -932,6 +934,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
     retry_properties: RetryProperties,
     max_delay: Duration,
     begin_index: OplogIndex,
+    entity_parent_start_index: Option<OplogIndex>,
     execution_status: Arc<std::sync::RwLock<crate::model::ExecutionStatus>>,
 ) -> FutureIncomingResponseHandle {
     // Capture config fields individually since OutgoingRequestConfig is not Clone
@@ -990,6 +993,7 @@ pub fn spawn_http_request_with_retry<Ctx: crate::workerctx::WorkerCtx>(
                         .cloned();
                     let mut task_ctx = crate::durable_host::durability::TaskRetryContext {
                         retry_point: begin_index,
+                        entity_parent_start_index,
                         environment_state_service,
                         environment_id,
                         default_retry_policy,
@@ -1272,6 +1276,7 @@ pub async fn try_output_stream_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
                 retry_properties,
                 exec_state.max_in_function_retry_delay,
                 request_state.begin_index(),
+                ctx.entity_parent_start_index(),
                 ctx.execution_status.clone(),
             );
             HostFutureIncomingResponse::pending(retry_handle)

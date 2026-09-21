@@ -11,11 +11,21 @@ steps:
     shell:
       command: "bash"
       args:
-        - "-c"
-        - |
-          golem agent invoke 'CounterAgent("c1")' increment &&
-          golem agent invoke 'CounterAgent("c2")' increment &&
-          golem agent invoke 'CounterAgent("c3")' increment
+        effect:
+          - "-c"
+          - |
+            golem agent invoke 'Counter("c1")' increment &&
+            golem agent invoke 'Counter("c2")' increment &&
+            golem agent invoke 'Counter("c3")' increment
+        rust: &create-counter-agents
+          - "-c"
+          - |
+            golem agent invoke 'CounterAgent("c1")' increment &&
+            golem agent invoke 'CounterAgent("c2")' increment &&
+            golem agent invoke 'CounterAgent("c3")' increment
+        ts: *create-counter-agents
+        scala: *create-counter-agents
+        moonbit: *create-counter-agents
       cwd: "test-app"
     expect:
       exit_code: 0
