@@ -507,7 +507,7 @@ pub struct OrderedOplogStart {
 }
 
 pub enum DurableStreamOplogRecord {
-    Registered(Option<OplogIndex>, StreamRegisteredRecord),
+    Registered(Option<OplogIndex>, Box<StreamRegisteredRecord>),
     Items(Option<OplogIndex>, StreamItemsRecord),
     End(Option<OplogIndex>, StreamEndRecord),
     Cancel(Option<OplogIndex>, StreamCancelRecord),
@@ -532,7 +532,7 @@ impl DurableStreamOplogRecord {
             Self::Registered(entity_parent_start_index, record) => {
                 Ok(OplogEntry::stream_registered(
                     entity_parent_start_index,
-                    raw.into_payload_with_cache(Arc::new(record))?,
+                    raw.into_payload_with_cache(Arc::from(record))?,
                 ))
             }
             Self::Items(entity_parent_start_index, record) => Ok(OplogEntry::stream_items(
@@ -559,7 +559,7 @@ impl DurableStreamOplogRecord {
         match self {
             Self::Registered(entity_parent_start_index, record) => OplogEntry::stream_registered(
                 entity_parent_start_index,
-                OplogPayload::Inline(Box::new(record)),
+                OplogPayload::Inline(record),
             ),
             Self::Items(entity_parent_start_index, record) => OplogEntry::stream_items(
                 entity_parent_start_index,
@@ -1101,7 +1101,7 @@ pub trait OplogOps: Oplog {
             trace_id: ctx.trace_id,
             trace_states: ctx.trace_states,
             invocation_context,
-            wallet_pin: Some(wallet_pin),
+            wallet_pin: Box::new(wallet_pin),
         })
     }
 

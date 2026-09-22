@@ -15,6 +15,7 @@
 use crate::Tracing;
 use futures::poll;
 use golem_common::model::agent::{AgentMode, AgentPrincipal, Principal};
+use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::durable_stream::*;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
@@ -689,7 +690,14 @@ async fn prepare_session(
                 trace_id,
                 trace_states,
                 invocation_context,
-                wallet_pin: None,
+                wallet_pin: Box::new(InvocationWalletPin {
+                    wallet_token: WalletVersionToken {
+                        wallet_id_hash: [0; 32],
+                        generation: 0,
+                    },
+                    pinned_card_ids: Vec::new(),
+                    scope_card_id: None,
+                }),
             })
             .await;
         worker

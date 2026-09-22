@@ -922,11 +922,11 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
             &target_agent_id,
             golem_common::model::oplog::OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_received(
+                Box::new(QueuedCardEvent::transfer_received(
                     detached_status_transfer_id,
                     source_card_id,
                     card.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -1165,13 +1165,11 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
     assert_eq!(detached_status_transfer.len(), 1);
     assert_eq!(concurrent_transfer.len(), 1);
     assert_eq!(conflict_winner.len(), 1);
-    assert_eq!(original_transfer[0].source_card_id, Some(source_card_id));
+    assert_eq!(original_transfer[0].source_card_id, source_card_id);
     assert_eq!(original_transfer[0].installed_card_id, card.card_id());
     assert_eq!(concurrent_transfer[0].installed_card_id, card.card_id());
     assert_eq!(conflict_winner[0].installed_card_id, card.card_id());
-    let target_generation = original_transfer[0]
-        .target_wallet_generation
-        .expect("target transfer admission must record its wallet generation");
+    let target_generation = original_transfer[0].target_wallet_generation;
     assert!(
         [
             detached_status_transfer[0],
@@ -1179,7 +1177,7 @@ async fn card_transfer_delivery_is_durable_idempotent_and_rejects_payload_confli
             conflict_winner[0],
         ]
         .into_iter()
-        .all(|transfer| transfer.target_wallet_generation == Some(target_generation)),
+        .all(|transfer| transfer.target_wallet_generation == target_generation),
         "reinstalling the same card through another transfer must not bump the target generation"
     );
 
@@ -1368,12 +1366,12 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     pending_transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -1387,12 +1385,12 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     completed_transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -1401,12 +1399,12 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     started_transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -1417,9 +1415,9 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
                 None,
                 started_transfer_id,
                 card.card_id(),
-                Some(source_holder.clone()),
+                source_holder.clone(),
                 target_holder.clone(),
-                Some(0),
+                0,
             ),
         )
         .await?;
@@ -1430,9 +1428,9 @@ async fn pending_source_card_transfers_resume_only_after_replay_reaches_live_mod
                 None,
                 completed_transfer_id,
                 card.card_id(),
-                Some(source_holder),
+                source_holder,
                 target_holder.clone(),
-                Some(0),
+                0,
             ),
         )
         .await?;
@@ -1612,12 +1610,12 @@ async fn pending_self_card_transfer_recovery_does_not_deadlock(
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     transfer_id,
                     card.card_id(),
                     card.clone(),
                     self_holder,
-                ),
+                )),
             ),
         )
         .await?;
@@ -1747,12 +1745,12 @@ async fn lost_card_transfer_response_converges_after_source_and_target_restart(
             &source_agent_id,
             OplogEntry::card_event_queued(
                 None,
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     transfer_id,
                     card.card_id(),
                     card.clone(),
                     target_holder.clone(),
-                ),
+                )),
             ),
         )
         .await?;
@@ -1763,9 +1761,9 @@ async fn lost_card_transfer_response_converges_after_source_and_target_restart(
                 None,
                 transfer_id,
                 card.card_id(),
-                Some(source_holder),
+                source_holder,
                 target_holder,
-                Some(0),
+                0,
             ),
         )
         .await?;

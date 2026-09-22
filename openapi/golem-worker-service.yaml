@@ -9692,6 +9692,7 @@ components:
       required:
       - timestamp
       - invocation
+      - walletPin
       properties:
         timestamp:
           type: string
@@ -9755,6 +9756,7 @@ components:
       - timestamp
       - cardId
       - parentIds
+      - walletGeneration
       properties:
         timestamp:
           type: string
@@ -9788,6 +9790,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
       properties:
         timestamp:
           type: string
@@ -9824,6 +9827,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
       properties:
         timestamp:
           type: string
@@ -9843,6 +9847,7 @@ components:
       required:
       - timestamp
       - revokedCardIds
+      - localWalletGeneration
       properties:
         timestamp:
           type: string
@@ -9863,6 +9868,7 @@ components:
       - timestamp
       - queuedEventIndex
       - cardId
+      - walletGeneration
       properties:
         timestamp:
           type: string
@@ -9909,6 +9915,7 @@ components:
       - transferId
       - cardId
       - targetHolder
+      - sourceWalletGeneration
       properties:
         timestamp:
           type: string
@@ -9932,8 +9939,10 @@ components:
       required:
       - timestamp
       - transferId
+      - sourceCardId
       - installedCardId
       - targetHolder
+      - targetWalletGeneration
       properties:
         timestamp:
           type: string
@@ -9945,7 +9954,7 @@ components:
         sourceCardId:
           type: string
           format: uuid
-          description: Source card identity, absent only on legacy entries.
+          description: Source card identity.
         installedCardId:
           type: string
           format: uuid

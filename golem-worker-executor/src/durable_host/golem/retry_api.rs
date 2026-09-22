@@ -145,7 +145,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .worker()
                 .add_and_commit_oplog(OplogEntry::set_retry_policy(
                     self.entity_parent_start_index(),
-                    named_policy.clone(),
+                    Box::new(named_policy.clone()),
                 ))
                 .await;
         }
