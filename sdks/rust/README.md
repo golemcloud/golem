@@ -10,6 +10,10 @@ the [transaction API](https://learn.golem.cloud/docs/transaction-api).
 The `golem-rust` crate uses the shared `golem-rust-macro` and
 `golem-tool-metadata` authoring crates from the repository's root workspace.
 
+Semantic retry policies can be used for both host-managed operations and arbitrary user code. See
+the [`golem-rust` retry example](golem-rust/README.md#retrying-user-code-with-semantic-policies) for
+how to resolve a named policy through the host and execute it locally with `RetrySchedule`.
+
 ## Agent implementations
 
 Traits annotated with `#[agent_definition]` must be implemented with
