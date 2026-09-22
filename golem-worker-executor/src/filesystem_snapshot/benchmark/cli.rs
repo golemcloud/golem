@@ -70,7 +70,8 @@ struct RunArguments {
     /// The directory on the benchmark volume.
     #[arg(long)]
     work_dir: PathBuf,
-    /// The object prefix of the run, which starts with `fs-snapshot-bench/`.
+    /// The object prefix of the run: `fs-snapshot-bench/<run id>`, with or without one `/` at the
+    /// end.
     #[arg(long)]
     object_prefix: String,
 }
@@ -169,11 +170,10 @@ fn validate(arguments: &RunArguments) -> Result<Selection, String> {
             arguments.cpu_setting
         ));
     }
-    if !arguments.object_prefix.starts_with(OBJECT_PREFIX_START)
-        || arguments.object_prefix.len() == OBJECT_PREFIX_START.len()
-    {
+    let expected = format!("{OBJECT_PREFIX_START}{}", arguments.run_id);
+    if arguments.object_prefix != expected && arguments.object_prefix != format!("{expected}/") {
         return Err(format!(
-            "the object prefix {:?} does not start with {OBJECT_PREFIX_START:?} and a name",
+            "the object prefix {:?} is not {expected:?}, the prefix of the run",
             arguments.object_prefix
         ));
     }
@@ -325,9 +325,19 @@ mod tests {
                 with(|arguments| arguments.cpu_setting = String::new()),
                 with(|arguments| arguments.object_prefix = "release".to_string()),
                 with(|arguments| arguments.object_prefix = "fs-snapshot-bench/".to_string()),
+                with(
+                    |arguments| arguments.object_prefix = "fs-snapshot-bench/other-run".to_string()
+                ),
+                with(|arguments| {
+                    arguments.object_prefix = "fs-snapshot-bench/123-1/extra".to_string()
+                }),
+                with(|arguments| arguments.object_prefix = "fs-snapshot-bench/123-1//".to_string()),
+                with(|arguments| arguments.object_prefix = "fs-snapshot-bench/123-1/".to_string()),
                 with(|arguments| arguments.tree = "files-tiny".to_string()),
             ],
-            [true, false, false, false, false, false]
+            [
+                true, false, false, false, false, false, false, false, true, false
+            ]
         );
     }
 
