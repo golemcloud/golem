@@ -40,23 +40,31 @@ pub struct SqliteIndexedStorage {
 }
 
 impl SqliteIndexedStorage {
-    pub async fn configured(config: &DbSqliteConfig) -> Result<Self, String> {
+    pub async fn configured(config: &DbSqliteConfig) -> Result<Self, IndexedStorageError> {
         Self::migrate(config).await?;
 
-        let pool = SqlitePool::configured(config)
-            .await
-            .map_err(|err| format!("Sqlite indexed storage pool initialization failed: {err:?}"))?;
+        let pool = SqlitePool::configured(config).await.map_err(|err| {
+            IndexedStorageError::initialization_failed(
+                "Sqlite indexed storage pool initialization failed",
+                err,
+            )
+        })?;
 
         Ok(Self { pool })
     }
 
     /// Apply the indexed storage migrations on the given sqlite config without
     /// creating a pool.
-    pub async fn migrate(config: &DbSqliteConfig) -> Result<(), String> {
+    pub async fn migrate(config: &DbSqliteConfig) -> Result<(), IndexedStorageError> {
         let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
         golem_service_base::db::sqlite::migrate(config, migrations.sqlite_migrations())
             .await
-            .map_err(|err| format!("Sqlite indexed storage migration failed: {err:?}"))
+            .map_err(|err| {
+                IndexedStorageError::initialization_failed(
+                    "Sqlite indexed storage migration failed",
+                    err,
+                )
+            })
     }
 
     pub fn new(pool: SqlitePool) -> Self {
