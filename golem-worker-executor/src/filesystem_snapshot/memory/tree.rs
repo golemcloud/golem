@@ -46,7 +46,8 @@ enum TreeNode {
 /// their names. Symlinks are read and not followed. Each name of a file gives its own entry, so
 /// the tree does not keep hard links. An entry that is not a regular file, a directory or a
 /// symlink gives an `InvalidInput` error, and the function does not open it. A `root` that is
-/// not a directory gives a `NotADirectory` error.
+/// not a directory gives a `NotADirectory` error. On a platform other than unix, a symlink gives
+/// an `Unsupported` error, and the function does not read it.
 pub(super) fn read_tree(root: &Path) -> io::Result<Arc<[TreeEntry]>> {
     if !std::fs::symlink_metadata(root)?.is_dir() {
         return Err(io::Error::new(
@@ -97,6 +98,10 @@ fn read_entry(path: &Path, relative: Box<Path>) -> io::Result<TreeEntry> {
     let node = if file_type.is_dir() {
         TreeNode::Directory
     } else if file_type.is_symlink() {
+        // The store cannot make a symlink on such a platform, so it does not keep one either.
+        if cfg!(not(unix)) {
+            return Err(symlinks_unsupported());
+        }
         TreeNode::Symlink(std::fs::read_link(path)?.into_boxed_path())
     } else if file_type.is_file() {
         TreeNode::File(std::fs::read(path)?.into_boxed_slice())
@@ -140,7 +145,8 @@ pub(super) fn tree_info(tree: &[TreeEntry], created_at: Timestamp) -> SnapshotIn
 /// gets its modification time. The directories get their permissions and modification times last,
 /// children before parents. So a read-only directory still takes its children, and no later write
 /// changes the time of a directory. The tree does not keep the metadata of its root. So the
-/// function does not set the permissions or the modification time of `into`.
+/// function does not set the permissions or the modification time of `into`. On a platform other
+/// than unix, the function makes no symlink, and a symlink gives an `Unsupported` error.
 ///
 /// An `into` that is missing gives a `NotFound` error. An `into` that is not a directory gives a
 /// `NotADirectory` error, and one that is not empty gives a `DirectoryNotEmpty` error. In these
@@ -208,16 +214,15 @@ fn create_symlink(target: &Path, link: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }
 
-/// Makes a symlink on Windows, where a symlink to a directory is another kind of symlink than a
-/// symlink to a file. A target that is missing gets a symlink to a file.
-#[cfg(windows)]
-fn create_symlink(target: &Path, link: &Path) -> io::Result<()> {
-    let resolved = link
-        .parent()
-        .map_or_else(|| target.to_path_buf(), |parent| parent.join(target));
-    if resolved.is_dir() {
-        std::os::windows::fs::symlink_dir(target, link)
-    } else {
-        std::os::windows::fs::symlink_file(target, link)
-    }
+#[cfg(not(unix))]
+fn create_symlink(_target: &Path, _link: &Path) -> io::Result<()> {
+    Err(symlinks_unsupported())
+}
+
+/// Gives the error of a symlink on a platform other than unix, where the store makes no symlink.
+fn symlinks_unsupported() -> io::Error {
+    io::Error::new(
+        ErrorKind::Unsupported,
+        "the in-memory snapshot store cannot make symlinks on this platform",
+    )
 }

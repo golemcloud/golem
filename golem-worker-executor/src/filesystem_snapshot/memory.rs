@@ -37,7 +37,8 @@ use tree::{TreeEntry, read_tree, tree_info, write_tree};
 
 /// A filesystem snapshot store that keeps each snapshot in the memory of the process.
 ///
-/// A clone of the store is one more store over the same snapshots, as another executor has.
+/// A clone of the store is one more store over the same snapshots, as another executor has. On a
+/// platform other than unix, a save of a tree with a symlink gives `Source` and publishes nothing.
 #[derive(Clone, Default)]
 pub(crate) struct InMemorySnapshotStore {
     scopes: Arc<Mutex<HashMap<SnapshotScope, Arc<[Stored]>>>>,
