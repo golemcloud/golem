@@ -16,7 +16,8 @@
 //!
 //! The backend keeps the files of one repository in one blob storage namespace, with the paths of
 //! the restic repository format. rustic calls the backend from threads outside the async runtime,
-//! and each call waits for the blob storage on the runtime that the backend holds.
+//! and each call waits for the blob storage on the runtime that the backend holds. Each call waits
+//! for at most a deadline.
 
 use bytes::Bytes;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
@@ -26,6 +27,7 @@ use rustic_core::{
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::Handle;
 
 /// The target label of each blob storage call of the backend.
@@ -65,36 +67,45 @@ impl StorageCall {
 /// the two digits are the start of the id. Each other file is at `<directory of the type>/<id>`.
 /// These are the paths of the restic repository format.
 ///
-/// The backend holds a handle of the async runtime, which the caller gives when it makes the
-/// backend. Each call waits for the blob storage with `Handle::block_on` on that runtime. Thus a
-/// thread that is not a thread of the runtime can call the backend, for example a thread of
+/// The backend holds a handle of the async runtime and a deadline, which the caller gives when it
+/// makes the backend. Each call waits for the blob storage with `Handle::block_on` on that runtime.
+/// Thus a thread that is not a thread of the runtime can call the backend, for example a thread of
 /// rustic. A call from a task of the runtime panics, because `Handle::block_on` panics in an async
 /// context. The executor builds with `panic = "abort"`, so that panic stops the executor. Thus the
 /// store runs rustic only through `execute_native`, which runs rustic on a blocking thread.
+///
+/// A call that gets no answer from the blob storage within the deadline gives an error. The
+/// runtime must be a multi-thread runtime, because on a `current_thread` runtime `Handle::block_on`
+/// does not drive the timer of the deadline.
 #[derive(Debug)]
 pub(super) struct BlobBackend {
     storage: Arc<dyn BlobStorage>,
     namespace: BlobStorageNamespace,
     runtime: Handle,
+    deadline: Duration,
 }
 
 impl BlobBackend {
-    /// Makes a backend over the namespace of the storage. Each call waits on `runtime`.
+    /// Makes a backend over the namespace of the storage. Each call waits on `runtime`, for at most
+    /// `deadline`.
     pub(super) fn new(
         storage: Arc<dyn BlobStorage>,
         namespace: BlobStorageNamespace,
         runtime: Handle,
+        deadline: Duration,
     ) -> Self {
         Self {
             storage,
             namespace,
             runtime,
+            deadline,
         }
     }
 
     /// Waits for one call on the blob storage, and gives its result as a rustic result.
     ///
-    /// Each call of the backend on the blob storage goes through this function.
+    /// Each call of the backend on the blob storage goes through this function. A call that gives
+    /// no answer within the deadline gives an error, the same as a call that failed.
     fn request<T>(
         &self,
         call: StorageCall,
@@ -102,9 +113,28 @@ impl BlobBackend {
         future: impl Future<Output = anyhow::Result<T>>,
     ) -> RusticResult<T> {
         self.runtime
-            .block_on(future)
+            .block_on(answer_within(self.deadline, future))
             .map_err(|error| storage_error(call, path, error))
     }
+}
+
+/// Gives the output of the future, or an error when the future gives no output within the deadline.
+///
+/// The timer starts at the first poll of the returned future, in the runtime of that poll. Thus a
+/// thread without a runtime context can wait for the result with `Handle::block_on`. A future that
+/// is ready at its first poll always gives its output. At the deadline, the function drops the
+/// future and gives an error whose root cause is tokio's `Elapsed`.
+async fn answer_within<T>(
+    deadline: Duration,
+    future: impl Future<Output = anyhow::Result<T>>,
+) -> anyhow::Result<T> {
+    tokio::time::timeout(deadline, future)
+        .await
+        .unwrap_or_else(|elapsed| {
+            Err(anyhow::Error::new(elapsed).context(format!(
+                "the blob storage gave no answer within {deadline:?}"
+            )))
+        })
 }
 
 impl ReadBackend for BlobBackend {

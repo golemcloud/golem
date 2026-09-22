@@ -16,9 +16,9 @@ use super::agents::AgentStorage;
 use super::report::{Outcome, PhaseResult, StepRecord, StepStatus};
 use super::trees::{FILES_TINY, tree_hash};
 use super::{
-    PlanEntry, RESTORE_THREADS_PHASES, Repository, SAVE, Scenario, Selection, WARM_SAVE,
-    concurrent_restore, concurrent_save, is_key_segment, plan, repository_key, repository_scope,
-    result_path, run_phase, snapshot_name,
+    PlanEntry, RESTORE_THREADS_PHASES, Repository, SAVE, STORAGE_CALL_DEADLINE, Scenario,
+    Selection, WARM_SAVE, concurrent_restore, concurrent_save, is_key_segment, plan,
+    repository_key, repository_scope, result_path, run_phase, snapshot_name,
 };
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
@@ -517,6 +517,7 @@ async fn the_agents_of_a_concurrent_save_each_save_their_tree_into_their_own_rep
                 Arc::new(AgentStorage::new(storage.clone(), &format!("x3-{agent}"))),
                 repository_scope(CONCURRENT_TINY.name, "no-limit", FILES_TINY.name),
                 repository_key("run-1"),
+                STORAGE_CALL_DEADLINE,
             );
             let into = tempfile::tempdir().unwrap();
             repository

@@ -17,6 +17,7 @@
 //! Each test calls the backend from the thread of the test. That thread is not a thread of the
 //! runtime that the backend holds, as the threads of rustic are not.
 
+use super::super::STORAGE_CALL_DEADLINE;
 use super::{BlobBackend, file_size};
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -49,8 +50,12 @@ impl Fixture {
         let runtime = Runtime::new().unwrap();
         let storage = Arc::new(InMemoryBlobStorage::new());
         let namespace = new_namespace();
-        let backend =
-            BlobBackend::new(storage.clone(), namespace.clone(), runtime.handle().clone());
+        let backend = BlobBackend::new(
+            storage.clone(),
+            namespace.clone(),
+            runtime.handle().clone(),
+            STORAGE_CALL_DEADLINE,
+        );
         Self {
             runtime,
             storage,
@@ -323,6 +328,7 @@ fn each_call_gives_an_error_of_the_storage_that_names_the_path() {
         Arc::new(FailingBlobStorage),
         new_namespace(),
         runtime.handle().clone(),
+        STORAGE_CALL_DEADLINE,
     );
     let pack = format!("data/ab/{}", "ab".repeat(32));
 

@@ -33,7 +33,7 @@ mod requests;
 mod trees;
 mod volume;
 
-use super::rustic::{PhaseTime, Repository, RepositoryKey};
+use super::rustic::{PhaseTime, Repository, RepositoryKey, STORAGE_CALL_DEADLINE};
 use super::{SnapshotName, SnapshotScope};
 use agents::{AgentStorage, FIRST_AGENT};
 use golem_common::model::environment::EnvironmentId;
@@ -373,6 +373,7 @@ impl PhaseContext {
             Arc::new(AgentStorage::new(self.storage.clone(), agent)),
             self.scope(),
             repository_key(&self.run_id),
+            STORAGE_CALL_DEADLINE,
         )
     }
 

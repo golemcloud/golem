@@ -42,6 +42,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 
+/// The longest time that one call of a repository waits for the blob storage.
+///
+/// A call that gets no answer within this time fails, and its operation fails with it. The value
+/// stops a call that does not return. It is not a limit for a slow call. The slowest call that the
+/// benchmark measured was a read of a pack, which took 1.3 s with the retries of the S3 storage.
+/// Keep the value at least 10 times the largest maximum request time in the benchmark results.
+pub(super) const STORAGE_CALL_DEADLINE: Duration = Duration::from_secs(30);
+
 /// The key that encrypts a repository.
 ///
 /// The key has 64 bytes: 32 bytes of the AES-256 key, then 16 bytes of the number `k` and 16
@@ -141,24 +149,29 @@ pub(super) struct RestoreReport {
 ///
 /// Each operation opens the repository again, with the master key and without the rustic cache.
 /// Each operation runs rustic on a blocking thread of the async runtime, and must be called from a
-/// task of that runtime. A snapshot has its name as its label.
+/// task of that runtime. That runtime must be a multi-thread runtime, because each call on the
+/// storage has a deadline. A snapshot has its name as its label.
 pub(super) struct Repository {
     storage: Arc<dyn BlobStorage>,
     scope: SnapshotScope,
     key: RepositoryKey,
+    deadline: Duration,
 }
 
 impl Repository {
-    /// Gives the repository of the scope in the storage, which the key opens.
+    /// Gives the repository of the scope in the storage, which the key opens. Each call on the
+    /// storage waits for at most `deadline`, and a call without an answer fails its operation.
     pub(super) fn new(
         storage: Arc<dyn BlobStorage>,
         scope: SnapshotScope,
         key: RepositoryKey,
+        deadline: Duration,
     ) -> Self {
         Self {
             storage,
             scope,
             key,
+            deadline,
         }
     }
 
@@ -208,7 +221,8 @@ impl Repository {
         run_blocking(move || forget(backend, &key, &name)).await
     }
 
-    /// Gives a backend over the namespace of the scope, which waits on the current runtime.
+    /// Gives a backend over the namespace of the scope, which waits on the current runtime for at
+    /// most the deadline.
     fn backend(&self) -> anyhow::Result<Arc<BlobBackend>> {
         let runtime = Handle::try_current()
             .context("a filesystem snapshot operation needs an async runtime")?;
@@ -216,6 +230,7 @@ impl Repository {
             self.storage.clone(),
             self.scope.0.clone(),
             runtime,
+            self.deadline,
         )))
     }
 }

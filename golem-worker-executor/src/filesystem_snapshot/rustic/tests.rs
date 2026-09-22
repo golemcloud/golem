@@ -14,7 +14,7 @@
 
 //! Save, restore and forget of a repository on the in-memory blob storage.
 
-use super::{OperationPhase, Repository, RepositoryKey, repository_options};
+use super::{OperationPhase, Repository, RepositoryKey, STORAGE_CALL_DEADLINE, repository_options};
 use crate::filesystem_snapshot::contract_tests::fixture::{Scratch, fixture, listing, write_tree};
 use crate::filesystem_snapshot::contract_tests::new_scope;
 use crate::filesystem_snapshot::{SnapshotName, SnapshotScope};
@@ -44,7 +44,7 @@ fn key() -> RepositoryKey {
 }
 
 fn repository(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -> Repository {
-    Repository::new(storage.clone(), scope.clone(), key())
+    Repository::new(storage.clone(), scope.clone(), key(), STORAGE_CALL_DEADLINE)
 }
 
 /// Writes the fixture of the contract suite into a new directory, and gives the directory.
@@ -256,10 +256,15 @@ async fn a_restore_reads_data_on_at_most_its_reader_threads() {
     let restore = async |reader_threads| {
         let counting = Arc::new(OverlapCountingStorage::new(storage.clone()));
         let into = Scratch::new();
-        Repository::new(counting.clone(), scope.clone(), key())
-            .restore(&name("second"), into.path(), reader_threads)
-            .await
-            .unwrap();
+        Repository::new(
+            counting.clone(),
+            scope.clone(),
+            key(),
+            STORAGE_CALL_DEADLINE,
+        )
+        .restore(&name("second"), into.path(), reader_threads)
+        .await
+        .unwrap();
         (counting.most(), listing(into.path()))
     };
 
