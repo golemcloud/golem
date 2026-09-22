@@ -36,16 +36,19 @@ const PROC_CLEAR_REFS: &str = "/proc/self/clear_refs";
 const CGROUP_CPU_STAT: &str = "/sys/fs/cgroup/cpu.stat";
 const CGROUP_MEMORY_CURRENT: &str = "/sys/fs/cgroup/memory.current";
 const CGROUP_MEMORY_STAT: &str = "/sys/fs/cgroup/memory.stat";
+const CGROUP_MEMORY_EVENTS: &str = "/sys/fs/cgroup/memory.events";
 
 /// Runs the step and measures it.
 ///
 /// The requests of the storage before the step are removed first, so the record holds only the
-/// requests of the step.
+/// requests of the step. A line on the standard error tells that the step starts, so the log of a
+/// pod that the kernel stopped shows the step that ran.
 pub(super) async fn measure<T>(
     name: &'static str,
     storage: &MeasuredBlobStorage,
     step: impl Future<Output = anyhow::Result<T>>,
 ) -> (StepRecord, anyhow::Result<T>) {
+    eprintln!("fs-snapshot-benchmark: the step {name} starts");
     let _ = storage.take();
     let before = ProcessSample::read();
     let peak_reset = reset_peak_rss();
@@ -202,6 +205,29 @@ pub(super) fn memory_stat_value(text: &str, key: &str) -> Option<u64> {
         .and_then(|(_, value)| value.trim().parse().ok())
 }
 
+/// Reads the counters of the text of a cgroup v2 `memory.events`, as a JSON object from the name
+/// of each counter to its value. A line that has no counter is not in the object.
+pub(super) fn parse_memory_events(text: &str) -> Value {
+    Value::Object(
+        text.lines()
+            .filter_map(|line| line.split_once(' '))
+            .filter_map(|(key, value)| {
+                value
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+                    .map(|value| (key.to_string(), Value::from(value)))
+            })
+            .collect(),
+    )
+}
+
+/// Gives the counters of the cgroup `memory.events` of the process, or `null` when the host does
+/// not give them.
+pub(super) fn memory_events() -> Value {
+    read_text(CGROUP_MEMORY_EVENTS).map_or(Value::Null, |text| parse_memory_events(&text))
+}
+
 /// The CPU time and the status of the process at one moment.
 struct ProcessSample {
     user: Duration,
@@ -331,9 +357,33 @@ impl Sampler {
 
 #[cfg(test)]
 mod tests {
-    use super::{CgroupCpu, StatusValues, memory_stat_value, parse_cpu_stat, parse_status};
+    use super::{
+        CgroupCpu, StatusValues, memory_stat_value, parse_cpu_stat, parse_memory_events,
+        parse_status,
+    };
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use test_r::test;
+
+    #[test]
+    fn the_memory_events_give_each_counter() {
+        let text = "low 0\nhigh 12\nmax 34\noom 1\noom_kill 1\noom_group_kill 0\n";
+
+        assert_eq!(
+            (parse_memory_events(text), parse_memory_events("")),
+            (
+                json!({
+                    "low": 0,
+                    "high": 12,
+                    "max": 34,
+                    "oom": 1,
+                    "oom_kill": 1,
+                    "oom_group_kill": 0
+                }),
+                json!({})
+            )
+        );
+    }
 
     #[test]
     fn the_status_gives_the_rss_the_peak_rss_and_the_threads() {

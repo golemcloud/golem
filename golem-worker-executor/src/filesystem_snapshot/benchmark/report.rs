@@ -98,6 +98,11 @@ impl StepRecord {
         }
     }
 
+    /// Gives the record with the parameters of the step.
+    pub(super) fn with_parameters(self, parameters: Value) -> Self {
+        Self { parameters, ..self }
+    }
+
     /// Gives the record with the details and the phases of the operation.
     pub(super) fn with_details(self, details: Value, phases: Box<[PhaseWall]>) -> Self {
         Self {

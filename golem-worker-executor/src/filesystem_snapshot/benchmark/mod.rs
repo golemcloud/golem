@@ -32,8 +32,6 @@ mod volume;
 
 use super::rustic::{PhaseTime, Repository, RepositoryKey};
 use super::{SnapshotName, SnapshotScope};
-use futures::FutureExt;
-use futures::future::BoxFuture;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use measure::measure;
@@ -41,6 +39,7 @@ use report::{FORMAT, Outcome, PhaseResult, PhaseWall, StepRecord, TreeFacts, mil
 use requests::MeasuredBlobStorage;
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -64,23 +63,59 @@ struct Scenario {
     name: &'static str,
     trees: &'static [TreeSpec],
     phases: &'static [Phase],
+    /// The phases that run under the lower memory limit of the workflow.
+    memory_limited_phases: &'static [&'static str],
 }
 
 /// A phase of a scenario: the work of one pod.
 struct Phase {
     name: &'static str,
-    run: for<'a> fn(&'a PhaseContext) -> BoxFuture<'a, PhaseOutcome>,
+    kind: PhaseKind,
+}
+
+/// What a phase does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PhaseKind {
+    /// A cold save of a new tree, a small change and a warm save.
+    Save,
+    /// A cold restore of the warm save with the number of reader threads. `None` is the default
+    /// of rustic.
+    Restore {
+        reader_threads: Option<NonZeroUsize>,
+    },
+}
+
+const SAVE: Phase = Phase {
+    name: "save",
+    kind: PhaseKind::Save,
+};
+
+const fn restore(name: &'static str, reader_threads: usize) -> Phase {
+    Phase {
+        name,
+        kind: PhaseKind::Restore {
+            reader_threads: NonZeroUsize::new(reader_threads),
+        },
+    }
 }
 
 const BASE_PHASES: &[Phase] = &[
-    Phase {
-        name: "save",
-        run: |context| base_save(context).boxed(),
-    },
+    SAVE,
     Phase {
         name: "restore",
-        run: |context| base_restore(context).boxed(),
+        kind: PhaseKind::Restore {
+            reader_threads: None,
+        },
     },
+];
+
+const RESTORE_THREADS_PHASES: &[Phase] = &[
+    SAVE,
+    restore("restore-1", 1),
+    restore("restore-2", 2),
+    restore("restore-4", 4),
+    restore("restore-8", 8),
+    restore("restore-20", 20),
 ];
 
 /// The scenarios of the benchmark.
@@ -89,20 +124,39 @@ const SCENARIOS: &[Scenario] = &[
         name: "base",
         trees: &[FILES_128M, FILES_1G, SQLITE_1G, OBJECTS_128M, OBJECTS_1G],
         phases: BASE_PHASES,
+        memory_limited_phases: &[],
     },
     Scenario {
         name: "smoke",
         trees: &[FILES_TINY, SQLITE_TINY],
         phases: BASE_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "restore-threads",
+        trees: &[FILES_1G],
+        phases: RESTORE_THREADS_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "memory-pressure",
+        trees: &[FILES_1G],
+        phases: BASE_PHASES,
+        memory_limited_phases: &["restore"],
     },
 ];
 
 /// One line of a plan: the phases of one tree of a scenario, in order.
+///
+/// `memory_limited_phases` names the phases that run under the lower memory limit of the
+/// workflow. A line without such phases does not have the field.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct PlanEntry {
     scenario: &'static str,
     tree: &'static str,
     phases: Box<[&'static str]>,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    memory_limited_phases: Box<[&'static str]>,
 }
 
 /// Gives the plan of the scenarios with the names, or the first name that no scenario has.
@@ -115,6 +169,7 @@ fn plan(names: &[String]) -> Result<Box<[PlanEntry]>, String> {
                 scenario: scenario.name,
                 tree: tree.name,
                 phases: scenario.phases.iter().map(|phase| phase.name).collect(),
+                memory_limited_phases: scenario.memory_limited_phases.into(),
             }));
             Ok(entries)
         })
@@ -242,7 +297,9 @@ struct PhaseOutcome {
 /// whether the write succeeded.
 ///
 /// `environment` is recorded as it is, with the time of a first request of the storage, which
-/// gets the credentials and a connection as a running executor already has them.
+/// gets the credentials and a connection as a running executor already has them. The counters of
+/// the cgroup `memory.events` at the start and at the end of the phase go into its `cgroup`
+/// object.
 async fn run_phase(
     run_id: &str,
     cpu_setting: &str,
@@ -251,6 +308,8 @@ async fn run_phase(
     storage: Arc<dyn BlobStorage>,
     environment: Value,
 ) -> (PhaseResult, anyhow::Result<()>) {
+    let environment =
+        with_cgroup_value(environment, "memory_events_start", measure::memory_events());
     let context = PhaseContext {
         run_id: run_id.into(),
         cpu_setting: cpu_setting.into(),
@@ -270,7 +329,8 @@ async fn run_phase(
         )
         .await;
     let environment = with_warm_up(environment, millis(started.elapsed()), warm_up.err());
-    let outcome = (selection.phase.run)(&context).await;
+    let outcome = run_kind(&context, selection.phase.kind).await;
+    let environment = with_cgroup_value(environment, "memory_events_end", measure::memory_events());
     let result = PhaseResult {
         format: FORMAT,
         run_id: run_id.into(),
@@ -286,6 +346,31 @@ async fn run_phase(
     };
     let written = write_result(&context, &result).await;
     (result, written)
+}
+
+/// Runs the work of the kind of phase.
+async fn run_kind(context: &PhaseContext, kind: PhaseKind) -> PhaseOutcome {
+    match kind {
+        PhaseKind::Save => base_save(context).await,
+        PhaseKind::Restore { reader_threads } => base_restore(context, reader_threads).await,
+    }
+}
+
+/// Gives the environment with the value at the key in its `cgroup` object. An environment that
+/// is an object without a `cgroup` object gets one.
+fn with_cgroup_value(environment: Value, key: &str, value: Value) -> Value {
+    match environment {
+        Value::Object(mut fields) => {
+            let cgroup = fields
+                .entry("cgroup")
+                .or_insert_with(|| Value::Object(Default::default()));
+            if let Value::Object(cgroup) = cgroup {
+                cgroup.insert(key.to_string(), value);
+            }
+            Value::Object(fields)
+        }
+        other => other,
+    }
 }
 
 fn with_warm_up(environment: Value, warm_up_ms: f64, error: Option<anyhow::Error>) -> Value {
@@ -482,7 +567,13 @@ fn save_record(record: StepRecord, save: &anyhow::Result<super::rustic::SaveRepo
 /// The restore phase of the base scenario: a cold restore of the warm save into an empty
 /// directory, and a comparison of the hash of the restored tree with the hash that the save
 /// phase recorded.
-async fn base_restore(context: &PhaseContext) -> PhaseOutcome {
+///
+/// `reader_threads` is the number of threads of the restore that read data, and the
+/// `parameters` of the restore step record it. `None` is the default of rustic.
+async fn base_restore(
+    context: &PhaseContext,
+    reader_threads: Option<NonZeroUsize>,
+) -> PhaseOutcome {
     let spec = context.selection.tree;
     let into = context.work_dir.join("restore");
     let repository = context.repository();
@@ -493,29 +584,18 @@ async fn base_restore(context: &PhaseContext) -> PhaseOutcome {
     };
     let expected = match saved_hash(context).await {
         Ok(expected) => expected,
-        Err(error) => {
-            return PhaseOutcome {
-                tree_facts: facts,
-                steps: vec![
-                    StepRecord::skipped("cold_restore"),
-                    StepRecord::skipped("hash_tree"),
-                ],
-                outcome: Outcome::Failed {
-                    reason: format!("the save phase gave no result to compare with: {error:#}")
-                        .into(),
-                },
-            };
-        }
+        Err(error) => return without_save(facts, &error, &["cold_restore", "hash_tree"]),
     };
 
     let (record, restored) = measure("cold_restore", storage, async {
         std::fs::create_dir(&into)?;
         repository
-            .restore(&snapshot_name(WARM_SAVE)?, &into, None)
+            .restore(&snapshot_name(WARM_SAVE)?, &into, reader_threads)
             .await?
             .ok_or_else(|| anyhow::anyhow!("no snapshot has the name {WARM_SAVE}"))
     })
     .await;
+    let record = record.with_parameters(json!({ "reader_threads": reader_threads }));
     let record = match &restored {
         Ok(report) => record.with_details(
             json!({ "files": report.files, "dirs": report.dirs, "bytes": report.bytes }),
@@ -554,6 +634,22 @@ async fn base_restore(context: &PhaseContext) -> PhaseOutcome {
             Outcome::Failed {
                 reason: "the restored tree differs from the saved tree".into(),
             }
+        },
+    }
+}
+
+/// Gives the outcome of a restore phase without a result of the save phase: a skipped record for
+/// each step.
+fn without_save(
+    tree_facts: TreeFacts,
+    error: &anyhow::Error,
+    skipped: &[&'static str],
+) -> PhaseOutcome {
+    PhaseOutcome {
+        tree_facts,
+        steps: skipped.iter().copied().map(StepRecord::skipped).collect(),
+        outcome: Outcome::Failed {
+            reason: format!("the save phase gave no result to compare with: {error:#}").into(),
         },
     }
 }
