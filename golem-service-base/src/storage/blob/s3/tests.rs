@@ -108,15 +108,18 @@ impl SentRequest {
 
 /// The response of the scripted transport to one request.
 ///
-/// The response has a `Content-Length` only when `content_length` is set. The body is one frame.
-/// When `body_reads` is set, a read of that frame adds 1 to it. When `transport_error` is set,
-/// the transport gives that error and no response.
+/// The response has a `Content-Length` only when `content_length` is set. When `body_reads` is
+/// set, the body is one frame, and a read of that frame adds 1 to it. Else, when `frame_bytes` is
+/// set, the body is frames of that number of bytes, and the last frame can be shorter, as a body
+/// from S3 comes in many frames. Else, the body is one frame. When `transport_error` is set, the
+/// transport gives that error and no response.
 struct Answer {
     status: u16,
     content_range: Option<&'static str>,
     content_length: Option<usize>,
     last_modified: Option<&'static str>,
     body_reads: Option<Arc<AtomicUsize>>,
+    frame_bytes: Option<usize>,
     body: String,
     transport_error: Option<ConnectorError>,
 }
@@ -129,6 +132,7 @@ impl Answer {
             content_length: None,
             last_modified: None,
             body_reads: None,
+            frame_bytes: None,
             body: body.into(),
             transport_error: None,
         }
@@ -207,16 +211,24 @@ impl Answer {
     }
 
     /// Gives the body as one frame. When `body_reads` is set, a read of that frame adds 1 to
-    /// it.
+    /// it. Else, when `frame_bytes` is set, gives the body as frames of that number of bytes.
     fn into_body(self) -> SdkBody {
-        match self.body_reads {
-            Some(body_reads) => SdkBody::from_body_1_x(StreamBody::new(
+        match (self.body_reads, self.frame_bytes) {
+            (Some(body_reads), _) => SdkBody::from_body_1_x(StreamBody::new(
                 futures::stream::iter([Ok::<_, Infallible>(Frame::data(Bytes::from(self.body)))])
                     .inspect(move |_| {
                         body_reads.fetch_add(1, Ordering::SeqCst);
                     }),
             )),
-            None => SdkBody::from(self.body),
+            (None, Some(frame_bytes)) => {
+                let body = Bytes::from(self.body);
+                let frames = body
+                    .chunks(frame_bytes.max(1))
+                    .map(|frame| Ok::<_, Infallible>(Frame::data(body.slice_ref(frame))))
+                    .collect::<Vec<_>>();
+                SdkBody::from_body_1_x(StreamBody::new(futures::stream::iter(frames)))
+            }
+            (None, None) => SdkBody::from(self.body),
         }
     }
 }
@@ -1222,11 +1234,14 @@ fn cut_range_keeps_the_buffer_of_the_blob() {
 
 #[test]
 async fn get_raw_reads_the_body_into_a_buffer_of_its_content_length() {
+    // The body comes in frames. A buffer that grows as the frames arrive gets more capacity than
+    // the body.
     let body = letters(1_000);
     let (storage, _) = scripted_storage("", {
         let body = body.clone();
         move |_, _| Answer {
             content_length: Some(body.len()),
+            frame_bytes: Some(100),
             ..Answer::new(200, body.clone())
         }
     });
@@ -1242,10 +1257,15 @@ async fn get_raw_reads_the_body_into_a_buffer_of_its_content_length() {
 
 #[test]
 async fn get_raw_slice_reads_the_range_into_a_buffer_of_its_length() {
+    // The body comes in frames. A buffer that grows as the frames arrive gets more capacity than
+    // the body.
     let body = letters(1_000);
     let (storage, _) = scripted_storage("", {
         let body = body.clone();
-        move |_, _| Answer::partial(Some("bytes 1-1000/2000"), &body)
+        move |_, _| Answer {
+            frame_bytes: Some(100),
+            ..Answer::partial(Some("bytes 1-1000/2000"), &body)
+        }
     });
 
     let bytes = storage
