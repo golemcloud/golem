@@ -1,0 +1,60 @@
+name: Component size (informational)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/component-size.yaml'
+      - 'test-components/size-analysis/**'
+      - 'test-components/agent-counters/**'
+      - 'sdks/rust/**'
+      - 'golem-rust-macro/**'
+      - 'golem-schema/**'
+      - 'cli/golem-cli/templates/rust/**'
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          rust-targets: wasm32-wasip2
+          install-cargo-binstall: 'true'
+          install-cargo-make: 'false'
+          cache-shared-key: component-size
+      - name: Install analysis tools
+        run: |
+          cargo binstall --no-confirm --locked wasm-tools@1.253.0 twiggy@0.8.0
+          curl -fLsS https://github.com/WebAssembly/binaryen/releases/download/version_123/binaryen-version_123-x86_64-linux.tar.gz -o /tmp/binaryen.tar.gz
+          tar xzf /tmp/binaryen.tar.gz -C /tmp
+          echo /tmp/binaryen-version_123/bin >> "$GITHUB_PATH"
+      - name: Test binary accounting and rebundling
+        run: python3 -m unittest discover -s test-components/size-analysis -v
+      - name: Build and report independent release choices
+        run: |
+          python3 test-components/size-analysis/analyze.py \
+            --manifest test-components/agent-counters/Cargo.toml \
+            --matrix --optimize --out tmp/component-size
+      - name: Isolated allocator performance smoke check
+        run: |
+          node test-components/size-analysis/benchmark-core.mjs \
+            tmp/component-size/baseline-s/report/core-0/module.wasm \
+            tmp/component-size/strip/report/core-0/module.wasm \
+            tmp/component-size/cgu1/report/core-0/module.wasm \
+            tmp/component-size/z/report/core-0/module.wasm \
+            tmp/component-size/strip/optimized-report/core-0/module.wasm \
+            > tmp/component-size/allocator-performance.json
+      - name: Upload report, including partial results on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-size-${{ github.sha }}
+          path: tmp/component-size
+          retention-days: 14
+          if-no-files-found: warn
