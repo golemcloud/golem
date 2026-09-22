@@ -9,8 +9,9 @@ use golem_rust::golem_agentic::golem::tool::host::{
     self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, agent_definition, agent_implementation,
-    decode_typed_schema_value_owned, read_only,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue,
+    TypedSchemaValue, agent_definition, agent_implementation, decode_typed_schema_value_owned,
+    read_only,
 };
 use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
@@ -73,6 +74,35 @@ struct RawMiddlewareProbeInput {
 #[derive(IntoSchema)]
 struct RawTypedOutputInput {
     tag: String,
+}
+
+#[derive(FromSchema)]
+struct RawReadFileResult {
+    content: String,
+    start_line: Option<u64>,
+    end_line: Option<u64>,
+    total_lines: u64,
+    truncated_before: bool,
+    truncated_after: bool,
+}
+
+#[derive(FromSchema)]
+enum RawWriteDisposition {
+    Created,
+    Replaced,
+}
+
+#[derive(FromSchema)]
+struct RawWriteFileResult {
+    disposition: RawWriteDisposition,
+    bytes_written: u64,
+}
+
+#[derive(FromSchema)]
+struct RawEditFileResult {
+    replacements: u64,
+    bytes_before: u64,
+    bytes_after: u64,
 }
 
 #[derive(Debug, Clone, IntoSchema, FromSchema)]
@@ -138,6 +168,7 @@ pub trait ToolStreamingCaller {
     async fn raw_modes_and_handles(&self) -> Vec<String>;
     async fn middleware_probe_modes(&self, value: String) -> Vec<String>;
     async fn middleware_probe_once(&self, value: String) -> String;
+    async fn filesystem_tool_roundtrip(&self, implementation: String) -> Vec<String>;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
@@ -319,6 +350,46 @@ fn raw_typed_output_input(tag: String) -> golem_rust::schema::wit::wire::TypedSc
         .into_typed_schema_value()
         .expect("encode raw typed output input");
     golem_rust::encode_typed_schema_value(&value).expect("encode raw typed output wire input")
+}
+
+fn raw_filesystem_input(
+    fields: Vec<(&str, SchemaType, SchemaValue)>,
+) -> golem_rust::schema::wit::wire::TypedSchemaValue {
+    let value = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(
+            fields
+                .iter()
+                .map(|(name, body, _)| golem_rust::schema::NamedFieldType {
+                    name: (*name).to_string(),
+                    body: body.clone(),
+                    metadata: Default::default(),
+                })
+                .collect(),
+        )),
+        SchemaValue::Record {
+            fields: fields.into_iter().map(|(_, _, value)| value).collect(),
+        },
+    );
+    golem_rust::encode_typed_schema_value(&value).expect("encode filesystem tool wire input")
+}
+
+async fn invoke_filesystem_tool<T: FromSchema>(
+    name: String,
+    command: &str,
+    input: golem_rust::schema::wit::wire::TypedSchemaValue,
+) -> T {
+    let result = ToolRpc::new(&name)
+        .invoke_and_await(vec![command.to_string()], input, None, None)
+        .await
+        .unwrap_or_else(|error| panic!("invoke guest-side filesystem tool '{name}': {error:?}"));
+    let value = decode_typed_schema_value_owned(
+        result
+            .result
+            .unwrap_or_else(|| panic!("filesystem tool '{name}' returned no result")),
+    )
+    .unwrap_or_else(|error| panic!("decode filesystem tool '{name}' result: {error}"));
+    T::from_value(value.value())
+        .unwrap_or_else(|error| panic!("convert filesystem tool '{name}' result: {error}"))
 }
 
 fn gated_typed_input<T: IntoSchema + FromSchema + 'static>(items: [T; 3]) -> AgentStream<T> {
@@ -1037,6 +1108,87 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await
             .expect("single synchronous middleware probe");
         decode_middleware_probe_result(result)
+    }
+
+    async fn filesystem_tool_roundtrip(&self, implementation: String) -> Vec<String> {
+        let path = format!("workspace/guest-{implementation}/notes.txt");
+        let write: RawWriteFileResult = invoke_filesystem_tool(
+            format!("write-file-{implementation}"),
+            "write-file",
+            raw_filesystem_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String(path.clone()),
+                ),
+                (
+                    "content",
+                    SchemaType::string(),
+                    SchemaValue::String("one\r\ntwo\nthree".to_string()),
+                ),
+                (
+                    "create-parent-directories",
+                    SchemaType::bool(),
+                    SchemaValue::Bool(true),
+                ),
+            ]),
+        )
+        .await;
+        let read: RawReadFileResult = invoke_filesystem_tool(
+            format!("read-file-{implementation}"),
+            "read-file",
+            raw_filesystem_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String(path.clone()),
+                ),
+                (
+                    "range",
+                    SchemaType::list(SchemaType::u64()),
+                    SchemaValue::List {
+                        elements: vec![SchemaValue::U64(2)],
+                    },
+                ),
+            ]),
+        )
+        .await;
+        let edit: RawEditFileResult = invoke_filesystem_tool(
+            format!("edit-file-{implementation}"),
+            "edit-file",
+            raw_filesystem_input(vec![
+                ("path", SchemaType::string(), SchemaValue::String(path)),
+                (
+                    "old-text",
+                    SchemaType::string(),
+                    SchemaValue::String("two\n".to_string()),
+                ),
+                (
+                    "new-text",
+                    SchemaType::string(),
+                    SchemaValue::String("TWO\r\n".to_string()),
+                ),
+            ]),
+        )
+        .await;
+
+        vec![
+            match write.disposition {
+                RawWriteDisposition::Created => "created",
+                RawWriteDisposition::Replaced => "replaced",
+            }
+            .to_string(),
+            write.bytes_written.to_string(),
+            read.content,
+            read.start_line.unwrap_or_default().to_string(),
+            read.end_line.unwrap_or_default().to_string(),
+            read.total_lines.to_string(),
+            read.truncated_before.to_string(),
+            read.truncated_after.to_string(),
+            edit.replacements.to_string(),
+            edit.bytes_before.to_string(),
+            edit.bytes_after.to_string(),
+        ]
     }
 
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence> {

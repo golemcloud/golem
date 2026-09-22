@@ -12604,7 +12604,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=golem-outline-lift-v0.58.0#4407232ead86d9bcbd06cbebd790a52120a4087a"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
 dependencies = [
  "bitflags 2.13.1",
  "futures",
@@ -12625,7 +12625,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-core"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=golem-outline-lift-v0.58.0#4407232ead86d9bcbd06cbebd790a52120a4087a"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
 dependencies = [
  "anyhow",
  "heck",
@@ -12635,7 +12635,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=golem-outline-lift-v0.58.0#4407232ead86d9bcbd06cbebd790a52120a4087a"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
 dependencies = [
  "anyhow",
  "heck",
@@ -12650,7 +12650,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust-macro"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?branch=golem-outline-lift-v0.58.0#4407232ead86d9bcbd06cbebd790a52120a4087a"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
 dependencies = [
  "anyhow",
  "macro-string",

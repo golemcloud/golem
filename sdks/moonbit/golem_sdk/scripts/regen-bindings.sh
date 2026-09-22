@@ -28,7 +28,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-readonly WIT_BINDGEN_COMMIT="9c6dce16db01eeb83f44360f27c0c502d3da4462"
+readonly WIT_BINDGEN_COMMIT="ca628b5d78c346f8b51973931d45c0ce08c784dd"
 readonly WIT_BINDGEN_SHORT_COMMIT="${WIT_BINDGEN_COMMIT:0:9}"
 
 wit_bindgen_version="$(wit-bindgen --version)"
@@ -86,10 +86,6 @@ generate_world() {
 }
 
 generate_world default agent-guest gen
-
-echo "==> Validating middleware argument lifts"
-python3 scripts/split-middleware-lift.py \
-  "$tmp_root/default/gen/interface/golem/tool/tool-middleware-guest/ffi.mbt"
 
 echo "==> Assembling generated roots"
 rm -rf "${GENERATED_ROOTS[@]}" gen-tool-middleware gen-agent-tool-middleware \

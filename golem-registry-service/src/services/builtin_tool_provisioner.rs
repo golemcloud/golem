@@ -48,9 +48,44 @@ pub struct BuiltinToolDescriptor {
     pub wasm_bytes: &'static [u8],
 }
 
-// There is intentionally no production tool inventory yet. Future artifacts are embedded in
-// descriptors here rather than loaded from registry-service filesystem paths.
-static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[];
+static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
+    BuiltinToolDescriptor {
+        component_name: "filesystem-tools-rust",
+        tool_name: "read-file-rust",
+        release_version: "0.1.0-rust",
+        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-rust.wasm"),
+    },
+    BuiltinToolDescriptor {
+        component_name: "filesystem-tools-rust",
+        tool_name: "write-file-rust",
+        release_version: "0.1.0-rust",
+        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-rust.wasm"),
+    },
+    BuiltinToolDescriptor {
+        component_name: "filesystem-tools-rust",
+        tool_name: "edit-file-rust",
+        release_version: "0.1.0-rust",
+        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-rust.wasm"),
+    },
+    BuiltinToolDescriptor {
+        component_name: "filesystem-tools-moonbit",
+        tool_name: "read-file-moonbit",
+        release_version: "0.1.0-moonbit",
+        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-moonbit.wasm"),
+    },
+    BuiltinToolDescriptor {
+        component_name: "filesystem-tools-moonbit",
+        tool_name: "write-file-moonbit",
+        release_version: "0.1.0-moonbit",
+        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-moonbit.wasm"),
+    },
+    BuiltinToolDescriptor {
+        component_name: "filesystem-tools-moonbit",
+        tool_name: "edit-file-moonbit",
+        release_version: "0.1.0-moonbit",
+        wasm_bytes: include_bytes!("../../../plugins/filesystem-tools-moonbit.wasm"),
+    },
+];
 
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_builtin_tools(
@@ -97,7 +132,7 @@ pub async fn provision_descriptors(
     }
     let mut extracted = Vec::with_capacity(descriptors.len());
     let mut coordinates = std::collections::BTreeSet::new();
-    let mut component_names = std::collections::BTreeSet::new();
+    let mut component_hashes = BTreeMap::new();
     for descriptor in descriptors {
         if !coordinates.insert((descriptor.tool_name, descriptor.release_version)) {
             anyhow::bail!(
@@ -106,9 +141,12 @@ pub async fn provision_descriptors(
                 descriptor.release_version
             );
         }
-        if !component_names.insert(descriptor.component_name) {
+        let wasm_hash = blake3::hash(descriptor.wasm_bytes);
+        if let Some(existing_hash) = component_hashes.insert(descriptor.component_name, wasm_hash)
+            && existing_hash != wasm_hash
+        {
             anyhow::bail!(
-                "duplicate built-in tool component name '{}'",
+                "built-in tool component '{}' has conflicting embedded artifacts",
                 descriptor.component_name
             );
         }
@@ -153,34 +191,37 @@ pub async fn provision_descriptors(
     }
     let auth = auth_service.builtin_owner_auth(owner).await?;
     let app = get_or_create_application(applications, owner, &auth).await?;
-    let env = get_or_create_environment(environments, app.id, &auth).await?;
-    let mut staged = Vec::new();
+    let environment = get_or_create_environment(environments, app.id, &auth).await?;
+    let mut component_tools = BTreeMap::<_, Vec<_>>::new();
     for (descriptor, tool) in descriptors.iter().zip(extracted) {
+        component_tools
+            .entry(descriptor.component_name)
+            .or_default()
+            .push(tool);
+    }
+    let mut staged = BTreeMap::new();
+    for (component_name, tools) in component_tools {
+        let descriptor = descriptors
+            .iter()
+            .find(|descriptor| descriptor.component_name == component_name)
+            .expect("component group came from descriptors");
         let component = upload_component(
             component_writes,
             components,
-            env.id,
+            environment.id,
             descriptor,
-            tool,
+            tools,
             &auth,
         )
         .await?;
-        staged.push((descriptor, component));
-    }
-    let mut deployment_current = true;
-    for (_, staged_component) in &staged {
-        match components
-            .get_deployed_component(staged_component.id, &auth)
-            .await
-        {
-            Ok(deployed) if deployed.revision == staged_component.revision => {}
-            _ => deployment_current = false,
+        match components.get_deployed_component(component.id, &auth).await {
+            Ok(deployed) if deployed.revision == component.revision => {}
+            _ => deploy(deployments, deployment_writes, environment.id, &auth).await?,
         }
+        staged.insert(component_name, component);
     }
-    if !deployment_current {
-        deploy(deployments, deployment_writes, env.id, &auth).await?;
-    }
-    for (descriptor, staged_component) in staged {
+    for descriptor in descriptors {
+        let staged_component = &staged[descriptor.component_name];
         let component = components
             .get_deployed_component(staged_component.id, &auth)
             .await?;
@@ -285,25 +326,34 @@ async fn upload_component(
     reads: &Arc<ComponentService>,
     env: EnvironmentId,
     descriptor: &BuiltinToolDescriptor,
-    tool: Tool,
+    tools: Vec<Tool>,
     auth: &AuthCtx,
 ) -> anyhow::Result<Component> {
     let name = ComponentName(descriptor.component_name.into());
-    let tool_name = ToolName::try_from(descriptor.tool_name).map_err(anyhow::Error::msg)?;
-    let tool_deployment_configs = BTreeMap::from([(
-        tool_name,
-        ToolDeploymentConfigCreation {
-            provision: ToolProvisionConfigCreation {
-                config: serde_json::json!({}).into(),
-                env: BTreeMap::new(),
-                plugin_installations: Vec::new(),
-                files: BTreeMap::new(),
-            },
-            environment_binding: None,
-            agent_bindings: BTreeMap::new(),
-            component_bindings: BTreeMap::new(),
-        },
-    )]);
+    let tool_deployment_configs = tools
+        .iter()
+        .map(|tool| {
+            let tool_name = ToolName::try_from(
+                tool.name()
+                    .expect("built-in tool metadata was matched by a valid name"),
+            )
+            .expect("built-in tool metadata name was already validated");
+            (
+                tool_name,
+                ToolDeploymentConfigCreation {
+                    provision: ToolProvisionConfigCreation {
+                        config: serde_json::json!({}).into(),
+                        env: BTreeMap::new(),
+                        plugin_installations: Vec::new(),
+                        files: BTreeMap::new(),
+                    },
+                    environment_binding: None,
+                    agent_bindings: BTreeMap::new(),
+                    component_bindings: BTreeMap::new(),
+                },
+            )
+        })
+        .collect();
     match writes
         .create(
             env,
@@ -313,7 +363,7 @@ async fn upload_component(
                 component_provision_config: Default::default(),
                 agent_types: vec![],
                 agent_type_provision_configs: BTreeMap::new(),
-                tools: vec![tool],
+                tools,
                 tool_deployment_configs,
                 tool_middlewares: vec![],
                 tool_middleware_provision_configs: BTreeMap::new(),

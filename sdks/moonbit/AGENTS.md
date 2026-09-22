@@ -154,14 +154,14 @@ files. Regenerate with the script, which requires this exact revision of the
 
 ```sh
 cargo install --locked --git https://github.com/golemcloud/wit-bindgen \
-  --rev 9c6dce16db01eeb83f44360f27c0c502d3da4462 wit-bindgen-cli
+  --rev ca628b5d78c346f8b51973931d45c0ce08c784dd wit-bindgen-cli
 ```
 
 The pin incorporates Bytecode Alliance's draft
 [MoonBit component-model async PR #1659](https://github.com/bytecodealliance/wit-bindgen/pull/1659)
 and Golem's additional outline-lift, named-memory-lowering, export-disambiguation, and deterministic
-emission changes and 64 KiB component byte-stream batching. MoonBit export-result lowering remains
-outlined per exported interface; this pin does not share lowering across interfaces.
+emission changes, 64 KiB component byte-stream batching, and shared export ABI lifting and lowering
+for types used across exported interfaces.
 Released wit-bindgen and upstream `main` do not yet generate the async MoonBit
 exports required by this SDK.
 
@@ -535,9 +535,10 @@ published to mooncakes.io for the release template to work.
 ## Dependencies & Tools
 
 - **wit-bindgen** — Golem's fork pinned at
-  `9c6dce16db01eeb83f44360f27c0c502d3da4462`. It combines draft upstream PR #1659's MoonBit
+  `ca628b5d78c346f8b51973931d45c0ce08c784dd`. It combines draft upstream PR #1659's MoonBit
   component-model async support with Golem's outline-lift, named-memory-lowering, and export
-  disambiguation changes, 64 KiB component byte-stream batching, and
+  disambiguation changes, 64 KiB component byte-stream batching, shared cross-interface export ABI
+  lifting and lowering, and
   deterministic bindings. Bindings are regenerated via
   `scripts/regen-bindings.sh`, which rejects any other generator revision and applies the s8/s16
   sign-extension fix in post-processing.

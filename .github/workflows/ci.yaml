@@ -150,6 +150,39 @@ jobs:
           artifact-name: unit-tests-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  check-builtin-tools:
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs: build-and-store
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
+          install-cargo-binstall: 'true'
+      - uses: ./.github/actions/restore-binaries
+        with:
+          run-id: ${{ github.run_id }}
+          copy-to-target: 'true'
+      - name: Setup MoonBit
+        uses: hustcer/setup-moonbit@v1
+        with:
+          version: ${{ env.MOONBIT_INSTALL_VERSION }}
+          core-version: ${{ env.MOONBIT_INSTALL_VERSION }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install wasm-tools
+        run: cargo binstall --force --locked wasm-tools@1.248.0
+      - name: Build built-in tools
+        run: cargo make --profile ci build-builtin-tools
+      - name: Validate committed built-in tool artifacts
+        run: |
+          wasm-tools validate --features all plugins/filesystem-tools-rust.wasm
+          wasm-tools validate --features all plugins/filesystem-tools-moonbit.wasm
+          git diff --exit-code -- plugins/filesystem-tools-rust plugins/filesystem-tools-rust.wasm plugins/filesystem-tools-moonbit plugins/filesystem-tools-moonbit.wasm
+
   worker-tests:
     env:
       CARGO_BUILD_JOBS: 10

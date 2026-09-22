@@ -1,0 +1,121 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/filesystem_tools_moonbit/component"
+
+import {
+  "golemcloud/golem_sdk/schema",
+  "golemcloud/golem_sdk/schema_model",
+  "golemcloud/golem_sdk/tool",
+  "golemcloud/golem_sdk/tool-core",
+}
+
+// Values
+pub fn cabi_realloc(Int, Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInitialize(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvokeGolemAgentGuest(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncInvokeGolemToolGuest(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncLoad(Int, Int, Int) -> Int
+
+pub fn wasmExportAsyncSave(Int, Int, Int) -> Int
+
+pub fn wasmExportDiscoverAgentTypes() -> Int
+
+pub fn wasmExportDiscoverAgentTypesPostReturn(Int) -> Unit
+
+pub fn wasmExportDiscoverTools() -> Int
+
+pub fn wasmExportDiscoverToolsPostReturn(Int) -> Unit
+
+pub fn wasmExportGetDefinition() -> Int
+
+pub fn wasmExportGetDefinitionPostReturn(Int) -> Unit
+
+pub fn wasmExportGetTool(Int, Int) -> Int
+
+pub fn wasmExportGetToolPostReturn(Int) -> Unit
+
+pub fn wasmExportInitialize(Int) -> Int
+
+pub fn wasmExportInvokeGolemAgentGuest(Int) -> Int
+
+pub fn wasmExportInvokeGolemToolGuest(Int) -> Int
+
+pub fn wasmExportLoad(Int, Int, Int, Int) -> Int
+
+pub fn wasmExportSave() -> Int
+
+// Errors
+
+// Types and methods
+type EditFile
+pub async fn EditFile::edit_file(String, String, String) -> Result[EditFileResult, FilesystemToolError]
+
+pub(all) struct EditFileMoonbitClient {
+  client : @tool.ToolClient
+}
+pub fn EditFileMoonbitClient::drop(Self) -> Unit
+pub async fn EditFileMoonbitClient::edit_file(Self, String, String, String) -> Result[EditFileResult, @tool.ToolError[FilesystemToolError]]
+pub fn EditFileMoonbitClient::new() -> Self
+
+pub(all) struct EditFileResult {
+  replacements : UInt64
+  bytes_before : UInt64
+  bytes_after : UInt64
+}
+pub impl @schema.FromSchema for EditFileResult
+pub impl @schema.IntoSchema for EditFileResult
+
+type FilesystemToolError
+pub impl @tool-core.ToolErrorSchema for FilesystemToolError
+
+type ReadFile
+pub async fn ReadFile::read_file(String, Array[UInt64]) -> Result[ReadFileResult, FilesystemToolError]
+
+pub(all) struct ReadFileMoonbitClient {
+  client : @tool.ToolClient
+}
+pub fn ReadFileMoonbitClient::drop(Self) -> Unit
+pub fn ReadFileMoonbitClient::new() -> Self
+pub async fn ReadFileMoonbitClient::read_file(Self, String, Array[UInt64]) -> Result[ReadFileResult, @tool.ToolError[FilesystemToolError]]
+
+pub(all) struct ReadFileResult {
+  content : String
+  start_line : UInt64?
+  end_line : UInt64?
+  total_lines : UInt64
+  truncated_before : Bool
+  truncated_after : Bool
+}
+pub impl @schema.FromSchema for ReadFileResult
+pub impl @schema.IntoSchema for ReadFileResult
+
+pub(all) enum WriteDisposition {
+  Created
+  Replaced
+}
+pub impl @schema.FromSchema for WriteDisposition
+pub impl @schema.IntoSchema for WriteDisposition
+
+type WriteFile
+pub async fn WriteFile::write_file(String, String, Bool) -> Result[WriteFileResult, FilesystemToolError]
+
+pub(all) struct WriteFileMoonbitClient {
+  client : @tool.ToolClient
+}
+pub fn WriteFileMoonbitClient::drop(Self) -> Unit
+pub fn WriteFileMoonbitClient::new() -> Self
+pub async fn WriteFileMoonbitClient::write_file(Self, String, String, Bool) -> Result[WriteFileResult, @tool.ToolError[FilesystemToolError]]
+
+pub(all) struct WriteFileResult {
+  disposition : WriteDisposition
+  bytes_written : UInt64
+}
+pub impl @schema.FromSchema for WriteFileResult
+pub impl @schema.IntoSchema for WriteFileResult
+
+// Type aliases
+
+// Traits

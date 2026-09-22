@@ -30,7 +30,8 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::oplog::payload::types::{
-    SerializableEntityBodyExecution, SerializableToolOperationTerminal, SerializableToolRpcError,
+    SerializableEntityBodyExecution, SerializableToolError, SerializableToolOperationTerminal,
+    SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentEntityKind, PublicOplogEntry, PublicOplogEntryAttribution,
@@ -88,6 +89,14 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("tool_streaming_rust_caller")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("filesystem_tools_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("filesystem_tools_moonbit")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -250,6 +259,130 @@ fn deployment_state(
         tool_bindings: BTreeMap::from([(owner, bindings)]),
         registered_tool_middlewares: BTreeMap::new(),
         tool_middleware_chains: BTreeMap::new(),
+    }
+}
+
+fn filesystem_tool_input(fields: Vec<(&str, SchemaType, SchemaValue)>) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(
+            fields
+                .iter()
+                .map(|(name, body, _)| golem_common::schema::NamedFieldType {
+                    name: (*name).to_string(),
+                    body: body.clone(),
+                    metadata: Default::default(),
+                })
+                .collect(),
+        )),
+        SchemaValue::Record {
+            fields: fields.into_iter().map(|(_, _, value)| value).collect(),
+        },
+    )
+}
+
+fn filesystem_line_range(
+    start_line: Option<u64>,
+    end_line: Option<u64>,
+) -> (SchemaType, SchemaValue) {
+    let mut elements = Vec::new();
+    if let Some(start_line) = start_line {
+        elements.push(SchemaValue::U64(start_line));
+    }
+    if let Some(end_line) = end_line {
+        elements.push(SchemaValue::U64(end_line));
+    }
+    (
+        SchemaType::list(SchemaType::u64()),
+        SchemaValue::List { elements },
+    )
+}
+
+async fn invoke_filesystem_tool(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definitions: &BTreeMap<ToolName, golem_common::schema::tool::Tool>,
+    tool_name: &str,
+    input: TypedSchemaValue,
+) -> anyhow::Result<
+    Result<
+        Option<SchemaValue>,
+        golem_common::model::oplog::payload::types::SerializableToolRpcError,
+    >,
+> {
+    let command_name = tool_name
+        .rsplit_once('-')
+        .map(|(name, _)| name)
+        .unwrap_or(tool_name);
+    let tool_name = ToolName::try_from(tool_name).unwrap();
+    let definition = &definitions[&tool_name];
+    let command_index = definition
+        .command_index_by_path(&[command_name.to_string()])
+        .expect("filesystem tool command exists");
+    let input_schema = definition.canonical_input_record_schema(command_index)?;
+    let (_, input_value) = input.into_parts();
+    let output = executor
+        .invoke_external_tool(
+            worker_id,
+            fingerprint,
+            IdempotencyKey::fresh(),
+            tool_name,
+            vec![command_name.to_string()],
+            TypedSchemaValue::new(input_schema, input_value),
+            InvocationContextStack::fresh(),
+            principal,
+            None,
+        )
+        .await?;
+    let AgentInvocationResult::ExternalTool { result } = output.result else {
+        anyhow::bail!("expected external tool result, got {output:?}");
+    };
+    Ok(result.map(|result| result.result.map(|value| value.into_parts().1)))
+}
+
+async fn invoke_filesystem_tool_success(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definitions: &BTreeMap<ToolName, golem_common::schema::tool::Tool>,
+    tool_name: &str,
+    input: TypedSchemaValue,
+) -> anyhow::Result<SchemaValue> {
+    match invoke_filesystem_tool(
+        executor,
+        worker_id,
+        fingerprint,
+        principal,
+        definitions,
+        tool_name,
+        input,
+    )
+    .await?
+    {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => anyhow::bail!("filesystem tool '{tool_name}' returned no value"),
+        Err(error) => anyhow::bail!("filesystem tool '{tool_name}' failed: {error:?}"),
+    }
+}
+
+fn filesystem_tool_name(base_name: &str, implementation: &str) -> String {
+    format!("{base_name}-{implementation}")
+}
+
+fn assert_filesystem_tool_error(
+    result: Result<Option<SchemaValue>, SerializableToolRpcError>,
+    expected_name: &str,
+) -> anyhow::Result<()> {
+    match result {
+        Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
+            SerializableToolError::CustomError(error) if error.name == expected_name => Ok(()),
+            other => {
+                anyhow::bail!("expected filesystem tool error '{expected_name}', got {other:?}")
+            }
+        },
+        other => anyhow::bail!("expected filesystem tool error '{expected_name}', got {other:?}"),
     }
 }
 
@@ -7953,6 +8086,554 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         .await?
         .into_typed()?;
     assert_eq!(after, "R");
+    Ok(())
+}
+
+async fn exercise_filesystem_tools(
+    executor: &TestWorkerExecutor,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    environment_state: &TestEnvironmentStateService,
+    caller_component: &golem_common::model::component::ComponentDto,
+    provider: &PrecompiledComponent,
+    implementation: &str,
+) -> anyhow::Result<()> {
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let definitions = metadata
+        .tools
+        .iter()
+        .map(|definition| {
+            let name = definition
+                .name()
+                .expect("filesystem tool has a root command");
+            (ToolName::try_from(name).unwrap(), definition.clone())
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        &format!("golem:filesystem-tools-{implementation}"),
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_id = agent_id!(
+        "ToolStreamingCaller",
+        format!("filesystem-tools-{implementation}")
+    );
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: context.account_id,
+    });
+    let path = format!("workspace/{implementation}/notes.txt");
+
+    let write = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        &filesystem_tool_name("write-file", implementation),
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("one\r\ntwo\nthree".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(true),
+            ),
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        write,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Enum { case: 0 }, SchemaValue::U64(14)]
+        }
+    );
+
+    let read = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        &filesystem_tool_name("read-file", implementation),
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            {
+                let (schema, value) = filesystem_line_range(Some(2), None);
+                ("range", schema, value)
+            },
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        read,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("two\nthree".to_string()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::U64(2))),
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::U64(3))),
+                },
+                SchemaValue::U64(3),
+                SchemaValue::Bool(true),
+                SchemaValue::Bool(false),
+            ]
+        }
+    );
+
+    let edit = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        &filesystem_tool_name("edit-file", implementation),
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            (
+                "old-text",
+                SchemaType::string(),
+                SchemaValue::String("two\n".to_string()),
+            ),
+            (
+                "new-text",
+                SchemaType::string(),
+                SchemaValue::String("TWO\r\n".to_string()),
+            ),
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        edit,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U64(1),
+                SchemaValue::U64(14),
+                SchemaValue::U64(15)
+            ]
+        }
+    );
+
+    let full_read = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        &filesystem_tool_name("read-file", implementation),
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            {
+                let (schema, value) = filesystem_line_range(None, None);
+                ("range", schema, value)
+            },
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        full_read,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("one\r\nTWO\r\nthree".to_string()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::U64(1))),
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::U64(3))),
+                },
+                SchemaValue::U64(3),
+                SchemaValue::Bool(false),
+                SchemaValue::Bool(false),
+            ]
+        }
+    );
+
+    let stale = invoke_filesystem_tool(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        &filesystem_tool_name("edit-file", implementation),
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            (
+                "old-text",
+                SchemaType::string(),
+                SchemaValue::String("outdated".to_string()),
+            ),
+            (
+                "new-text",
+                SchemaType::string(),
+                SchemaValue::String("replacement".to_string()),
+            ),
+        ]),
+    )
+    .await?;
+    assert_filesystem_tool_error(stale, "stale-edit")?;
+
+    let replace = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        &filesystem_tool_name("write-file", implementation),
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(path.clone()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("same same".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        replace,
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Enum { case: 1 }, SchemaValue::U64(9)]
+        }
+    );
+
+    let ambiguous = invoke_filesystem_tool(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        &filesystem_tool_name("edit-file", implementation),
+        filesystem_tool_input(vec![
+            ("path", SchemaType::string(), SchemaValue::String(path)),
+            (
+                "old-text",
+                SchemaType::string(),
+                SchemaValue::String("same".to_string()),
+            ),
+            (
+                "new-text",
+                SchemaType::string(),
+                SchemaValue::String("different".to_string()),
+            ),
+        ]),
+    )
+    .await?;
+    assert_filesystem_tool_error(ambiguous, "ambiguous-edit")?;
+
+    // "aa" occurs twice in "aaa" (at offsets 0 and 1), so the documented
+    // unambiguous-edit contract requires rejecting this edit.
+    let overlap_path = format!("workspace/{implementation}/overlap.txt");
+    invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        &filesystem_tool_name("write-file", implementation),
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(overlap_path.clone()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("aaa".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(true),
+            ),
+        ]),
+    )
+    .await?;
+    let overlapping = invoke_filesystem_tool(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        &filesystem_tool_name("edit-file", implementation),
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(overlap_path),
+            ),
+            (
+                "old-text",
+                SchemaType::string(),
+                SchemaValue::String("aa".to_string()),
+            ),
+            (
+                "new-text",
+                SchemaType::string(),
+                SchemaValue::String("x".to_string()),
+            ),
+        ]),
+    )
+    .await?;
+    assert_filesystem_tool_error(overlapping, "ambiguous-edit")?;
+
+    let traversal = invoke_filesystem_tool(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal,
+        &definitions,
+        &filesystem_tool_name("read-file", implementation),
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("../outside.txt".to_string()),
+            ),
+            {
+                let (schema, value) = filesystem_line_range(None, None);
+                ("range", schema, value)
+            },
+        ]),
+    )
+    .await?;
+    assert_filesystem_tool_error(traversal, "unsafe-path")?;
+    Ok(())
+}
+
+async fn exercise_guest_invoked_filesystem_tools(
+    executor: &TestWorkerExecutor,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    environment_state: &TestEnvironmentStateService,
+    caller_component: &golem_common::model::component::ComponentDto,
+    provider: &PrecompiledComponent,
+    implementation: &str,
+) -> anyhow::Result<()> {
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        &format!("golem:filesystem-tools-{implementation}"),
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let evidence: Vec<String> = executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id!(
+                "ToolStreamingCaller",
+                format!("filesystem-tools-guest-{implementation}")
+            ),
+            "filesystem_tool_roundtrip",
+            data_value!(implementation.to_string()),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        evidence,
+        vec![
+            "created",
+            "14",
+            "two\nthree",
+            "2",
+            "3",
+            "3",
+            "true",
+            "false",
+            "1",
+            "14",
+            "15",
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn rust_and_moonbit_builtin_filesystem_tools_have_matching_behavior(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools_rust")] rust: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools_moonbit")] moonbit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+
+    exercise_filesystem_tools(
+        &executor,
+        deps,
+        &context,
+        &environment_state,
+        &caller_component,
+        rust,
+        "rust",
+    )
+    .await?;
+    exercise_filesystem_tools(
+        &executor,
+        deps,
+        &context,
+        &environment_state,
+        &caller_component,
+        moonbit,
+        "moonbit",
+    )
+    .await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn rust_and_moonbit_filesystem_tools_work_through_guest_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools_rust")] rust: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools_moonbit")] moonbit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+
+    exercise_guest_invoked_filesystem_tools(
+        &executor,
+        deps,
+        &context,
+        &environment_state,
+        &caller_component,
+        rust,
+        "rust",
+    )
+    .await?;
+    exercise_guest_invoked_filesystem_tools(
+        &executor,
+        deps,
+        &context,
+        &environment_state,
+        &caller_component,
+        moonbit,
+        "moonbit",
+    )
+    .await?;
     Ok(())
 }
 

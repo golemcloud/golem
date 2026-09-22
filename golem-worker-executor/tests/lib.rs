@@ -231,6 +231,18 @@ test_component!(
     "golem-it:tool-streaming-rust-caller"
 );
 test_component!(
+    filesystem_tools_rust,
+    "filesystem_tools_rust",
+    "../plugins/filesystem-tools-rust",
+    "golem:filesystem-tools-rust"
+);
+test_component!(
+    filesystem_tools_moonbit,
+    "filesystem_tools_moonbit",
+    "../plugins/filesystem-tools-moonbit",
+    "golem:filesystem-tools-moonbit"
+);
+test_component!(
     tool_streaming_ts_provider,
     "tool_streaming_ts_provider",
     "golem_it_tool_streaming_ts_provider",

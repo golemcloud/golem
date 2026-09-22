@@ -56,7 +56,6 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
     };
     let auth = AuthCtx::system();
 
-    provision(&services, owner, std::slice::from_ref(&descriptor)).await;
     let app = services
         .application_service
         .get_in_account(owner, &ApplicationName("golem-system".into()), &auth)
@@ -67,6 +66,20 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
         .get_in_application(app.id, &EnvironmentName("builtin-tools".into()), &auth)
         .await
         .unwrap();
+    let baseline_component_count = services
+        .component_service
+        .list_staged_components_for_environment(&env, &auth)
+        .await
+        .unwrap()
+        .len();
+    let baseline_deployment_count = services
+        .deployment_service
+        .list_deployments(env.id, None, &auth)
+        .await
+        .unwrap()
+        .len();
+
+    provision(&services, owner, std::slice::from_ref(&descriptor)).await;
     let first_component = services
         .component_service
         .get_staged_component_by_name(
@@ -76,14 +89,14 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
         )
         .await
         .unwrap();
-    let first_release = only_release(&services, owner).await;
+    let first_release = release_named(&services, owner, descriptor.tool_name).await;
     let first_deployments = services
         .deployment_service
         .list_deployments(env.id, None, &auth)
         .await
         .unwrap();
     assert_eq!(first_component.revision, ComponentRevision::INITIAL);
-    assert_eq!(first_deployments.len(), 1);
+    assert_eq!(first_deployments.len(), baseline_deployment_count + 1);
 
     provision(&services, owner, std::slice::from_ref(&descriptor)).await;
     let repeated_component = services
@@ -95,7 +108,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
         )
         .await
         .unwrap();
-    let repeated_release = only_release(&services, owner).await;
+    let repeated_release = release_named(&services, owner, descriptor.tool_name).await;
     assert_eq!(repeated_component.id, first_component.id);
     assert_eq!(repeated_component.revision, first_component.revision);
     assert_eq!(repeated_release.id, first_release.id);
@@ -106,7 +119,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
             .await
             .unwrap()
             .len(),
-        1
+        baseline_deployment_count + 1
     );
 
     let mismatch = BuiltinToolDescriptor {
@@ -128,7 +141,12 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
     .await
     .unwrap_err();
     assert!(error.to_string().contains("immutable"), "{error:#}");
-    assert_eq!(only_release(&services, owner).await.id, first_release.id);
+    assert_eq!(
+        release_named(&services, owner, descriptor.tool_name)
+            .await
+            .id,
+        first_release.id
+    );
     assert_eq!(
         services
             .component_service
@@ -136,7 +154,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
             .await
             .unwrap()
             .len(),
-        1
+        baseline_component_count + 1
     );
     assert_eq!(
         services
@@ -145,7 +163,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
             .await
             .unwrap()
             .len(),
-        1
+        baseline_deployment_count + 1
     );
 }
 
@@ -166,12 +184,13 @@ async fn provision(services: &Services, owner: AccountId, descriptors: &[Builtin
     .unwrap();
 }
 
-async fn only_release(services: &Services, owner: AccountId) -> ToolRelease {
-    let releases = services
+async fn release_named(services: &Services, owner: AccountId, name: &str) -> ToolRelease {
+    services
         .tool_release_service
         .list_in_account(owner, &AuthCtx::system())
         .await
-        .unwrap();
-    assert_eq!(releases.len(), 1);
-    releases.into_iter().next().unwrap()
+        .unwrap()
+        .into_iter()
+        .find(|release| release.name.as_str() == name)
+        .unwrap()
 }
