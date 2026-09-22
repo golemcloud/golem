@@ -35,12 +35,11 @@ import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
-import scala.scalajs.js.annotation.{JSExport, JSExportTopLevel}
 import scala.scalajs.js.typedarray.Uint8Array
 import scala.util.control.NonFatal
 
 /**
- * Scala.js implementation of the mandatory Golem JS guest exports.
+ * Full agent and tool implementations selected by generated guest exports.
  *
  * The Scala application code is responsible for registering agent definitions
  * into AgentRegistry at module initialization time (typically via
@@ -297,8 +296,7 @@ object Guest {
     out
   }
 
-  @JSExportTopLevel("golemAgent200Guest")
-  val golemAgent200Guest: js.Dynamic =
+  def golemAgent200Guest: js.Dynamic =
     js.Dynamic.literal(
       "initialize" -> ((agentTypeName: String, input: js.Dynamic, principal: js.Dynamic) =>
         initialize(agentTypeName, input, principal)
@@ -310,11 +308,7 @@ object Guest {
       "discoverAgentTypes" -> (() => discoverAgentTypes())
     )
 
-  @JSExportTopLevel("guest")
-  val guest: js.Dynamic = golemAgent200Guest
-
-  @JSExportTopLevel("golemTool010Guest")
-  val golemTool010Guest: js.Dynamic =
+  def golemTool010Guest: js.Dynamic =
     js.Dynamic.literal(
       "discoverTools" -> (() => discoverTools()),
       "getTool"       -> ((name: String) => getTool(name)),
@@ -338,9 +332,7 @@ object Guest {
       )
     )
 
-  @JSExportTopLevel("saveSnapshot")
   object SaveSnapshot {
-    @JSExport
     def save(): js.Promise[JsSnapshot] =
       if (js.isUndefined(resolved)) {
         FutureInterop.toPromise(Future.successful(JsSnapshot(new Uint8Array(0), "application/octet-stream")))
@@ -431,9 +423,7 @@ object Guest {
       }
     }
 
-  @JSExportTopLevel("loadSnapshot")
   object LoadSnapshot {
-    @JSExport
     def load(snapshot: JsSnapshot): js.Promise[Unit] =
       if (!js.isUndefined(resolved)) {
         js.Promise.reject(customError("Agent is already initialized in this container"))

@@ -249,6 +249,7 @@ lazy val testAgents = project
 lazy val emptyAutoRegisterFixture = project
   .in(file("test-empty-auto-register"))
   .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
+  .dependsOn(core, macros)
   .settings(
     name := "golem-scala-empty-auto-register-fixture",
     golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("emptyfixture"),
@@ -259,20 +260,43 @@ lazy val emptyAutoRegisterFixture = project
     }
   )
 
-// --- pure middleware guest link fixture (JS, not published) ----------------
+// --- capability-sensitive guest export fixtures (JS, not published) -------
+
+def capabilityFixture(id: String, capabilities: String*) =
+  Project(id, file(s"test-capability-exports/$id"))
+    .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
+    .dependsOn(core, macros)
+    .settings(commonSettings)
+    .settings(jsSettings)
+    .settings(
+      golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("capabilityfixture"),
+      publish / skip := true,
+      Compile / unmanagedSourceDirectories ++= capabilities.map { capability =>
+        (ThisBuild / baseDirectory).value / "test-capability-exports" / "src" / capability
+      },
+      scalaJSUseMainModuleInitializer := false,
+      scalaJSLinkerConfig ~= (_.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule))
+    )
+
+lazy val toolExportsFixture = capabilityFixture("toolExportsFixture", "tool")
+lazy val agentExportsFixture = capabilityFixture("agentExportsFixture", "agent")
+lazy val mixedExportsFixture = capabilityFixture("mixedExportsFixture", "agent", "tool", "middleware")
+lazy val clientExportsFixture = capabilityFixture("clientExportsFixture", "client")
+
+// --- middleware guest link fixture (JS, not published) ---------------------
 
 lazy val middlewareGuestLinkFixture = project
   .in(file("test-middleware-guest-link"))
-  .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin)
-  .dependsOn(model.js, macros)
+  .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
+  .dependsOn(core, macros)
   .settings(commonSettings)
   .settings(jsSettings)
   .settings(
     name := "golem-scala-middleware-guest-link-fixture",
+    golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("capabilityfixture"),
     publish / skip := true,
     Compile / unmanagedSourceDirectories +=
-      (ThisBuild / baseDirectory).value / "core" / "js" / "src" / "main" / "scala",
-    Compile / unmanagedSources / excludeFilter := HiddenFileFilter || "Guest.scala",
+      (ThisBuild / baseDirectory).value / "test-capability-exports" / "src" / "middleware",
     scalaJSUseMainModuleInitializer := false,
     scalaJSLinkerConfig ~= {
       _.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)

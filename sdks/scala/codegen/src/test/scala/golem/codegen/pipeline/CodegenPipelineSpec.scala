@@ -58,6 +58,65 @@ class CodegenPipelineSpec extends munit.FunSuite {
   private def discover(sources: SourceDiscovery.SourceInput*): SourceDiscovery.Result =
     SourceDiscovery.discover(sources)
 
+  test("guest export roots follow implementations, including every mixed capability combination") {
+    val middleware = SourceDiscovery.SourceInput(
+      "Middleware.scala",
+      """package example
+        |import golem.runtime.annotations._
+        |@universalToolMiddleware(name = "pass-through")
+        |final class PassThrough extends golem.tool.UniversalToolMiddleware
+        |""".stripMargin
+    )
+    for {
+      agents      <- List(false, true)
+      tools       <- List(false, true)
+      middlewares <- List(false, true)
+    } {
+      val sources = List(
+        if (agents) Some(agentSource) else None,
+        if (tools) Some(toolSource) else None,
+        if (middlewares) Some(middleware) else None
+      ).flatten
+      val exports = CodegenPipeline
+        .run(discover(sources: _*), Some("example"), rpcEnabled = true)
+        .autoRegister
+        .get
+        .files
+        .find(_.relativePath.endsWith("RegisterAgents.scala"))
+        .get
+        .content
+      assertEquals(exports.contains("Guest.golemAgent200Guest"), agents)
+      assertEquals(exports.contains("Guest.SaveSnapshot.save()"), agents)
+      assertEquals(exports.contains("Guest.LoadSnapshot.load("), agents)
+      assertEquals(exports.contains("Guest.golemTool010Guest"), tools)
+      assertEquals(exports.contains("ToolMiddlewareGuest.golemTool010ToolMiddlewareGuest"), middlewares)
+      List("golemAgent200Guest", "golemTool010Guest", "golemTool010ToolMiddlewareGuest", "saveSnapshot", "loadSnapshot")
+        .foreach(name => assert(exports.contains(s"""@JSExportTopLevel("$name")"""), exports))
+    }
+  }
+
+  test("client-only traits and middleware tool projections do not retain local guest implementations") {
+    val source = SourceDiscovery.SourceInput(
+      "Client.scala",
+      """package example
+        |import golem.runtime.annotations._
+        |@agentDefinition("remote")
+        |trait Remote { class Id(val id: String); def call(): String }
+        |@toolDefinition(name = "remote-tool")
+        |trait RemoteTool { def echo(value: String): String }
+        |@toolMiddleware(name = "transparent")
+        |final class Transparent extends RemoteToolMiddleware
+        |""".stripMargin
+    )
+    val generated = CodegenPipeline.run(discover(source), Some("example"), rpcEnabled = true)
+    val exports   = generated.autoRegister.get.files.find(_.relativePath.endsWith("RegisterAgents.scala")).get.content
+    assert(!exports.contains("Guest.golemAgent200Guest"), exports)
+    assert(!exports.contains("Guest.golemTool010Guest"), exports)
+    assert(!exports.contains("Guest.SaveSnapshot"), exports)
+    assert(exports.contains("ToolMiddlewareGuest.golemTool010ToolMiddlewareGuest"), exports)
+    assert(generated.rpc.files.exists(_.relativePath.endsWith("RemoteToolClient.scala")))
+  }
+
   test("pipeline with both auto-register and rpc enabled") {
     val discovered = discover(agentSource)
     val result     = CodegenPipeline.run(discovered, Some("example"), rpcEnabled = true)
