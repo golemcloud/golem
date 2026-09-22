@@ -59,6 +59,11 @@ impl SchemaRef {
         Self { graph, root }
     }
 
+    #[cfg(test)]
+    pub(crate) fn shares_definition_pool_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.graph, &other.graph)
+    }
+
     pub fn graph(&self) -> &SchemaGraph {
         &self.graph
     }
