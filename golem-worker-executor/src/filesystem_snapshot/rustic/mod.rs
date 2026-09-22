@@ -21,6 +21,8 @@
 mod backend;
 
 #[cfg(test)]
+mod holding;
+#[cfg(test)]
 mod tests;
 
 use super::{SnapshotName, SnapshotScope};

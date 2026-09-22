@@ -18,6 +18,7 @@
 //! runtime that the backend holds, as the threads of rustic are not.
 
 use super::super::STORAGE_CALL_DEADLINE;
+use super::super::holding::{holding_storage, reached_deadline};
 use super::{BlobBackend, file_size};
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -30,12 +31,16 @@ use golem_service_base::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent,
 };
 use pretty_assertions::assert_eq;
-use rustic_core::{BytesList, FileType, Id, ReadBackend, RusticResult, WriteBackend};
+use rustic_core::{BytesList, FileType, Id, ReadBackend, RusticError, RusticResult, WriteBackend};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use test_r::test;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
+
+/// The longest time that a test waits for the calls on the backend.
+const LIMIT: Duration = Duration::from_secs(10);
 
 /// A backend over a new in-memory storage, with the runtime that it waits on.
 struct Fixture {
@@ -109,6 +114,14 @@ fn id(digits: &str) -> Id {
 
 fn bytes(text: &str) -> BytesList {
     Bytes::copy_from_slice(text.as_bytes()).into()
+}
+
+/// Runs the calls on a new thread, which is not a thread of a runtime, and gives their result.
+/// `None` means that the calls did not end within the limit.
+fn within_limit<T: Send + 'static>(calls: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || sender.send(calls()));
+    receiver.recv_timeout(LIMIT).ok()
 }
 
 #[test]
@@ -356,6 +369,92 @@ fn each_call_gives_an_error_of_the_storage_that_names_the_path() {
 }
 
 #[test]
+fn a_call_that_gets_no_answer_gives_a_storage_error_at_the_deadline() {
+    let runtime = Runtime::new().unwrap();
+    let (storage, _gate, _dropped) =
+        holding_storage(Arc::new(InMemoryBlobStorage::new()), |_, _| true);
+    let deadline = Duration::from_millis(100);
+    let backend = BlobBackend::new(storage, new_namespace(), runtime.handle().clone(), deadline);
+    let pack = format!("data/ab/{}", "ab".repeat(32));
+
+    let outcome = within_limit(move || {
+        let started = Instant::now();
+        let errors = [
+            (backend.list_with_size(FileType::Config).err(), "config"),
+            (backend.list_with_size(FileType::Pack).err(), "data"),
+            (
+                backend.read_full(FileType::Pack, &id("ab")).err(),
+                pack.as_str(),
+            ),
+            (
+                backend
+                    .read_partial(FileType::Pack, &id("ab"), false, 0, 1)
+                    .err(),
+                pack.as_str(),
+            ),
+            (
+                backend
+                    .write_bytes(FileType::Pack, &id("ab"), false, bytes("pack"))
+                    .err(),
+                pack.as_str(),
+            ),
+            (
+                backend.remove(FileType::Pack, &id("ab"), false).err(),
+                pack.as_str(),
+            ),
+        ]
+        .map(|(error, path)| {
+            error.map(|error| {
+                let text = text_of(&error);
+                (
+                    text.contains(&format!("`{path}`")),
+                    text.contains("the blob storage gave no answer within 100ms"),
+                    reached_deadline(&*error),
+                )
+            })
+        });
+        (errors, started.elapsed() >= deadline * 6)
+    });
+
+    assert_eq!(outcome, Some(([Some((true, true, true)); 6], true)));
+}
+
+#[test]
+fn a_call_that_answers_before_the_deadline_gives_its_answer() {
+    let runtime = Runtime::new().unwrap();
+    let (storage, gate, _dropped) =
+        holding_storage(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
+            op_label == "write"
+        });
+    let backend = BlobBackend::new(
+        storage,
+        new_namespace(),
+        runtime.handle().clone(),
+        Duration::from_secs(2),
+    );
+    let answer_after = Duration::from_millis(100);
+    let started = Instant::now();
+    runtime.spawn(async move {
+        tokio::time::sleep(answer_after).await;
+        drop(gate);
+    });
+
+    let outcome = within_limit(move || {
+        let written = backend
+            .write_bytes(FileType::Index, &id("ab"), false, bytes("index"))
+            .is_ok();
+        let waited = started.elapsed() >= answer_after;
+        let read = backend.read_full(FileType::Index, &id("ab")).ok();
+        (written, waited, read)
+    });
+
+    assert_eq!(
+        outcome,
+        Some((true, true, Some(Bytes::from_static(b"index"))))
+    );
+}
+
+#[test]
 fn a_thread_that_is_not_a_thread_of_the_runtime_can_call_the_backend() {
     let fixture = Fixture::new();
     let backend = Arc::new(fixture.backend);
@@ -391,13 +490,18 @@ fn a_size_that_does_not_fit_in_32_bits_is_an_error() {
 fn error_text<T>(result: RusticResult<T>) -> String {
     match result {
         Ok(_) => String::new(),
-        Err(error) => format!(
-            "{error} {}",
-            std::error::Error::source(&*error)
-                .map(ToString::to_string)
-                .unwrap_or_default()
-        ),
+        Err(error) => text_of(&error),
     }
+}
+
+/// Gives the text of the error, with the text of its source.
+fn text_of(error: &RusticError) -> String {
+    format!(
+        "{error} {}",
+        std::error::Error::source(error)
+            .map(ToString::to_string)
+            .unwrap_or_default()
+    )
 }
 
 /// A blob storage that fails every call.
