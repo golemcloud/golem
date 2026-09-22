@@ -284,6 +284,9 @@ impl From<CallWorkerExecutorError> for ApiEndpointError {
 impl From<WorkerExecutorError> for ApiEndpointError {
     fn from(error: WorkerExecutorError) -> Self {
         match error {
+            WorkerExecutorError::InvalidRequest { .. } => {
+                Self::bad_request(api::error_code::VALIDATION_ERROR, error)
+            }
             WorkerExecutorError::AgentNotFound { .. } => {
                 Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
             }
@@ -526,6 +529,32 @@ mod tests {
                 assert_eq!(body.code, api::error_code::REQUEST_PAYLOAD_TOO_LARGE);
             }
             other => panic!("expected PayloadTooLarge, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_worker_executor_request_maps_to_validation_error() {
+        let api_error: ApiEndpointError =
+            WorkerExecutorError::invalid_request("invalid scan cursor").into();
+
+        match api_error {
+            ApiEndpointError::BadRequest(Json(body)) => {
+                assert_eq!(body.code, api::error_code::VALIDATION_ERROR);
+                assert_eq!(body.errors, vec!["Invalid request: invalid scan cursor"]);
+            }
+            other => panic!("expected BadRequest, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn internal_worker_executor_error_still_maps_to_internal_error() {
+        let api_error: ApiEndpointError = WorkerExecutorError::ShardingNotReady.into();
+
+        match api_error {
+            ApiEndpointError::InternalError(Json(body)) => {
+                assert_eq!(body.code, api::error_code::INTERNAL_SHARDING_NOT_READY);
+            }
+            other => panic!("expected InternalError, got: {other:?}"),
         }
     }
 }
