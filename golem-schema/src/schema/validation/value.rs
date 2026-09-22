@@ -109,6 +109,11 @@ impl Display for ValuePath {
 /// All errors raised by [`validate_value`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum ValueError {
+    /// Validation requires an optional Cargo feature.
+    UnsupportedFeature {
+        path: ValuePath,
+        feature: &'static str,
+    },
     ShapeMismatch {
         path: ValuePath,
         expected: String,
@@ -272,6 +277,9 @@ pub enum ResultSide {
 impl Display for ValueError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            ValueError::UnsupportedFeature { path, feature } => {
+                write!(f, "validation at {path} requires feature `{feature}`")
+            }
             ValueError::ShapeMismatch {
                 path,
                 expected,
@@ -1022,6 +1030,15 @@ fn check<'a>(
                 }),
                 Some(branch) => {
                     path.push(ValuePathSegment::UnionBody);
+                    #[cfg(not(feature = "regex"))]
+                    if matches!(branch.discriminator, DiscriminatorRule::Regex { .. }) {
+                        errors.push(ValueError::UnsupportedFeature {
+                            path: path.snapshot(),
+                            feature: "regex",
+                        });
+                        path.pop();
+                        return;
+                    }
                     let mut sub_errors = Vec::new();
                     check(index, &branch.body, &vp.body, path, &mut sub_errors);
                     errors.extend(sub_errors);
@@ -1133,6 +1150,14 @@ fn check_text(
             found: char_len,
         });
     }
+    #[cfg(not(feature = "regex"))]
+    if restrictions.regex.is_some() {
+        errors.push(ValueError::UnsupportedFeature {
+            path: path.snapshot(),
+            feature: "regex",
+        });
+    }
+    #[cfg(feature = "regex")]
     if let Some(regex) = &restrictions.regex
         && let Ok(compiled) = regex::Regex::new(regex.as_str())
         && !compiled.is_match(payload.text.as_str())
@@ -1203,6 +1228,20 @@ fn check_path(spec: &PathSpec, p: &str, path: &mut ValuePath, errors: &mut Vec<V
     // The validator must not read the filesystem or sniff content.
 }
 
+#[cfg(not(feature = "url"))]
+fn check_url(
+    _spec: &UrlRestrictions,
+    _url: &str,
+    path: &mut ValuePath,
+    errors: &mut Vec<ValueError>,
+) {
+    errors.push(ValueError::UnsupportedFeature {
+        path: path.snapshot(),
+        feature: "url",
+    });
+}
+
+#[cfg(feature = "url")]
 fn check_url(
     spec: &UrlRestrictions,
     url: &str,
@@ -1365,6 +1404,9 @@ fn discriminator_matches(index: &GraphIndex, branch: &UnionBranch, body: &Schema
         DiscriminatorRule::Contains { substring } => string_view(index, &branch.body, body)
             .map(|s| s.contains(substring.as_str()))
             .unwrap_or(false),
+        #[cfg(not(feature = "regex"))]
+        DiscriminatorRule::Regex { .. } => false,
+        #[cfg(feature = "regex")]
         DiscriminatorRule::Regex { regex } => {
             let Some(s) = string_view(index, &branch.body, body) else {
                 return false;

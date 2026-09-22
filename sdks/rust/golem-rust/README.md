@@ -4,6 +4,17 @@ A library that help writing [Golem](https://golem.cloud) programs by providing h
 wrappers for Golem's runtime APIs, including functions for defining and performing operations
 transactionally.
 
+## Optional schema validation
+
+Simple guests do not include regex automata or URL/IDNA/ICU tables. Enable the
+`regex` feature for regex-constrained text and regex union discriminators, and
+`url` for URL value validation and `url::Url` conversions. `rich-validation`
+enables both. The regex dialect and WHATWG URL/IDNA behavior are unchanged;
+validation that needs a disabled feature returns an explicit error, including
+when registering a tool with regex constraints or validating URL defaults.
+Schema representation, fixed MIME/unit/identifier grammars, and non-regex union
+discriminators remain available without these features.
+
 ## Retrying user code with semantic policies
 
 Named policies are selected by the Golem host. The selected policy can be compiled into a local

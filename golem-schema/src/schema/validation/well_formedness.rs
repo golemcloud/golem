@@ -27,6 +27,8 @@ use std::fmt::{self, Display, Formatter};
 /// All structural errors that can be raised by [`validate_graph`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SchemaError {
+    /// Validation requires an optional Cargo feature.
+    UnsupportedFeature(&'static str),
     DuplicateTypeId(TypeId),
     DanglingRef(TypeId),
     /// A named reference whose alias chain is a pure cycle
@@ -107,6 +109,9 @@ pub enum SchemaError {
 impl Display for SchemaError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            SchemaError::UnsupportedFeature(feature) => {
+                write!(f, "schema requires feature `{feature}`")
+            }
             SchemaError::DuplicateTypeId(id) => write!(f, "duplicate type id `{id}`"),
             SchemaError::DanglingRef(id) => write!(f, "dangling type reference `{id}`"),
             SchemaError::RecursiveAlias(id) => {
@@ -559,6 +564,11 @@ fn check_text_restrictions(restrictions: &TextRestrictions, errors: &mut Vec<Sch
     {
         errors.push(SchemaError::TextLengthRangeInverted);
     }
+    #[cfg(not(feature = "regex"))]
+    if restrictions.regex.is_some() {
+        errors.push(SchemaError::UnsupportedFeature("regex"));
+    }
+    #[cfg(feature = "regex")]
     if let Some(regex) = &restrictions.regex
         && let Err(e) = regex::Regex::new(regex.as_str())
     {
@@ -583,8 +593,7 @@ fn check_path_spec(_spec: &PathSpec, _errors: &mut Vec<SchemaError>) {
 }
 
 fn check_url_spec(_spec: &UrlRestrictions, _errors: &mut Vec<SchemaError>) {
-    // UrlRestrictions has no regex today; nothing to validate beyond
-    // structural shape.
+    // URL schema structure has no constraints requiring the URL parser.
 }
 
 fn validate_union(
@@ -646,6 +655,12 @@ fn check_union_branch(graph: &SchemaGraph, branch: &UnionBranch, errors: &mut Ve
                     tag: branch.tag.clone(),
                 });
             }
+            #[cfg(not(feature = "regex"))]
+            {
+                let _ = regex;
+                errors.push(SchemaError::UnsupportedFeature("regex"));
+            }
+            #[cfg(feature = "regex")]
             if regex.is_empty() {
                 errors.push(SchemaError::InvalidRegex {
                     tag: branch.tag.clone(),

@@ -82,6 +82,14 @@ async fn tool_middleware_cross_crate_components_and_compile_failures() {
         ("agent", "agent"),
         ("middleware", "middleware"),
         ("mixed", "agent,tool,middleware"),
+        ("empty-rich", "golem-rust/rich-validation"),
+        ("tool-rich", "tool,golem-rust/rich-validation"),
+        ("agent-rich", "agent,golem-rust/rich-validation"),
+        ("middleware-rich", "middleware,golem-rust/rich-validation"),
+        (
+            "mixed-rich",
+            "agent,tool,middleware,golem-rust/rich-validation",
+        ),
     ] {
         let output = cargo(
             &fixture,
@@ -127,6 +135,9 @@ async fn tool_middleware_cross_crate_components_and_compile_failures() {
         // These symbols are in the unstripped name section, including functions
         // retained only through ctor-installed tables and generated client code.
         let symbols = String::from_utf8_lossy(&bytes);
+        for symbol in ["ambient_tool_rpc", "tool_client"] {
+            assert!(!symbols.contains(symbol), "{name} retained unused {symbol}");
+        }
         for (capability, symbol) in [
             ("agent", "agent_impl"),
             ("agent", "agent_registry"),
