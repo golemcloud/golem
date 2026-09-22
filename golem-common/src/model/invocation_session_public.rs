@@ -80,7 +80,7 @@ pub enum PublicErrorCode {
     ProducerError,
     InvocationFailed,
     /// The executor that answered does not own this agent's shard right now: the assignment is
-    /// moving, or a write of it was fenced by the shard's new owner. Nothing is wrong with the
+    /// moving, or one of its writes was fenced by the shard's new owner. Nothing is wrong with the
     /// request, and a client that retries reaches the new owner - which is why this is not
     /// `InternalError`.
     RoutingMiss,

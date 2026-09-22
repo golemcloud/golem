@@ -1243,7 +1243,6 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                     trace_states: params.trace_states,
                     invocation_context,
                     wallet_pin: None,
-                    // Raw-only, and absent from the WIT record by design.
                 })
             }
             oplog::OplogEntry::AgentInvocationFinished(params) => {
