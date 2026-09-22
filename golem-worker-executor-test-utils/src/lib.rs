@@ -4535,11 +4535,14 @@ impl Oplog for TestOplog {
             .unwrap()
             .remove(&self.owned_agent_id.agent_id);
         if append {
+            // The injected entry is the point of the hook, so a refusal fails the test rather
+            // than letting it pass against an oplog that never received it.
             self.oplog
                 .add(OplogEntry::Suspend {
                     timestamp: golem_common::model::Timestamp::now_utc(),
                 })
-                .await;
+                .await
+                .expect("append_after_next_oplog_commit was refused by the oplog");
         }
         committed
     }
