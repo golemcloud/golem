@@ -17,7 +17,7 @@ use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
     BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
-    agent_path_segment, blob_copy_changes_nothing, blob_path_to_string, blob_range,
+    agent_path_segment, blob_copy_changes_nothing, blob_path_to_string, blob_positions,
     check_blob_name, normalized_blob_path,
 };
 use anyhow::{Error, anyhow};
@@ -40,7 +40,7 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
 use bytes::{Buf, Bytes};
 use futures::stream::BoxStream;
-use futures::{TryFutureExt, TryStreamExt};
+use futures::{Stream, TryFutureExt, TryStreamExt};
 use golem_common::model::Timestamp;
 use golem_common::retries::with_retries_customized;
 use http_body::SizeHint;
@@ -207,6 +207,7 @@ impl Intercept for ResponseStatus {
 
 /// How the backend reads the body of a response to a ranged read. `response_body` selects the
 /// variant from the status and the headers of the response, before the body is read.
+#[derive(Clone, Copy)]
 enum ResponseBody {
     /// The backend uses the body as the bytes of the range. The range has `length` bytes. This
     /// is the variant of a response whose `Content-Range` gives the range.
@@ -216,6 +217,73 @@ enum ResponseBody {
     /// shows that `end` is not in the object. The backend does not check that the body is the
     /// object, so an error page with the status 200 gets this variant too.
     WholeObject,
+}
+
+/// The body of a response does not have the length that the response gave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "the body of the response is not {expected} bytes long; the backend read {read} bytes of it"
+)]
+struct BodyLengthError {
+    /// The length that the response gave.
+    expected: u64,
+    /// The number of bytes that the backend read before it stopped.
+    read: u64,
+}
+
+/// Gives the chunks of the body of a response as a stream.
+fn body_chunks(body: ByteStream) -> impl Stream<Item = Result<Bytes, Error>> {
+    futures::stream::unfold(body, |mut body| async move {
+        body.next()
+            .await
+            .map(|chunk| (chunk.map_err(Error::from), body))
+    })
+}
+
+/// Reads the chunks of the body of a response into one buffer.
+///
+/// With `expected`, the buffer gets that capacity before the first chunk. Thus the read copies
+/// each byte one time, and the buffer has no unused capacity. When the process cannot reserve
+/// that capacity, the read gives an error and does not stop the process. A body with another
+/// length than `expected` gives a [`BodyLengthError`]. The read stops at the first chunk that
+/// goes past `expected`, so the buffer does not grow past `expected`. Without `expected`, the
+/// buffer grows as the chunks arrive.
+async fn read_body(
+    chunks: impl Stream<Item = Result<Bytes, Error>>,
+    expected: Option<u64>,
+) -> Result<Vec<u8>, Error> {
+    let mut buffer = Vec::new();
+    if let Some(expected) = expected {
+        buffer.try_reserve_exact(usize::try_from(expected)?)?;
+    }
+    let (buffer, read) = chunks
+        .try_fold((buffer, 0_u64), |(mut buffer, read), chunk| async move {
+            let read = read.saturating_add(chunk.len() as u64);
+            match expected {
+                Some(expected) if read > expected => {
+                    Err(Error::from(BodyLengthError { expected, read }))
+                }
+                _ => {
+                    buffer.extend_from_slice(&chunk);
+                    Ok((buffer, read))
+                }
+            }
+        })
+        .await?;
+    match expected {
+        Some(expected) if read != expected => Err(BodyLengthError { expected, read }.into()),
+        _ => Ok(buffer),
+    }
+}
+
+/// Cuts the bytes from `start` to `end` out of `blob`, which holds the full blob. The result uses
+/// the buffer of `blob`, so the cut makes no copy of the blob. Both offsets are inclusive, and the
+/// rules of [`blob_positions`] apply.
+fn cut_range(mut blob: Vec<u8>, start: u64, end: u64) -> Result<Vec<u8>, BlobRangeError> {
+    let positions = blob_positions(blob.len(), start, end)?;
+    blob.truncate(positions.end() + 1);
+    blob.drain(..*positions.start());
+    Ok(blob)
 }
 
 impl S3BlobStorage {
@@ -1071,11 +1139,10 @@ impl BlobStorage for S3BlobStorage {
 
         match result {
             Ok(response) => {
-                let body = response.body;
-                let aggregated_bytes = body.collect().await?;
-                let bytes = aggregated_bytes.to_vec();
-
-                Ok(Some(bytes))
+                let expected = response
+                    .content_length
+                    .and_then(|length| u64::try_from(length).ok());
+                Ok(Some(read_body(body_chunks(response.body), expected).await?))
             }
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 NoSuchKey(_) => Ok(None),
@@ -1192,22 +1259,21 @@ impl BlobStorage for S3BlobStorage {
                     start,
                     end,
                 )?;
-                let body = response.body.collect().await?.to_vec();
+                // A body with another number of bytes than the response gives is an error.
+                let expected = match response_body {
+                    ResponseBody::Range { length } => Some(length),
+                    ResponseBody::WholeObject => response
+                        .content_length
+                        .and_then(|length| u64::try_from(length).ok()),
+                };
+                let body = read_body(body_chunks(response.body), expected)
+                    .await
+                    .map_err(|error| error.context(format!("the byte range {start}-{end}")))?;
                 let bytes = match response_body {
-                    // A body with another number of bytes than the range gives an error.
-                    ResponseBody::Range { length } => {
-                        let returned = body.len();
-                        (u64::try_from(returned).ok() == Some(length))
-                            .then_some(body)
-                            .ok_or_else(|| {
-                                anyhow!(
-                                    "S3 returned {returned} bytes for the byte range {start}-{end}"
-                                )
-                            })?
-                    }
+                    ResponseBody::Range { .. } => body,
                     // The rule of the default `get_raw_slice`, so every backend gives the same
                     // error for a range that is not in the object.
-                    ResponseBody::WholeObject => blob_range(&body, start, end)?.to_vec(),
+                    ResponseBody::WholeObject => cut_range(body, start, end)?,
                 };
 
                 Ok(Some(bytes))

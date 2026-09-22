@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage};
+use super::{BodyLengthError, RETRIABLE_SERVICE_ERROR_CODES, S3BlobStorage, cut_range, read_body};
 use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::storage::blob::{
     BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
     ExistsResult, ListedBlob, PutIfAbsent, agent_path_segment,
 };
+use anyhow::anyhow;
 use aws_runtime::retries::classifiers::{THROTTLING_ERRORS, TRANSIENT_ERRORS};
 use aws_sdk_s3::config::http::{HttpRequest, HttpResponse};
 use aws_sdk_s3::config::retry::RetryConfig;
@@ -36,13 +37,14 @@ use axum::extract::State;
 use axum::http::{Response, StatusCode as ServerStatus};
 use axum::routing::put;
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use golem_common::model::AgentId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use http_body::Frame;
 use http_body_util::StreamBody;
 use pretty_assertions::assert_eq;
+use std::collections::TryReserveError;
 use std::convert::Infallible;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -310,6 +312,26 @@ fn sent(requests: &SentRequests) -> Vec<SentRequest> {
 /// Gives the `BlobRangeError` of an error of the blob storage, or `None` for another error.
 fn range_error(error: anyhow::Error) -> Option<BlobRangeError> {
     error.downcast_ref::<BlobRangeError>().copied()
+}
+
+/// Gives the `BodyLengthError` of an error of the blob storage, or `None` for another error.
+fn length_error(error: anyhow::Error) -> Option<BodyLengthError> {
+    error.downcast_ref::<BodyLengthError>().copied()
+}
+
+/// Gives the chunks as a stream of chunks without an error.
+fn chunks(parts: &[&'static str]) -> impl Stream<Item = Result<Bytes, anyhow::Error>> + use<> {
+    futures::stream::iter(
+        parts
+            .iter()
+            .map(|part| Ok(Bytes::from_static(part.as_bytes())))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Gives a text of `length` bytes, the letters from `a` to `z` again and again.
+fn letters(length: usize) -> String {
+    ('a'..='z').cycle().take(length).collect()
 }
 
 /// Gives the `BlobNameError` of an error of the blob storage, or `None` for another error.
@@ -1064,6 +1086,248 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
             Err(None),
             Err(None),
             Err(None)
+        )
+    );
+}
+
+#[test]
+async fn read_body_reads_the_chunks_into_one_buffer_of_the_expected_length() {
+    let with_length = read_body(chunks(&["abc", "de", "f"]), Some(6))
+        .await
+        .unwrap();
+    let without_length = read_body(chunks(&["abc", "de", "f"]), None).await.unwrap();
+    let empty = read_body(chunks(&[]), Some(0)).await.unwrap();
+
+    assert_eq!(
+        (
+            with_length.capacity(),
+            with_length,
+            without_length,
+            empty.capacity(),
+            empty
+        ),
+        (6, b"abcdef".to_vec(), b"abcdef".to_vec(), 0, Vec::new())
+    );
+}
+
+#[test]
+async fn read_body_refuses_a_body_with_another_length() {
+    let short = read_body(chunks(&["abc", "de"]), Some(6)).await;
+    let long = read_body(chunks(&["abc", "def"]), Some(4)).await;
+    let empty = read_body(chunks(&[]), Some(1)).await;
+
+    assert_eq!(
+        (
+            short.map_err(length_error),
+            long.map_err(length_error),
+            empty.map_err(length_error)
+        ),
+        (
+            Err(Some(BodyLengthError {
+                expected: 6,
+                read: 5
+            })),
+            Err(Some(BodyLengthError {
+                expected: 4,
+                read: 6
+            })),
+            Err(Some(BodyLengthError {
+                expected: 1,
+                read: 0
+            }))
+        )
+    );
+}
+
+#[test]
+async fn read_body_stops_at_the_first_chunk_past_the_expected_length() {
+    // The read gets the error of the transport only if it reads the chunk after the one that
+    // goes past the length.
+    let body = futures::stream::iter([
+        Ok(Bytes::from_static(b"abc")),
+        Ok(Bytes::from_static(b"def")),
+        Err(anyhow!("the connection closed")),
+    ]);
+
+    let result = read_body(body, Some(4)).await;
+
+    assert_eq!(
+        result.map_err(length_error),
+        Err(Some(BodyLengthError {
+            expected: 4,
+            read: 6
+        }))
+    );
+}
+
+#[test]
+async fn read_body_gives_the_error_of_a_chunk() {
+    let body = || {
+        futures::stream::iter([
+            Ok(Bytes::from_static(b"ab")),
+            Err(anyhow!("the connection closed")),
+        ])
+    };
+
+    let with_length = read_body(body(), Some(6)).await;
+    let without_length = read_body(body(), None).await;
+
+    assert_eq!(
+        (
+            with_length.map_err(|error| error.to_string()),
+            without_length.map_err(|error| error.to_string())
+        ),
+        (
+            Err("the connection closed".to_string()),
+            Err("the connection closed".to_string())
+        )
+    );
+}
+
+#[test]
+async fn read_body_gives_an_error_for_a_length_that_it_cannot_reserve() {
+    let result = read_body(chunks(&["abc"]), Some(u64::MAX)).await;
+
+    assert_eq!(
+        result.map_err(|error| error.is::<TryReserveError>()),
+        Err(true)
+    );
+}
+
+#[test]
+fn cut_range_keeps_the_buffer_of_the_blob() {
+    let blob = || b"abcdef".to_vec();
+    let inside = cut_range(blob(), 1, 3).unwrap();
+    let whole = cut_range(blob(), 0, 5).unwrap();
+    let last_byte = cut_range(blob(), 5, 5).unwrap();
+    let outside = [(0, 6), (6, 6), (3, 2), (u64::MAX, u64::MAX)];
+
+    assert_eq!(
+        (
+            (inside.capacity(), inside),
+            (whole.capacity(), whole),
+            (last_byte.capacity(), last_byte),
+            outside.map(|(start, end)| cut_range(blob(), start, end)),
+            cut_range(Vec::new(), 0, 0)
+        ),
+        (
+            (6, b"bcd".to_vec()),
+            (6, b"abcdef".to_vec()),
+            (6, b"f".to_vec()),
+            outside.map(|(start, end)| Err(BlobRangeError { start, end })),
+            Err(BlobRangeError { start: 0, end: 0 })
+        )
+    );
+}
+
+#[test]
+async fn get_raw_reads_the_body_into_a_buffer_of_its_content_length() {
+    let body = letters(1_000);
+    let (storage, _) = scripted_storage("", {
+        let body = body.clone();
+        move |_, _| Answer {
+            content_length: Some(body.len()),
+            ..Answer::new(200, body.clone())
+        }
+    });
+
+    let bytes = storage
+        .get_raw("test", "get-raw", namespace(), Path::new("blob"))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!((bytes.capacity(), bytes), (1_000, body.into_bytes()));
+}
+
+#[test]
+async fn get_raw_slice_reads_the_range_into_a_buffer_of_its_length() {
+    let body = letters(1_000);
+    let (storage, _) = scripted_storage("", {
+        let body = body.clone();
+        move |_, _| Answer::partial(Some("bytes 1-1000/2000"), &body)
+    });
+
+    let bytes = storage
+        .get_raw_slice(
+            "test",
+            "get-raw-slice",
+            namespace(),
+            Path::new("blob"),
+            1,
+            1_000,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!((bytes.capacity(), bytes), (1_000, body.into_bytes()));
+}
+
+#[test]
+async fn get_raw_slice_cuts_the_range_out_of_a_200_response_in_its_buffer() {
+    // A buffer of the length of the range would show that the backend made a copy of the range.
+    let body = letters(1_000);
+    let body_reads = Arc::new(AtomicUsize::new(0));
+    let (storage, _) = scripted_storage("", {
+        let body = body.clone();
+        move |_, _| Answer::whole_object(&body, &body_reads)
+    });
+
+    let bytes = storage
+        .get_raw_slice(
+            "test",
+            "get-raw-slice",
+            namespace(),
+            Path::new("blob"),
+            1,
+            3,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!((bytes.capacity(), bytes), (1_000, b"bcd".to_vec()));
+}
+
+#[test]
+async fn get_raw_slice_refuses_a_body_with_another_length_than_the_range() {
+    let (storage, _) = scripted_storage("", |request, _| match request.range.as_deref() {
+        Some("bytes=0-2") => Answer::partial(Some("bytes 0-2/6"), "a"),
+        _ => Answer::partial(Some("bytes 3-4/6"), "def"),
+    });
+    let read = |start, end| {
+        storage.get_raw_slice(
+            "test",
+            "get-raw-slice",
+            namespace(),
+            Path::new("blob"),
+            start,
+            end,
+        )
+    };
+
+    let short = read(0, 2).await.unwrap_err();
+    let long = read(3, 4).await.unwrap_err();
+
+    assert_eq!(
+        (
+            short.to_string(),
+            length_error(short),
+            long.to_string(),
+            length_error(long)
+        ),
+        (
+            "the byte range 0-2".to_string(),
+            Some(BodyLengthError {
+                expected: 3,
+                read: 1
+            }),
+            "the byte range 3-4".to_string(),
+            Some(BodyLengthError {
+                expected: 2,
+                read: 3
+            })
         )
     );
 }
