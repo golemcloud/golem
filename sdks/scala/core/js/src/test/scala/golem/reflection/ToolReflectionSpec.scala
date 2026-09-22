@@ -116,7 +116,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       assertTrue(definition.client.left.toOption.exists(_.isInstanceOf[GolemReflectError.ToolRpc]))
     },
     test("caller-owned tool construction retains the structured RPC failure") {
-      val failure = ToolRpcFailure.Denied("not authorized")
+      val failure    = ToolRpcFailure.Denied("not authorized")
       val definition = ToolClientDefinition.unnamed[String](_ =>
         throw new golem.runtime.tool.client.ToolRpcConstructionException(failure)
       )

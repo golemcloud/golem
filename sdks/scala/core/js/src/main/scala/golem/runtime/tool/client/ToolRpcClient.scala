@@ -69,8 +69,7 @@ object ToolRpcClient {
     }
 }
 
-final class ToolRpcConstructionException(val failure: ToolRpcFailure)
-    extends RuntimeException(failure.toString)
+final class ToolRpcConstructionException(val failure: ToolRpcFailure) extends RuntimeException(failure.toString)
 
 /**
  * The Scala.js implementation of [[ToolRpcTransport]] over the

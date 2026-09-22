@@ -120,15 +120,15 @@ sealed trait GolemReflectError extends Product with Serializable {
 }
 
 object GolemReflectError {
-  final case class Discovery(message: String)    extends GolemReflectError
-  final case class Identity(message: String)     extends GolemReflectError
-  final case class SchemaEncode(message: String) extends GolemReflectError
-  final case class SchemaDecode(message: String) extends GolemReflectError
-  final case class Validation(message: String)   extends GolemReflectError
+  final case class Discovery(message: String)     extends GolemReflectError
+  final case class Identity(message: String)      extends GolemReflectError
+  final case class SchemaEncode(message: String)  extends GolemReflectError
+  final case class SchemaDecode(message: String)  extends GolemReflectError
+  final case class Validation(message: String)    extends GolemReflectError
   final case class ToolRpc(error: ToolRpcFailure) extends GolemReflectError {
     val message: String = error.toString
   }
-  final case class Remote(error: AgentRpcError)  extends GolemReflectError {
+  final case class Remote(error: AgentRpcError) extends GolemReflectError {
     val message: String = error.message
   }
 }
