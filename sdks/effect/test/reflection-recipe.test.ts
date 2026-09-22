@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
-import { Reflection } from "@golemcloud/effect-golem"
+import { Reflection } from "../src/index.js"
 
 const dynamicSearch = Effect.scoped(
   Effect.gen(function* () {
