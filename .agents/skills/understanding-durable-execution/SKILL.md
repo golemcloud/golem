@@ -192,7 +192,11 @@ retries by reloading persisted identity and pending initialization. Local succes
 resolved data and `Unloaded` state. Remote topology recovery and dependent finished-session recovery
 run together in the post-publication reconciler, preserving the deletion gate: attachment RPCs can
 acquire mutually referring cold workers on different executors, so awaiting them before publication
-would create a cycle. Local readiness does not authorize a merely prepared stream attachment.
+would create a cycle. Local readiness does not authorize a merely prepared stream attachment. The
+reconciler folds only through the committed `last_known_status.oplog_idx`. Once its topology cache
+has no dirty sessions and the producer has no active attachments, it parks on committed stream-state
+notifications instead of polling the oplog; active attachments retain the configured renewal
+deadline, and failed recovery retains periodic retry.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
 existing-only acquisition, and reciprocal cold topologies.
 

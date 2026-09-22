@@ -100,6 +100,13 @@ Session control and topology recovery caches that encounter a committed cut in t
 the authoritative session index, discarding pre-cut cached state. An uncommitted marker fails closed
 instead of repeatedly loading an index that cannot yet cover it.
 
+The worker's post-publication stream reconciler uses the committed in-memory status tip as the
+topology suffix boundary. After recovery leaves no dirty topology and producer metadata reports no
+active attachment, the task parks on `DurableStreamStore::session_records_changed`; it does not
+periodically reopen an idle worker's oplog merely because historical stream records exist. A
+committed session mutation wakes it, active attachments keep the renewal deadline armed, and a
+failed pass keeps periodic retry armed.
+
 A repeated `Start` for a retained session reports the current epoch, even after a resume or revert.
 It does not reactivate foreign bindings when its original attempt no longer owns the attachment.
 Remote RPC uses a revoked acceptance for an explicit `Resume`; if still attached, it tries

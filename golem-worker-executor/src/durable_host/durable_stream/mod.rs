@@ -648,6 +648,7 @@ pub struct DurableStreamStore {
     source_cancellations: RwLock<HashMap<StreamId, (u64, CancellationToken)>>,
     next_source_cancellation_id: AtomicU64,
     reconciliation_cursor: AtomicUsize,
+    reconcilable_attachment_count: AtomicU64,
     open_stream_count: AtomicUsize,
     live_join_capacity: usize,
     session_records_changed: Notify,
@@ -994,6 +995,7 @@ impl DurableStreamStore {
         }
 
         let open_stream_count = index.open_streams;
+        let reconcilable_attachment_count = index.active_attachment_count;
         crate::metrics::durable_stream::add_open_streams(open_stream_count);
         if !index.streams.is_empty() {
             tracing::debug!(
@@ -1039,6 +1041,7 @@ impl DurableStreamStore {
             source_cancellations: RwLock::new(HashMap::new()),
             next_source_cancellation_id: AtomicU64::new(1),
             reconciliation_cursor: AtomicUsize::new(0),
+            reconcilable_attachment_count: AtomicU64::new(reconcilable_attachment_count),
             open_stream_count: AtomicUsize::new(open_stream_count),
             live_join_capacity,
             session_records_changed: Notify::new(),
