@@ -40,6 +40,23 @@ pub mod build_tool {
     pub const GO_MIN: &str = "1.27.1";
 }
 
+// The Go toolchain the CLI builds Go components with.
+//
+// Go components need a Go runtime patched with `runtime.wasiOnIdle` (async
+// components deadlock without it) and, for durable replay, without the
+// goroutine scheduling-latency sampler, whose clock reads depend on execution
+// history. Golem maintains that toolchain as a fork of Go and releases the
+// bootstrap trees componentize-go expects; the CLI installs the pinned release
+// into componentize-go's own toolchain directory and puts it on PATH for every
+// Go command, so builds never depend on which Go the developer has installed.
+//
+// Bump TAG to adopt a new release; the CLI replaces an installed toolchain
+// whose recorded tag differs.
+pub mod go_toolchain {
+    pub const REPO: &str = "golemcloud/go";
+    pub const TAG: &str = "go1.27.1-golem.1";
+}
+
 // Keep this aligned with the Go component template's `tool` directive.
 //
 // componentize-go must be pinned to a concrete version, never `latest`: below

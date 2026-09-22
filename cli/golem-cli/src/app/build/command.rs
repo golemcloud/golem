@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::app::build::go_toolchain::{GoToolchain, ensure_go_toolchain};
 use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
     GoModDepsMarkerHash, InjectToPrebuiltQuickJsCommandMarkerHash, MoonInstallDepsMarkerHash,
@@ -398,16 +399,37 @@ pub async fn execute_external_command(
 
                 ensure_common_deps_for_tool(ctx, command_tokens[0].as_str(), &build_dir).await?;
 
-                let resolved_command =
-                    resolve_command_for_execution(command_tokens[0].as_str(), Some(&build_dir))?;
-                let mut process = Command::new(resolved_command.program);
+                // `go` is the managed toolchain, not whatever is on PATH.
+                let go_toolchain = if normalized_program_name(command_tokens[0].as_str()) == "go" {
+                    Some(ensure_go_toolchain(ctx.application_config()).await?)
+                } else {
+                    None
+                };
 
-                process
-                    .args(resolved_command.prefix_args)
-                    .args(command_tokens.iter().skip(1))
-                    .current_dir(&build_dir)
-                    .envs(&command.env);
+                let mut process = match &go_toolchain {
+                    Some(toolchain) => {
+                        let mut process = Command::new(&toolchain.go);
+                        process.args(command_tokens.iter().skip(1));
+                        process
+                    }
+                    None => {
+                        let resolved_command = resolve_command_for_execution(
+                            command_tokens[0].as_str(),
+                            Some(&build_dir),
+                        )?;
+                        let mut process = Command::new(resolved_command.program);
+                        process
+                            .args(resolved_command.prefix_args)
+                            .args(command_tokens.iter().skip(1));
+                        process
+                    }
+                };
 
+                process.current_dir(&build_dir).envs(&command.env);
+
+                if let Some(toolchain) = &go_toolchain {
+                    apply_go_toolchain_env(&mut process, toolchain)?;
+                }
                 configure_external_command_env(&mut process, command_tokens[0].as_str(), ctx);
 
                 process
@@ -480,11 +502,13 @@ pub async fn ensure_common_deps_for_tool(
                 return Ok(());
             }
 
+            let toolchain = ensure_go_toolchain(ctx.application_config()).await?;
+
             let module_root = build_dir.to_path_buf();
             let ensure_key = format!("go:{}", module_root.display());
             ctx.tools_with_ensured_common_deps()
                 .ensure_common_deps_for_tool_once(&ensure_key, || async {
-                    ensure_go_dependencies(ctx, &module_root).await
+                    ensure_go_dependencies(ctx, &module_root, &toolchain).await
                 })
                 .await
         }
@@ -621,7 +645,11 @@ async fn run_moon_install(app_root_dir: &Path) -> anyhow::Result<()> {
         .await
 }
 
-async fn ensure_go_dependencies(ctx: &BuildContext<'_>, module_root: &Path) -> anyhow::Result<()> {
+async fn ensure_go_dependencies(
+    ctx: &BuildContext<'_>,
+    module_root: &Path,
+    toolchain: &GoToolchain,
+) -> anyhow::Result<()> {
     let go_sum_path = module_root.join("go.sum");
     let marker_dir = ctx.application().task_result_marker_dir();
 
@@ -677,18 +705,36 @@ async fn ensure_go_dependencies(ctx: &BuildContext<'_>, module_root: &Path) -> a
         );
     }
 
-    run_go_mod_tidy(module_root).await?;
+    run_go_mod_tidy(module_root, toolchain).await?;
 
     // Record success against the post-tidy go.mod/go.sum so the next build skips.
     go_mod_deps_marker(module_root)?.result(Ok(()))
 }
 
-async fn run_go_mod_tidy(module_root: &Path) -> anyhow::Result<()> {
-    Command::new(which("go")?)
-        .args(["mod", "tidy"])
-        .current_dir(module_root)
-        .stream_and_run("go")
-        .await
+async fn run_go_mod_tidy(module_root: &Path, toolchain: &GoToolchain) -> anyhow::Result<()> {
+    let mut command = Command::new(&toolchain.go);
+    command.args(["mod", "tidy"]).current_dir(module_root);
+    apply_go_toolchain_env(&mut command, toolchain)?;
+    command.stream_and_run("go").await
+}
+
+/// Makes the managed toolchain the `go` that a command and everything it spawns
+/// use: componentize-go looks up `go` on PATH, and `GOTOOLCHAIN=local` keeps Go
+/// from switching to an unpatched release named by a `toolchain` directive.
+fn apply_go_toolchain_env(command: &mut Command, toolchain: &GoToolchain) -> anyhow::Result<()> {
+    let path = match std::env::var_os("PATH") {
+        Some(path) => {
+            let mut dirs = vec![toolchain.bin_dir.clone()];
+            dirs.extend(std::env::split_paths(&path));
+            std::env::join_paths(dirs)?
+        }
+        None => toolchain.bin_dir.clone().into_os_string(),
+    };
+    command.env("PATH", path);
+    if std::env::var_os("GOTOOLCHAIN").is_none() {
+        command.env("GOTOOLCHAIN", "local");
+    }
+    Ok(())
 }
 
 fn configure_external_command_env(command: &mut Command, executable: &str, ctx: &BuildContext<'_>) {

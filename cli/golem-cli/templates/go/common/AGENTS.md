@@ -154,9 +154,13 @@ anywhere in the module (e.g. an `internal/` directory).
 
 ## Prerequisites
 
-- Go toolchain: https://go.dev/dl/ (Go 1.27.1 or newer)
 - Golem CLI (`golem`) version 1.5.x: https://github.com/golemcloud/golem/releases
 - `wasm-tools`: https://github.com/bytecodealliance/wasm-tools
+- Go toolchain: https://go.dev/dl/ (Go 1.27.1 or newer) — for development: an IDE,
+  `go test`, `go vet`. `golem build` does not use it: components are compiled with
+  Golem's own Go toolchain (https://github.com/golemcloud/go), which the CLI
+  installs on first build because componentize-go needs runtime patches that
+  upstream Go does not have yet.
 
 ## Name Mapping
 

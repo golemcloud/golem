@@ -26,8 +26,10 @@ pub(crate) use skills::{
 };
 
 use crate::app::build::check::requirements::{
-    ToolRequirement, ToolRequirementCheck, VersionRange, tool_requirements_for_language,
+    ToolRequirement, ToolRequirementCheck, ToolRequirementSeverity, VersionRange,
+    tool_requirements_for_language,
 };
+use crate::app::build::go_toolchain::{GoToolchain, ensure_go_toolchain};
 use crate::app::context::{BuildContext, validated_to_anyhow};
 use crate::app::edit::golem_yaml;
 use crate::fs;
@@ -131,9 +133,13 @@ pub async fn check_build_tool_requirements(ctx: &BuildContext<'_>) -> anyhow::Re
     let mut validation = ValidationBuilder::new();
 
     for requirement in requirements.into_values() {
+        let result = check_tool_requirement(ctx, app_root_dir, requirement).await;
         validation.with_context(vec![("tool", requirement.name.to_string())], |validation| {
-            if let Err(error) = check_tool_requirement(app_root_dir, requirement) {
-                validation.add_error(error.to_string());
+            if let Err(error) = result {
+                match requirement.severity {
+                    ToolRequirementSeverity::Required => validation.add_error(error.to_string()),
+                    ToolRequirementSeverity::Recommended => validation.add_warn(error.to_string()),
+                }
             }
         });
     }
@@ -229,7 +235,11 @@ fn selected_component_languages(ctx: &BuildContext<'_>) -> BTreeSet<GuestLanguag
         .collect()
 }
 
-fn check_tool_requirement(project_dir: &Path, requirement: ToolRequirement) -> anyhow::Result<()> {
+async fn check_tool_requirement(
+    ctx: &BuildContext<'_>,
+    project_dir: &Path,
+    requirement: ToolRequirement,
+) -> anyhow::Result<()> {
     match requirement.check {
         ToolRequirementCheck::CommandVersion { command, args } => {
             check_command_version(project_dir, requirement, command, args)
@@ -237,7 +247,62 @@ fn check_tool_requirement(project_dir: &Path, requirement: ToolRequirement) -> a
         ToolRequirementCheck::RustTargetInstalled { target } => {
             check_rust_target(project_dir, requirement, target)
         }
+        ToolRequirementCheck::GolemGoToolchain => {
+            let toolchain = ensure_go_toolchain(ctx.application_config())
+                .await
+                .map_err(|err| {
+                    anyhow!(
+                        "{} is not available: {}\nHint: {}",
+                        requirement.name.log_color_error_highlight(),
+                        err,
+                        requirement.install_hint
+                    )
+                })?;
+            check_go_toolchain_version(project_dir, requirement, &toolchain)
+        }
     }
+}
+
+fn check_go_toolchain_version(
+    project_dir: &Path,
+    requirement: ToolRequirement,
+    toolchain: &GoToolchain,
+) -> anyhow::Result<()> {
+    let output = Command::new(&toolchain.go)
+        .current_dir(project_dir)
+        .args(["version"])
+        .output()
+        .map_err(|err| {
+            anyhow!(
+                "{} failed to run ({}): {}\nHint: {}",
+                requirement.name.log_color_error_highlight(),
+                toolchain.go.display(),
+                err,
+                requirement.install_hint
+            )
+        })?;
+
+    let Some(range) = requirement.version_range else {
+        return Ok(());
+    };
+
+    let output_text = String::from_utf8_lossy(&output.stdout).to_string();
+    let version = extract_version(output_text.as_str()).ok_or_else(|| {
+        anyhow!(
+            "{} version could not be detected from output\nHint: {}",
+            requirement.name.log_color_error_highlight(),
+            requirement.install_hint
+        )
+    })?;
+
+    verify_version_range(requirement.name, &version, range).map_err(|err| {
+        anyhow!(
+            "{} {}\nHint: {}",
+            requirement.name.log_color_error_highlight(),
+            err,
+            requirement.install_hint
+        )
+    })
 }
 
 fn check_command_version(
