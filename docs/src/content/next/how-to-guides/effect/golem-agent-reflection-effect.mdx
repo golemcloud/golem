@@ -143,9 +143,9 @@ const dynamicSearch = Effect.scoped(Effect.gen(function* () {
   const identity = yield* type.agentId({ tenant: "docs" })
   const dynamic = yield* identity.dynamicClient()
   const result = yield* dynamic.method(method.name).invoke(input).pipe(
-    Effect.catchAll((error) =>
+    Effect.catch((error) =>
       Effect.logError("dynamic search failed", error).pipe(
-        Effect.zipRight(Effect.fail(error)),
+        Effect.andThen(Effect.fail(error)),
       ),
     ),
   )

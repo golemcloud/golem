@@ -5,6 +5,7 @@ import { Effect, Exit, Scope, Stream } from "effect"
 import { createToolClientRuntime, isRpcError, type ToolRuntimeError } from "./BridgeTool.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
+  cloneSchemaValue,
   field,
   schemaValueEquals,
   schemaShapesMatch,
@@ -133,19 +134,22 @@ export class ToolCommand {
       ? [
           ...body.positionals.fixed.map((positional) => {
             const optional = !positional.required && positional.default_ === undefined
+            const defaultValue =
+              positional.default_ === undefined
+                ? undefined
+                : schemaValueFromWit(positional.default_)
             return Object.freeze({
               kind: "positional" as const,
               name: positional.name,
               aliases: [] as ReadonlyArray<string>,
               required: positional.required,
               optionalCarrier: optional ? (true as const) : undefined,
-              default:
-                positional.default_ === undefined
-                  ? undefined
-                  : schemaValueFromWit(positional.default_),
+              get default() {
+                return defaultValue === undefined ? undefined : cloneSchemaValue(defaultValue)
+              },
               schema: SchemaRef.fromImmutableGraph(
                 graph,
-                optional ? t.option(typeAt(positional.type)) : typeAt(positional.type),
+                optional ? optionalRoot(graph, typeAt(positional.type)) : typeAt(positional.type),
               ),
             })
           }),
@@ -206,6 +210,8 @@ export class ToolCommand {
   packJson(input: JsonValue): Core.SchemaValueTree {
     if (!this.inputSchema) throw new ToolReflectionError("input", "command has no body")
     const value = this.inputSchema.packJson(input)
+    if (!this.inputSchema.validateValue(value).success)
+      throw new ToolReflectionError("input", "invalid tool input")
     this.validateConstraints(value)
     return value
   }
@@ -539,7 +545,8 @@ export class ToolType {
   readonly client: ReflectedToolClient
 
   constructor(registered: import("golem:tool/host@0.1.0").RegisteredTool) {
-    const raw = registered.definition
+    const snapshot = immutableSnapshot(registered)
+    const raw = snapshot.definition
     if (raw.commands.nodes.length === 0) throw new TypeError("tool has no root command")
     this.name = raw.commands.nodes[0].name
     this.lookupName = registered.lookupName
@@ -601,7 +608,19 @@ export class ToolType {
   }
 }
 
-/** A schema-free client bound only to an ambient tool name. @since 1.6.0 @category models */
+const immutableSnapshot = <T>(value: T): T => {
+  if (Array.isArray(value)) return Object.freeze(value.map(immutableSnapshot)) as T
+  if (value instanceof Uint8Array) return value.slice() as T
+  if (value !== null && typeof value === "object") {
+    const copy = Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, immutableSnapshot(child)]),
+    )
+    return Object.freeze(copy) as T
+  }
+  return value
+}
+
+/** A fully dynamic client bound only to an ambient tool name. @since 1.6.0 @category models */
 export class DynamicToolClient {
   constructor(readonly name: string) {}
 
@@ -730,15 +749,33 @@ function optionArgument(
     option.default_ === undefined &&
     option.shape.tag !== "repeatable-list" &&
     option.shape.tag !== "repeatable-map"
+  const defaultValue =
+    option.default_ === undefined ? undefined : schemaValueFromWit(option.default_)
   return Object.freeze({
     kind: "option",
     name: option.long,
     aliases: Object.freeze([...option.aliases]),
     required: option.required,
     optionalCarrier: optional ? true : undefined,
-    default: option.default_ === undefined ? undefined : schemaValueFromWit(option.default_),
-    schema: SchemaRef.fromImmutableGraph(graph, optional ? t.option(root) : root),
+    get default() {
+      return defaultValue === undefined ? undefined : cloneSchemaValue(defaultValue)
+    },
+    schema: SchemaRef.fromImmutableGraph(graph, optional ? optionalRoot(graph, root) : root),
   })
+}
+
+function optionalRoot(graph: SchemaGraph, root: SchemaType): SchemaType {
+  let current = root
+  const seen = new Set<string>()
+  while (current.body.tag === "ref") {
+    if (seen.has(current.body.id))
+      throw new TypeError(`Cyclic tool schema ref '${current.body.id}'`)
+    seen.add(current.body.id)
+    const definition = graph.defs.get(current.body.id)
+    if (!definition) throw new TypeError(`Unresolved tool schema ref '${current.body.id}'`)
+    current = definition.body
+  }
+  return current.body.tag === "option" ? root : t.option(root)
 }
 
 function flagArgument(flag: Common.FlagSpec, graph: SchemaGraph): ToolArgument {

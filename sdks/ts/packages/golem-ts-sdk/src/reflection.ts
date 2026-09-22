@@ -47,6 +47,7 @@ import {
 import {
   field,
   freezeSchemaGraph,
+  schemaShapesMatch,
   schemaGraphRootsFromWit,
   t,
   type SchemaGraph,
@@ -207,6 +208,9 @@ export class AgentType {
   validateConfigValues(entries: readonly AgentConfigEntry[]): AgentConfigEntry[] {
     return entries.map((entry) => {
       const declaration = this.configDeclaration(entry.path);
+      if (!schemaShapesMatch(declaration.schema.graph, entry.value.graph)) {
+        throw new TypeError(`Incompatible config schema at '${entry.path.join('.')}'`);
+      }
       if (!declaration.schema.validateValue(entry.value.value).success) {
         throw new TypeError(`Invalid config value at '${entry.path.join('.')}'`);
       }

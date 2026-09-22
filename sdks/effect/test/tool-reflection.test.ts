@@ -5,9 +5,10 @@ import { ToolType } from "../src/ToolReflection.js"
 import { toolClientDefinition, ToolTransport } from "../src/Tool.js"
 import { ToolClient } from "../src/host/ToolClient.js"
 import { compile } from "../src/WitCodec.js"
-import { t } from "../src/internal/schema-model/model.js"
-import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
+import { t, v } from "../src/internal/schema-model/model.js"
+import { schemaGraphToWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { SchemaRef } from "../src/SchemaRef.js"
+import { restrict } from "../src/WitTypes.js"
 
 const definition = toolDefinition("effect-reflection").body((body) =>
   body.positional("name", Schema.String).returns(Schema.String),
@@ -51,6 +52,82 @@ describe("native tool reflection", () => {
     expect(command.validateJson({ maybe: "needle" }).success).toBe(true)
     expect(command.validateJson({ maybe: null }).success).toBe(false)
     expect(command.validateJson({ maybe: "other" }).success).toBe(false)
+  })
+
+  it("applies schema restrictions through command-level packing and validation", () => {
+    const definition = toolDefinition("restricted-reflection").body((body) =>
+      body.positional("count", Schema.Number.pipe(restrict({ min: 10 }))),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "restricted-reflection",
+      definition: compileDefinition(definition).wire,
+    }).client.command([])
+    expect(command.validateJson({ count: 9 }).success).toBe(false)
+    expect(() => command.packJson({ count: 9 })).toThrow()
+    expect(command.validateJson({ count: 10 }).success).toBe(true)
+  })
+
+  it("owns a deeply immutable discovery snapshot", () => {
+    const definition = toolDefinition("immutable-reflection").body((body) =>
+      body
+        .flag("enabled", { default: true, negatable: true })
+        .constraint(c.requiresAll(c.present("enabled"))),
+    )
+    const wire = compileDefinition(definition).wire
+    const command = new ToolType({
+      ...registered,
+      lookupName: "immutable-reflection",
+      definition: wire,
+    }).client.command([])
+    const constraints = wire.commands.nodes[0].body!.constraints as unknown as Array<unknown>
+    constraints[0] = { tag: "requires-all", val: [{ tag: "present", val: "missing" }] }
+    expect(command.validateJson({ enabled: false }).success).toBe(true)
+    expect(Object.isFrozen(command.constraints[0])).toBe(true)
+  })
+
+  it("owns binary defaults without exposing their mutable bytes", () => {
+    const definition = toolDefinition("effect-binary-snapshot").body((body) =>
+      body.option("payload", Schema.String),
+    )
+    const wire = compileDefinition(definition).wire
+    const source = new Uint8Array([1, 255])
+    wire.commands.nodes[0].body!.options[0].default_ = schemaValueToWit(v.binary(source))
+    const command = new ToolType({
+      ...registered,
+      lookupName: "effect-binary-snapshot",
+      definition: wire,
+    }).client.command([])
+    source[0] = 8
+    const first = command.arguments[0].default
+    expect(first).toMatchObject({ tag: "binary", bytes: new Uint8Array([1, 255]) })
+    if (first?.tag !== "binary") throw new Error("expected binary default")
+    first.bytes[1] = 9
+    expect(command.arguments[0].default).toMatchObject({
+      tag: "binary",
+      bytes: new Uint8Array([1, 255]),
+    })
+  })
+
+  it("does not nest already optional positional and scalar option schemas", () => {
+    const definition = toolDefinition("effect-single-option").body((body) =>
+      body
+        .positional("position", Schema.UndefinedOr(Schema.String), { required: false })
+        .option("choice", Schema.UndefinedOr(Schema.String)),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "effect-single-option",
+      definition: compileDefinition(definition).wire,
+    }).client.command([])
+    for (const argument of command.arguments) {
+      expect(argument.schema.root.body.tag).toBe("option")
+      if (argument.schema.root.body.tag === "option") {
+        expect(argument.schema.root.body.element.body.tag).not.toBe("option")
+      }
+    }
+    expect(command.validateJson({ position: null, choice: null }).success).toBe(true)
+    expect(command.validateJson({ position: "p", choice: "c" }).success).toBe(true)
   })
 
   it("sends optional inputs with a graph that accepts both carriers", async () => {
