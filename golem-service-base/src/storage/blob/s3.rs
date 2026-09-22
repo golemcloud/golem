@@ -371,19 +371,21 @@ impl S3BlobStorage {
                 agent_id,
                 agent_mode,
             } => {
+                // The agent is one segment of a bounded length, because a raw agent id can hold
+                // `/`, `\` and `.` segments, which the rules of a key refuse.
                 let environment_id_string = environment_id.to_string();
-                let agent_id_string = agent_id.to_string();
+                let agent = agent_path_segment(agent_id);
                 let mode = super::agent_mode_prefix(*agent_mode);
                 if self.config.object_prefix.is_empty() {
                     Path::new(mode)
                         .join(environment_id_string)
-                        .join(agent_id_string)
+                        .join(agent)
                         .to_path_buf()
                 } else {
                     Path::new(&self.config.object_prefix)
                         .join(mode)
                         .join(environment_id_string)
-                        .join(agent_id_string)
+                        .join(agent)
                         .to_path_buf()
                 }
             }

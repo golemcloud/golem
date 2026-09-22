@@ -71,10 +71,8 @@ impl SqliteBlobStorage {
                 agent_mode,
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
-                format!(
-                    "oplog_payload-{mode}-{environment_id}-{}",
-                    agent_id.agent_id
-                )
+                let agent = agent_path_segment(&agent_id);
+                format!("oplog_payload-{mode}-{environment_id}-{agent}")
             }
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
