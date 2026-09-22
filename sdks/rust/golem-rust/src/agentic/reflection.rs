@@ -977,9 +977,11 @@ impl ReflectedAgentMethod {
         }
         self.definition.input.validate_value(&input)?;
         Ok(ReflectedPendingInvocation {
-            inner: self.transport.pending(&self.definition.raw.name, input)?,
-            output: self.definition.output.clone(),
-            method: self.definition.raw.name.clone(),
+            checked: CheckedReflectedOutput {
+                inner: self.transport.pending(&self.definition.raw.name, input)?,
+                output: self.definition.output.clone(),
+                method: self.definition.raw.name.clone(),
+            },
         })
     }
 
@@ -1129,18 +1131,22 @@ pub struct PendingInvocation {
 
 /// A reflected pending invocation that applies the selected method's output policy on completion.
 pub struct ReflectedPendingInvocation {
-    inner: PendingInvocation,
+    checked: CheckedReflectedOutput<PendingInvocation>,
+}
+
+struct CheckedReflectedOutput<F> {
+    inner: F,
     output: Option<SchemaRef>,
     method: String,
 }
 
 impl ReflectedPendingInvocation {
     pub fn metadata(&self) -> &InvocationMetadata {
-        &self.inner.metadata
+        &self.checked.inner.metadata
     }
 
     pub fn cancel(&self) {
-        self.inner.cancel();
+        self.checked.inner.cancel();
     }
 
     pub async fn get(self) -> PendingResult {
@@ -1149,6 +1155,14 @@ impl ReflectedPendingInvocation {
 }
 
 impl Future for ReflectedPendingInvocation {
+    type Output = PendingResult;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.get_mut().checked).poll(cx)
+    }
+}
+
+impl<F: Future<Output = PendingResult> + Unpin> Future for CheckedReflectedOutput<F> {
     type Output = PendingResult;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -1551,13 +1565,17 @@ fn decode_custom_error(value: crate::schema::wit::wire::TypedSchemaValue) -> Rem
 #[cfg(test)]
 mod tests {
     use super::{
-        GolemReflectError, MethodOnlyAgentClientDefinition, SchemaRef, validate_declared_output,
+        CheckedReflectedOutput, GolemReflectError, Invocation, InvocationMetadata,
+        MethodOnlyAgentClientDefinition, ParsedAgentId, SchemaRef, validate_declared_output,
     };
     use crate::schema::{
         MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, VariantCaseType,
         VariantValuePayload,
     };
     use serde_json::json;
+    use std::future::{Future, ready};
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Waker};
     use test_r::test;
 
     #[test]
@@ -1640,6 +1658,43 @@ mod tests {
             validate_declared_output(None, Some(&SchemaValue::Bool(true)), "unit"),
             Err(GolemReflectError::MalformedRemoteOutput(_))
         ));
+    }
+
+    #[test]
+    fn reflected_pending_output_matches_awaited_policy() {
+        let output = SchemaRef::new(SchemaGraph::anonymous(SchemaType::string()));
+        for (declared, value) in [
+            (Some(output.clone()), None),
+            (None, Some(SchemaValue::Bool(true))),
+            (Some(output.clone()), Some(SchemaValue::U32(7))),
+            (
+                Some(output.clone()),
+                Some(SchemaValue::String("ok".to_string())),
+            ),
+        ] {
+            let awaited = validate_declared_output(declared.as_ref(), value.as_ref(), "read");
+            let invocation = Invocation {
+                metadata: InvocationMetadata {
+                    agent_id: ParsedAgentId::new("test"),
+                    idempotency_key: "test".to_string(),
+                },
+                value,
+            };
+            let mut pending = CheckedReflectedOutput {
+                inner: ready(Ok(invocation)),
+                output: declared,
+                method: "read".to_string(),
+            };
+            let mut context = Context::from_waker(Waker::noop());
+            let completed = Pin::new(&mut pending).poll(&mut context);
+            let Poll::Ready(result) = completed else {
+                panic!("ready reflected invocation must complete");
+            };
+            assert_eq!(result.is_ok(), awaited.is_ok());
+            if let Err(error) = result {
+                assert!(matches!(error, GolemReflectError::MalformedRemoteOutput(_)));
+            }
+        }
     }
 
     #[test]
