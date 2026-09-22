@@ -7,6 +7,7 @@ import { z } from 'zod/v4';
 import { c, toolDefinition, getExtendedToolDefinition } from '../src/tool';
 import { encodeTool } from '../src/internal/tool';
 import { compileSchema } from '../src/schema/adapter';
+import { s } from '../src/schema/markers';
 import { ToolCallError } from '../src/toolClient';
 import { ToolRemoteOutputError, ToolType } from '../src/toolReflection';
 import { createToolClientRuntime, type ToolClientRuntime } from '../src/bridge/tool';
@@ -14,7 +15,6 @@ import {
   emptyMetadata,
   field,
   schemaShapesMatch,
-  schemaValueToWit,
   schemaType,
   t,
   v,
@@ -121,12 +121,11 @@ describe('native tool reflection', () => {
   });
 
   it('owns binary defaults without exposing their mutable bytes', () => {
+    const source = new Uint8Array([1, 255]);
     const definition = toolDefinition('binary-snapshot').body((body) =>
-      body.option('payload', z.string()),
+      body.option('payload', s.binary(), { default: source }),
     );
     const wire = encodeTool(getExtendedToolDefinition(definition));
-    const source = new Uint8Array([1, 255]);
-    wire.commands.nodes[0].body!.options[0].default_ = schemaValueToWit(v.binary(source));
     const command = new ToolType(
       {
         lookupName: 'binary-snapshot',
@@ -146,19 +145,27 @@ describe('native tool reflection', () => {
     });
   });
 
-  it('does not nest already optional positional and scalar option schemas', () => {
+  it('invokes with one authored option carrier for omitted and supplied inputs', async () => {
     const definition = toolDefinition('single-option').body((body) =>
       body
         .positional('position', z.string().optional(), { required: false })
         .option('choice', z.string().optional()),
     );
+    const authored = getExtendedToolDefinition(definition);
+    const start = vi.fn((_path, _input) => ({
+      settledResult: Promise.resolve({
+        status: 'fulfilled' as const,
+        value: { result: undefined },
+      }),
+      cancel: vi.fn(),
+    }));
     const command = new ToolType(
       {
         lookupName: 'single-option',
-        definition: encodeTool(getExtendedToolDefinition(definition)),
+        definition: encodeTool(authored),
         implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
       },
-      { start: vi.fn() } as unknown as ToolClientRuntime,
+      { start } as ToolClientRuntime,
     ).client.command([]);
     for (const argument of command.arguments) {
       expect(argument.schema.root.body.tag).toBe('option');
@@ -166,8 +173,20 @@ describe('native tool reflection', () => {
         expect(argument.schema.root.body.element.body.tag).not.toBe('option');
       }
     }
-    expect(command.validateJson({ position: null, choice: null }).success).toBe(true);
-    expect(command.validateJson({ position: 'p', choice: 'c' }).success).toBe(true);
+    const expectedGraph = authored.canonicalInputModel(authored.root).codec.graph;
+    for (const [position, choice] of [
+      [null, null],
+      ['p', null],
+      [null, 'c'],
+      ['p', 'c'],
+    ] as const) {
+      expect(command.validateJson({ position, choice }).success).toBe(true);
+      await expect(command.invokeJson({ position, choice })).resolves.toBeUndefined();
+      const sent = start.mock.calls.at(-1)![1];
+      expect(schemaShapesMatch(expectedGraph, sent.graph)).toBe(true);
+      expect(command.inputSchema!.validateValue(sent.value).success).toBe(true);
+    }
+    expect(start).toHaveBeenCalledTimes(4);
   });
 
   it('renders discriminator conditions without replacing the branch schema', () => {
