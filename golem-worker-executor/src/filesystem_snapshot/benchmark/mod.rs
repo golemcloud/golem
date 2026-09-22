@@ -21,9 +21,12 @@
 //! earlier phase from the blob storage.
 //!
 //! Each repository and each result is in the namespace `InitialAgentFiles` of an environment
-//! that only the benchmark uses, below the object prefix of the run.
+//! that only the benchmark uses, below the object prefix of the run. The repositories of a
+//! scenario, a CPU setting and a tree are the repositories of its agents (see [`agents`]).
 
+mod agents;
 pub mod cli;
+mod concurrent;
 mod measure;
 mod report;
 mod requests;
@@ -32,6 +35,7 @@ mod volume;
 
 use super::rustic::{PhaseTime, Repository, RepositoryKey};
 use super::{SnapshotName, SnapshotScope};
+use agents::{AgentStorage, FIRST_AGENT};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use measure::measure;
@@ -76,13 +80,22 @@ struct Phase {
 /// What a phase does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PhaseKind {
-    /// A cold save of a new tree, a small change and a warm save.
+    /// A cold save of a new tree, a small change and a warm save, into the repository of the
+    /// first agent.
     Save,
-    /// A cold restore of the warm save with the number of reader threads. `None` is the default
-    /// of rustic.
+    /// A cold restore of the warm save of the first agent with the number of reader threads.
+    /// `None` is the default of rustic.
     Restore {
         reader_threads: Option<NonZeroUsize>,
     },
+    /// The restores of the warm save into the repositories of `agents` agents at the same time.
+    ConcurrentRestore {
+        agents: usize,
+        reader_threads: Option<NonZeroUsize>,
+    },
+    /// The cold saves of `agents` agents at the same time, a small change of the tree of each
+    /// agent, and then the warm saves of the agents at the same time.
+    ConcurrentSave { agents: usize },
 }
 
 const SAVE: Phase = Phase {
@@ -96,6 +109,23 @@ const fn restore(name: &'static str, reader_threads: usize) -> Phase {
         kind: PhaseKind::Restore {
             reader_threads: NonZeroUsize::new(reader_threads),
         },
+    }
+}
+
+const fn concurrent_restore(name: &'static str, agents: usize, reader_threads: usize) -> Phase {
+    Phase {
+        name,
+        kind: PhaseKind::ConcurrentRestore {
+            agents,
+            reader_threads: NonZeroUsize::new(reader_threads),
+        },
+    }
+}
+
+const fn concurrent_save(name: &'static str, agents: usize) -> Phase {
+    Phase {
+        name,
+        kind: PhaseKind::ConcurrentSave { agents },
     }
 }
 
@@ -116,6 +146,46 @@ const RESTORE_THREADS_PHASES: &[Phase] = &[
     restore("restore-4", 4),
     restore("restore-8", 8),
     restore("restore-20", 20),
+];
+
+const CONCURRENT_RESTORE_1_PHASES: &[Phase] = &[
+    SAVE,
+    concurrent_restore("restore-x1", 1, 1),
+    concurrent_restore("restore-x5", 5, 1),
+    concurrent_restore("restore-x10", 10, 1),
+    concurrent_restore("restore-x25", 25, 1),
+    concurrent_restore("restore-x50", 50, 1),
+    concurrent_restore("restore-x100", 100, 1),
+    concurrent_restore("restore-x200", 200, 1),
+];
+
+const CONCURRENT_RESTORE_4_PHASES: &[Phase] = &[
+    SAVE,
+    concurrent_restore("restore-x1", 1, 4),
+    concurrent_restore("restore-x5", 5, 4),
+    concurrent_restore("restore-x10", 10, 4),
+    concurrent_restore("restore-x25", 25, 4),
+    concurrent_restore("restore-x50", 50, 4),
+    concurrent_restore("restore-x100", 100, 4),
+    concurrent_restore("restore-x200", 200, 4),
+];
+
+const CONCURRENT_RESTORE_20_PHASES: &[Phase] = &[
+    SAVE,
+    concurrent_restore("restore-x1", 1, 20),
+    concurrent_restore("restore-x5", 5, 20),
+    concurrent_restore("restore-x10", 10, 20),
+    concurrent_restore("restore-x25", 25, 20),
+    concurrent_restore("restore-x50", 50, 20),
+    concurrent_restore("restore-x100", 100, 20),
+    concurrent_restore("restore-x200", 200, 20),
+];
+
+const CONCURRENT_SAVE_PHASES: &[Phase] = &[
+    concurrent_save("save-x1", 1),
+    concurrent_save("save-x2", 2),
+    concurrent_save("save-x4", 4),
+    concurrent_save("save-x8", 8),
 ];
 
 /// The scenarios of the benchmark.
@@ -143,6 +213,30 @@ const SCENARIOS: &[Scenario] = &[
         trees: &[FILES_1G],
         phases: BASE_PHASES,
         memory_limited_phases: &["restore"],
+    },
+    Scenario {
+        name: "concurrent-restore-1",
+        trees: &[FILES_128M, FILES_1G],
+        phases: CONCURRENT_RESTORE_1_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "concurrent-restore-4",
+        trees: &[FILES_128M, FILES_1G],
+        phases: CONCURRENT_RESTORE_4_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "concurrent-restore-20",
+        trees: &[FILES_128M, FILES_1G],
+        phases: CONCURRENT_RESTORE_20_PHASES,
+        memory_limited_phases: &[],
+    },
+    Scenario {
+        name: "concurrent-save",
+        trees: &[FILES_128M, FILES_1G, SQLITE_1G],
+        phases: CONCURRENT_SAVE_PHASES,
+        memory_limited_phases: &[],
     },
 ];
 
@@ -264,16 +358,27 @@ struct PhaseContext {
 }
 
 impl PhaseContext {
-    fn repository(&self) -> Repository {
+    /// Gives the scope of the repositories of the agents of the phase.
+    fn scope(&self) -> SnapshotScope {
+        repository_scope(
+            self.selection.scenario.name,
+            &self.cpu_setting,
+            self.selection.tree.name,
+        )
+    }
+
+    /// Gives the repository of the agent.
+    fn agent_repository(&self, agent: &str) -> Repository {
         Repository::new(
-            self.storage.clone(),
-            repository_scope(
-                self.selection.scenario.name,
-                &self.cpu_setting,
-                self.selection.tree.name,
-            ),
+            Arc::new(AgentStorage::new(self.storage.clone(), agent)),
+            self.scope(),
             repository_key(&self.run_id),
         )
+    }
+
+    /// Gives the repository of the first agent.
+    fn repository(&self) -> Repository {
+        self.agent_repository(FIRST_AGENT)
     }
 
     fn result_path(&self, phase: &str) -> Box<Path> {
@@ -353,6 +458,11 @@ async fn run_kind(context: &PhaseContext, kind: PhaseKind) -> PhaseOutcome {
     match kind {
         PhaseKind::Save => base_save(context).await,
         PhaseKind::Restore { reader_threads } => base_restore(context, reader_threads).await,
+        PhaseKind::ConcurrentRestore {
+            agents,
+            reader_threads,
+        } => concurrent::concurrent_restore(context, agents, reader_threads).await,
+        PhaseKind::ConcurrentSave { agents } => concurrent::concurrent_save(context, agents).await,
     }
 }
 

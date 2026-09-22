@@ -366,9 +366,86 @@ async fn change_database(path: &Path) -> anyhow::Result<Value> {
     }))
 }
 
+/// How the files of a copy of a tree were made.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct CopyCounts {
+    /// The files that share their data with the source, through a reflink.
+    pub(super) reflinked: u64,
+    /// The files whose bytes were copied.
+    pub(super) copied: u64,
+}
+
+impl CopyCounts {
+    pub(super) fn with(self, other: Self) -> Self {
+        Self {
+            reflinked: self.reflinked + other.reflinked,
+            copied: self.copied + other.copied,
+        }
+    }
+}
+
+/// Copies the tree `from` into the directory `to`, which must not exist, with the permission
+/// bits of each entry. A file is a reflink of its source where the filesystem has reflinks
+/// (`FICLONE`, for example on XFS), and a copy of its bytes where it does not. The copy does not
+/// keep the modification times.
+pub(super) fn copy_tree(from: &Path, to: &Path) -> anyhow::Result<CopyCounts> {
+    std::fs::create_dir(to).with_context(|| format!("create the tree {}", to.display()))?;
+    Ok(walk(
+        from,
+        CopyCounts::default(),
+        &mut |counts, path, metadata| {
+            let target = to.join(path.strip_prefix(from).map_err(io::Error::other)?);
+            if metadata.is_dir() {
+                std::fs::create_dir(&target)?;
+                std::fs::set_permissions(&target, metadata.permissions())?;
+                Ok(counts)
+            } else if metadata.is_file() {
+                copy_file(path, &target, metadata).map(|reflinked| {
+                    counts.with(if reflinked {
+                        CopyCounts {
+                            reflinked: 1,
+                            copied: 0,
+                        }
+                    } else {
+                        CopyCounts {
+                            reflinked: 0,
+                            copied: 1,
+                        }
+                    })
+                })
+            } else {
+                Err(io::Error::other(format!(
+                    "the tree has an entry that is not a file or a directory: {}",
+                    path.display()
+                )))
+            }
+        },
+    )?)
+}
+
+/// Copies the file `from` to the new file `to`, and tells whether the copy is a reflink.
+///
+/// When the reflink fails, the filesystem cannot share the data of the files, so the copy of the
+/// bytes after it does not share them either.
+fn copy_file(from: &Path, to: &Path, metadata: &Metadata) -> io::Result<bool> {
+    let source = File::open(from)?;
+    let target = File::create_new(to)?;
+    match rustix::fs::ioctl_ficlone(&target, &source) {
+        Ok(()) => {
+            target.set_permissions(metadata.permissions())?;
+            Ok(true)
+        }
+        Err(_) => {
+            drop(target);
+            std::fs::copy(from, to)?;
+            Ok(false)
+        }
+    }
+}
+
 /// Writes each change of the filesystem of `root` to the volume, and removes the pages of each
 /// file below `root` from the page cache.
-fn settle(root: &Path) -> anyhow::Result<()> {
+pub(super) fn settle(root: &Path) -> anyhow::Result<()> {
     rustix::fs::syncfs(File::open(root)?)?;
     walk(root, (), &mut |(), path, metadata| {
         if metadata.is_file() {
@@ -469,12 +546,12 @@ fn walk<T>(
 #[cfg(test)]
 mod tests {
     use super::{
-        FILES_TINY, MIB, SQLITE_TINY, TreeCounts, TreeShape, TreeSpec, change, file_path,
-        file_size, generate, limit_layout, tree_hash,
+        FILES_TINY, MIB, SQLITE_TINY, TreeCounts, TreeShape, TreeSpec, change, copy_tree,
+        file_path, file_size, generate, limit_layout, tree_hash, walk,
     };
     use pretty_assertions::assert_eq;
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::Path;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
     use test_r::test;
 
@@ -489,6 +566,25 @@ mod tests {
 
     fn hash(root: &Path) -> Box<str> {
         tree_hash(root).unwrap().0
+    }
+
+    /// Gives the path, the permission bits and the content of each entry below `root`, in the
+    /// order of the paths. A directory has no content.
+    fn contents(root: &Path) -> Vec<(PathBuf, u32, Vec<u8>)> {
+        walk(root, Vec::new(), &mut |mut entries, path, metadata| {
+            let content = if metadata.is_file() {
+                std::fs::read(path)?
+            } else {
+                Vec::new()
+            };
+            entries.push((
+                path.strip_prefix(root).unwrap().to_path_buf(),
+                metadata.mode(),
+                content,
+            ));
+            Ok(entries)
+        })
+        .unwrap()
     }
 
     #[test]
@@ -553,6 +649,28 @@ mod tests {
                 true,
                 true,
             )
+        );
+    }
+
+    #[test]
+    async fn a_copy_of_a_tree_has_its_entries_permissions_and_content() {
+        let work = tempfile::tempdir().unwrap();
+        let root = work.path().join("tree");
+        let copy = work.path().join("copy");
+        generate(&FILES_TINY, &root).await.unwrap();
+        std::fs::set_permissions(
+            root.join("d000/f00000"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        std::fs::set_permissions(root.join("d001"), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+
+        let counts = copy_tree(&root, &copy).unwrap();
+
+        assert_eq!(
+            (counts.reflinked + counts.copied, contents(&copy)),
+            (100, contents(&root))
         );
     }
 

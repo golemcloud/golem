@@ -14,6 +14,7 @@
 
 //! A blob storage that records each request that it passes to another blob storage.
 
+use super::agents::AGENTS;
 use super::report::{RequestSummary, RequestTimes, millis};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -92,18 +93,26 @@ impl MeasuredBlobStorage {
 }
 
 /// Gives the file type of a repository path from its first name: `config`, `pack`, `index`,
-/// `snapshot`, `key`, or `other`.
+/// `snapshot`, `key`, or `other`. The path of the repository of an agent starts with
+/// `agents/<agent>` (see [`super::agents`]), and the first name after it gives the type.
 pub(super) fn file_type(path: &Path) -> &'static str {
-    match path
+    let names = path
         .components()
-        .find(|component| matches!(component, Component::Normal(_)))
-        .and_then(|component| component.as_os_str().to_str())
-    {
-        Some("config") => "config",
-        Some("data") => "pack",
-        Some("index") => "index",
-        Some("snapshots") => "snapshot",
-        Some("keys") => "key",
+        .filter_map(|component| match component {
+            Component::Normal(name) => Some(name.to_str()),
+            _ => None,
+        })
+        .collect::<Box<[_]>>();
+    let in_repository = match &*names {
+        [Some(AGENTS), Some(_), rest @ ..] => rest,
+        all => all,
+    };
+    match in_repository.first() {
+        Some(Some("config")) => "config",
+        Some(Some("data")) => "pack",
+        Some(Some("index")) => "index",
+        Some(Some("snapshots")) => "snapshot",
+        Some(Some("keys")) => "key",
         _ => "other",
     }
 }
@@ -139,8 +148,8 @@ pub(super) fn summarize(records: &[RequestRecord]) -> Box<[RequestSummary]> {
 }
 
 /// Gives the minimum, the percentiles by the nearest rank, the maximum and the total of times
-/// that are in ascending order and not empty.
-fn times(sorted: &[Duration]) -> RequestTimes {
+/// that are in ascending order. Each value of an empty list is zero.
+pub(super) fn times(sorted: &[Duration]) -> RequestTimes {
     let rank = |percent: usize| {
         let index = (percent * sorted.len()).div_ceil(100).max(1) - 1;
         sorted.get(index).copied().map(millis).unwrap_or_default()
@@ -554,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn the_file_type_is_the_first_name_of_the_path() {
+    fn the_file_type_is_the_first_name_of_the_repository_path() {
         assert_eq!(
             [
                 "config",
@@ -564,11 +573,16 @@ mod tests {
                 "keys/ab",
                 "results/base/save.json",
                 "",
-                "./data/ab/abcd"
+                "./data/ab/abcd",
+                "agents/0/config",
+                "agents/x8-7/data/ab/abcd",
+                "agents/0",
+                "agents"
             ]
             .map(|path| file_type(Path::new(path))),
             [
-                "config", "pack", "index", "snapshot", "key", "other", "other", "pack"
+                "config", "pack", "index", "snapshot", "key", "other", "other", "pack", "config",
+                "pack", "other", "other"
             ]
         );
     }
