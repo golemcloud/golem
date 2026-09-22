@@ -47,9 +47,10 @@ use tokio::runtime::Handle;
 /// The longest time that one call of a repository waits for the blob storage.
 ///
 /// A call that gets no answer within this time fails, and its operation fails with it. The value
-/// stops a call that does not return. It is not a limit for a slow call. The slowest call that the
-/// benchmark measured was a read of a pack, which took 1.3 s with the retries of the S3 storage.
-/// Keep the value at least 10 times the largest maximum request time in the benchmark results.
+/// stops a call that does not return. It is not a limit for a slow call. On S3, with the retries of
+/// the S3 storage, a write of a pack took at most 1.7 s with eight saves at the same time. A ranged
+/// read of a pack took at most 1.5 s under the CPU request of an executor. Keep the value at least
+/// 10 times the longest measured call.
 pub(super) const STORAGE_CALL_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The key that encrypts a repository.
