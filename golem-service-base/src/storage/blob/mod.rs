@@ -596,6 +596,26 @@ pub fn agent_path_segment(agent_id: &AgentId) -> String {
     format!("{sanitized_prefix}-{digest}")
 }
 
+/// Tells whether a name has the form of a segment that [`agent_path_segment`] gives.
+///
+/// The form is 1 to 32 characters that are ASCII letters, digits, `-` or `_`, then `-`, then 64
+/// lowercase hexadecimal digits. The prefix can hold `-`, so the check splits the name at the
+/// last `-`. The check makes no request, so a caller can use it to skip a name of a storage
+/// layout that did not use the segment. An agent name always holds `(`, so such a name does not
+/// have the form.
+pub fn is_agent_path_segment(name: &str) -> bool {
+    name.rsplit_once('-').is_some_and(|(prefix, digest)| {
+        (1..=32).contains(&prefix.len())
+            && prefix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            && digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
 /// Returns the symmetric per-mode prefix used by all blob-storage backends for oplog data.
 pub fn agent_mode_prefix(mode: AgentMode) -> &'static str {
     match mode {
@@ -1105,7 +1125,7 @@ pub(crate) fn blob_child_path(directory: &str, name: &str) -> Box<Path> {
 mod tests {
     use super::{
         BlobNameError, BlobRangeError, agent_path_segment, blob_path_to_string, blob_range,
-        normalized_blob_path,
+        is_agent_path_segment, normalized_blob_path,
     };
     use golem_common::model::AgentId;
     use golem_common::model::component::ComponentId;
@@ -1343,6 +1363,55 @@ mod tests {
                     .to_string(),
                 "agent-6a683fb8dbe943ef400d01ca02589e2b93eb9e982cfff9bf930fdcad6787107f".to_string(),
             ]
+        );
+    }
+
+    /// Each segment that `agent_path_segment` gives has the form that `is_agent_path_segment`
+    /// checks: agent names with `/`, `.` and `..` segments, a name of 500 bytes, a name with `-`,
+    /// and an empty name. The other names do not have the form: an agent name, which holds `(`,
+    /// a hash of 63 or 65 digits, a hash in uppercase, a prefix of 33 characters, an empty
+    /// prefix, a prefix that is not ASCII, and a name without `-`.
+    #[test]
+    fn the_form_of_an_agent_path_segment_is_the_form_that_agent_path_segment_gives() {
+        let component_id =
+            ComponentId(uuid::Uuid::parse_str("0d9f6c1e-2b8a-4f3d-9e7c-5a4b3c2d1e0f").unwrap());
+        let long_name = format!("counter(\"{}\")", "x".repeat(489));
+        let segments = [
+            r#"counter("a/../b")"#,
+            r#"counter("a/./b")"#,
+            r#"counter("a//b")"#,
+            r#"counter("a/b")"#,
+            long_name.as_str(),
+            "my-agent",
+            "",
+        ]
+        .map(|agent| {
+            agent_path_segment(&AgentId {
+                component_id,
+                agent_id: agent.to_string(),
+            })
+        });
+        let hash = "97f0841e19646b6f20282e1d316187fb327b2df867064639c28e15d22dd797ec";
+        let other_names = [
+            r#"counter("a/b")"#.to_string(),
+            format!("counter-{}", &hash[..63]),
+            format!("counter-{hash}0"),
+            format!("counter-{}", hash.to_uppercase()),
+            format!("{}-{hash}", "a".repeat(33)),
+            format!("-{hash}"),
+            format!("zähler-{hash}"),
+            hash.to_string(),
+        ];
+
+        assert_eq!(
+            (
+                long_name.len(),
+                segments.each_ref().map(|name| is_agent_path_segment(name)),
+                other_names
+                    .each_ref()
+                    .map(|name| is_agent_path_segment(name)),
+            ),
+            (500, [true; 7], [false; 8])
         );
     }
 
