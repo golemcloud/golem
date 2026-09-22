@@ -2203,6 +2203,21 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     });
     let cut_index = append_session(oplog.as_ref(), cut.clone()).await;
     indexed_records.push((cut_index, cut));
+    oplog.commit(CommitLevel::Always).await;
+
+    let inherited = service
+        .stream_session_index
+        .lookup_latest(&id, AgentMode::Durable, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(inherited.first_prepared.is_none());
+    assert!(inherited.public_session_id.is_none());
+    assert!(inherited.export_fork_initialized);
+    assert_eq!(inherited.expiry_policy, StreamSessionExpiryPolicy::None);
+    assert_eq!(inherited.expiry_deadline_millis, None);
+    assert!(!inherited.expired);
+
     let replacement = initialize(40_000);
     let replacement_index = append_session(oplog.as_ref(), replacement.clone()).await;
     indexed_records.push((replacement_index, replacement));
@@ -2272,6 +2287,8 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
         unreachable!()
     };
     record.public_session_id = public.into();
+    record.expiry_policy = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 };
+    record.expiry_deadline_millis = Some(40_000);
     append_session(oplog.as_ref(), prepared).await;
     oplog.commit(CommitLevel::Always).await;
 
@@ -2316,6 +2333,16 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
             .and_then(|status| status.public_session_id),
         Some(public.into())
     );
+    let inherited = service
+        .stream_session_index
+        .lookup_latest(&id, AgentMode::Durable, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(inherited.first_prepared.is_some());
+    assert_eq!(inherited.expiry_policy, StreamSessionExpiryPolicy::None);
+    assert_eq!(inherited.expiry_deadline_millis, None);
+    assert_eq!(inherited.attachment_attached, Some(false));
     service.stream_session_index.clear(&id).await.unwrap();
     assert_eq!(
         service
@@ -2334,6 +2361,16 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
             .and_then(|status| status.public_session_id),
         Some(public.into())
     );
+    let rebuilt = service
+        .stream_session_index
+        .lookup_latest(&id, AgentMode::Durable, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(rebuilt.first_prepared.is_some());
+    assert_eq!(rebuilt.expiry_policy, StreamSessionExpiryPolicy::None);
+    assert_eq!(rebuilt.expiry_deadline_millis, None);
+    assert_eq!(rebuilt.attachment_attached, Some(false));
 }
 
 #[test]

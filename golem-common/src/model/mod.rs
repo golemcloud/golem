@@ -1535,6 +1535,9 @@ impl DurableStreamSessionStatus {
             self.attachment_epoch = Some(cut.epoch_floor);
             self.attachment_attached = Some(false);
             if cut.revert.is_none() {
+                if self.first_prepared.is_none() {
+                    self.public_session_id = None;
+                }
                 self.expiry_policy = crate::model::durable_stream::StreamSessionExpiryPolicy::None;
                 self.expiry_deadline_millis = None;
                 self.expired = false;
