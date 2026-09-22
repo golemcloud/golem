@@ -44,7 +44,9 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
-use trees::{FILES_1G, FILES_128M, FILES_TINY, SQLITE_1G, SQLITE_TINY, TreeSpec};
+use trees::{
+    FILES_1G, FILES_128M, FILES_TINY, OBJECTS_1G, OBJECTS_128M, SQLITE_1G, SQLITE_TINY, TreeSpec,
+};
 use uuid::Uuid;
 
 /// The labels of the blob storage calls of the benchmark itself.
@@ -85,7 +87,7 @@ const BASE_PHASES: &[Phase] = &[
 const SCENARIOS: &[Scenario] = &[
     Scenario {
         name: "base",
-        trees: &[FILES_128M, FILES_1G, SQLITE_1G],
+        trees: &[FILES_128M, FILES_1G, SQLITE_1G, OBJECTS_128M, OBJECTS_1G],
         phases: BASE_PHASES,
     },
     Scenario {

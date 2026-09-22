@@ -44,6 +44,10 @@ const ROW_PAYLOAD_BYTES: u64 = 1_024;
 const CHANGED_FILES: u64 = 10;
 const CHANGED_ROWS: u64 = 100;
 
+/// The number of files in each directory of a tree at the object limit, as in the other file
+/// trees.
+const FILES_PER_DIRECTORY: u64 = 100;
+
 /// A tree that the benchmark makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TreeSpec {
@@ -62,6 +66,9 @@ pub(super) enum TreeShape {
     },
     /// One SQLite database of at least the size.
     Sqlite { bytes: u64 },
+    /// Files and directories that are `objects` filesystem objects together with the root, in
+    /// the layout that [`limit_layout`] gives. Its small change keeps the number of objects.
+    ObjectLimit { objects: u64, bytes: u64 },
 }
 
 pub(super) const FILES_128M: TreeSpec = TreeSpec {
@@ -78,6 +85,24 @@ pub(super) const FILES_1G: TreeSpec = TreeSpec {
     shape: TreeShape::Files {
         files: 10_000,
         directories: 100,
+        bytes: 1024 * MIB,
+    },
+};
+
+/// The tree at the object limit of an agent with 128 MiB of storage: 8,192 objects.
+pub(super) const OBJECTS_128M: TreeSpec = TreeSpec {
+    name: "objects-128m",
+    shape: TreeShape::ObjectLimit {
+        objects: 8_192,
+        bytes: 128 * MIB,
+    },
+};
+
+/// The tree at the object limit of an agent with 1 GiB of storage: 32,768 objects.
+pub(super) const OBJECTS_1G: TreeSpec = TreeSpec {
+    name: "objects-1g",
+    shape: TreeShape::ObjectLimit {
+        objects: 32_768,
         bytes: 1024 * MIB,
     },
 };
@@ -109,6 +134,17 @@ pub(super) struct TreeCounts {
     pub(super) bytes: u64,
 }
 
+/// Gives the number of files and the number of directories of a tree whose files, directories
+/// and root are `objects` objects together.
+///
+/// Each directory holds at most [`FILES_PER_DIRECTORY`] files, so a directory and its files are
+/// at most `FILES_PER_DIRECTORY + 1` objects.
+pub(super) const fn limit_layout(objects: u64) -> (u64, u64) {
+    let below_root = objects.saturating_sub(1);
+    let directories = below_root.div_ceil(FILES_PER_DIRECTORY + 1);
+    (below_root - directories, directories)
+}
+
 /// Makes the tree in the directory `root`, which must not exist.
 pub(super) async fn generate(spec: &TreeSpec, root: &Path) -> anyhow::Result<TreeCounts> {
     std::fs::create_dir(root).with_context(|| format!("create the tree {}", root.display()))?;
@@ -118,9 +154,17 @@ pub(super) async fn generate(spec: &TreeSpec, root: &Path) -> anyhow::Result<Tre
             directories,
             bytes,
         } => {
-            let root = root.to_path_buf();
-            tokio::task::spawn_blocking(move || generate_files(&root, files, directories, bytes))
-                .await?
+            in_blocking(root, move |root| {
+                generate_files(root, files, directories, bytes)
+            })
+            .await
+        }
+        TreeShape::ObjectLimit { objects, bytes } => {
+            let (files, directories) = limit_layout(objects);
+            in_blocking(root, move |root| {
+                generate_files(root, files, directories, bytes)
+            })
+            .await
         }
         TreeShape::Sqlite { bytes } => generate_database(&root.join(DATABASE), bytes).await,
     }?;
@@ -136,14 +180,31 @@ pub(super) async fn change(spec: &TreeSpec, root: &Path) -> anyhow::Result<Value
             directories,
             bytes,
         } => {
-            let root = root.to_path_buf();
-            tokio::task::spawn_blocking(move || change_files(&root, files, directories, bytes))
-                .await??
+            in_blocking(root, move |root| {
+                change_files(root, files, directories, bytes, Replace::No)
+            })
+            .await?
+        }
+        TreeShape::ObjectLimit { objects, bytes } => {
+            let (files, directories) = limit_layout(objects);
+            in_blocking(root, move |root| {
+                change_files(root, files, directories, bytes, Replace::Yes)
+            })
+            .await?
         }
         TreeShape::Sqlite { .. } => change_database(&root.join(DATABASE)).await?,
     };
     settle(root)?;
     Ok(change)
+}
+
+/// Runs the work on the tree `root` on a blocking thread.
+async fn in_blocking<T: Send + 'static>(
+    root: &Path,
+    work: impl FnOnce(&Path) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    let root = root.to_path_buf();
+    tokio::task::spawn_blocking(move || work(&root)).await?
 }
 
 /// Gives the path of the file with the index, relative to the root of the tree.
@@ -189,7 +250,23 @@ fn generate_files(root: &Path, files: u64, directories: u64, bytes: u64) -> anyh
     Ok(())
 }
 
-fn change_files(root: &Path, files: u64, directories: u64, bytes: u64) -> anyhow::Result<Value> {
+/// Whether the small change of a files tree replaces a file, or only adds one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Replace {
+    /// The change deletes the last file, and adds a file with a new name in its directory. So
+    /// the tree keeps its number of objects.
+    Yes,
+    /// The change adds a file in the first directory.
+    No,
+}
+
+fn change_files(
+    root: &Path,
+    files: u64,
+    directories: u64,
+    bytes: u64,
+    replace: Replace,
+) -> anyhow::Result<Value> {
     let step = (files / CHANGED_FILES).max(1);
     let rewritten = (0..CHANGED_FILES.min(files))
         .map(|position| position * step)
@@ -198,16 +275,26 @@ fn change_files(root: &Path, files: u64, directories: u64, bytes: u64) -> anyhow
             write_file(root, &file_path(index, files, directories), 1, size)
                 .map(|()| written + size)
         })?;
-    let added = file_size(0, files, bytes);
-    write_file(
-        root,
-        &file_path(0, files, directories).with_file_name("added"),
-        0,
-        added,
-    )?;
+    // The added file has the size of the file with the index.
+    let (added_path, added_index, deleted) = match replace {
+        Replace::Yes => {
+            let last = files.saturating_sub(1);
+            let path = file_path(last, files, directories);
+            std::fs::remove_file(root.join(&path))?;
+            (path.with_file_name("replaced"), last, 1)
+        }
+        Replace::No => (
+            file_path(0, files, directories).with_file_name("added"),
+            0,
+            0,
+        ),
+    };
+    let added = file_size(added_index, files, bytes);
+    write_file(root, &added_path, 0, added)?;
     Ok(json!({
         "files_rewritten": CHANGED_FILES.min(files),
         "files_added": 1,
+        "files_deleted": deleted,
         "rows_updated": 0,
         "bytes": rewritten + added,
     }))
@@ -273,6 +360,7 @@ async fn change_database(path: &Path) -> anyhow::Result<Value> {
     Ok(json!({
         "files_rewritten": 0,
         "files_added": 0,
+        "files_deleted": 0,
         "rows_updated": updated,
         "bytes": updated * ROW_PAYLOAD_BYTES,
     }))
@@ -381,7 +469,8 @@ fn walk<T>(
 #[cfg(test)]
 mod tests {
     use super::{
-        FILES_TINY, SQLITE_TINY, TreeCounts, change, file_path, file_size, generate, tree_hash,
+        FILES_TINY, MIB, SQLITE_TINY, TreeCounts, TreeShape, TreeSpec, change, file_path,
+        file_size, generate, limit_layout, tree_hash,
     };
     use pretty_assertions::assert_eq;
     use std::os::unix::fs::PermissionsExt;
@@ -389,8 +478,82 @@ mod tests {
     use std::time::{Duration, SystemTime};
     use test_r::test;
 
+    /// A tree at the object limit of 128 objects: 125 files in 2 directories, and the root.
+    const OBJECTS_TINY: TreeSpec = TreeSpec {
+        name: "objects-tiny",
+        shape: TreeShape::ObjectLimit {
+            objects: 128,
+            bytes: MIB,
+        },
+    };
+
     fn hash(root: &Path) -> Box<str> {
         tree_hash(root).unwrap().0
+    }
+
+    #[test]
+    fn the_limit_layout_counts_the_root_and_fills_each_directory() {
+        let layout = |objects| {
+            let (files, directories) = limit_layout(objects);
+            (
+                files,
+                directories,
+                files + directories + 1,
+                file_path(files - 1, files, directories),
+            )
+        };
+
+        assert_eq!(
+            [layout(8_192), layout(32_768), layout(128)],
+            [
+                (8_109, 82, 8_192, Path::new("d081/f08108").into()),
+                (32_442, 325, 32_768, Path::new("d324/f32441").into()),
+                (125, 2, 128, Path::new("d001/f00124").into()),
+            ]
+        );
+    }
+
+    #[test]
+    async fn a_tree_at_the_object_limit_keeps_its_number_of_objects_after_its_change() {
+        let work = tempfile::tempdir().unwrap();
+        let root = work.path().join("tree");
+
+        let counts = generate(&OBJECTS_TINY, &root).await.unwrap();
+        let before = hash(&root);
+        let changed = change(&OBJECTS_TINY, &root).await.unwrap();
+        let (after, after_counts) = tree_hash(&root).unwrap();
+
+        assert_eq!(
+            (
+                counts,
+                after_counts,
+                [
+                    &changed["files_rewritten"],
+                    &changed["files_added"],
+                    &changed["files_deleted"]
+                ]
+                .map(|value| value.as_u64()),
+                root.join("d001/f00124").exists(),
+                root.join("d001/replaced").exists(),
+                before != after,
+            ),
+            (
+                TreeCounts {
+                    files: 125,
+                    directories: 2,
+                    bytes: MIB,
+                },
+                TreeCounts {
+                    files: 125,
+                    directories: 2,
+                    bytes: MIB,
+                },
+                [Some(10), Some(1), Some(1)],
+                false,
+                true,
+                true,
+            )
+        );
     }
 
     #[test]
@@ -430,6 +593,7 @@ mod tests {
                 counts,
                 changed["files_rewritten"].as_u64(),
                 changed["files_added"].as_u64(),
+                changed["files_deleted"].as_u64(),
                 after_counts.files,
                 before != after,
             ),
@@ -441,6 +605,7 @@ mod tests {
                 },
                 Some(10),
                 Some(1),
+                Some(0),
                 101,
                 true,
             )

@@ -45,6 +45,8 @@ fn the_plan_gives_the_phases_of_each_tree_of_each_scenario() {
                 entry("base", "files-128m"),
                 entry("base", "files-1g"),
                 entry("base", "sqlite-1g"),
+                entry("base", "objects-128m"),
+                entry("base", "objects-1g"),
                 entry("smoke", "files-tiny"),
                 entry("smoke", "sqlite-tiny"),
             ]),
@@ -62,12 +64,13 @@ fn a_selection_names_a_tree_and_a_phase_of_its_scenario() {
         [
             found("base", "files-1g", "save"),
             found("smoke", "sqlite-tiny", "restore"),
+            found("base", "objects-1g", "restore"),
             found("base", "files-tiny", "save"),
             found("base", "files-1g", "prune"),
             found("other", "files-1g", "save"),
         ]
         .map(|found| found.is_ok()),
-        [true, true, false, false, false]
+        [true, true, true, false, false, false]
     );
 }
 
