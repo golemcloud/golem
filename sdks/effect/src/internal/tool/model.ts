@@ -7,6 +7,8 @@ import { compile, type CompiledWitCodec } from "../../WitCodec.js"
 import { Uint32 } from "../../WitTypes.js"
 import type { HostServices } from "../../host/HostLive.js"
 import type { Scope } from "effect"
+import { registerTool } from "./registry.js"
+export { registeredTools, resetTools } from "./registry.js"
 
 export type DocInput = string | Partial<ToolCommon.Doc>
 export type RepeatableMode =
@@ -412,7 +414,6 @@ export interface Registered {
   readonly implementation: ToolImplementation
   readonly layer?: Layer.Layer<any>
 }
-const registry = new Map<string, Registered>()
 
 const doc = (input?: DocInput): ToolCommon.Doc =>
   typeof input === "string"
@@ -778,23 +779,6 @@ function validateDefinition(root: CommandModel): void {
   visit(root, new Set(), new Set())
 }
 
-function registerTool<N extends string>(
-  definition: ToolDefinition<N>,
-  implementation: ToolImplementation,
-  layer?: Layer.Layer<any>,
-): ImplementedTool<N> {
-  if (registry.has(definition.name))
-    throw new Error(`Tool '${definition.name}' is already registered`)
-  const compiled = compileDefinition(definition)
-  for (const path of compiled.bodies.keys()) {
-    if (!implementationAt(implementation, definition.name, path ? path.split("/") : []))
-      throw new Error(`missing implementation for tool command '${path || definition.name}'`)
-  }
-  registry.set(definition.name, { ...compiled, implementation, layer })
-  return { name: definition.name, definition }
-}
-export const registeredTools = () => [...registry.values()]
-export const resetTools = () => registry.clear()
 export const findCommand = (r: Registered, path: readonly string[]) => r.bodies.get(path.join("/"))
 /** Canonical host input order: inherited globals, positionals, tail, options, then flags. */
 export const canonicalInputFields = (

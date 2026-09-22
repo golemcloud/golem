@@ -84,6 +84,15 @@ try {
 
   const installed = join(temporaryDirectory, "node_modules", "@golemcloud", "effect-golem")
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"))
+  run(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      'import { componentConfiguration } from "@golemcloud/effect-golem/build"; if (typeof componentConfiguration !== "function") throw new Error("missing component builder")',
+    ],
+    { cwd: temporaryDirectory },
+  )
   runNpm(
     [
       "install",

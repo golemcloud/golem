@@ -1,15 +1,7 @@
 /**
  * Rollup config used by the `effect-golem-ts` component template defined
- * in `golem.yaml`. Adapted from the official TS SDK template's
- * `rollup.config.component.mjs`, with these differences:
- *
- *   - Externalizes `@golemcloud/effect-golem` (instead of `@golemcloud/golem-ts-sdk`)
- *     and all `golem:*` / `wasi:*` / `agent-guest` host module IDs. The
- *     resolved values come from the prebuilt base WASM at runtime.
- *   - Does not depend on `golem-typegen`-generated metadata: agents
- *     defined via effect-golem's `defineAgent(...)` are self-describing.
- *   - Bundles `effect` into the user code (the base WASM also embeds its
- *     own copy via `effect-golem`'s bundle).
+ * in `golem.yaml`. SDK capabilities are bundled with the application;
+ * Effect and host modules resolve from the base WASM.
  *
  * Invoked by the build pipeline with these env vars set:
  *   GOLEM_APP_ROOT       — the integration-test/ directory
@@ -21,6 +13,8 @@ import json from "@rollup/plugin-json"
 import nodeResolve from "@rollup/plugin-node-resolve"
 import typescript from "@rollup/plugin-typescript"
 import process from "node:process"
+import { rollup } from "rollup"
+import { componentConfiguration } from "@golemcloud/effect-golem/build"
 
 const componentName = process.env.GOLEM_COMPONENT_NAME
 const golemTemp = process.env.GOLEM_TEMP
@@ -31,18 +25,14 @@ if (!golemTemp) throw new Error("GOLEM_TEMP env var is not set")
 if (!appRootDir) throw new Error("GOLEM_APP_ROOT env var is not set")
 
 const externalPackages = (id) =>
-  id === "@golemcloud/effect-golem" ||
-  id === "@golemcloud/effect-golem/sqlite" ||
-  id === "@golemcloud/effect-golem/postgres" ||
-  id === "@golemcloud/effect-golem/mysql" ||
-  id === "@golemcloud/effect-golem/ignite2" ||
+  id === "node:sqlite" ||
   id === "effect" ||
   id.startsWith("golem:") ||
   id.startsWith("wasi:") ||
   id === "agent-guest"
 
-export default {
-  input: "./src/main.ts",
+export default await componentConfiguration(rollup, {
+  input: process.env.GOLEM_COMPONENT_ENTRY ?? "./src/main.ts",
   output: {
     file: `${golemTemp}/ts-dist/${componentName}/main.js`,
     format: "esm",
@@ -56,4 +46,4 @@ export default {
     json(),
     typescript({ noEmitOnError: true }),
   ],
-}
+})

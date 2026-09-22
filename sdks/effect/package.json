@@ -26,6 +26,7 @@
   "main": "dist/index.mjs",
   "types": "dist/effect-golem.d.ts",
   "exports": {
+    "./build": "./build/component.mjs",
     ".": {
       "types": "./dist/effect-golem.d.ts",
       "import": "./dist/index.mjs"
@@ -108,6 +109,7 @@
     }
   },
   "files": [
+    "build",
     "dist",
     "!dist/**/*.map",
     "wasm",
@@ -126,7 +128,7 @@
     "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
     "compile-agent-template": "node ./scripts/compile-agent-templates.mjs",
     "copy-agent-template": "node ./scripts/copy-agent-template.mjs",
-    "build-agent-template": "npm run build:bundle && npm run generate-agent-template && npm run compile-agent-template && npm run copy-agent-template",
+    "build-agent-template": "npm run build && npm run build:bundle && npm run generate-agent-template && npm run compile-agent-template && npm run copy-agent-template",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
