@@ -88,13 +88,14 @@ final class ToolType private[reflection] (
   val definition: WitTool,
   val implementedBy: ComponentId
 ) {
-  private val graph = SchemaWire.schemaGraphFromWit(definition.schema)
+  private val decoded = SchemaWire.schemaGraphRootsFromWit(definition.schema)
+  private val graph   = decoded.graph
 
   val name: String    = definition.commands.nodes.head.name
   val version: String = definition.version
 
   private def schemaAt(index: Int): SchemaRef =
-    SchemaRef(SchemaWire.schemaGraphFromWit(definition.schema.copy(root = index)))
+    SchemaRef(graph, decoded.at(index))
 
   private def optionSchema(shape: WitOptionShape): SchemaRef = shape match {
     case WitOptionShape.Scalar(index)         => schemaAt(index)
@@ -255,6 +256,8 @@ final class ToolClientDefinition[Client] private (
     else
       try Right(createClient(lookupName))
       catch {
+        case error: golem.runtime.tool.client.ToolRpcConstructionException =>
+          Left(GolemReflectError.ToolRpc(error.failure))
         case NonFatal(error) =>
           Left(GolemReflectError.Discovery(Option(error.getMessage).getOrElse(error.toString)))
       }

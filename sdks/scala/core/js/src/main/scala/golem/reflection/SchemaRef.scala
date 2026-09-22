@@ -190,8 +190,8 @@ private object CanonicalJson {
           "additionalProperties" -> Json.Boolean(false)
         )
       case BinaryType(restrictions) =>
-        def base64UrlLength(bytes: Int): Int = (bytes * 4 + 2) / 3
-        val byteRestrictions                 =
+        def base64UrlLength(bytes: Int): Long = (bytes.toLong * 4 + 2) / 3
+        val byteRestrictions                  =
           restrictions.minBytes.map(value => "minLength" -> number(base64UrlLength(value))).toList ++
             restrictions.maxBytes.map(value => "maxLength" -> number(base64UrlLength(value))).toList
         val mimeType = restrictions.mimeTypes match {

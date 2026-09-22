@@ -10,6 +10,7 @@
 
 package golem.reflection
 
+import golem.config.ConfigOverride
 import golem.schema._
 import golem.schema.SchemaTypeBody._
 import golem.schema.SchemaValue._
@@ -270,7 +271,54 @@ object SchemaRefSpec extends ZIOSpecDefault {
       val secret     = agentType.packConfigJson(List(ReflectedConfigJson(List("apiKey"), Json.String("x"))))
       val invalid    = agentType.packConfigJson(List(ReflectedConfigJson(List("greeting"), Json.Number(BigDecimal(42)))))
       val restricted = agentType.packConfigJson(List(ReflectedConfigJson(List("count"), Json.Number(BigDecimal(4)))))
-      assertTrue(good.isRight, unknown.isLeft, secret.isLeft, invalid.isLeft, restricted.isLeft)
+      val mismatched = agentType.validateConfig(
+        List(
+          ConfigOverride(
+            List("greeting"),
+            TypedSchemaValue(SchemaGraph(ListMap.empty, SchemaType(U32Type())), StringValue("hello"))
+          )
+        )
+      )
+      val equivalent = agentType.validateConfig(
+        List(
+          ConfigOverride(
+            List("greeting"),
+            TypedSchemaValue(
+              SchemaGraph(ListMap("alias" -> SchemaTypeDef(SchemaType(StringType))), SchemaType(RefType("alias"))),
+              StringValue("hello")
+            )
+          )
+        )
+      )
+      assertTrue(
+        good.isRight,
+        unknown.isLeft,
+        secret.isLeft,
+        invalid.isLeft,
+        restricted.isLeft,
+        mismatched.isLeft,
+        equivalent.isRight
+      )
+    },
+    test("binary JSON Schema bounds use wider arithmetic") {
+      val ref = SchemaRef(
+        SchemaGraph(
+          ListMap.empty,
+          SchemaType(BinaryType(BinaryRestrictions(minBytes = Some(Int.MaxValue), maxBytes = Some(Int.MaxValue))))
+        )
+      )
+      val bytes = ref
+        .toJsonSchema()
+        .get("properties")
+        .one
+        .toOption
+        .get
+        .get("bytes")
+        .one
+        .toOption
+        .get
+      val expected = Json.Number(BigDecimal((Int.MaxValue.toLong * 4 + 2) / 3))
+      assertTrue(bytes.get("minLength").one == Right(expected), bytes.get("maxLength").one == Right(expected))
     },
     test("throwing config codecs return schema encode failures") {
       val definition = AgentClientDefinition.full[String, String](

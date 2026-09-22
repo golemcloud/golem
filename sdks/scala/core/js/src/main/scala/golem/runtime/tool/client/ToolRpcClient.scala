@@ -38,7 +38,10 @@ object ToolRpcClient {
 
   /** A transport bound to one remote tool name. */
   def transport(toolName: String): ToolRpcTransport =
-    new JsToolRpcTransport(new ToolHostApi.RawToolRpc(toolName))
+    tryTransport(toolName) match {
+      case Right(transport) => transport
+      case Left(failure)    => throw new ToolRpcConstructionException(failure)
+    }
 
   /**
    * Opens a reflected transport without throwing when the host rejects the
@@ -65,6 +68,9 @@ object ToolRpcClient {
         Left(ToolRpcFailure.ProtocolError(String.valueOf(error.getMessage)))
     }
 }
+
+final class ToolRpcConstructionException(val failure: ToolRpcFailure)
+    extends RuntimeException(failure.toString)
 
 /**
  * The Scala.js implementation of [[ToolRpcTransport]] over the

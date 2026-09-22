@@ -116,7 +116,7 @@ final case class ExtendedToolType(
     val globalFields = effectiveGlobals(commandIndex).flatMap {
       case EffectiveCommandField.OptionField(o) =>
         if (bodyNames.contains(o.long) || o.aliases.exists(bodyNames.contains)) None
-        else Some(CanonicalInputField(o.long, o.aliases, ToolGraphs.optionCollectedGraph(o.shape)))
+        else Some(CanonicalInputField(o.long, o.aliases, ToolGraphs.canonicalOptionGraph(o)))
       case EffectiveCommandField.FlagField(f) =>
         if (bodyNames.contains(f.long) || f.aliases.exists(bodyNames.contains)) None
         else Some(CanonicalInputField(f.long, f.aliases, ToolGraphs.flagGraph(f)))
@@ -125,9 +125,9 @@ final case class ExtendedToolType(
     val bodyFields = body match {
       case None    => Nil
       case Some(b) =>
-        b.positionals.fixed.map(p => CanonicalInputField(p.name, Nil, p.tpe)) ++
+        b.positionals.fixed.map(p => CanonicalInputField(p.name, Nil, ToolGraphs.canonicalPositionalGraph(p))) ++
           b.positionals.tail.map(t => CanonicalInputField(t.name, Nil, ToolGraphs.listWrapperGraph(t.itemType))) ++
-          b.options.map(o => CanonicalInputField(o.long, o.aliases, ToolGraphs.optionCollectedGraph(o.shape))) ++
+          b.options.map(o => CanonicalInputField(o.long, o.aliases, ToolGraphs.canonicalOptionGraph(o))) ++
           b.flags.map(f => CanonicalInputField(f.long, f.aliases, ToolGraphs.flagGraph(f)))
     }
 

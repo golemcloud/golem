@@ -44,6 +44,25 @@ private[golem] object ToolGraphs {
       case ExtendedOptionShape.RepeatableMap(r)  => r.mapType
     }
 
+  def canonicalOptionGraph(option: ExtendedOptionSpec): SchemaGraph = {
+    val collected = optionCollectedGraph(option.shape)
+    option.shape match {
+      case _: ExtendedOptionShape.RepeatableList | _: ExtendedOptionShape.RepeatableMap => collected
+      case _ if option.required || option.default.nonEmpty                              => collected
+      case _                                                                            => optionalCarrierGraph(collected)
+    }
+  }
+
+  def canonicalPositionalGraph(positional: ExtendedPositional): SchemaGraph =
+    if (positional.required || positional.default.nonEmpty) positional.tpe
+    else optionalCarrierGraph(positional.tpe)
+
+  private def optionalCarrierGraph(graph: SchemaGraph): SchemaGraph =
+    RefResolution.resolveRef(graph, graph.root).toOption match {
+      case Some(SchemaType(SchemaTypeBody.OptionType(_), _)) => graph
+      case _                                                 => SchemaGraph(graph.defs, SchemaType(SchemaTypeBody.OptionType(graph.root)))
+    }
+
   /**
    * The full input value type of an option (used for the "no variant in input
    * position" check). A repeatable-list stores its element type; a
@@ -317,16 +336,6 @@ private[golem] object ToolGraphs {
   }
 
   /**
-   * Maximum recursion depth for structural shape comparison; deeper than this
-   * the comparison gives up and reports "not a match". Reporting "not a match"
-   * on exhaustion is the safe direction: a non-match between two same-named
-   * declarations surfaces as an explicit
-   * [[ToolBuildError.InheritedGlobalConflict]] rather than silently dropping a
-   * local parameter that might actually differ.
-   */
-  private val ShapeMatchMaxDepth: Int = 32
-
-  /**
    * Whether two canonical input value graphs describe the same value *shape*,
    * ignoring metadata and validation restrictions (docs, numeric/text bounds,
    * etc.) but honoring structure and exact primitive representation. References
@@ -335,18 +344,16 @@ private[golem] object ToolGraphs {
    * Recursive (cyclic) graphs are compared coinductively: when the same pair of
    * referenced definitions is reached again along a path, the two shapes are
    * assumed to match (the cycle has already been established structurally). The
-   * per-pair memo is what guarantees termination; the depth counter is a
-   * defensive secondary guard for pathologically deep finite types.
+   * per-pair memo is what guarantees termination.
    */
   def schemaShapesMatch(a: SchemaGraph, b: SchemaGraph): Boolean =
-    schemaTypesMatch(a, a.root, b, b.root, ShapeMatchMaxDepth, mutable.Set.empty)
+    schemaTypesMatch(a, a.root, b, b.root, mutable.Set.empty)
 
   private def schemaTypesMatch(
     aGraph: SchemaGraph,
     aTy: SchemaType,
     bGraph: SchemaGraph,
     bTy: SchemaType,
-    depth: Int,
     visiting: mutable.Set[(String, String)]
   ): Boolean = {
     // Break recursion at reference boundaries before resolving: revisiting the
@@ -364,12 +371,10 @@ private[golem] object ToolGraphs {
     resolved match {
       case None         => false
       case Some((a, b)) =>
-        if (depth == 0) return false
-        val next = depth - 1
         import SchemaTypeBody._
 
         def rec(x: SchemaType, y: SchemaType): Boolean =
-          schemaTypesMatch(aGraph, x, bGraph, y, next, visiting)
+          schemaTypesMatch(aGraph, x, bGraph, y, visiting)
 
         def optRec(x: Option[SchemaType], y: Option[SchemaType]): Boolean =
           (x, y) match {

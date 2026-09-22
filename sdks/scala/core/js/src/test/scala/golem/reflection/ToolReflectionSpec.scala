@@ -109,6 +109,19 @@ object ToolReflectionSpec extends ZIOSpecDefault {
         partial.client("deployed-tool") == Right("deployed-tool")
       )
     },
+    test("generated tool transport creation reports an invalid target fallibly") {
+      val definition = ToolClientDefinition.named("missing-tool")(
+        golem.runtime.tool.client.ToolRpcClient.transport
+      )
+      assertTrue(definition.client.left.toOption.exists(_.isInstanceOf[GolemReflectError.ToolRpc]))
+    },
+    test("caller-owned tool construction retains the structured RPC failure") {
+      val failure = ToolRpcFailure.Denied("not authorized")
+      val definition = ToolClientDefinition.unnamed[String](_ =>
+        throw new golem.runtime.tool.client.ToolRpcConstructionException(failure)
+      )
+      assertTrue(definition.client("target") == Left(GolemReflectError.ToolRpc(failure)))
+    },
     test("optional fields use the canonical option carrier") {
       val original = sample()
       val nodes    = original.definition.commands.nodes

@@ -16,7 +16,6 @@ import golem.host.js.schema.{
   JsInputSchema,
   JsNamedField,
   JsOutputSchema,
-  JsSchemaGraph,
   JsSchemaValueTree,
   JsTypedSchemaValue,
   JsUuid => JsSchemaUuid
@@ -29,6 +28,7 @@ import golem.schema.SchemaTypeBody.RecordType
 import golem.schema.validation.ValueValidation
 import golem.schema.wire.SchemaWire
 import golem.config.ConfigOverride
+import golem.tool.{ToolGraphs, ToolRpcFailure}
 import golem.{Datetime, FutureInterop, Uuid}
 import zio.blocks.schema.json.Json
 
@@ -125,6 +125,9 @@ object GolemReflectError {
   final case class SchemaEncode(message: String) extends GolemReflectError
   final case class SchemaDecode(message: String) extends GolemReflectError
   final case class Validation(message: String)   extends GolemReflectError
+  final case class ToolRpc(error: ToolRpcFailure) extends GolemReflectError {
+    val message: String = error.toString
+  }
   final case class Remote(error: AgentRpcError)  extends GolemReflectError {
     val message: String = error.message
   }
@@ -214,9 +217,12 @@ final class AgentType private[reflection] (
   def validateConfig(overrides: List[ConfigOverride]): Either[GolemReflectError, List[ConfigOverride]] =
     ReflectionInternals.sequence(overrides.map { entry =>
       configDeclaration(entry.path).flatMap { declaration =>
-        validate(declaration.schema, entry.value.value).map { _ =>
-          ConfigOverride(entry.path, TypedSchemaValue(declaration.schema.graph, entry.value.value))
-        }
+        if (!ToolGraphs.schemaShapesMatch(entry.value.graph, declaration.schema.graph))
+          Left(GolemReflectError.Validation(s"Incompatible config schema at '${entry.path.mkString(".")}'"))
+        else
+          validate(declaration.schema, entry.value.value).map { _ =>
+            ConfigOverride(entry.path, TypedSchemaValue(declaration.schema.graph, entry.value.value))
+          }
       }
     })
 
@@ -269,14 +275,14 @@ object Reflection {
     try {
       val raw     = registered.agentType
       val graph   = raw.schema
-      val decoded = SchemaWire.schemaGraphFromWit(SchemaWireInterop.graphFromJs(graph))
+      val decoded = SchemaWire.schemaGraphRootsFromWit(SchemaWireInterop.graphFromJs(graph))
       val methods = raw.methods.toList.map { method =>
         AgentMethod(
           method.name,
           method.description,
           method.promptHint.toOption,
-          inputRef(graph, decoded, method.inputSchema),
-          outputRef(graph, decoded, method.outputSchema)
+          inputRef(decoded, method.inputSchema),
+          outputRef(decoded, method.outputSchema)
         )
       }
       val mode = raw.mode match {
@@ -291,35 +297,36 @@ object Reflection {
           raw.sourceLanguage,
           mode,
           ComponentId.fromJs(registered.implementedBy),
-          inputRef(graph, decoded, raw.constructor.inputSchema),
+          inputRef(decoded, raw.constructor.inputSchema),
           methods,
           raw.config.toList.map { declaration =>
-            val rooted = SchemaWire
-              .schemaGraphFromWit(SchemaWireInterop.graphFromJs(graph).copy(root = declaration.valueType))
-            ReflectedConfigDeclaration(declaration.path.toList, declaration.source, SchemaRef(rooted))
+            ReflectedConfigDeclaration(
+              declaration.path.toList,
+              declaration.source,
+              SchemaRef(decoded.graph, decoded.at(declaration.valueType))
+            )
           }
         )
       )
     } catch { case NonFatal(error) => Left(GolemReflectError.SchemaDecode(error.getMessage)) }
 
-  private def inputRef(graph: JsSchemaGraph, decoded: SchemaGraph, input: JsInputSchema): SchemaRef = {
+  private def inputRef(decoded: SchemaWire.DecodedSchemaGraph, input: JsInputSchema): SchemaRef = {
     if (input.tag != "parameters") throw new IllegalArgumentException(s"unknown input schema '${input.tag}'")
     val entries = input.asInstanceOf[js.Dynamic].selectDynamic("val").asInstanceOf[js.Array[JsNamedField]].toList
     val fields  = entries.collect {
       case entry if entry.source.tag == "user-supplied" =>
-        val root = SchemaWire.schemaGraphFromWit(SchemaWireInterop.graphFromJs(graph).copy(root = entry.schema)).root
+        val root = decoded.at(entry.schema)
         NamedFieldType(entry.name, root, SchemaWireInterop.metadataFromJs(entry.metadata))
     }
-    SchemaRef(SchemaGraph(decoded.defs, SchemaType(RecordType(fields))))
+    SchemaRef(SchemaGraph(decoded.graph.defs, SchemaType(RecordType(fields))))
   }
 
-  private def outputRef(graph: JsSchemaGraph, decoded: SchemaGraph, output: JsOutputSchema): Option[SchemaRef] =
+  private def outputRef(decoded: SchemaWire.DecodedSchemaGraph, output: JsOutputSchema): Option[SchemaRef] =
     output.tag match {
       case "unit"   => None
       case "single" =>
-        val root   = output.asInstanceOf[js.Dynamic].selectDynamic("val").asInstanceOf[Int]
-        val rooted = SchemaWire.schemaGraphFromWit(SchemaWireInterop.graphFromJs(graph).copy(root = root)).root
-        Some(SchemaRef(decoded, rooted))
+        val root = output.asInstanceOf[js.Dynamic].selectDynamic("val").asInstanceOf[Int]
+        Some(SchemaRef(decoded.graph, decoded.at(root)))
       case other => throw new IllegalArgumentException(s"unknown output schema '$other'")
     }
 }
