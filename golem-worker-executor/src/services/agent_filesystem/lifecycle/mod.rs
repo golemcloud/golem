@@ -39,6 +39,7 @@ use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::component::{AgentFilePermissions, InitialAgentFile};
 use golem_common::model::environment::EnvironmentId;
+use golem_service_base::storage::blob::agent_path_segment;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -499,7 +500,7 @@ async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
     let name = SandboxFilesystemName::new(
         agent.environment_id.to_string(),
         agent.agent_id.component_id.to_string(),
-        agent.agent_id.agent_name_encoded(),
+        agent_path_segment(&agent.agent_id),
     )
     .map_err(|source| CreateFailure { source })?;
     let sandbox = Adapter::create_fresh(provisioning, name, limits.sandbox())

@@ -29,6 +29,8 @@ use golem_common::model::worker::{
 use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex, RetryConfig};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
+#[cfg(target_os = "linux")]
+use golem_service_base::storage::blob::agent_path_segment;
 use golem_test_framework::dsl::{
     TestDsl, count_agent_invocation_pair_since, drain_connection, stderr_events, stdout_events,
 };
@@ -874,7 +876,7 @@ async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
     let runtime_path = root
         .join(context.default_environment_id.to_string())
         .join(component.id.to_string())
-        .join(worker_id.agent_name_encoded());
+        .join(agent_path_segment(&worker_id));
     assert!(runtime_path.exists());
 
     quota.set_limit(4096).await?;
@@ -1139,7 +1141,7 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     let victim_path = root
         .join(context.default_environment_id.to_string())
         .join(component.id.to_string())
-        .join(victim_worker.agent_name_encoded());
+        .join(agent_path_segment(&victim_worker));
     assert!(
         victim_path.is_dir(),
         "managed victim did not use the XFS root"
@@ -1166,7 +1168,7 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     let trigger_path = root
         .join(context.default_environment_id.to_string())
         .join(component.id.to_string())
-        .join(trigger_worker.agent_name_encoded());
+        .join(agent_path_segment(&trigger_worker));
     assert!(
         trigger_path.is_dir(),
         "managed trigger did not use the XFS root"

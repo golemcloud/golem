@@ -281,8 +281,10 @@ impl AgentId {
         format!("urn:worker:{}/{}", self.component_id, self.agent_id)
     }
 
-    /// Returns the agent name percent-encoded so it is safe to use as a
-    /// single filesystem path component.
+    /// Gives the agent name with each character that is not an unreserved URL character
+    /// percent-encoded, so that the name is one segment of a URL path.
+    ///
+    /// The result can be longer than a file name can be, so it is not a directory name.
     pub fn agent_name_encoded(&self) -> String {
         urlencoding::encode(&self.agent_id).into_owned()
     }
