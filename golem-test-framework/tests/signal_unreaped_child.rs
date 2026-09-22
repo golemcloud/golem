@@ -22,10 +22,14 @@
 //! process to signal, and unit tests must never spawn external processes (AGENTS.md);
 //! `cargo make unit-tests` runs `--workspace --lib` and would otherwise pick it up.
 //!
-//! Everything here is `#[cfg(unix)]`, because `signal_unreaped_child` is: pausing an executor is
-//! `SIGSTOP`, which Windows does not have. On Windows this file compiles to nothing, and the
-//! `SpawnedWorkerExecutor::pause`/`resume` that use it panic with that as the reason - so the
-//! sharding tests that freeze an executor are unix-only, not silently weaker elsewhere.
+//! Everything here is `#[cfg(unix)]`, because `signal_unreaped_child` is. Windows has no
+//! `SIGSTOP`/`SIGCONT`, and neither `std` nor `libc`'s Windows shim can suspend a running process
+//! and resume it in place - so the stalled-executor scenario cannot be simulated there at all.
+//! The gate is for the compiler rather than the test runner: `libc::SIGSTOP` and `libc::kill` do
+//! not exist on Windows, so without it the daily Windows job, which only builds, would fail to
+//! compile. It runs no tests, and the sharding suite that uses the pause is Linux-only in CI, so
+//! the gate costs no coverage. `SpawnedWorkerExecutor::pause`/`resume` keep `#[cfg(not(unix))]`
+//! arms that panic naming the platform, so running the suite there fails with the real reason.
 
 test_r::enable!();
 
