@@ -853,7 +853,7 @@ const collectBindableParams = (
   for (const [name, p] of Object.entries(params)) {
     if (isMultimodal(p) || isElementSpec(p)) continue
     // Only Schema.Top values can be string-bindable.
-    if (p && typeof p === "object" && "ast" in (p as object)) {
+    if (Schema.isSchema(p)) {
       if (isBindable(p as Schema.Top)) {
         out.add(name)
       }

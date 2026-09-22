@@ -77,9 +77,9 @@ export interface CompiledConfig {
 const redactedInner = (schema: Schema.Top): Schema.Top | undefined => {
   const ast = schema.ast
   if (ast._tag !== "Declaration") return undefined
-  const tag = (ast.annotations as { typeConstructor?: { _tag?: string } } | undefined)
-    ?.typeConstructor?._tag
-  return tag === "effect/Redacted" && ast.typeParameters[0] !== undefined
+  const id = (ast.annotations as { representation?: { id?: string } } | undefined)?.representation
+    ?.id
+  return id === "effect/schema/Redacted" && ast.typeParameters[0] !== undefined
     ? (Schema.make(ast.typeParameters[0]) as Schema.Top)
     : undefined
 }
