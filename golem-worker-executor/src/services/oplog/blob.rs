@@ -21,6 +21,7 @@ use crate::services::oplog::{
 };
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
+use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -28,12 +29,66 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
-    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult, PutIfAbsent,
+    agent_path_segment, is_agent_path_segment,
 };
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// The name of the blob that holds the agent name in the directory of an archive.
+///
+/// The name is not a number, so it is not the name of a chunk.
+const AGENT_ID_BLOB: &str = "agent_id";
+
+/// Gives the directory of the archive of an agent, which is the path segment of the agent.
+///
+/// The agent name can hold `/`, `\` and `.` segments, and it can be longer than a file name. The
+/// path segment holds none of them, and the hash in it makes the directory of each agent its own.
+fn archive_directory(agent_id: &AgentId) -> PathBuf {
+    PathBuf::from(agent_path_segment(agent_id))
+}
+
+/// Gives the path of the blob that holds the agent name in the directory of an archive.
+fn agent_id_blob_path(directory: &Path) -> PathBuf {
+    directory.join(AGENT_ID_BLOB)
+}
+
+/// Gives the path of the chunk that ends at the index, in the directory of an archive.
+fn chunk_path(directory: &Path, idx: OplogIndex) -> PathBuf {
+    directory.join(idx.to_string())
+}
+
+/// Reads the agent name that the directory of an archive holds.
+///
+/// Gives `None` when the directory holds no agent id blob. A process that stops after it makes
+/// the directory and before it writes the agent id leaves such a directory, and that directory
+/// holds no chunk. Content that is not UTF-8 gives an error.
+async fn read_agent_name(
+    blob_storage: &(dyn BlobStorage + Send + Sync),
+    namespace: BlobStorageNamespace,
+    directory: &Path,
+) -> Result<Option<String>, WorkerExecutorError> {
+    blob_storage
+        .with("blob_oplog", "scan_for_component")
+        .get_raw(namespace, &agent_id_blob_path(directory))
+        .await
+        .map_err(|err| {
+            WorkerExecutorError::unknown(format!(
+                "Failed to read the agent id of compressed oplog directory {directory:?} in blob storage: {err}"
+            ))
+        })?
+        .map(|bytes| {
+            String::from_utf8(bytes).map_err(|err| {
+                WorkerExecutorError::unknown(format!(
+                    "The agent id of compressed oplog directory {directory:?} is not UTF-8: {err}"
+                ))
+            })
+        })
+        .transpose()
+}
 
 /// An oplog archive implementation that uses the configured blob storage to store compressed
 /// chunks of the oplog.
@@ -97,7 +152,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
                     agent_mode,
                     level: self.level,
                 },
-                Path::new(&owned_agent_id.agent_name()),
+                &archive_directory(&owned_agent_id.agent_id),
             )
             .await
             .unwrap_or_else(|err| {
@@ -120,25 +175,13 @@ impl OplogArchiveService for BlobOplogArchiveService {
     }
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
-        self.blob_storage
-            .with("blob_oplog", "exists")
-            .exists(
-                BlobStorageNamespace::CompressedOplog {
-                    environment_id: owned_agent_id.environment_id(),
-                    component_id: owned_agent_id.component_id(),
-                    agent_mode,
-                    level: self.level,
-                },
-                Path::new(&owned_agent_id.agent_name()),
-            )
-            .await
-            .map(|exists| exists == ExistsResult::Directory)
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to check existence of compressed oplog for worker {} in blob storage: {err}",
-                    owned_agent_id.agent_id
-                )
-            })
+        BlobOplogArchive::exists(
+            owned_agent_id.clone(),
+            agent_mode,
+            self.blob_storage.clone(),
+            self.level,
+        )
+        .await
     }
 
     async fn scan_for_component(
@@ -160,44 +203,52 @@ impl OplogArchiveService for BlobOplogArchiveService {
         }
 
         let blob_storage = self.blob_storage.with("blob_oplog", "scan_for_component");
+        let namespace = BlobStorageNamespace::CompressedOplog {
+            environment_id: *environment_id,
+            component_id: *component_id,
+            agent_mode: active_mode,
+            level: self.level,
+        };
         let owned_agent_ids = if blob_storage.exists(
-            BlobStorageNamespace::CompressedOplog {
-                environment_id: *environment_id,
-                component_id: *component_id,
-                agent_mode: active_mode,
-                level: self.level,
-            },
+            namespace.clone(),
             Path::new(""),
         ).await.map_err(|err| {
             WorkerExecutorError::unknown(format!("Failed to check if compressed oplog root for component {component_id} exists in blob storage: {err}"))
         })? == ExistsResult::Directory
         {
             let paths = blob_storage
-                .list_dir(
-                BlobStorageNamespace::CompressedOplog {
-                environment_id: *environment_id,
-                component_id: *component_id,
-                agent_mode: active_mode,
-                level: self.level,
-            },
-            Path::new(""),
-        ).await.map_err(|err| {
-            WorkerExecutorError::unknown(format!("Failed to list entries of compressed oplog for component {component_id} in blob storage: {err}"))
-        })?;
+                .list_dir(namespace.clone(), Path::new(""))
+                .await
+                .map_err(|err| {
+                    WorkerExecutorError::unknown(format!("Failed to list entries of compressed oplog for component {component_id} in blob storage: {err}"))
+                })?;
 
-            paths
-                .into_iter()
-                .map(|path| {
-                    let agent_name = path.file_name().unwrap().to_str().unwrap();
-                    OwnedAgentId {
-                        environment_id: *environment_id,
-                        agent_id: AgentId {
-                            component_id: *component_id,
-                            agent_id: agent_name.to_string(),
-                        },
-                    }
-                })
-                .collect()
+            // A name that does not have the form of an agent path segment is a directory of an
+            // earlier layout, which used the agent name. The name rules can refuse a path below
+            // such a directory, so the scan makes no request there. The reads go one after the
+            // other, as the existence checks of the lower layers in the multi-layer scan do.
+            futures::stream::iter(
+                paths
+                    .into_iter()
+                    .filter(|path| path.to_str().is_some_and(is_agent_path_segment)),
+            )
+            .then(|directory| {
+                let namespace = namespace.clone();
+                async move {
+                    read_agent_name(self.blob_storage.as_ref(), namespace, &directory).await
+                }
+            })
+            .try_filter_map(|agent_name| async move {
+                Ok(agent_name.map(|agent_name| OwnedAgentId {
+                    environment_id: *environment_id,
+                    agent_id: AgentId {
+                        component_id: *component_id,
+                        agent_id: agent_name,
+                    },
+                }))
+            })
+            .try_collect()
+            .await?
         } else {
             Vec::new()
         };
@@ -317,22 +368,22 @@ impl BlobOplogArchive {
     }
 
     async fn ensure_is_created(&self) {
-        // `create_dir` is idempotent in every blob storage backend, so racing creators are
+        // `create_dir` is idempotent in every blob storage backend, and `put_raw_if_absent` of
+        // the agent id gives `AlreadyExists` to the second creator, so racing creators are
         // harmless.
         if self.created.load(Ordering::Acquire) {
             return;
         }
+        let namespace = BlobStorageNamespace::CompressedOplog {
+            environment_id: self.owned_agent_id.environment_id(),
+            component_id: self.owned_agent_id.component_id(),
+            agent_mode: self.agent_mode,
+            level: self.level,
+        };
+        let directory = archive_directory(&self.owned_agent_id.agent_id);
         self.blob_storage
             .with("blob_oplog", "new")
-            .create_dir(
-                BlobStorageNamespace::CompressedOplog {
-                    environment_id: self.owned_agent_id.environment_id(),
-                    component_id: self.owned_agent_id.component_id(),
-                    agent_mode: self.agent_mode,
-                    level: self.level,
-                },
-                Path::new(&self.owned_agent_id.agent_name()),
-            )
+            .create_dir(namespace.clone(), &directory)
             .await
             .unwrap_or_else(|err| {
                 panic!(
@@ -341,9 +392,34 @@ impl BlobOplogArchive {
                 )
             });
 
+        // The agent id comes after the directory and before the first chunk. So a directory
+        // without the agent id holds no chunk, and `exists` and `scan_for_component` do not see
+        // it. On the filesystem backend `put_raw_if_absent` writes the whole blob or no blob,
+        // also when the process stops. Both results are a success.
+        let _: PutIfAbsent = self
+            .blob_storage
+            .put_raw_if_absent(
+                "blob_oplog",
+                "new",
+                namespace,
+                &agent_id_blob_path(&directory),
+                self.owned_agent_id.agent_id.agent_id.as_bytes(),
+            )
+            .await
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to store the agent id of the compressed oplog for worker {} in blob storage: {err}",
+                    self.owned_agent_id.agent_id
+                )
+            });
+
         self.created.store(true, Ordering::Release);
     }
 
+    /// Tells whether the archive of the agent exists.
+    ///
+    /// The archive exists when its directory holds the agent id blob. `ensure_is_created` writes
+    /// that blob before the first chunk, so a directory without it holds no chunk.
     pub(crate) async fn exists(
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
@@ -359,10 +435,10 @@ impl BlobOplogArchive {
                     agent_mode,
                     level,
                 },
-                Path::new(&owned_agent_id.agent_name()),
+                &agent_id_blob_path(&archive_directory(&owned_agent_id.agent_id)),
             )
             .await
-            .map(|exists| exists == ExistsResult::Directory)
+            .map(|exists| exists == ExistsResult::File)
             .unwrap_or_else(|err| {
                 panic!(
                     "failed to check existence of compressed oplog for worker {} in blob storage: {err}",
@@ -386,7 +462,7 @@ impl BlobOplogArchive {
                     agent_mode,
                     level,
                 },
-                Path::new(&owned_agent_id.agent_name()),
+                &archive_directory(&owned_agent_id.agent_id),
             )
             .await
             .unwrap_or_else(|err| {
@@ -398,6 +474,8 @@ impl BlobOplogArchive {
 
         paths
             .into_iter()
+            // The agent id blob is not a chunk, and its name is not an index.
+            .filter(|path| path.file_name() != Some(OsStr::new(AGENT_ID_BLOB)))
             .map(|path| {
                 let idx = Self::path_to_oplog_index(&path);
                 (idx, path)
@@ -414,10 +492,7 @@ impl BlobOplogArchive {
     }
 
     pub(crate) fn oplog_index_to_path(&self, idx: OplogIndex) -> PathBuf {
-        let mut path = PathBuf::new();
-        path.push(self.owned_agent_id.agent_name());
-        path.push(idx.to_string());
-        path
+        chunk_path(&archive_directory(&self.owned_agent_id.agent_id), idx)
     }
 
     // Fetch a range of entries from the storage. At most one chunk of data will be returned,
@@ -680,14 +755,10 @@ impl OplogArchive for BlobOplogArchive {
         };
 
         let drop_count = idx_to_drop.len();
+        let directory = archive_directory(&self.owned_agent_id.agent_id);
         let to_drop = idx_to_drop
             .iter()
-            .map(|idx| {
-                let mut path = PathBuf::new();
-                path.push(self.owned_agent_id.agent_name());
-                path.push(idx.to_string());
-                path
-            })
+            .map(|idx| chunk_path(&directory, *idx))
             .collect::<Vec<_>>();
 
         let ns = BlobStorageNamespace::CompressedOplog {
@@ -719,7 +790,7 @@ impl OplogArchive for BlobOplogArchive {
                     agent_mode: self.agent_mode,
                     level: self.level,
                 },
-                Path::new(&self.owned_agent_id.agent_name())).await.unwrap_or_else(|err| {
+                &directory).await.unwrap_or_else(|err| {
                     panic!(
                         "failed to drop compressed oplog directory for worker {} in blob storage: {err}",
                         self.owned_agent_id.agent_id
@@ -740,3 +811,6 @@ impl OplogArchive for BlobOplogArchive {
         self.current_oplog_index().await
     }
 }
+
+#[cfg(test)]
+mod tests;
