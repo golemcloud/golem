@@ -12,12 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Save, restore and forget of a repository on the in-memory blob storage.
+//! Save, restore, forget and prune of a repository on the in-memory blob storage.
+//!
+//! The tests with a held call give each call a short deadline. Each of them keeps the gate of the
+//! held calls closed until the storage is dropped. So the threads of rustic stop because of the
+//! deadline, and not because the gate opens.
 
-use super::{OperationPhase, Repository, RepositoryKey, STORAGE_CALL_DEADLINE, repository_options};
-use crate::filesystem_snapshot::contract_tests::fixture::{Scratch, fixture, listing, write_tree};
+use super::backend::BlobBackend;
+use super::holding::{holding_storage, reached_deadline};
+use super::{
+    OperationPhase, Repository, RepositoryKey, STORAGE_CALL_DEADLINE, open_existing,
+    repository_options, run_blocking,
+};
+use crate::filesystem_snapshot::contract_tests::fixture::{
+    Scratch, Spec, fixture, listing, write_tree,
+};
 use crate::filesystem_snapshot::contract_tests::new_scope;
 use crate::filesystem_snapshot::{SnapshotName, SnapshotScope};
+use anyhow::Context;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -27,13 +39,24 @@ use golem_service_base::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent,
 };
 use pretty_assertions::assert_eq;
+use rustic_core::repofile::{BlobType, IndexFile};
+use rustic_core::{OpenStatus, PruneOptions, Repository as RusticRepository, RusticResult};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::test;
-use tokio::sync::watch;
+use tokio::runtime::Handle;
+use tokio::sync::{oneshot, watch};
+use tokio::time::error::Elapsed;
+
+/// The deadline of each call in the tests that hold a call.
+const SHORT_DEADLINE: Duration = Duration::from_millis(200);
+
+/// The longest time that a test waits for an operation, or for the threads of an operation to
+/// stop.
+const LIMIT: Duration = Duration::from_secs(10);
 
 fn name(text: &str) -> SnapshotName {
     SnapshotName::new(text).unwrap()
@@ -65,6 +88,78 @@ async fn stored_paths(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> V
         .collect::<Vec<_>>();
     paths.sort();
     paths
+}
+
+/// Gives the id in hex of each pack of data blobs in the repository of the scope.
+async fn data_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -> Box<[Box<str>]> {
+    with_existing_repository(
+        storage.clone(),
+        scope,
+        STORAGE_CALL_DEADLINE,
+        |repository| {
+            let indexes = repository
+                .stream_files::<IndexFile>()?
+                .collect::<RusticResult<Vec<_>>>()?;
+            Ok(indexes
+                .into_iter()
+                .flat_map(|(_, index)| index.packs)
+                .filter(|pack| pack.blob_type() == BlobType::Data)
+                .map(|pack| Box::from(pack.id.to_hex().as_str()))
+                .collect())
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// Prunes the repository of the scope with the options, on a blocking thread. Each call on the
+/// storage waits for at most `deadline`.
+async fn prune(
+    storage: Arc<dyn BlobStorage>,
+    scope: &SnapshotScope,
+    deadline: Duration,
+    options: PruneOptions,
+) -> anyhow::Result<()> {
+    with_existing_repository(storage, scope, deadline, move |repository| {
+        let plan = repository.prune_plan(&options)?;
+        Ok(repository.prune(&options, plan)?)
+    })
+    .await
+}
+
+/// Opens the repository of the scope over the storage, and does the work with it on a blocking
+/// thread. Each call on the storage waits for at most `deadline`.
+async fn with_existing_repository<R: Send + 'static>(
+    storage: Arc<dyn BlobStorage>,
+    scope: &SnapshotScope,
+    deadline: Duration,
+    work: impl FnOnce(&RusticRepository<OpenStatus>) -> anyhow::Result<R> + Send + 'static,
+) -> anyhow::Result<R> {
+    let backend = Arc::new(BlobBackend::new(
+        storage,
+        scope.0.clone(),
+        Handle::current(),
+        deadline,
+    ));
+    run_blocking(move || {
+        let repository = open_existing(backend, &key())?.context("the scope has no repository")?;
+        work(&repository)
+    })
+    .await
+}
+
+/// Tells whether an operation ended within the limit with the error of a call that got no answer
+/// within its deadline. `None` means that the operation did not end within the limit.
+fn failed_at_deadline<T>(outcome: Result<anyhow::Result<T>, Elapsed>) -> Option<bool> {
+    outcome
+        .ok()
+        .map(|result| result.is_err_and(|error| reached_deadline(error.as_ref())))
+}
+
+/// Tells whether the storage is dropped within the limit. The storage is dropped only when each
+/// thread that held a copy of it has ended.
+async fn dropped_within_limit(dropped: oneshot::Receiver<()>) -> bool {
+    tokio::time::timeout(LIMIT, dropped).await.is_ok()
 }
 
 #[test]
@@ -506,4 +601,109 @@ impl BlobStorage for OverlapCountingStorage {
             .exists(target_label, op_label, namespace, path)
             .await
     }
+}
+
+#[test]
+async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_threads_stop() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    let (storage, _gate, dropped) = holding_storage(inner.clone(), |op_label, path| {
+        op_label == "write" && path.starts_with("data")
+    });
+    let repository = Repository::new(storage, scope.clone(), key(), SHORT_DEADLINE);
+    let tree = fixture_tree();
+
+    let saved = tokio::time::timeout(LIMIT, repository.save(&name("first"), tree.path())).await;
+    drop(repository);
+    let stopped = dropped_within_limit(dropped).await;
+    let snapshots = stored_paths(&inner, &scope)
+        .await
+        .into_iter()
+        .filter(|path| path.starts_with("snapshots/"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (failed_at_deadline(saved), snapshots, stopped),
+        (Some(true), Vec::<String>::new(), true)
+    );
+}
+
+#[test]
+async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threads() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    let tree = fixture_tree();
+    repository(&inner, &scope)
+        .save(&name("first"), tree.path())
+        .await
+        .unwrap();
+    let data_packs = data_packs(&inner, &scope).await;
+    let has_data_packs = !data_packs.is_empty();
+    let (storage, _gate, dropped) = holding_storage(inner, move |op_label, path| {
+        op_label == "read_range"
+            && path
+                .file_name()
+                .and_then(|file| file.to_str())
+                .is_some_and(|file| data_packs.iter().any(|pack| **pack == *file))
+    });
+    let repository = Repository::new(storage, scope, key(), SHORT_DEADLINE);
+    let into = Scratch::new();
+    let directories = fixture()
+        .into_iter()
+        .filter(|(_, spec)| matches!(spec, Spec::Directory { .. }))
+        .map(|(path, _)| path)
+        .collect::<Vec<_>>();
+
+    let restored =
+        tokio::time::timeout(LIMIT, repository.restore(&name("first"), into.path(), None)).await;
+    drop(repository);
+    let stopped = dropped_within_limit(dropped).await;
+    // The plan phase of a restore makes each directory before the content phase reads data.
+    let made = directories
+        .iter()
+        .map(|path| (*path, into.path().join(path).is_dir()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (
+            has_data_packs,
+            failed_at_deadline(restored),
+            stopped,
+            directories.is_empty(),
+            made
+        ),
+        (
+            true,
+            Some(true),
+            true,
+            false,
+            directories
+                .iter()
+                .map(|path| (*path, true))
+                .collect::<Vec<_>>()
+        )
+    );
+}
+
+#[test]
+async fn a_prune_whose_pack_reads_get_no_answer_fails_and_stops_its_threads() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    let tree = fixture_tree();
+    repository(&inner, &scope)
+        .save(&name("first"), tree.path())
+        .await
+        .unwrap();
+    let (storage, _gate, dropped) = holding_storage(inner, |op_label, path| {
+        op_label == "read_range" && path.starts_with("data")
+    });
+
+    let pruned = tokio::time::timeout(
+        LIMIT,
+        prune(storage, &scope, SHORT_DEADLINE, PruneOptions::default()),
+    )
+    .await;
+    let stopped = dropped_within_limit(dropped).await;
+
+    assert_eq!((failed_at_deadline(pruned), stopped), (Some(true), true));
 }
