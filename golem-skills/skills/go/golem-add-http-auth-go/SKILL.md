@@ -40,12 +40,10 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 
 var (
 	// GET /api/{name}/public  — open
-	Public = golem.DefineMethod[ID, golem.Unit, string]("public",
-		golem.HTTP(golem.GET("/public")))
+	Public = Agent.Method[golem.Unit, string]("public", golem.HTTP(golem.GET("/public")))
 
 	// GET /api/{name}/private  — requires auth
-	Private = golem.DefineMethod[ID, golem.Unit, string]("private",
-		golem.HTTP(golem.GET("/private", golem.EndpointAuth(true))))
+	Private = Agent.Method[golem.Unit, string]("private", golem.HTTP(golem.GET("/private", golem.EndpointAuth(true))))
 )
 ```
 
@@ -61,12 +59,10 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 
 var (
 	// GET /api/{name}/health  — override to open
-	Health = golem.DefineMethod[ID, golem.Unit, string]("health",
-		golem.HTTP(golem.GET("/health", golem.EndpointAuth(false))))
+	Health = Agent.Method[golem.Unit, string]("health", golem.HTTP(golem.GET("/health", golem.EndpointAuth(false))))
 
 	// GET /api/{name}/data  — inherits the mount default (auth required)
-	GetData = golem.DefineMethod[ID, golem.Unit, Data]("getData",
-		golem.HTTP(golem.GET("/data")))
+	GetData = Agent.Method[golem.Unit, Data]("getData", golem.HTTP(golem.GET("/data")))
 )
 ```
 

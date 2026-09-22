@@ -10,12 +10,10 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 	Name:        "SnapAgent",
 	Description: "Exercises the Go SDK custom snapshot (Snapshotter)",
 	Mode:        golem.Durable,
-	Snapshot: golem.SnapshotEveryN(2),
+	Snapshot:    golem.SnapshotEveryN(2),
 })
 
 var (
-	Bump = golem.DefineMethod[Id, golem.Unit, int64]("bump",
-		golem.Desc("Increase the counter and return it"))
-	Value = golem.DefineMethod[Id, golem.Unit, int64]("value",
-		golem.Desc("Return the current counter"))
+	Bump  = Agent.Method[golem.Unit, int64]("bump", golem.Desc("Increase the counter and return it"))
+	Value = Agent.Method[golem.Unit, int64]("value", golem.Desc("Return the current counter"))
 )

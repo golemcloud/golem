@@ -7,16 +7,16 @@ A Go agent's configuration is a single **config struct** attached to the agent's
 Two things change versus a plain agent:
 
 - define with `golem.DefineConfiguredAgent[ID, Cfg]` instead of `golem.DefineAgent[ID]`,
-- implement with `golem.ImplementConfigured` (its constructor receives an `*golem.InitContext[ID, state, Cfg]`),
+- implement with `Agent.ImplementConfigured` (its constructor receives an `*golem.InitContext[ID, state, Cfg]`),
 
-then read the config with `golem.Config(Agent, ctx)` inside a method, or `ctx.Config()` inside the constructor.
+then read the config with `ctx.Config(Agent)` inside a method, or `ctx.Config()` inside the constructor.
 
 ## Steps
 
 1. **Declare the config struct** — one exported field per config key.
 2. **Attach it** with `golem.DefineConfiguredAgent[ID, Cfg]` in the definition.
-3. **Implement** with `golem.ImplementConfigured`; read config from the `InitContext` in the constructor.
-4. **Read at method time** with `golem.Config(Agent, ctx)`.
+3. **Implement** with `Agent.ImplementConfigured`; read config from the `InitContext` in the constructor.
+4. **Read at method time** with `ctx.Config(Agent)`.
 5. **Provide values** under `agents.<Name>.config` in `golem.yaml`.
 
 ## Definition (`agents/shop/shop.go`)
@@ -48,8 +48,8 @@ var Agent = golem.DefineConfiguredAgent[ID, Config](golem.Spec{
 })
 
 var (
-	Greet    = golem.DefineMethod[ID, golem.Unit, string]("greet", golem.Desc("Greeting, from config"))
-	Settings = golem.DefineMethod[ID, golem.Unit, []string]("settings", golem.Desc("Return the configured features"))
+	Greet    = Agent.Method[golem.Unit, string]("greet", golem.Desc("Greeting, from config"))
+	Settings = Agent.Method[golem.Unit, []string]("settings", golem.Desc("Return the configured features"))
 )
 ```
 
@@ -70,25 +70,24 @@ import (
 type state struct{ greeting string }
 
 // ImplementConfigured binds the constructor; its InitContext exposes Config().
-var agent = golem.ImplementConfigured(shop.Agent,
-	func(ctx *golem.InitContext[shop.ID, state, shop.Config]) *state {
-		// Constructor-time config read: seed state once from config.
-		return &state{greeting: ctx.Config().Greeting}
-	})
+var agent = shop.Agent.ImplementConfigured(func(ctx *golem.InitContext[shop.ID, state, shop.Config]) *state {
+	// Constructor-time config read: seed state once from config.
+	return &state{greeting: ctx.Config().Greeting}
+})
 
 func init() {
-	golem.Handle(agent, shop.Greet, func(ctx *golem.Context[state], _ golem.Unit) string {
+	agent.Handle(shop.Greet, func(ctx *golem.Context[state], _ golem.Unit) string {
 		return ctx.State.greeting
 	})
 
-	golem.Handle(agent, shop.Settings, func(ctx *golem.Context[state], _ golem.Unit) []string {
-		cfg := golem.Config(shop.Agent, ctx) // method-time config read
+	agent.Handle(shop.Settings, func(ctx *golem.Context[state], _ golem.Unit) []string {
+		cfg := ctx.Config(shop.Agent) // method-time config read
 		return cfg.Features
 	})
 }
 ```
 
-`golem.Config(shop.Agent, ctx)` returns the whole `shop.Config` value; `ctx` is the running method's `*golem.Context[state]` (requiring it means config is only readable from inside a running method). The constructor reads the same config via `ctx.Config()` on its `InitContext`.
+`ctx.Config(shop.Agent)` returns the whole `shop.Config` value; `ctx` is the running method's `*golem.Context[state]` (requiring it means config is only readable from inside a running method). The constructor reads the same config via `ctx.Config()` on its `InitContext`.
 
 ## Providing Values in `golem.yaml`
 

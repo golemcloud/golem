@@ -12,16 +12,16 @@ type state struct{ value int64 }
 
 func (s *state) current() int64 { return s.value }
 
-var agent = golem.Implement(counter.Agent, func(counter.CounterID) *state { return &state{} })
+var agent = counter.Agent.Implement(func(counter.CounterID) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		ctx.State.value++
 		return ctx.State.value
 	})
-	golem.Handle(agent, counter.Add, func(ctx *golem.Context[state], in counter.AddIn) int64 {
+	agent.Handle(counter.Add, func(ctx *golem.Context[state], in counter.AddIn) int64 {
 		ctx.State.value += in.By
 		return ctx.State.value
 	})
-	golem.Handle(agent, counter.Value, golem.Bind0((*state).current)) // method-expression binding
+	agent.Handle(counter.Value, golem.Bind0((*state).current)) // method-expression binding
 }

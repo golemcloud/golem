@@ -19,9 +19,7 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 var (
 	// Run executes a two-step transaction, recording each step and compensation
 	// in state. It returns "committed" or "rolled-back".
-	Run = golem.DefineMethod[Id, RunIn, string]("run",
-		golem.Desc("Run a two-step saga; roll back when Fail is set"))
+	Run = Agent.Method[RunIn, string]("run", golem.Desc("Run a two-step saga; roll back when Fail is set"))
 	// Log returns the recorded step/compensation names in order.
-	Log = golem.DefineMethod[Id, golem.Unit, []string]("log",
-		golem.Desc("Return the recorded step and compensation names"))
+	Log = Agent.Method[golem.Unit, []string]("log", golem.Desc("Return the recorded step and compensation names"))
 )

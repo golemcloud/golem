@@ -24,14 +24,14 @@ func (s *state) Load(b []byte) error {
 	return nil
 }
 
-var agent = golem.Implement(session.Agent, func(session.ID) *state { return &state{} })
+var agent = session.Agent.Implement(func(session.ID) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, session.Spend, func(ctx *golem.Context[state], in session.SpendIn) int64 {
+	agent.Handle(session.Spend, func(ctx *golem.Context[state], in session.SpendIn) int64 {
 		ctx.State.total += in.Amount
 		return ctx.State.total
 	})
-	golem.Handle(agent, session.Total, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(session.Total, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		return ctx.State.total
 	})
 }

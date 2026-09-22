@@ -31,8 +31,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 // GET /api/{name}/data  — allows https://app.example.com
-var GetData = golem.DefineMethod[ID, golem.Unit, Data]("getData",
-	golem.HTTP(golem.GET("/data")))
+var GetData = Agent.Method[golem.Unit, Data]("getData", golem.HTTP(golem.GET("/data")))
 ```
 
 ## Endpoint-level CORS
@@ -47,12 +46,10 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 
 var (
 	// Allows BOTH https://app.example.com AND * (all origins)
-	GetData = golem.DefineMethod[ID, golem.Unit, Data]("getData",
-		golem.HTTP(golem.GET("/data", golem.EndpointCORS("*"))))
+	GetData = Agent.Method[golem.Unit, Data]("getData", golem.HTTP(golem.GET("/data", golem.EndpointCORS("*"))))
 
 	// Inherits mount-level only: https://app.example.com
-	GetOther = golem.DefineMethod[ID, golem.Unit, Data]("getOther",
-		golem.HTTP(golem.GET("/other")))
+	GetOther = Agent.Method[golem.Unit, Data]("getOther", golem.HTTP(golem.GET("/other")))
 )
 ```
 

@@ -66,10 +66,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-	Open = golem.DefineMethod[ID, golem.Unit, string]("open",
-		golem.Desc("Create a promise and return its webhook URL"))
-	Result = golem.DefineMethod[ID, golem.Unit, Event]("result",
-		golem.Desc("Await the payload POSTed to the webhook URL"))
+	Open = Agent.Method[golem.Unit, string]("open", golem.Desc("Create a promise and return its webhook URL"))
+	Result = Agent.Method[golem.Unit, Event]("result", golem.Desc("Await the payload POSTed to the webhook URL"))
 )
 ```
 
@@ -89,11 +87,11 @@ type state struct {
 	open    bool
 }
 
-var agent = golem.Implement(webhookdemo.Agent, func(webhookdemo.ID) *state { return &state{} })
+var agent = webhookdemo.Agent.Implement(func(webhookdemo.ID) *state { return &state{} })
 
 func init() {
 	// Mint a URL; persist the PromiseID so a later invocation can await it.
-	golem.Handle(agent, webhookdemo.Open, func(ctx *golem.Context[state], _ golem.Unit) string {
+	agent.Handle(webhookdemo.Open, func(ctx *golem.Context[state], _ golem.Unit) string {
 		p := golem.NewPromise[webhookdemo.Event]()
 		ctx.State.pending = p.ID()
 		ctx.State.open = true
@@ -101,7 +99,7 @@ func init() {
 	})
 
 	// Suspend until the external POST arrives; returns the decoded body.
-	golem.Handle(agent, webhookdemo.Result, func(ctx *golem.Context[state], _ golem.Unit) webhookdemo.Event {
+	agent.Handle(webhookdemo.Result, func(ctx *golem.Context[state], _ golem.Unit) webhookdemo.Event {
 		if !ctx.State.open {
 			panic("no open webhook — call open first")
 		}

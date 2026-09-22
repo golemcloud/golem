@@ -19,6 +19,6 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-	Spend = golem.DefineMethod[ID, SpendIn, int64]("spend", golem.Desc("Add to the running total"))
-	Total = golem.DefineMethod[ID, golem.Unit, int64]("total", golem.Desc("Return the running total"))
+	Spend = Agent.Method[SpendIn, int64]("spend", golem.Desc("Add to the running total"))
+	Total = Agent.Method[golem.Unit, int64]("total", golem.Desc("Return the running total"))
 )

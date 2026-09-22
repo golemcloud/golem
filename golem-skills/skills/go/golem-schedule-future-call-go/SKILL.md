@@ -36,10 +36,10 @@ import (
 
 type state struct{ pending *golem.ScheduledInvocation }
 
-var agent = golem.Implement(scheduler.Agent, func(scheduler.ID) *state { return &state{} })
+var agent = scheduler.Agent.Implement(func(scheduler.ID) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, scheduler.Arm, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
+	agent.Handle(scheduler.Arm, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
 		c := counter.Agent.Get(counter.ID{Name: "my-counter"})
 		// Run counter.increment 60 seconds from now.
 		ctx.State.pending = counter.Increment.Schedule(c, time.Now().Add(60*time.Second), golem.Unit{})
@@ -65,7 +65,7 @@ Keep the `*golem.ScheduledInvocation` (e.g. in state) and call `Cancel()`:
 
 ```go
 func init() {
-	golem.Handle(agent, scheduler.Cancel, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
+	agent.Handle(scheduler.Cancel, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
 		if ctx.State.pending != nil {
 			ctx.State.pending.Cancel() // no-op if it has already started
 			ctx.State.pending = nil

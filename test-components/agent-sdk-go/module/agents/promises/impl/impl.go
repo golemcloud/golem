@@ -18,25 +18,25 @@ type state struct {
 	created map[uint64]*golem.Promise[string]
 }
 
-var agent = golem.Implement(promises.Agent, func(promises.Id) *state {
+var agent = promises.Agent.Implement(func(promises.Id) *state {
 	return &state{created: map[uint64]*golem.Promise[string]{}}
 })
 
 func init() {
-	golem.Handle(agent, promises.Create, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(promises.Create, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		p := golem.NewPromise[string]()
 		id := p.ID()
 		ctx.State.created[id.OplogIndex] = p
 		return int64(id.OplogIndex)
 	})
-	golem.Handle(agent, promises.Await, func(ctx *golem.Context[state], in promises.OplogIdxIn) string {
+	agent.Handle(promises.Await, func(ctx *golem.Context[state], in promises.OplogIdxIn) string {
 		p := ctx.State.created[uint64(in.OplogIdx)]
 		if p == nil {
 			panic(fmt.Errorf("no promise created with oplog index %d", in.OplogIdx))
 		}
 		return p.Await() // suspends until completed
 	})
-	golem.Handle(agent, promises.Complete, func(ctx *golem.Context[state], in promises.CompleteIn) bool {
+	agent.Handle(promises.Complete, func(ctx *golem.Context[state], in promises.CompleteIn) bool {
 		p := ctx.State.created[uint64(in.OplogIdx)]
 		if p == nil {
 			panic(fmt.Errorf("no promise created with oplog index %d", in.OplogIdx))

@@ -5,14 +5,14 @@
 An agent's **definition** carries all of its declarative metadata. In Go there are no attribute macros — the metadata is plain values you pass to `golem.DefineAgent`:
 
 - the `golem.Spec` struct — `Name`, `Description`, `Mode`, `HTTP` (mount), and `Snapshot`;
-- per-method options passed to `golem.DefineMethod` — `golem.Desc(...)` for a method description and `golem.HTTP(...)` for HTTP routes.
+- per-method options passed to `Agent.Method` — `golem.Desc(...)` for a method description and `golem.HTTP(...)` for HTTP routes.
 
 This metadata is surfaced in the published agent-type schema (used by the platform, by other agents, and by metadata/LLM tool discovery). It has no effect on the handler logic itself.
 
 ## Steps
 
 1. **Set identity + mode** on the `Spec`: `Name`, `Description`, and (optionally) `Mode`.
-2. **Describe each method** with the `golem.Desc("...")` option on `golem.DefineMethod`.
+2. **Describe each method** with the `golem.Desc("...")` option on `Agent.Method`.
 3. **Mount over HTTP** (optional) by setting `Spec.HTTP` and adding `golem.HTTP(...)` routes to methods.
 4. **Build** — run `golem build`.
 
@@ -73,15 +73,12 @@ Attach `golem.Desc("...")` to a method to set the description carried in the sch
 
 ```go
 var (
-	CheckStock = golem.DefineMethod[ID, string, uint32]("check-stock",
-		golem.Desc("Returns the number of units in stock for the given SKU; 0 if unknown."))
+	CheckStock = Agent.Method[string, uint32]("check-stock", golem.Desc("Returns the number of units in stock for the given SKU; 0 if unknown."))
 
-	Restock = golem.DefineMethod[ID, RestockIn, uint32]("restock",
-		golem.Desc("Increases the stock count for the given SKU by the amount; returns the new total."))
+	Restock = Agent.Method[RestockIn, uint32]("restock", golem.Desc("Increases the stock count for the given SKU by the amount; returns the new total."))
 
 	// Model an observable failure in the result type, and describe it.
-	Pick = golem.DefineMethod[ID, PickIn, golem.Result[uint32, string]]("pick",
-		golem.Desc("Decreases stock for the given SKU; returns err if there is insufficient stock."))
+	Pick = Agent.Method[PickIn, golem.Result[uint32, string]]("pick", golem.Desc("Decreases stock for the given SKU; returns err if there is insufficient stock."))
 )
 ```
 
@@ -101,9 +98,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 	},
 })
 
-var CheckStock = golem.DefineMethod[ID, string, uint32]("check-stock",
-	golem.Desc("Returns units in stock for the given SKU."),
-	golem.HTTP(golem.GET("/stock/{sku}")))
+var CheckStock = Agent.Method[string, uint32]("check-stock", golem.Desc("Returns units in stock for the given SKU."), golem.HTTP(golem.GET("/stock/{sku}")))
 ```
 
 `golem.Mount` fields (`sdks/go/golem/http_mount.go:46`): `Path` (required), `Auth`, `CORS`, `PhantomAgent`, `WebhookSuffix`. Verb constructors are `golem.GET/POST/PUT/DELETE/PATCH/...` and `golem.Custom("VERB", "/path")`. For full route-binding rules (path/query/header/body, per-route auth and CORS) load [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go).

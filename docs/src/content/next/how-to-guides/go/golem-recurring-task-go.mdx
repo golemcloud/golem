@@ -4,7 +4,7 @@
 
 A recurring task is a method that **reschedules itself**: it does its work, then schedules the next run. Scheduling uses `Method.Schedule(client, at, in)`, which arranges an invocation at a future time and returns a cancelable `*golem.ScheduledInvocation`.
 
-To message itself an agent needs a client for its **own** instance, which needs its own `ID`. `Context` only exposes the raw id string, so **capture the typed `ID` in state at construction** — the constructor passed to `golem.Implement` receives it.
+To message itself an agent needs a client for its **own** instance, which needs its own `ID`. `Context` only exposes the raw id string, so **capture the typed `ID` in state at construction** — the constructor passed to `Agent.Implement` receives it.
 
 ## Steps
 
@@ -26,8 +26,8 @@ type ID struct{ Name string }
 var Agent = golem.DefineAgent[ID](golem.Spec{Name: "PollerAgent", Description: "Periodic poller"})
 
 var (
-	Start = golem.DefineMethod[ID, golem.Unit, golem.Unit]("start", golem.Desc("Begin the recurring loop"))
-	Tick  = golem.DefineMethod[ID, golem.Unit, golem.Unit]("tick", golem.Desc("One iteration; reschedules itself"))
+	Start = Agent.Method[golem.Unit, golem.Unit]("start", golem.Desc("Begin the recurring loop"))
+	Tick  = Agent.Method[golem.Unit, golem.Unit]("tick", golem.Desc("One iteration; reschedules itself"))
 )
 ```
 
@@ -50,16 +50,16 @@ const interval = time.Minute
 type state struct{ self poller.ID }
 
 // The constructor receives this instance's ID — capture it.
-var agent = golem.Implement(poller.Agent, func(id poller.ID) *state { return &state{self: id} })
+var agent = poller.Agent.Implement(func(id poller.ID) *state { return &state{self: id} })
 
 func init() {
-	golem.Handle(agent, poller.Start, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
+	agent.Handle(poller.Start, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
 		self := poller.Agent.Get(ctx.State.self)
 		poller.Tick.Schedule(self, time.Now().Add(interval), golem.Unit{})
 		return golem.Unit{}
 	})
 
-	golem.Handle(agent, poller.Tick, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
+	agent.Handle(poller.Tick, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
 		// ... do the periodic work ...
 
 		// schedule the next iteration

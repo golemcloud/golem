@@ -17,10 +17,10 @@ import (
 
 type state struct{}
 
-var agent = golem.Implement(customdur.Agent, func(customdur.Id) *state { return &state{} })
+var agent = customdur.Agent.Implement(func(customdur.Id) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, customdur.Callback, func(_ *golem.Context[state], in customdur.CallbackIn) string {
+	agent.Handle(customdur.Callback, func(_ *golem.Context[state], in customdur.CallbackIn) string {
 		return golem.DurableOp(
 			golem.DurableSpec{Interface: "agent-sdk-go", Function: "custom-callback", Type: golem.WriteRemote},
 			in,

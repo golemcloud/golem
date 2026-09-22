@@ -28,10 +28,10 @@ import (
 
 type state struct{}
 
-var agent = golem.Implement(fetcher.Agent, func(fetcher.ID) *state { return &state{} })
+var agent = fetcher.Agent.Implement(func(fetcher.ID) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, fetcher.Fetch, func(_ *golem.Context[state], in fetcher.FetchIn) string {
+	agent.Handle(fetcher.Fetch, func(_ *golem.Context[state], in fetcher.FetchIn) string {
 		url := "https://api.example.com/thing?q=" + in.Query
 		// golem.Must panics on error (the SDK turns the panic into an agent-error
 		// and retries per policy). Use it for calls that shouldn't fail normally.

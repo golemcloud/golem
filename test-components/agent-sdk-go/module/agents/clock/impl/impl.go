@@ -15,15 +15,15 @@ import (
 
 type state struct{ times []int64 }
 
-var agent = golem.Implement(clock.Agent, func(clock.Id) *state { return &state{} })
+var agent = clock.Agent.Implement(func(clock.Id) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, clock.RecordTime, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(clock.RecordTime, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		now := time.Now().UnixNano()
 		ctx.State.times = append(ctx.State.times, now)
 		return now
 	})
-	golem.Handle(agent, clock.FirstTime, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(clock.FirstTime, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		return ctx.State.times[0]
 	})
 }

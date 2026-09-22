@@ -883,7 +883,9 @@ jobs:
       - name: Lint (golangci-lint)
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12
+          # >= v2.13 is required: earlier releases are built with Go 1.26 and
+          # cannot parse the SDK's generic methods (a Go 1.27 feature).
+          version: v2.13.2
           working-directory: sdks/go/golem
 
       - name: Vet (wasip1)

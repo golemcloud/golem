@@ -83,8 +83,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-	Greeting = golem.DefineMethod[ID, golem.Unit, string]("greeting", golem.Desc("Read /data/greeting.txt"))
-	Log      = golem.DefineMethod[ID, LogIn, golem.Unit]("log", golem.Desc("Append a line to /tmp/agent.log"))
+	Greeting = Agent.Method[golem.Unit, string]("greeting", golem.Desc("Read /data/greeting.txt"))
+	Log      = Agent.Method[LogIn, golem.Unit]("log", golem.Desc("Append a line to /tmp/agent.log"))
 )
 ```
 
@@ -105,16 +105,16 @@ import (
 
 type state struct{}
 
-var agent = golem.Implement(reader.Agent, func(reader.ID) *state { return &state{} })
+var agent = reader.Agent.Implement(func(reader.ID) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, reader.Greeting, func(_ *golem.Context[state], _ golem.Unit) string {
+	agent.Handle(reader.Greeting, func(_ *golem.Context[state], _ golem.Unit) string {
 		// golem.Must aborts the invocation if the read fails.
 		data := golem.Must(os.ReadFile("/data/greeting.txt"))
 		return strings.TrimSpace(string(data))
 	})
 
-	golem.Handle(agent, reader.Log, func(_ *golem.Context[state], in reader.LogIn) golem.Unit {
+	agent.Handle(reader.Log, func(_ *golem.Context[state], in reader.LogIn) golem.Unit {
 		f := golem.Must(os.OpenFile("/tmp/agent.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644))
 		defer f.Close()
 		golem.Must(f.WriteString(in.Message + "\n"))

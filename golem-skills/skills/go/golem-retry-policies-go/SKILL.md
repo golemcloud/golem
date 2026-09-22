@@ -194,7 +194,7 @@ var codeOwned = retry.Named("code-owned",
 	WithPriority(20).
 	AppliesWhen(retry.TargetAgentType.Eq("InventoryAgent"))
 
-var agent = golem.Implement(retrying.Agent, func(retrying.ID) *state {
+var agent = retrying.Agent.Implement(func(retrying.ID) *state {
 	retry.Set(codeOwned) // register the code-owned rule when the worker starts
 	return &state{}
 })
@@ -205,7 +205,7 @@ function that reinstates the previously registered rule (or removes it) — scop
 with `defer`:
 
 ```go
-golem.Handle(agent, retrying.Burst, func(_ *golem.Context[state], _ golem.Unit) retrying.Snapshot {
+agent.Handle(retrying.Burst, func(_ *golem.Context[state], _ golem.Unit) retrying.Snapshot {
 	// Override the code-owned rule just for this call, restored on return.
 	defer retry.With(retry.Named("code-owned", retry.Immediate().MaxRetries(10)).
 		WithPriority(99).

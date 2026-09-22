@@ -14,14 +14,14 @@ import (
 
 type state struct{}
 
-var agent = golem.Implement(rpccaller.Agent, func(rpccaller.Id) *state { return &state{} })
+var agent = rpccaller.Agent.Implement(func(rpccaller.Id) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, rpccaller.Call, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
+	agent.Handle(rpccaller.Call, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
 		c := ledger.Agent.Get(ledger.Id{Region: in.Region})
 		return ledger.Record.Call(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
 	})
-	golem.Handle(agent, rpccaller.AtomicCall, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
+	agent.Handle(rpccaller.AtomicCall, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
 		var total int64
 		golem.Atomically(func() {
 			c := ledger.Agent.Get(ledger.Id{Region: in.Region})
@@ -29,7 +29,7 @@ func init() {
 		})
 		return total
 	})
-	golem.Handle(agent, rpccaller.Async, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
+	agent.Handle(rpccaller.Async, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
 		c := ledger.Agent.Get(ledger.Id{Region: in.Region})
 		return ledger.Record.CallAsync(c, ledger.RecordIn{Amount: in.Amount}).Get().MustOk()
 	})

@@ -34,8 +34,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 // GET /catalog/{name}/items/{sku}  — {sku} → LookupIn.Sku
-var Lookup = golem.DefineMethod[ID, LookupIn, ItemInfo]("lookup",
-	golem.HTTP(golem.GET("/items/{sku}", golem.Query("detailed", "detailed"))))
+var Lookup = Agent.Method[LookupIn, ItemInfo]("lookup", golem.HTTP(golem.GET("/items/{sku}", golem.Query("detailed", "detailed"))))
 ```
 
 The trailing catch-all `{*rest}` captures everything after a prefix and may only appear as the **last** endpoint segment; it is **not** allowed in a mount path.
@@ -51,8 +50,7 @@ type SearchIn struct {
 }
 
 // GET /catalog/{name}/search?q=hello&limit=10
-var Search = golem.DefineMethod[ID, SearchIn, []Result]("search",
-	golem.HTTP(golem.GET("/search",
+var Search = Agent.Method[SearchIn, []Result]("search", golem.HTTP(golem.GET("/search",
 		golem.Query("q", "query"),         // ?q= → SearchIn.Query
 		golem.Query("limit", "maxResults"), // ?limit= → SearchIn.MaxResults
 	)))
@@ -70,8 +68,7 @@ type DataIn struct {
 	Token     string
 }
 
-var GetData = golem.DefineMethod[ID, DataIn, Data]("getData",
-	golem.HTTP(golem.GET("/data",
+var GetData = Agent.Method[DataIn, Data]("getData", golem.HTTP(golem.GET("/data",
 		golem.Header("X-Request-Id", "requestId"),
 		golem.Header("Authorization", "token"),
 	)))
@@ -107,8 +104,7 @@ type UpdateIn struct {
 }
 
 // POST /catalog/{name}/items/{sku}   Body: {"name":"Widget","count":5}
-var Update = golem.DefineMethod[ID, UpdateIn, Item]("update",
-	golem.HTTP(golem.POST("/items/{sku}")))
+var Update = Agent.Method[UpdateIn, Item]("update", golem.HTTP(golem.POST("/items/{sku}")))
 ```
 
 Each unbound field becomes a top-level key in the JSON body object (field names lower-first / camelCase, as elsewhere in the SDK).

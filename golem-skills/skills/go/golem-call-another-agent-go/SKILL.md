@@ -32,10 +32,10 @@ import (
 
 type state struct{}
 
-var agent = golem.Implement(rpccaller.Agent, func(rpccaller.ID) *state { return &state{} })
+var agent = rpccaller.Agent.Implement(func(rpccaller.ID) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, rpccaller.Call, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
+	agent.Handle(rpccaller.Call, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
 		// Get a client for the ledger instance identified by region.
 		c := ledger.Agent.Get(ledger.ID{Region: in.Region})
 		// Call returns the method's Out; here Out is a golem.Result, unwrapped with MustOk.

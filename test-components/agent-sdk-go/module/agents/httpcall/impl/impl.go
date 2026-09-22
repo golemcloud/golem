@@ -25,20 +25,20 @@ func fetch(payload string) string {
 	return string(golem.Must(io.ReadAll(resp.Body)))
 }
 
-var agent = golem.Implement(httpcall.Agent, func(httpcall.Id) *state { return &state{} })
+var agent = httpcall.Agent.Implement(func(httpcall.Id) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, httpcall.Callback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
+	agent.Handle(httpcall.Callback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
 		return fetch(in.Payload)
 	})
-	golem.Handle(agent, httpcall.RetryCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
+	agent.Handle(httpcall.RetryCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
 		// Retry the request while the endpoint answers 500; the host re-issues it
 		// transparently, so the handler just sees the eventual success.
 		pol := retry.Immediate().MaxRetries(10).OnlyWhen(retry.StatusCode.OneOf(500))
 		defer retry.With(retry.Named("flaky-endpoint", pol).WithPriority(10))()
 		return fetch(in.Payload)
 	})
-	golem.Handle(agent, httpcall.AtomicTimedCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
+	agent.Handle(httpcall.AtomicTimedCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
 		var body string
 		golem.Atomically(func() {
 			started := time.Now()
@@ -47,7 +47,7 @@ func init() {
 		})
 		return body
 	})
-	golem.Handle(agent, httpcall.AtomicCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
+	agent.Handle(httpcall.AtomicCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
 		var body string
 		golem.Atomically(func() { body = fetch(in.Payload) })
 		return body

@@ -37,8 +37,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
     Description: "Processes one item",
 })
 
-var Process = golem.DefineMethod[ID, ProcessIn, string]("process",
-    golem.Desc("Process a single item and return the result"))
+var Process = Agent.Method[ProcessIn, string]("process", golem.Desc("Process a single item and return the result"))
 ```
 
 ### Coordinator fan-out (`agents/coordinator/impl/impl.go`)
@@ -55,10 +54,10 @@ import (
 
 type state struct{}
 
-var agent = golem.Implement(coordinator.Agent, func(coordinator.ID) *state { return &state{} })
+var agent = coordinator.Agent.Implement(func(coordinator.ID) *state { return &state{} })
 
 func init() {
-    golem.Handle(agent, coordinator.FanOut, func(_ *golem.Context[state], in coordinator.FanOutIn) []string {
+    agent.Handle(coordinator.FanOut, func(_ *golem.Context[state], in coordinator.FanOutIn) []string {
         // 1. Start every call — each returns immediately with a future.
         futures := make([]*golem.Future[string], len(in.Items))
         for i, item := range in.Items {
@@ -96,7 +95,7 @@ For long-running work, `Trigger` each worker (fire-and-forget, no call held open
 ### Coordinator
 
 ```go
-golem.Handle(agent, coordinator.DispatchAndCollect, func(ctx *golem.Context[state], in coordinator.RegionsIn) []string {
+agent.Handle(coordinator.DispatchAndCollect, func(ctx *golem.Context[state], in coordinator.RegionsIn) []string {
     // One promise per worker.
     promises := make([]*golem.Promise[string], len(in.Regions))
     for i := range in.Regions {
@@ -121,7 +120,7 @@ golem.Handle(agent, coordinator.DispatchAndCollect, func(ctx *golem.Context[stat
 ### Worker completes its promise
 
 ```go
-golem.Handle(agent, worker.RunReport, func(ctx *golem.Context[state], in worker.RunReportIn) golem.Unit {
+agent.Handle(worker.RunReport, func(ctx *golem.Context[state], in worker.RunReportIn) golem.Unit {
     report := "Report for " + ctx.State.region + ": OK"
     golem.CompletePromise(in.Promise, report)
     return golem.Unit{}

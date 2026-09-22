@@ -11,13 +11,13 @@ import (
 
 type state struct{}
 
-var agent = golem.Implement(configecho.Agent, func(configecho.Id) *state { return &state{} })
+var agent = configecho.Agent.Implement(func(configecho.Id) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, configecho.Greeting, func(ctx *golem.Context[state], _ golem.Unit) string {
-		return golem.Config(configecho.Agent, ctx).Greeting
+	agent.Handle(configecho.Greeting, func(ctx *golem.Context[state], _ golem.Unit) string {
+		return ctx.Config(configecho.Agent).Greeting
 	})
-	golem.Handle(agent, configecho.Cents, func(ctx *golem.Context[state], _ golem.Unit) int64 {
-		return golem.Config(configecho.Agent, ctx).Fee.Cents
+	agent.Handle(configecho.Cents, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+		return ctx.Config(configecho.Agent).Fee.Cents
 	})
 }

@@ -41,12 +41,10 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 
 var (
 	// GET /counters/{name}/value  — options compose: Desc + HTTP in one call.
-	Value = golem.DefineMethod[ID, golem.Unit, int64]("value",
-		golem.Desc("Read the current value"), golem.HTTP(golem.GET("/value")))
+	Value = Agent.Method[golem.Unit, int64]("value", golem.Desc("Read the current value"), golem.HTTP(golem.GET("/value")))
 
 	// POST /counters/{name}/add  — AddIn arrives as the JSON body
-	Add = golem.DefineMethod[ID, AddIn, int64]("add",
-		golem.Desc("Add to the count"), golem.HTTP(golem.POST("/add")))
+	Add = Agent.Method[AddIn, int64]("add", golem.Desc("Add to the count"), golem.HTTP(golem.POST("/add")))
 )
 ```
 
@@ -57,8 +55,7 @@ The handlers are ordinary handlers (see `golem-add-agent-go`) — nothing HTTP-s
 - **Path variables** — `{sku}` in a route suffix binds the input field `Sku`: `golem.GET("/items/{sku}")`.
 - **Query parameters** — `golem.Query("detailed", "detailed")` binds `?detailed=` to the `Detailed` field:
   ```go
-  Lookup = golem.DefineMethod[ID, LookupIn, ItemInfo]("lookup",
-      golem.HTTP(golem.GET("/items/{sku}", golem.Query("detailed", "detailed"))))
+  Lookup = Agent.Method[LookupIn, ItemInfo]("lookup", golem.HTTP(golem.GET("/items/{sku}", golem.Query("detailed", "detailed"))))
   ```
 - **Headers** — `golem.Header("X-Tenant", "tenant")` binds the header to the `Tenant` field.
 - **Body** — for body-carrying verbs (`POST`/`PUT`), input fields not bound to path/query/header come from the JSON request body.

@@ -13,8 +13,6 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 })
 
 var (
-	RecordTime = golem.DefineMethod[Id, golem.Unit, int64]("record-time",
-		golem.Desc("Read time.Now() into durable state and return it as unix nanos"))
-	FirstTime = golem.DefineMethod[Id, golem.Unit, int64]("first-time",
-		golem.Desc("Return the first recorded reading as unix nanos"))
+	RecordTime = Agent.Method[golem.Unit, int64]("record-time", golem.Desc("Read time.Now() into durable state and return it as unix nanos"))
+	FirstTime  = Agent.Method[golem.Unit, int64]("first-time", golem.Desc("Return the first recorded reading as unix nanos"))
 )

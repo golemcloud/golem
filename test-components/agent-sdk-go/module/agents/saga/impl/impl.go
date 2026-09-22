@@ -13,10 +13,10 @@ import (
 
 type state struct{ log []string }
 
-var agent = golem.Implement(saga.Agent, func(saga.Id) *state { return &state{} })
+var agent = saga.Agent.Implement(func(saga.Id) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, saga.Run, func(ctx *golem.Context[state], in saga.RunIn) string {
+	agent.Handle(saga.Run, func(ctx *golem.Context[state], in saga.RunIn) string {
 		s := ctx.State
 		record := func(name string) { s.log = append(s.log, name) }
 
@@ -47,10 +47,10 @@ func init() {
 		)
 
 		res := golem.FallibleTransaction(func(tx *golem.Transaction[string]) golem.Result[string, string] {
-			if r := golem.Step(tx, charge, golem.Unit{}); r.IsErr() {
+			if r := tx.Step(charge, golem.Unit{}); r.IsErr() {
 				return golem.Err[string, string](r.Err())
 			}
-			if r := golem.Step(tx, ship, in.Fail); r.IsErr() {
+			if r := tx.Step(ship, in.Fail); r.IsErr() {
 				return golem.Err[string, string](r.Err())
 			}
 			return golem.Ok[string, string]("committed")
@@ -61,7 +61,7 @@ func init() {
 		}
 		return res.Ok()
 	})
-	golem.Handle(agent, saga.Log, func(ctx *golem.Context[state], _ golem.Unit) []string {
+	agent.Handle(saga.Log, func(ctx *golem.Context[state], _ golem.Unit) []string {
 		return ctx.State.log
 	})
 }

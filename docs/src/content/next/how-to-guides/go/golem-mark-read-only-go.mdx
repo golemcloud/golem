@@ -8,7 +8,7 @@ runtime **traps outgoing HTTP and agent RPC** from a read-only method. In
 exchange, Golem **caches the result** per the chosen cache policy.
 
 You mark a method read-only by passing the `golem.ReadOnly(...)` option to
-`golem.DefineMethod` in the **definition** package — it is a `golem.MethodOpt`,
+`Agent.Method` in the **definition** package — it is a `golem.MethodOpt`,
 just like `golem.Desc(...)` and `golem.HTTP(...)`.
 
 ## Steps
@@ -32,10 +32,10 @@ var Agent = golem.DefineAgent[ID](golem.Spec{Name: "CounterAgent"})
 
 var (
 	// Read-write: mutates shared state.
-	Increment = golem.DefineMethod[ID, golem.Unit, int64]("increment")
+	Increment = Agent.Method[golem.Unit, int64]("increment")
 
 	// Read-only: pure read over already-loaded state (default cache policy).
-	Value = golem.DefineMethod[ID, golem.Unit, int64]("value", golem.ReadOnly())
+	Value = Agent.Method[golem.Unit, int64]("value", golem.ReadOnly())
 )
 ```
 
@@ -44,11 +44,11 @@ happens not to perform side effects:
 
 ```go
 func init() {
-	golem.Handle(agent, counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		ctx.State.count++
 		return ctx.State.count
 	})
-	golem.Handle(agent, counter.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(counter.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		return ctx.State.count // pure read
 	})
 }
@@ -70,13 +70,13 @@ import "time"
 
 var (
 	// Cached until the next write.
-	Catalog = golem.DefineMethod[ID, golem.Unit, Catalog]("catalog", golem.ReadOnly())
+	Catalog = Agent.Method[golem.Unit, Catalog]("catalog", golem.ReadOnly())
 
 	// Cached for a minute regardless of writes.
-	Rates = golem.DefineMethod[ID, golem.Unit, Rates]("rates", golem.ReadOnly(golem.CacheFor(time.Minute)))
+	Rates = Agent.Method[golem.Unit, Rates]("rates", golem.ReadOnly(golem.CacheFor(time.Minute)))
 
 	// Never cached, but still trapped against remote side effects.
-	Compute = golem.DefineMethod[ID, ComputeIn, int64]("compute", golem.ReadOnly(golem.NoCache()))
+	Compute = Agent.Method[ComputeIn, int64]("compute", golem.ReadOnly(golem.NoCache()))
 )
 ```
 
@@ -120,9 +120,7 @@ Read-only methods are the natural fit for HTTP `GET`/`HEAD` endpoints. Combine
 [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go)):
 
 ```go
-var Catalog = golem.DefineMethod[ID, golem.Unit, Catalog]("catalog",
-	golem.ReadOnly(),
-	golem.HTTP(golem.GET("/catalog")))
+var Catalog = Agent.Method[golem.Unit, Catalog]("catalog", golem.ReadOnly(), golem.HTTP(golem.GET("/catalog")))
 ```
 
 ## Not available in the Go SDK

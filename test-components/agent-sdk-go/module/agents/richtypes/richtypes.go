@@ -23,8 +23,6 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 })
 
 var (
-	Describe = golem.DefineMethod[Id, DescribeIn, string]("describe",
-		golem.Desc("Summarize a list + optional argument"))
-	Repeat = golem.DefineMethod[Id, RepeatIn, []string]("repeat",
-		golem.Desc("Return a list of N copies of S"))
+	Describe = Agent.Method[DescribeIn, string]("describe", golem.Desc("Summarize a list + optional argument"))
+	Repeat   = Agent.Method[RepeatIn, []string]("repeat", golem.Desc("Return a list of N copies of S"))
 )

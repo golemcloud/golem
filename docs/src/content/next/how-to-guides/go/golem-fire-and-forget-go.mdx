@@ -24,10 +24,10 @@ import (
 
 type state struct{}
 
-var agent = golem.Implement(coordinator.Agent, func(coordinator.ID) *state { return &state{} })
+var agent = coordinator.Agent.Implement(func(coordinator.ID) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, coordinator.Start, func(_ *golem.Context[state], in coordinator.StartIn) golem.Unit {
+	agent.Handle(coordinator.Start, func(_ *golem.Context[state], in coordinator.StartIn) golem.Unit {
 		// Hand each unit of work to a worker without awaiting the outcome.
 		for _, w := range in.Jobs {
 			c := worker.Agent.Get(worker.ID{Name: w.Worker})

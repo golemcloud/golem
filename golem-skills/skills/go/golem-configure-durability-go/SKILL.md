@@ -54,8 +54,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-	Increment = golem.DefineMethod[ID, golem.Unit, int64]("increment", golem.Desc("Increase the count by one"))
-	Value     = golem.DefineMethod[ID, golem.Unit, int64]("value", golem.Desc("Return the current value"))
+	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Desc("Increase the count by one"))
+	Value     = Agent.Method[golem.Unit, int64]("value", golem.Desc("Return the current value"))
 )
 ```
 
@@ -73,14 +73,14 @@ import (
 
 type state struct{ count int64 }
 
-var agent = golem.Implement(counter.Agent, func(counter.ID) *state { return &state{} })
+var agent = counter.Agent.Implement(func(counter.ID) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		ctx.State.count++
 		return ctx.State.count
 	})
-	golem.Handle(agent, counter.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(counter.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		return ctx.State.count
 	})
 }

@@ -86,8 +86,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-    Spend = golem.DefineMethod[ID, SpendIn, int64]("spend", golem.Desc("Add to the running total"))
-    Total = golem.DefineMethod[ID, golem.Unit, int64]("total", golem.Desc("Return the running total"))
+    Spend = Agent.Method[SpendIn, int64]("spend", golem.Desc("Add to the running total"))
+    Total = Agent.Method[golem.Unit, int64]("total", golem.Desc("Return the running total"))
 )
 ```
 
@@ -125,14 +125,14 @@ func (s *state) Load(b []byte) error {
     return nil
 }
 
-var agent = golem.Implement(session.Agent, func(session.ID) *state { return &state{} })
+var agent = session.Agent.Implement(func(session.ID) *state { return &state{} })
 
 func init() {
-    golem.Handle(agent, session.Spend, func(ctx *golem.Context[state], in session.SpendIn) int64 {
+    agent.Handle(session.Spend, func(ctx *golem.Context[state], in session.SpendIn) int64 {
         ctx.State.total += in.Amount
         return ctx.State.total
     })
-    golem.Handle(agent, session.Total, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+    agent.Handle(session.Total, func(ctx *golem.Context[state], _ golem.Unit) int64 {
         return ctx.State.total
     })
 }

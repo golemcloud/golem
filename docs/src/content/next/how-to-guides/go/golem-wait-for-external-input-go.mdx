@@ -63,11 +63,9 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 
 var (
     // Request opens the promise and returns its id for an external completer.
-    Request = golem.DefineMethod[ID, golem.Unit, golem.PromiseID]("request",
-        golem.Desc("Open an approval request, returning the promise id to complete"))
+    Request = Agent.Method[golem.Unit, golem.PromiseID]("request", golem.Desc("Open an approval request, returning the promise id to complete"))
     // Await durably blocks until the open request is completed.
-    Await = golem.DefineMethod[ID, golem.Unit, Verdict]("await",
-        golem.Desc("Durably block until the open request is completed"))
+    Await = Agent.Method[golem.Unit, Verdict]("await", golem.Desc("Durably block until the open request is completed"))
 )
 ```
 
@@ -90,17 +88,17 @@ type state struct {
     open    bool
 }
 
-var agent = golem.Implement(approval.Agent, func(approval.ID) *state { return &state{} })
+var agent = approval.Agent.Implement(func(approval.ID) *state { return &state{} })
 
 func init() {
-    golem.Handle(agent, approval.Request, func(ctx *golem.Context[state], _ golem.Unit) golem.PromiseID {
+    agent.Handle(approval.Request, func(ctx *golem.Context[state], _ golem.Unit) golem.PromiseID {
         p := golem.NewPromise[approval.Verdict]()
         ctx.State.pending = p.ID() // persist so a later invocation can Await it
         ctx.State.open = true
         return p.ID()
     })
 
-    golem.Handle(agent, approval.Await, func(ctx *golem.Context[state], _ golem.Unit) approval.Verdict {
+    agent.Handle(approval.Await, func(ctx *golem.Context[state], _ golem.Unit) approval.Verdict {
         if !ctx.State.open {
             panic("no open approval request — call request first")
         }

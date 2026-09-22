@@ -41,8 +41,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-	Add  = golem.DefineMethod[ID, AddIn, int64]("add", golem.Desc("Insert a note, return the new count"))
-	List = golem.DefineMethod[ID, golem.Unit, []string]("list", golem.Desc("Return all note bodies"))
+	Add  = Agent.Method[AddIn, int64]("add", golem.Desc("Insert a note, return the new count"))
+	List = Agent.Method[golem.Unit, []string]("list", golem.Desc("Return all note bodies"))
 )
 ```
 
@@ -61,10 +61,10 @@ import (
 
 type state struct{}
 
-var agent = golem.Implement(notes.Agent, func(notes.ID) *state { return &state{} })
+var agent = notes.Agent.Implement(func(notes.ID) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, notes.Add, func(_ *golem.Context[state], in notes.AddIn) int64 {
+	agent.Handle(notes.Add, func(_ *golem.Context[state], in notes.AddIn) int64 {
 		db := golem.Must(postgres.Open(in.Addr)) // "postgres://user:pass@host:5432/app"
 		defer db.Close()
 
@@ -79,7 +79,7 @@ func init() {
 		return n
 	})
 
-	golem.Handle(agent, notes.List, func(_ *golem.Context[state], _ golem.Unit) []string {
+	agent.Handle(notes.List, func(_ *golem.Context[state], _ golem.Unit) []string {
 		db := golem.Must(postgres.Open("postgres://user:pass@localhost:5432/app"))
 		defer db.Close()
 

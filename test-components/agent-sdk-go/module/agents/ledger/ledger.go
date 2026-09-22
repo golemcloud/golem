@@ -13,7 +13,6 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 })
 
 var (
-	Record = golem.DefineMethod[Id, RecordIn, golem.Result[int64, string]]("record",
-		golem.Desc("Add to the ledger, returning the new total or an error value"))
-	Total = golem.DefineMethod[Id, golem.Unit, int64]("total")
+	Record = Agent.Method[RecordIn, golem.Result[int64, string]]("record", golem.Desc("Add to the ledger, returning the new total or an error value"))
+	Total  = Agent.Method[golem.Unit, int64]("total")
 )

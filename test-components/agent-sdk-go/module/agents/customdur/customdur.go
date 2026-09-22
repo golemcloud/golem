@@ -14,5 +14,4 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 	Name: "CustomDurAgent", Description: "Custom durable operation (DurableOp) for replay tests", Mode: golem.Durable,
 })
 
-var Callback = golem.DefineMethod[Id, CallbackIn, string]("callback",
-	golem.Desc("Wrap an outbound HTTP call in golem.DurableOp and return its body"))
+var Callback = Agent.Method[CallbackIn, string]("callback", golem.Desc("Wrap an outbound HTTP call in golem.DurableOp and return its body"))

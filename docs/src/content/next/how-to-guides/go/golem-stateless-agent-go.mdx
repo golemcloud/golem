@@ -32,8 +32,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
     Mode:        golem.Ephemeral, // <- makes every invocation start clean
 })
 
-var Handle = golem.DefineMethod[ID, HandleIn, string]("handle",
-    golem.Desc("Process one request and return the result"))
+var Handle = Agent.Method[HandleIn, string]("handle", golem.Desc("Process one request and return the result"))
 ```
 
 ### Implementation
@@ -54,10 +53,10 @@ import (
 // state is empty: an ephemeral agent keeps nothing between invocations.
 type state struct{}
 
-var agent = golem.Implement(handler.Agent, func(handler.ID) *state { return &state{} })
+var agent = handler.Agent.Implement(func(handler.ID) *state { return &state{} })
 
 func init() {
-    golem.Handle(agent, handler.Handle, func(_ *golem.Context[state], in handler.HandleIn) string {
+    agent.Handle(handler.Handle, func(_ *golem.Context[state], in handler.HandleIn) string {
         return "processed: " + strings.ToUpper(in.Input)
     })
 }
@@ -94,10 +93,8 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 })
 
 var (
-    ToUpper = golem.DefineMethod[ID, ConvertIn, string]("toUpper",
-        golem.HTTP(golem.POST("/to-upper")))
-    ToLower = golem.DefineMethod[ID, ConvertIn, string]("toLower",
-        golem.HTTP(golem.POST("/to-lower")))
+    ToUpper = Agent.Method[ConvertIn, string]("toUpper", golem.HTTP(golem.POST("/to-upper")))
+    ToLower = Agent.Method[ConvertIn, string]("toLower", golem.HTTP(golem.POST("/to-lower")))
 )
 ```
 

@@ -79,8 +79,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
     HTTP: &golem.Mount{Path: "/counters/{name}"}, // {name} binds the ID field
 })
 
-var Add = golem.DefineMethod[ID, AddIn, int64]("add",
-    golem.HTTP(golem.POST("/add?by={by}")))
+var Add = Agent.Method[AddIn, int64]("add", golem.HTTP(golem.POST("/add?by={by}")))
 ```
 
 The agent must also be declared in the manifest's `httpApi` deployment. External clients then POST to the deployed route — from a Go program with the standard library:

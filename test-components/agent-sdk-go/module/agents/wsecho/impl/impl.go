@@ -12,10 +12,10 @@ import (
 
 type state struct{}
 
-var agent = golem.Implement(wsecho.Agent, func(wsecho.Id) *state { return &state{} })
+var agent = wsecho.Agent.Implement(func(wsecho.Id) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, wsecho.Echo, func(_ *golem.Context[state], in wsecho.EchoIn) string {
+	agent.Handle(wsecho.Echo, func(_ *golem.Context[state], in wsecho.EchoIn) string {
 		conn := golem.Must(websocket.Connect(in.URL))
 		golem.Must0(conn.SendText(in.Message))
 		msg := golem.Must(conn.Receive())

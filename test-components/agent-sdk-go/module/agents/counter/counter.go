@@ -18,10 +18,7 @@ var Agent = golem.DefineAgent[CounterID](golem.Spec{
 })
 
 var (
-	Increment = golem.DefineMethod[CounterID, golem.Unit, int64](
-		"increment", golem.Desc("Increase the count by one"))
-	Add = golem.DefineMethod[CounterID, AddIn, int64](
-		"add", golem.Desc("Add to the count"))
-	Value = golem.DefineMethod[CounterID, golem.Unit, int64](
-		"value", golem.Desc("Return the current value"))
+	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Desc("Increase the count by one"))
+	Add       = Agent.Method[AddIn, int64]("add", golem.Desc("Add to the count"))
+	Value     = Agent.Method[golem.Unit, int64]("value", golem.Desc("Return the current value"))
 )

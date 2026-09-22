@@ -21,7 +21,7 @@ type ID struct {
 
 var Agent = golem.DefineAgent[ID](golem.Spec{Name: "SessionAgent", Description: "Per-user, per-device session"})
 
-var Touch = golem.DefineMethod[ID, golem.Unit, int64]("touch", golem.Desc("Record activity, return hit count"))
+var Touch = Agent.Method[golem.Unit, int64]("touch", golem.Desc("Record activity, return hit count"))
 ```
 
 ## Addressing a specific instance

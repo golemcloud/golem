@@ -22,16 +22,11 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 })
 
 var (
-	Set = golem.DefineMethod[Id, SetIn, golem.Unit]("set",
-		golem.Desc("Store a string value under a key"))
+	Set = Agent.Method[SetIn, golem.Unit]("set", golem.Desc("Store a string value under a key"))
 	// Get returns the stored value, or "" when the key is absent.
-	Get = golem.DefineMethod[Id, GetIn, string]("get",
-		golem.Desc("Read a key; empty string when absent"))
-	Exists = golem.DefineMethod[Id, GetIn, bool]("exists",
-		golem.Desc("Report whether a key is present"))
-	Delete = golem.DefineMethod[Id, GetIn, golem.Unit]("delete",
-		golem.Desc("Delete a key"))
+	Get    = Agent.Method[GetIn, string]("get", golem.Desc("Read a key; empty string when absent"))
+	Exists = Agent.Method[GetIn, bool]("exists", golem.Desc("Report whether a key is present"))
+	Delete = Agent.Method[GetIn, golem.Unit]("delete", golem.Desc("Delete a key"))
 	// Keys returns the bucket's keys, sorted so the result is comparable.
-	Keys = golem.DefineMethod[Id, GetIn, []string]("keys",
-		golem.Desc("List the bucket's keys, sorted"))
+	Keys = Agent.Method[GetIn, []string]("keys", golem.Desc("List the bucket's keys, sorted"))
 )

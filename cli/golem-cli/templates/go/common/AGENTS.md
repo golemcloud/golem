@@ -61,7 +61,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-transactions-go` | Saga-pattern transactions with compensation |
 | `golem-add-postgres-go` | Using PostgreSQL via the `golem/rdbms/postgres` wrapper |
 | `golem-add-mysql-go` | Using MySQL via the `golem/rdbms/mysql` wrapper |
-| `golem-add-config-go` | Adding typed configuration (`DefineConfiguredAgent` + `golem.Config`) |
+| `golem-add-config-go` | Adding typed configuration (`DefineConfiguredAgent` + `ctx.Config`) |
 | `golem-add-secret-go` | Adding typed secrets (`golem.Secret[T]`) |
 | `golem-file-io-go` | Reading and writing files with the standard `os`/`io` packages |
 | `golem-logging-go` | Structured logging via `log/slog` |
@@ -81,7 +81,7 @@ This is a **Golem Application** — a distributed computing project targeting We
 
 Key concepts:
 - **Component**: A WASM component compiled from Go, defining one or more agent types
-- **Agent type**: A state-free **definition** (`golem.DefineAgent` + `golem.DefineMethod` descriptors) plus an **implementation** (`golem.Implement` + `golem.Handle`), split across a `<name>` / `impl` package pair
+- **Agent type**: A state-free **definition** (`golem.DefineAgent` + `Agent.Method` descriptors) plus an **implementation** (`Agent.Implement` + `impl.Handle`), split across a `<name>` / `impl` package pair
 - **Agent (worker)**: A running instance of an agent type, identified by constructor parameters, with persistent state
 
 ## Agent Fundamentals
@@ -119,7 +119,7 @@ module/                           # This component — its own Go module (golem.
     counter/                      #   the counter agent
       counter.go                  #     package counter — DEFINITION: DefineAgent + method descriptors + types
       impl/
-        impl.go                   #     package impl — IMPLEMENTATION: golem.Implement (registers on import)
+        impl.go                   #     package impl — IMPLEMENTATION: Agent.Implement (registers on import)
   internal/                       # (optional) any non-agent packages
 golem-temp/                       # Build artifacts (gitignored)
 ```
@@ -167,7 +167,7 @@ anywhere in the module (e.g. an `internal/` directory).
 Wire names come from the SDK's declarations, not from Go identifiers:
 
 - **Agent type names**: the `Name` in `golem.Spec{Name: "CounterAgent"}`
-- **Method names**: the string passed to `golem.DefineMethod[...]("increment")`
+- **Method names**: the string passed to `Agent.Method[...]("increment")`
 - **Parameter and record field names**: the Go field name **lower-camel-cased** — `AmountCents` → `amountCents`
 - **Variant case names**: the string in `golem.Case[Card]("card")`
 - **Enum case names**: positional, from `golem.DefineEnum[Status]("active", "closed")`
@@ -209,13 +209,14 @@ Wire names come from the SDK's declarations, not from Go identifiers:
 
 - Standard Go style: `gofmt` decides formatting; `UpperCamelCase` for exported identifiers,
   `lowerCamelCase` otherwise.
-- Agents are declared with `golem.DefineAgent` and their methods with `golem.DefineMethod` (in the
-  definition package); behaviour is attached in the implementation package with
-  `impl := golem.Implement(def, init)` and then `golem.Handle(impl, method, handler)` per method (in an
-  `init()`). A configured agent whose constructor reads config uses `golem.ImplementConfigured` and reads
-  config in a method via `golem.Config(def, ctx)`.
+- Agents are declared with `golem.DefineAgent`, and their methods on the definition with
+  `Agent.Method[In, Out]("name")` (in the definition package); behaviour is attached in the implementation
+  package with `impl := Agent.Implement(init)` and then `impl.Handle(method, handler)` per method (in an
+  `init()`, never in a package-level var: a handler that references its own agent there is a Go
+  initialization cycle). A configured agent whose constructor reads config uses `Agent.ImplementConfigured`
+  and reads config in a method via `ctx.Config(Agent)`.
 - Handlers may be plain closures or ordinary Go methods bound with a method expression
-  (`golem.Handle(impl, Cart.AddItem, golem.Bind((*state).AddItem))`).
+  (`impl.Handle(Cart.AddItem, golem.Bind((*state).AddItem))`).
 
 ## Tooling
 

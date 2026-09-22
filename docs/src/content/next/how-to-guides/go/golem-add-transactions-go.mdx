@@ -17,8 +17,7 @@ already provides.
 The Go API lives in the `golem` package:
 
 - `golem.Operation[In, Out, E]` — a compensable step, built with `golem.NewOperation`.
-- `golem.Step(tx, op, input)` — run an operation inside a transaction (a **free
-  function**, because Go methods cannot take type parameters).
+- `tx.Step(op, input)` — run an operation inside a transaction.
 - `golem.FallibleTransaction[Out, E](...)` — rolls back on failure and **returns** a
   `golem.TransactionFailure[E]`.
 - `golem.InfallibleTransaction[Out, E](...)` — rolls back and **retries** the whole
@@ -32,7 +31,7 @@ open so the runtime replays it.
 
 1. **Define each operation** with `golem.NewOperation(execute, compensate)`.
 2. **Choose a transaction flavor** — fallible (failure is acceptable) or infallible (must eventually succeed).
-3. **Run the steps** with `golem.Step(tx, op, input)` inside the transaction body.
+3. **Run the steps** with `tx.Step(op, input)` inside the transaction body.
 4. **Handle the outcome** — inspect the `golem.Result` (fallible) or use the returned value (infallible).
 
 ## Defining Operations
@@ -83,16 +82,16 @@ var chargePayment = golem.NewOperation(
 
 On a step failure, the completed steps are compensated (best-effort, in reverse)
 and a `golem.TransactionFailure[E]` is returned — **there is no retry**. Run steps
-with `golem.Step(tx, op, input)`; return an error result from the body to trigger
+with `tx.Step(op, input)`; return an error result from the body to trigger
 rollback.
 
 ```go
 result := golem.FallibleTransaction(func(tx *golem.Transaction[string]) golem.Result[string, string] {
-	r1 := golem.Step(tx, reserveInventory, "SKU-123")
+	r1 := tx.Step(reserveInventory, "SKU-123")
 	if r1.IsErr() {
 		return golem.Err[string, string](r1.Err())
 	}
-	r2 := golem.Step(tx, chargePayment, 4999)
+	r2 := tx.Step(chargePayment, 4999)
 	if r2.IsErr() {
 		return golem.Err[string, string](r2.Err())
 	}
@@ -129,11 +128,11 @@ transaction** — so it returns the plain `Out` value, always succeeding eventua
 
 ```go
 orderID := golem.InfallibleTransaction(func(tx *golem.Transaction[string]) golem.Result[string, string] {
-	r1 := golem.Step(tx, reserveInventory, "SKU-123")
+	r1 := tx.Step(reserveInventory, "SKU-123")
 	if r1.IsErr() {
 		return golem.Err[string, string](r1.Err())
 	}
-	r2 := golem.Step(tx, chargePayment, 4999)
+	r2 := tx.Step(chargePayment, 4999)
 	if r2.IsErr() {
 		return golem.Err[string, string](r2.Err())
 	}
@@ -154,14 +153,14 @@ its transactions are `async` and require wrapping bodies in `boxed(async move { 
 })`. The Go SDK has **none of that** — there is a single `golem.NewOperation`, and
 transaction bodies are plain synchronous functions. Blocking work inside a step
 (HTTP, RPC, promises) suspends the fiber at its await point, so no `async`/`boxed`
-plumbing is needed. `golem.Step` is a top-level function (not a method on the
-transaction) because Go methods cannot carry the per-step type parameters.
+plumbing is needed. A step is a method on the transaction, `tx.Step(op, input)`,
+so the error type comes from the transaction itself.
 
 ## Guidelines
 
 - Model expected step failures as the **error arm** of the step's `golem.Result`;
   reserve `panic` for infra failures (it leaves the region open for replay).
-- Run every step with `golem.Step(tx, op, input)` — that is what records the
+- Run every step with `tx.Step(op, input)` — that is what records the
   compensation to run on rollback.
 - Keep compensation logic **idempotent** — it may run more than once (especially
   under `InfallibleTransaction`).

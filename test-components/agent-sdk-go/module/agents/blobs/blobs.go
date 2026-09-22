@@ -24,16 +24,11 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 })
 
 var (
-	Write = golem.DefineMethod[Id, WriteIn, golem.Unit]("write",
-		golem.Desc("Write an object into a container, creating the container if needed"))
+	Write = Agent.Method[WriteIn, golem.Unit]("write", golem.Desc("Write an object into a container, creating the container if needed"))
 	// Read returns the object's content, or "" when the object is absent.
-	Read = golem.DefineMethod[Id, ObjectIn, string]("read",
-		golem.Desc("Read an object; empty string when absent"))
-	Size = golem.DefineMethod[Id, ObjectIn, int64]("size",
-		golem.Desc("Return the object's size in bytes"))
-	Delete = golem.DefineMethod[Id, ObjectIn, golem.Unit]("delete",
-		golem.Desc("Delete an object"))
+	Read   = Agent.Method[ObjectIn, string]("read", golem.Desc("Read an object; empty string when absent"))
+	Size   = Agent.Method[ObjectIn, int64]("size", golem.Desc("Return the object's size in bytes"))
+	Delete = Agent.Method[ObjectIn, golem.Unit]("delete", golem.Desc("Delete an object"))
 	// List returns the container's object names, sorted so the result is comparable.
-	List = golem.DefineMethod[Id, ContainerIn, []string]("list",
-		golem.Desc("List a container's objects, sorted"))
+	List = Agent.Method[ContainerIn, []string]("list", golem.Desc("List a container's objects, sorted"))
 )

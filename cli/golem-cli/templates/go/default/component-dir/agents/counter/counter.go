@@ -21,7 +21,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 // Method descriptors are package-level vars: the same value drives the published
 // schema, the implementation binding, and calls from other agents.
 var (
-	Increment = golem.DefineMethod[ID, golem.Unit, int64]("increment", golem.Desc("Increase the count by one"))
-	Add       = golem.DefineMethod[ID, AddIn, int64]("add", golem.Desc("Add to the count"))
-	Value     = golem.DefineMethod[ID, golem.Unit, int64]("value", golem.Desc("Return the current value"))
+	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Desc("Increase the count by one"))
+	Add       = Agent.Method[AddIn, int64]("add", golem.Desc("Add to the count"))
+	Value     = Agent.Method[golem.Unit, int64]("value", golem.Desc("Return the current value"))
 )

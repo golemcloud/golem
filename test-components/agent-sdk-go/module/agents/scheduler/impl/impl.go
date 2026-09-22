@@ -15,7 +15,7 @@ import (
 
 type state struct{}
 
-var agent = golem.Implement(scheduler.Agent, func(scheduler.Id) *state { return &state{} })
+var agent = scheduler.Agent.Implement(func(scheduler.Id) *state { return &state{} })
 
 func scheduleBump(in scheduler.ScheduleIn) *golem.ScheduledInvocation {
 	c := counter.Agent.Get(counter.CounterID{Name: in.Target})
@@ -24,11 +24,11 @@ func scheduleBump(in scheduler.ScheduleIn) *golem.ScheduledInvocation {
 }
 
 func init() {
-	golem.Handle(agent, scheduler.Bump, func(_ *golem.Context[state], in scheduler.ScheduleIn) golem.Unit {
+	agent.Handle(scheduler.Bump, func(_ *golem.Context[state], in scheduler.ScheduleIn) golem.Unit {
 		scheduleBump(in)
 		return golem.Unit{}
 	})
-	golem.Handle(agent, scheduler.BumpCancelled, func(_ *golem.Context[state], in scheduler.ScheduleIn) golem.Unit {
+	agent.Handle(scheduler.BumpCancelled, func(_ *golem.Context[state], in scheduler.ScheduleIn) golem.Unit {
 		scheduleBump(in).Cancel()
 		return golem.Unit{}
 	})

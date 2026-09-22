@@ -13,8 +13,8 @@ This split lets agents call one another without a Go import cycle, and keeps sta
 
 1. **Create the definition** — add `agents/<name>/<name>.go` with `package <name>`.
 2. **Declare identity + types** — an `ID` struct (its fields are the constructor parameters), plus any input/output structs.
-3. **Define the agent and its methods** — `golem.DefineAgent` + one `golem.DefineMethod` descriptor per method.
-4. **Create the implementation** — add `agents/<name>/impl/impl.go` with `package impl`: a private `state`, `golem.Implement`, and one `golem.Handle` per method.
+3. **Define the agent and its methods** — `golem.DefineAgent` + one `Agent.Method` descriptor per method.
+4. **Create the implementation** — add `agents/<name>/impl/impl.go` with `package impl`: a private `state`, `Agent.Implement`, and one `impl.Handle` per method.
 5. **Wire it in** — blank-import the impl package in `main.go`.
 6. **Build** — run `golem build`.
 
@@ -42,9 +42,9 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 // Method descriptors are package-level vars: the same value drives the published
 // schema, the implementation binding, and calls from other agents.
 var (
-	Increment = golem.DefineMethod[ID, golem.Unit, int64]("increment", golem.Desc("Increase the count by one"))
-	Add       = golem.DefineMethod[ID, AddIn, int64]("add", golem.Desc("Add to the count"))
-	Value     = golem.DefineMethod[ID, golem.Unit, int64]("value", golem.Desc("Return the current value"))
+	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Desc("Increase the count by one"))
+	Add       = Agent.Method[AddIn, int64]("add", golem.Desc("Add to the count"))
+	Value     = Agent.Method[golem.Unit, int64]("value", golem.Desc("Return the current value"))
 )
 ```
 
@@ -69,19 +69,19 @@ func (s *state) current() int64 { return s.value }
 
 // Implement binds the constructor and returns a handle; Handle registers each
 // method on it.
-var agent = golem.Implement(counter.Agent, func(counter.ID) *state { return &state{} })
+var agent = counter.Agent.Implement(func(counter.ID) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		ctx.State.value++
 		return ctx.State.value
 	})
-	golem.Handle(agent, counter.Add, func(ctx *golem.Context[state], in counter.AddIn) int64 {
+	agent.Handle(counter.Add, func(ctx *golem.Context[state], in counter.AddIn) int64 {
 		ctx.State.value += in.By
 		return ctx.State.value
 	})
 	// A handler can also be an ordinary Go method, bound with a method expression.
-	golem.Handle(agent, counter.Value, golem.Bind0((*state).current))
+	agent.Handle(counter.Value, golem.Bind0((*state).current))
 }
 ```
 
@@ -122,10 +122,10 @@ Handlers return only their output value. Signal failure two ways:
 
 ```go
 // definition
-var Record = golem.DefineMethod[ID, RecordIn, golem.Result[int64, string]]("record")
+var Record = Agent.Method[RecordIn, golem.Result[int64, string]]("record")
 
 // handler
-golem.Handle(agent, Record, func(ctx *golem.Context[state], in RecordIn) golem.Result[int64, string] {
+agent.Handle(Record, func(ctx *golem.Context[state], in RecordIn) golem.Result[int64, string] {
 	if in.Amount < 0 {
 		return golem.Err[int64, string]("cannot record a negative amount")
 	}

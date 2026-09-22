@@ -18,14 +18,14 @@ type state struct{ count int64 }
 func (s *state) Save() ([]byte, error) { return json.Marshal(s.count) }
 func (s *state) Load(b []byte) error   { return json.Unmarshal(b, &s.count) }
 
-var agent = golem.Implement(snapstate.Agent, func(snapstate.Id) *state { return &state{} })
+var agent = snapstate.Agent.Implement(func(snapstate.Id) *state { return &state{} })
 
 func init() {
-	golem.Handle(agent, snapstate.Bump, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(snapstate.Bump, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		ctx.State.count++
 		return ctx.State.count
 	})
-	golem.Handle(agent, snapstate.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+	agent.Handle(snapstate.Value, func(ctx *golem.Context[state], _ golem.Unit) int64 {
 		return ctx.State.count
 	})
 }
