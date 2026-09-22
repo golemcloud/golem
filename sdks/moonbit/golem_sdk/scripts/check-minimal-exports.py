@@ -146,6 +146,8 @@ def main():
             size for package, size in summary["code_by_package"].items()
             if package.startswith("golemcloud/golem_sdk/gen/"))
         if not args.measure_only:
+            if tools_present:
+                assert summary["stream"]["writes"] == 7, summary["stream"]
             absent = ["rpc", "tool-middleware", "tool-middleware-exports"]
             if not agents:
                 absent += ["agents", "agent-exports"]

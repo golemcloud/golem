@@ -97,6 +97,7 @@ fn provider_stdout_from_callbacks(
     },
     fn() { state.val.open && !state.val.dropped },
     None,
+    write_window_size=65536,
   )
   { state, output, }
 }

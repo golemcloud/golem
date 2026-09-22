@@ -18,7 +18,11 @@ executes discovery and snapshot save through canonical ABI exports, and invokes
 the tool's `ping` and `burst` methods through the asynchronous canonical ABI.
 `burst` verifies every byte across sizes 0, 1, 63, 64, 65, 4096, and 65537; records
 provider write calls; and checks exactly one finish and drop. These boundaries
-exercise the generated async runtime's byte staging batch size. The MoonBit tests
+exercise `ProviderStdout`'s 64 KiB callback window using the generated async runtime's
+bounded-copy API. The expected seven writes comprise five small chunks and two
+chunks for 65537 bytes; the empty write is skipped. This is a tool stdout
+`write(list<u8>)` probe, not a direct component `stream<u8>` probe or a count of
+Wasmtime host reader calls, which may coalesce submissions. The MoonBit tests
 also exercise generated registration, SDK guest dispatch, agent initialization,
 state mutation, JSON snapshot envelopes, already-initialized snapshot rejection,
 and explicit no-agent/no-tool errors.

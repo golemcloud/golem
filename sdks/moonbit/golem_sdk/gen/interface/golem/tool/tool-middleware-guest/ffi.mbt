@@ -6803,10 +6803,10 @@ fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamCom
                   if writer_closed.val || data.length() == 0 {
                         return 0
                   }
-                  let data_len = if data.length() < 64 {
+                  let data_len = if data.length() < 65536 {
                         data.length()
                   } else {
-                        64
+                        65536
                   }
                   let ptr = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1Malloc(data_len)
                   for i in 0..<data_len {
@@ -6862,6 +6862,7 @@ fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamCom
             () => close_writer_serialized(),
             () => !writer_closed.val,
             Some(cleanup_value),
+            write_window_size=65536,
             )
             let relay_source = producer is None
             let run_producer = async fn() -> Unit {
@@ -6872,7 +6873,7 @@ fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamCom
                         }
                         None =>
                         for ;; {
-                              match stream.read(64) {
+                              match stream.read(65536) {
                                     Some(data) =>
                                     if !sink.write_all(data[:]) {
                                           stream.reject(cleanup_value)

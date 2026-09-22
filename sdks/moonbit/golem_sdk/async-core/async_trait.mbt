@@ -5,6 +5,7 @@ pub struct Sink[X] {
   priv is_open : () -> Bool
   priv has_cleanup : () -> Bool
   priv cleanup : ((X) -> Unit)?
+  priv write_window_size : Int
 }
 
 ///|
@@ -21,8 +22,10 @@ pub fn[X] Sink::from_callbacks(
   close : async () -> Unit,
   is_open : () -> Bool,
   cleanup : ((X) -> Unit)?,
+  write_window_size? : Int = sink_write_window_size,
 ) -> Sink[X] {
-  { write, close, is_open, has_cleanup: () => cleanup is Some(_), cleanup, }
+  guard! write_window_size > 0
+  { write, close, is_open, has_cleanup: () => cleanup is Some(_), cleanup, write_window_size }
 }
 
 ///|
@@ -34,10 +37,10 @@ pub async fn[X] Sink::write(self : Sink[X], data : ArrayView[X]) -> Int {
   if data.length() == 0 {
     return 0
   }
-  let length = if data.length() < sink_write_window_size {
+  let length = if data.length() < self.write_window_size {
     data.length()
   } else {
-    sink_write_window_size
+    self.write_window_size
   }
   // The callback may suspend, so it must not retain the caller's borrowed view.
   let buffer = FixedArray::makei(length, i => data[i])
@@ -60,10 +63,10 @@ pub async fn Sink::write_bytes(self : Sink[Byte], data : BytesView) -> Int {
   if data.length() == 0 {
     return 0
   }
-  let length = if data.length() < sink_write_window_size {
+  let length = if data.length() < self.write_window_size {
     data.length()
   } else {
-    sink_write_window_size
+    self.write_window_size
   }
   let buffer = FixedArray::makei(length, i => data[i])
   let written = (self.write)(buffer[:])
@@ -125,7 +128,9 @@ pub async fn[X] Sink::write_all(self : Sink[X], data : ArrayView[X]) -> Bool {
       return true
     }
     let written = {
-      errdefer self.cleanup_unaccepted(data, offset)
+      errdefer {
+        self.cleanup_unaccepted(data, offset)
+      }
       self.write(data[offset:])
     }
     offset = offset + written
@@ -146,7 +151,9 @@ pub async fn Sink::write_all_bytes(self : Sink[Byte], data : BytesView) -> Bool 
       return true
     }
     let written = {
-      errdefer self.cleanup_unaccepted_bytes(data, offset)
+      errdefer {
+        self.cleanup_unaccepted_bytes(data, offset)
+      }
       self.write_bytes(data[offset:])
     }
     offset = offset + written
@@ -546,17 +553,17 @@ pub fn[X] Future::ready_with_cleanup(
   cleanup : (X) -> Unit,
 ) -> Future[X] {
   let state : Ref[LocalFutureState[X]] = {
-    val: { value: Some(value), closed: false, cleanup: Some(cleanup), },
+    val: { value: Some(value), closed: false, cleanup: Some(cleanup) },
   }
-  { inner: Local(state), }
+  { inner: Local(state) }
 }
 
 ///|
 pub fn[X] Future::ready(value : X) -> Future[X] {
   let state : Ref[LocalFutureState[X]] = {
-    val: { value: Some(value), closed: false, cleanup: None, },
+    val: { value: Some(value), closed: false, cleanup: None },
   }
-  { inner: Local(state), }
+  { inner: Local(state) }
 }
 
 ///|
@@ -569,9 +576,7 @@ pub fn[X] Future::from(
   producer : async () -> X,
   on_unstarted_drop? : () -> Unit,
 ) -> Future[X] {
-  {
-    inner: Pending({ val: { producer: Some(producer), on_unstarted_drop, }, }),
-  }
+  { inner: Pending({ val: { producer: Some(producer), on_unstarted_drop } }) }
 }
 
 ///|
@@ -581,7 +586,7 @@ pub fn[X] Future::from_source(
   close : async () -> Unit,
   close_sync : () -> Unit,
 ) -> Future[X] {
-  { inner: Source({ get, close, close_sync, }), }
+  { inner: Source({ get, close, close_sync }) }
 }
 
 ///|
@@ -732,6 +737,7 @@ fn[X] stream_pipe_sink(pipe : Ref[StreamPipe[X]]) -> Sink[X] {
     close: () => stream_pipe_close_writer(pipe),
     is_open: () => !pipe.val.writer_closed && !pipe.val.reader_dropped,
     has_cleanup: () => pipe.val.cleanup is Some(_),
+    write_window_size: sink_write_window_size,
     cleanup: Some(fn(value) {
       match pipe.val.cleanup {
         Some(cleanup) => cleanup(value)
@@ -747,7 +753,7 @@ fn[X] new_local_stream(
   cleanup : ((X) -> Unit)?,
 ) -> (Stream[X], Sink[X]) {
   let pipe = new_stream_pipe(capacity, cleanup)
-  let stream = Stream::{ inner: Local(pipe), }
+  let stream = Stream::{ inner: Local(pipe) }
   let sink = stream_pipe_sink(pipe)
   (stream, sink)
 }
@@ -777,7 +783,11 @@ fn[X] materialize_stream_producer(
           state.val.on_unstarted_drop = None
           let sink = stream_pipe_sink(pipe)
           spawn_stream_producer(async fn() {
-            defer (sink.close() catch { _ => () })
+            defer {
+              sink.close() catch {
+                _ => ()
+              }
+            }
             producer(sink)
           })
         }
@@ -821,7 +831,7 @@ pub fn[X] Stream::produce(
 ) -> Stream[X] {
   {
     inner: Outgoing({
-      val: { producer: Some(producer), cleanup, on_unstarted_drop, pipe: None, },
+      val: { producer: Some(producer), cleanup, on_unstarted_drop, pipe: None },
     }),
   }
 }
@@ -833,7 +843,7 @@ pub fn[X] Stream::from_source(
   close : async () -> Unit,
   close_sync : () -> Unit,
 ) -> Stream[X] {
-  { inner: Source({ read, close, close_sync, }), }
+  { inner: Source({ read, close, close_sync }) }
 }
 
 ///|
