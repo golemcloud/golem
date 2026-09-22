@@ -1720,12 +1720,29 @@ class CodegenPipelineSpec extends munit.FunSuite {
 
     assertEquals(
       result.rpc.files.map(_.relativePath),
-      Seq("example/GrepClient.scala", "example/GrepMiddleware.scala")
+      Seq("example/GrepCallProjection.scala", "example/GrepClient.scala", "example/GrepMiddleware.scala")
     )
     assert(result.rpc.files.last.content.contains("trait GrepUnderlying"))
     assert(
       result.rpc.files.last.content.contains("trait GrepMiddleware extends GrepMiddleware.Adapter[GrepUnderlying]")
     )
+  }
+
+  test("pipeline rejects an existing object that collides with the generated call projection") {
+    val source = SourceDiscovery.SourceInput(
+      "ProjectionCollision.scala",
+      """|package example
+         |import golem.runtime.annotations._
+         |@toolDefinition(name = "grep")
+         |trait Grep { def run(): String }
+         |object GrepCallProjection
+         |""".stripMargin
+    )
+
+    val error = intercept[CodegenPipeline.PipelineException] {
+      CodegenPipeline.run(discover(source), None, rpcEnabled = true)
+    }
+    assert(error.getMessage.contains("GrepCallProjection"), error.getMessage)
   }
 
   test("pipeline rejects ambiguous flattened middleware methods") {

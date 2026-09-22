@@ -111,7 +111,7 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("def apply(): GrepClient = apply(toolName)"))
     assert(content.contains("def apply(lookupName: _root_.scala.Predef.String): GrepClient = new Root(lookupName)"))
     assert(content.contains("ToolRpcClient.transport(lookupName)"))
-    assert(content.contains("_root_.golem.runtime.macros.ToolDefinitionMacro.tryMetadata[Grep]"))
+    assert(content.contains("new _root_.golem.tool.AmbientToolCallBackend"))
   }
 
   test("drops Principal and stdout parameters and keeps stdin; stdout returns a started invocation") {
@@ -127,23 +127,17 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
       )
     )
     assert(content.contains("_root_.scala.Some(stdin)"))
-    assert(content.contains("ToolClientRuntime.start"))
-    assert(content.contains("decodeValueResult"))
+    assert(content.contains("GrepCallProjection.__start_grep"))
   }
 
   test("the implicit-body root command invokes with an empty command path") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
-    // `grep` is the tool's root command: no path element is appended
-    assert(
-      content.contains("_root_.golem.tool.ToolClientRuntime.start(__transport, _root_.scala.Nil, __input")
-    )
+    assert(content.contains("GrepCallProjection.__start_grep(__backend, _root_.scala.Nil"))
   }
 
   test("unwraps Future results and decodes typed errors through the derived error schema") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
-    assert(content.contains("private lazy val __errorSchema_GrepError: _root_.golem.tool.ToolErrorSchema[GrepError]"))
-    assert(content.contains("_root_.golem.runtime.macros.ToolErrorSchemaDerivation.derive[GrepError]"))
-    assert(content.contains("__errorSchema_GrepError.fromErrorValue(_)"))
+    assert(content.contains("GrepCallProjection.__await_replace"))
     // subcommands inherit the root global `caseSensitive`
     assert(
       content.contains(
@@ -161,7 +155,7 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
           "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[_root_.scala.Nothing], String]]"
       )
     )
-    assert(content.contains("runInfallible"))
+    assert(content.contains("GrepCallProjection.__await_version"))
   }
 
   test("count-flag parameters encode through countFlagValue") {
@@ -185,12 +179,7 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
         """("git-dir", _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[Option[String]]].toValue(gitDir))"""
       )
     )
-    assert(
-      content.contains(
-        """_root_.golem.tool.ToolClientRuntime.run[GitError](__transport, _root_.scala.List("status"), __input"""
-      )
-    )
-    assert(content.contains("""private lazy val __model_status"""))
+    assert(content.contains("GitCallProjection.__await_status"))
   }
 
   test("subtree methods return wrapper clients carrying the inherited canonical prefix") {
@@ -203,9 +192,7 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val prefixIdx  = content.indexOf("""prefixValue("git-dir"""")
     val verboseIdx = content.indexOf("""prefixValue("verbose"""")
     assert(prefixIdx >= 0 && verboseIdx >= 0 && prefixIdx < verboseIdx)
-    // navigation appends the child command name and preserves the selected transport
-    assert(content.contains("""_root_.scala.List("remote")"""))
-    assert(content.contains("new GitClient.RemoteClient(\n        __transport,"))
+    assert(content.contains("new GitClient.RemoteClient(\n        __backend,"))
   }
 
   test("wrapper leaf methods use the dynamic input path when a prefix is inherited") {
@@ -213,13 +200,8 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val content = result.files.find(_.relativePath == "example/GitClient.scala").get.content
 
     assert(content.contains("def add(name: String, url: String):"))
-    assert(content.contains("if (__inheritedPrefix.isEmpty)"))
-    assert(content.contains("buildDynamicInput"))
-    assert(content.contains("""__commandPath :+ "add""""))
-    // the child's implicit-body command does not extend the command path
-    assert(content.contains("runInfallible(__transport, __commandPath, __input"))
-    // the child descriptor backs the wrapper's canonical input models
-    assert(content.contains("ToolDefinitionMacro.tryMetadata[Remote]"))
+    assert(content.contains("GitCallProjection.__await_add(__backend, __inheritedPrefix"))
+    assert(content.contains("GitCallProjection.__await_remote(__backend, __inheritedPrefix"))
   }
 
   test("child wrappers omit parameters supplied through inherited canonical aliases") {
@@ -429,7 +411,6 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
 
     val content = generate("Grep2.scala" -> source).files.head.content
     assert(content.contains("""val toolName: _root_.scala.Predef.String = "super-grep""""))
-    // the overridden root command is the implicit body: empty command path
-    assert(content.contains("runInfallible(__transport, _root_.scala.Nil, __input"))
+    assert(content.contains("Grep2CallProjection.__await_superGrep(__backend, _root_.scala.Nil"))
   }
 }

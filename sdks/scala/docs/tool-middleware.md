@@ -162,6 +162,6 @@ A pure middleware component cannot invoke ambient tools through an ordinary gene
 
 The three artifacts are generated from the same WIT/build matrix and embedded byte-for-byte in both sbt and Mill plugins. `golemPrepare` refreshes all three `.generated/*.wasm` files by content hash, while `golem-cli` selects the one named by the component template.
 
-## Future client design
+## Generated client relationship
 
-[GOL-484](https://linear.app/golem-cloud/issue/GOL-484/redesign-scala-typed-tool-clients-around-injectable-transports-and) tracks a possible redesign of typed Scala tool clients around injectable transports and failure algebras. That could simplify how ordinary and underlying projections share implementation, but it is not required to author or run middleware with the API described here.
+The generated `<Tool>Client` and `<Tool>Underlying` remain separate nominal APIs for ambient calls and invocation-scoped middleware calls. Code generation backs both with the same internal command paths, canonical input assembly, declared-error codecs, and result codecs, so the two call surfaces encode and decode a tool definition consistently without exposing the transport abstraction to application code.
