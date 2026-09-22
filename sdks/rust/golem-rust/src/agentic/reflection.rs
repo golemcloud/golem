@@ -520,7 +520,7 @@ impl AgentType {
         )?;
         Ok(ReflectedAgentClient {
             agent_type: self.clone(),
-            transport: Rc::new(transport),
+            transport: ReflectedTransport::Host(Rc::new(transport)),
             reusable_identity: Some(agent_id.clone()),
         })
     }
@@ -860,7 +860,7 @@ impl ReflectedAgentClientFactory {
         )?;
         Ok(ReflectedAgentClient {
             agent_type: self.agent_type.clone(),
-            transport: Rc::new(transport),
+            transport: ReflectedTransport::Host(Rc::new(transport)),
             reusable_identity: identity,
         })
     }
@@ -869,7 +869,7 @@ impl ReflectedAgentClientFactory {
 #[derive(Clone)]
 pub struct ReflectedAgentClient {
     agent_type: AgentType,
-    transport: Rc<RpcTransport>,
+    transport: ReflectedTransport,
     reusable_identity: Option<ParsedAgentId>,
 }
 
@@ -898,7 +898,101 @@ impl ReflectedAgentClient {
 #[derive(Clone)]
 pub struct ReflectedAgentMethod {
     definition: AgentMethod,
-    transport: Rc<RpcTransport>,
+    transport: ReflectedTransport,
+}
+
+#[derive(Clone)]
+enum ReflectedTransport {
+    Host(Rc<RpcTransport>),
+    #[cfg(test)]
+    Test(Rc<TestReflectedTransport>),
+}
+
+#[cfg(test)]
+struct TestReflectedTransport {
+    value: Option<SchemaValue>,
+}
+
+#[cfg(test)]
+impl TestReflectedTransport {
+    fn completion(&self) -> Invocation<Option<SchemaValue>> {
+        Invocation {
+            metadata: InvocationMetadata {
+                agent_id: ParsedAgentId::new("test-agent"),
+                idempotency_key: "test-key".to_string(),
+            },
+            value: self.value.clone(),
+        }
+    }
+
+    async fn invoke_and_await(&self, _method: &str, _input: SchemaValue) -> PendingResult {
+        Ok(self.completion())
+    }
+
+    fn pending(&self, _method: &str, _input: SchemaValue) -> ReflectedTransportPending {
+        let completion = self.completion();
+        ReflectedTransportPending {
+            metadata: completion.metadata.clone(),
+            cancel: Rc::new(|| {}),
+            future: Box::pin(std::future::ready(Ok(completion))),
+        }
+    }
+}
+
+impl ReflectedTransport {
+    async fn invoke_and_await(&self, method: &str, input: SchemaValue) -> PendingResult {
+        match self {
+            Self::Host(transport) => transport.invoke_and_await(method, input).await,
+            #[cfg(test)]
+            Self::Test(transport) => transport.invoke_and_await(method, input).await,
+        }
+    }
+
+    fn pending(
+        &self,
+        method: &str,
+        input: SchemaValue,
+    ) -> Result<ReflectedTransportPending, GolemReflectError> {
+        match self {
+            Self::Host(transport) => {
+                let pending = transport.pending(method, input)?;
+                let metadata = pending.metadata.clone();
+                let cancellation = Rc::clone(&pending.raw);
+                Ok(ReflectedTransportPending {
+                    metadata,
+                    cancel: Rc::new(move || cancellation.cancel()),
+                    future: Box::pin(pending),
+                })
+            }
+            #[cfg(test)]
+            Self::Test(transport) => Ok(transport.pending(method, input)),
+        }
+    }
+
+    fn trigger(
+        &self,
+        method: &str,
+        input: SchemaValue,
+    ) -> Result<InvocationMetadata, GolemReflectError> {
+        match self {
+            Self::Host(transport) => transport.trigger(method, input),
+            #[cfg(test)]
+            Self::Test(_) => panic!("test reflected transport does not support trigger"),
+        }
+    }
+
+    fn schedule(
+        &self,
+        at: ScheduledTime,
+        method: &str,
+        input: SchemaValue,
+    ) -> Result<ScheduledInvocation, GolemReflectError> {
+        match self {
+            Self::Host(transport) => transport.schedule(at, method, input),
+            #[cfg(test)]
+            Self::Test(_) => panic!("test reflected transport does not support scheduling"),
+        }
+    }
 }
 
 fn validate_declared_output(
@@ -1127,6 +1221,21 @@ pub struct ScheduledInvocation {
 }
 
 type PendingResult = Result<Invocation<Option<SchemaValue>>, GolemReflectError>;
+type PendingResultFuture = Pin<Box<dyn Future<Output = PendingResult>>>;
+
+struct ReflectedTransportPending {
+    metadata: InvocationMetadata,
+    cancel: Rc<dyn Fn()>,
+    future: PendingResultFuture,
+}
+
+impl Future for ReflectedTransportPending {
+    type Output = PendingResult;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.get_mut().future.as_mut().poll(cx)
+    }
+}
 
 pub struct PendingInvocation {
     pub metadata: InvocationMetadata,
@@ -1136,7 +1245,7 @@ pub struct PendingInvocation {
 
 /// A reflected pending invocation that applies the selected method's output policy on completion.
 pub struct ReflectedPendingInvocation {
-    checked: CheckedReflectedOutput<PendingInvocation>,
+    checked: CheckedReflectedOutput<ReflectedTransportPending>,
 }
 
 struct CheckedReflectedOutput<F> {
@@ -1151,7 +1260,7 @@ impl ReflectedPendingInvocation {
     }
 
     pub fn cancel(&self) {
-        self.checked.inner.cancel();
+        (self.checked.inner.cancel)();
     }
 
     pub async fn get(self) -> PendingResult {
@@ -1570,17 +1679,16 @@ fn decode_custom_error(value: crate::schema::wit::wire::TypedSchemaValue) -> Rem
 #[cfg(test)]
 mod tests {
     use super::{
-        CheckedReflectedOutput, GolemReflectError, Invocation, InvocationMetadata,
-        MethodOnlyAgentClientDefinition, ParsedAgentId, SchemaRef, validate_declared_output,
+        AgentMethod, GolemReflectError, MethodOnlyAgentClientDefinition, ReflectedAgentMethod,
+        ReflectedTransport, SchemaRef, TestReflectedTransport, validate_declared_output,
     };
+    use crate::bindings::golem::agent::common as wire_common;
     use crate::schema::{
         MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, VariantCaseType,
         VariantValuePayload,
     };
     use serde_json::json;
-    use std::future::{Future, ready};
-    use std::pin::Pin;
-    use std::task::{Context, Poll, Waker};
+    use std::rc::Rc;
     use test_r::test;
 
     #[test]
@@ -1666,39 +1774,61 @@ mod tests {
     }
 
     #[test]
-    fn reflected_pending_output_matches_awaited_policy() {
+    async fn reflected_public_completion_paths_apply_the_same_output_policy() {
         let output = SchemaRef::new(SchemaGraph::anonymous(SchemaType::string()));
-        for (declared, value) in [
-            (Some(output.clone()), None),
-            (None, Some(SchemaValue::Bool(true))),
-            (Some(output.clone()), Some(SchemaValue::U32(7))),
+        let input = SchemaRef::new(SchemaGraph::anonymous(SchemaType::record(vec![])));
+        for (name, declared, value) in [
+            ("missing_declared", Some(output.clone()), None),
+            ("unexpected_unit", None, Some(SchemaValue::Bool(true))),
             (
+                "incompatible",
                 Some(output.clone()),
-                Some(SchemaValue::String("ok".to_string())),
+                Some(SchemaValue::U32(7)),
             ),
         ] {
-            let awaited = validate_declared_output(declared.as_ref(), value.as_ref(), "read");
-            let invocation = Invocation {
-                metadata: InvocationMetadata {
-                    agent_id: ParsedAgentId::new("test"),
-                    idempotency_key: "test".to_string(),
+            let method = ReflectedAgentMethod {
+                definition: AgentMethod {
+                    agent_type_name: "InvalidOutput".to_string(),
+                    raw: wire_common::AgentMethod {
+                        name: name.to_string(),
+                        description: String::new(),
+                        http_endpoint: vec![],
+                        prompt_hint: None,
+                        input_schema: wire_common::InputSchema::Parameters(vec![]),
+                        output_schema: if declared.is_some() {
+                            wire_common::OutputSchema::Single(0)
+                        } else {
+                            wire_common::OutputSchema::Unit
+                        },
+                        read_only: None,
+                    },
+                    input: input.clone(),
+                    output: declared,
                 },
-                value,
+                transport: ReflectedTransport::Test(Rc::new(TestReflectedTransport { value })),
             };
-            let mut pending = CheckedReflectedOutput {
-                inner: ready(Ok(invocation)),
-                output: declared,
-                method: "read".to_string(),
-            };
-            let mut context = Context::from_waker(Waker::noop());
-            let completed = Pin::new(&mut pending).poll(&mut context);
-            let Poll::Ready(result) = completed else {
-                panic!("ready reflected invocation must complete");
-            };
-            assert_eq!(result.is_ok(), awaited.is_ok());
-            if let Err(error) = result {
-                assert!(matches!(error, GolemReflectError::MalformedRemoteOutput(_)));
-            }
+            let empty = SchemaValue::Record { fields: vec![] };
+
+            let awaited = method
+                .invoke_value(empty.clone())
+                .await
+                .expect_err("awaited completion must reject malformed output");
+            let pending = method
+                .pending_value(empty)
+                .expect("pending invocation starts")
+                .get()
+                .await
+                .expect_err("pending completion must reject malformed output");
+
+            assert!(matches!(
+                awaited,
+                GolemReflectError::MalformedRemoteOutput(_)
+            ));
+            assert!(matches!(
+                pending,
+                GolemReflectError::MalformedRemoteOutput(_)
+            ));
+            assert_eq!(awaited.to_string(), pending.to_string());
         }
     }
 
