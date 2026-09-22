@@ -33,6 +33,10 @@ components:
     dependencies:
       agents:
         - effect-cross-sdk:effect-provider/EffectFixture
+        - effect-cross-sdk:ts-peer/TsPrincipalPeer
+      tools:
+        - effect-cross-sdk:ts-peer/ts-cross-plain
+        - effect-cross-sdk:ts-peer/ts-optional-reflection
   effect-cross-sdk:effect-consumer:
     dir: effect-consumer
     templates: effect
@@ -51,6 +55,7 @@ tools:
   ts-cross-streaming: {}
   effect-optional-reflection: {}
   ts-optional-reflection: {}
+  ts-cross-plain: {}
 
 agents:
   EffectFixture:
@@ -64,6 +69,11 @@ agents:
       effect-cross-streaming: {}
       effect-optional-reflection: {}
       ts-cross-streaming: {}
+      ts-optional-reflection: {}
+      ts-cross-plain: {}
+  RustPeer:
+    tools:
+      ts-cross-plain: {}
       ts-optional-reflection: {}
   EffectConsumer:
     tools:

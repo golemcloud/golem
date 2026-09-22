@@ -118,7 +118,20 @@ try {
       assert.ok(ephemeral.includes("TsEphemeralPeer"), ephemeral)
       const nonfinite = invoke(caller, "nonfiniteReflection")
       assert.ok(nonfinite.includes("TsPeer:true:true|RustPeer:true:true"), nonfinite)
-      console.log("Deployed Effect reflected agent calls and ephemeral lifecycle passed")
+      const rustCaller = `RustPeer("rust-${stamp}")`
+      const rustFirst = invoke(rustCaller, "reflected_ts_agent")
+      assert.ok(rustFirst.includes("TsPeer|TsPeer|0.0|Some(F64(0"), rustFirst)
+      assert.ok(rustFirst.includes("|1.0|Some(F64(1"), rustFirst)
+      const rustSecond = invoke(rustCaller, "reflected_ts_agent")
+      assert.ok(rustSecond.includes("TsPeer|TsPeer|1.0|Some(F64(1"), rustSecond)
+      assert.ok(rustSecond.includes("|2.0|Some(F64(2"), rustSecond)
+      const rustPrincipal = invoke(rustCaller, "principal_identity_round_trip")
+      const rustTenant = `principal-rust-rust-${stamp}`
+      assert.ok(
+        rustPrincipal.includes(`${rustTenant}:1|${rustTenant}:2|${rustTenant}:3`),
+        rustPrincipal,
+      )
+      console.log("Deployed Effect and Rust reflected agent calls and ephemeral lifecycle passed")
     } else if (process.env.RUN_TOOL_REFLECTION_ONLY !== "1") {
       const ts = invoke(`TsPeer("ts-${stamp}")`, "callEffect", `"ts-${stamp}"`, '"request-ts"')
       assert.ok(ts.includes(`ts-override:ts-${stamp}:2:5`), ts)
@@ -308,7 +321,22 @@ try {
         generatedEffectTool.includes(`ts-ok:effect-${stamp}|ts:effect-${stamp}:TYPED`),
         generatedEffectTool,
       )
-      console.log("Deployed TS and Effect typed, reflected, and dynamic tool calls passed")
+      const reflectedRustTool = invoke(
+        `RustPeer("rust-${stamp}")`,
+        "reflected_ts_tool",
+        '"reflection"',
+      )
+      assert.ok(
+        reflectedRustTool.includes(String.raw`ts-plain:reflection|\"ts-plain:reflection\"`),
+        reflectedRustTool,
+      )
+      assert.ok(reflectedRustTool.includes("|true|Some(String("), reflectedRustTool)
+      const reflectedRustOptional = invoke(`RustPeer("rust-${stamp}")`, "reflected_optional_tool")
+      assert.ok(
+        reflectedRustOptional.includes("omitted|supplied|omitted|supplied"),
+        reflectedRustOptional,
+      )
+      console.log("Deployed TS, Effect, and Rust typed, reflected, and dynamic tool calls passed")
     }
   }
 } finally {
