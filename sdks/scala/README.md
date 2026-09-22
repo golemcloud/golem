@@ -211,6 +211,7 @@ object Example {
 - **[Getting started](example/README.md)** - Minimal end-to-end project setup (Scala.js + golem-cli)
 - **[Snapshot helpers](docs/snapshot.md)** - State persistence helpers
 - **[Transaction helpers](docs/transactions.md)** - Infallible and fallible transaction patterns
+- **[Retry policies](docs/retry.md)** - Host-managed policies and local `Future` retries
 - **[Result helpers](docs/result.md)** - WIT-friendly `Result` type for error handling
 - **[Tool middleware](docs/tool-middleware.md)** - Transparent, adapter, and universal middleware authoring
 - **[Supported versions](docs/supported-versions.md)** - Compatibility matrix
