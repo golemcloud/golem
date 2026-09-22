@@ -278,30 +278,6 @@ impl<'a> GraphDecoder<'a> {
     }
 }
 
-#[cfg(test)]
-mod graph_decoder_tests {
-    use super::GraphDecoder;
-    use crate::schema::{MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType};
-    use test_r::test;
-
-    #[test]
-    fn shared_decoder_reuses_successfully_decoded_type_nodes() {
-        let graph = SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
-            name: "entry".to_string(),
-            body: SchemaType::list(SchemaType::string()),
-            metadata: MetadataEnvelope::default(),
-        }]));
-        let wire = crate::schema::wit::encode_graph(&graph).unwrap();
-        let decoder = GraphDecoder::new(&wire).unwrap();
-
-        let first = decoder.decode_type_at(wire.root).unwrap();
-        let decoded_count = decoder.ctx.decoded.borrow().len();
-        assert!(decoded_count > 1);
-        assert_eq!(decoder.decode_type_at(wire.root).unwrap(), first);
-        assert_eq!(decoder.ctx.decoded.borrow().len(), decoded_count);
-    }
-}
-
 /// Decode a value tree by reference, rejecting any quota-token handle (host /
 /// feature-neutral).
 ///
@@ -1587,5 +1563,29 @@ fn usize_index_v(i: wire::ValueNodeIndex) -> Result<usize, DecodeError> {
         Err(DecodeError::ValueNodeIndexOutOfRange(i))
     } else {
         Ok(i as usize)
+    }
+}
+
+#[cfg(test)]
+mod graph_decoder_tests {
+    use super::GraphDecoder;
+    use crate::schema::{MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType};
+    use test_r::test;
+
+    #[test]
+    fn shared_decoder_reuses_successfully_decoded_type_nodes() {
+        let graph = SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
+            name: "entry".to_string(),
+            body: SchemaType::list(SchemaType::string()),
+            metadata: MetadataEnvelope::default(),
+        }]));
+        let wire = crate::schema::wit::encode_graph(&graph).unwrap();
+        let decoder = GraphDecoder::new(&wire).unwrap();
+
+        let first = decoder.decode_type_at(wire.root).unwrap();
+        let decoded_count = decoder.ctx.decoded.borrow().len();
+        assert!(decoded_count > 1);
+        assert_eq!(decoder.decode_type_at(wire.root).unwrap(), first);
+        assert_eq!(decoder.ctx.decoded.borrow().len(), decoded_count);
     }
 }
