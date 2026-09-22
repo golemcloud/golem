@@ -15,8 +15,8 @@
 //! Saves a directory tree as a named filesystem snapshot, and restores it.
 //!
 //! [`FilesystemSnapshotStore`] is the interface. [`InMemorySnapshotStore`] keeps each snapshot in
-//! the memory of the process. The contract suite in `contract` holds the behaviour that each
-//! store must have.
+//! the memory of the process. The contract suite in `contract_tests` holds the behaviour that each
+//! store must have, and it compiles only for tests.
 
 use async_trait::async_trait;
 use golem_common::model::{OwnedAgentId, Timestamp};
@@ -26,7 +26,7 @@ use std::fmt::{Display, Formatter};
 use std::path::Path;
 
 #[cfg(test)]
-mod contract;
+mod contract_tests;
 mod memory;
 
 #[allow(unused_imports)]

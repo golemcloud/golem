@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The trees of the contract suite: a fixture that the suite writes, and a listing that the suite
-//! reads back. Neither uses the code of an adapter, so a defect of an adapter cannot hide in the
-//! check.
+//! This module is test code, and it compiles only for tests.
+//!
+//! It holds the trees of the contract suite: a fixture that the suite writes, and a listing that
+//! the suite reads back. The suite writes these trees and reads them back with its own code, not
+//! with the code of a store. So a defect of a store cannot hide in the check.
 
 use std::fs::Metadata;
 use std::path::Path;

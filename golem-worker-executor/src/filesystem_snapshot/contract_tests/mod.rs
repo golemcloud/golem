@@ -12,17 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The contract of [`FilesystemSnapshotStore`]: the behaviour that each store must have.
+//! This module is test code, and it compiles only for tests.
 //!
-//! Each case sees a store only through the trait. A store registers the suite with [`register`]
-//! from a `#[test_gen]` function. It gives the suite a function that opens stores over one new
-//! storage for each case. The suite writes its own trees and reads them back with its own code. So
-//! it does not use the code of a store to check that store.
+//! It holds the contract suite of [`FilesystemSnapshotStore`]: the behaviour that each adapter of
+//! the trait must have. Each case sees a store only through the trait. The suite writes its own
+//! trees and reads them back with its own code. So it does not use the code of a store to check
+//! that store.
+//!
+//! An adapter registers the suite from a `#[test_gen]` function in its own tests. That function
+//! calls [`register`] with a function that gives an [`OpenStore`] over one new, empty storage. The
+//! suite calls it one time for each case. Each call of the [`OpenStore`] opens one more store over
+//! the same storage, as another executor has. The in-memory store registers the suite in
+//! `memory/tests.rs`:
+//!
+//! ```ignore
+//! #[test_gen]
+//! fn in_memory_store_keeps_the_contract(r: &mut DynamicTestRegistration) {
+//!     contract_tests::register(r, || {
+//!         let store = InMemorySnapshotStore::new();
+//!         let open: OpenStore =
+//!             Arc::new(move || Arc::new(store.clone()) as Arc<dyn FilesystemSnapshotStore>);
+//!         open
+//!     });
+//! }
+//! ```
 
-mod tree;
+mod fixture;
 
 use super::{
     FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope, SnapshotStoreError,
+};
+use fixture::{
+    Listed, Scratch, Spec, files_and_bytes, fixture, listing, one_file, pattern, write_tree,
 };
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
@@ -33,9 +54,6 @@ use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use test_r::core::{DynamicTestRegistration, TestProperties};
-use tree::{
-    Listed, Scratch, Spec, files_and_bytes, fixture, listing, one_file, pattern, write_tree,
-};
 use uuid::Uuid;
 
 /// Opens a store over the storage of one case. Each call opens another store over the same

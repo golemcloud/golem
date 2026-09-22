@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{InMemorySnapshotStore, Stored};
-use crate::filesystem_snapshot::contract::{self, OpenStore, new_scope};
+use crate::filesystem_snapshot::contract_tests::{self, OpenStore, new_scope};
 use crate::filesystem_snapshot::{
     FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotStoreError,
 };
@@ -26,7 +26,7 @@ use test_r::{test, test_gen};
 
 #[test_gen]
 fn in_memory_store_keeps_the_contract(r: &mut DynamicTestRegistration) {
-    contract::register(r, || {
+    contract_tests::register(r, || {
         let store = InMemorySnapshotStore::new();
         let open: OpenStore =
             Arc::new(move || Arc::new(store.clone()) as Arc<dyn FilesystemSnapshotStore>);
@@ -124,7 +124,7 @@ async fn of_two_saves_of_one_name_at_the_same_time_one_wins() {
 
 #[cfg(unix)]
 mod unix {
-    use crate::filesystem_snapshot::contract::new_scope;
+    use crate::filesystem_snapshot::contract_tests::new_scope;
     use crate::filesystem_snapshot::{
         FilesystemSnapshotStore, InMemorySnapshotStore, SnapshotName, SnapshotStoreError,
     };
