@@ -12,7 +12,7 @@ package golem.reflection
 
 import golem.Uuid
 import golem.schema._
-import golem.schema.SchemaTypeBody.{RecordType, RefType, S32Type, StringType}
+import golem.schema.SchemaTypeBody.{ListType, RecordType, RefType, S32Type, StringType}
 import golem.schema.SchemaValue._
 import golem.schema.wire.SchemaWire
 import golem.tool._
@@ -27,7 +27,7 @@ import scala.concurrent.{ExecutionContext, Future, Promise}
 object ToolReflectionSpec extends ZIOSpecDefault {
   private val stringGraph = SchemaGraph(ListMap.empty, SchemaType(StringType))
 
-  private def sample(valueGraph: SchemaGraph = stringGraph): ToolType = {
+  private def sample(valueGraph: SchemaGraph = stringGraph, errorName: Option[String] = None): ToolType = {
     val doc    = Doc("", "", Nil)
     val schema = SchemaWire.schemaGraphToWit(valueGraph)
     val body   = WitCommandBody(
@@ -41,7 +41,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       None,
       None,
       Some(WitResultSpec(schema.root, doc, Nil, "")),
-      Nil,
+      errorName.toList.map(name => WitErrorCase(name, doc, ErrorKind.RuntimeError, 1, Some(schema.root))),
       None
     )
     new ToolType(
@@ -264,6 +264,31 @@ object ToolReflectionSpec extends ZIOSpecDefault {
         command.decodeResult(ToolInvokeResult(Some(sameIdWrong))).isLeft,
         command.decodeResult(ToolInvokeResult(Some(otherIdSame))).isRight
       )
+    },
+    test("deep result and declared error graphs remain structurally comparable") {
+      def nested(depth: Int, leaf: SchemaType): SchemaType =
+        (0 until depth).foldLeft(leaf)((current, _) => SchemaType(ListType(current)))
+      def value(depth: Int): SchemaValue =
+        (0 until depth).foldLeft(StringValue("hello"): SchemaValue)((current, _) => ListValue(List(current)))
+      def graph(depth: Int, id: String, leaf: SchemaType): SchemaGraph =
+        SchemaGraph(ListMap(id -> SchemaTypeDef(nested(depth, leaf))), SchemaType(RefType(id)))
+
+      assertTrue(List(31, 32, 33).forall { depth =>
+        val expected     = graph(depth, "Expected", SchemaType(StringType))
+        val matching     = TypedSchemaValue(graph(depth, "Equivalent", SchemaType(StringType)), value(depth))
+        val wrong        = TypedSchemaValue(graph(depth, "Expected", SchemaType(S32Type(None))), value(depth))
+        val command      = sample(expected, Some("declared")).command(List("run")).toOption.get
+        val matchedError = command.mapFailure(
+          ToolRpcFailure.RemoteToolError(ToolInvokeError.UnknownToolError("declared", matching))
+        )
+        val wrongError = command.mapFailure(
+          ToolRpcFailure.RemoteToolError(ToolInvokeError.UnknownToolError("declared", wrong))
+        )
+        command.decodeResult(ToolInvokeResult(Some(matching))).isRight &&
+        command.decodeResult(ToolInvokeResult(Some(wrong))).isLeft &&
+        matchedError == ToolError.Tool(NamedToolError("declared", matching)) &&
+        wrongError.isInstanceOf[ToolError.MalformedRemoteOutput]
+      })
     },
     test("stream failures remain recoverable for reflected calls") {
       val broken = new ToolInputStream {

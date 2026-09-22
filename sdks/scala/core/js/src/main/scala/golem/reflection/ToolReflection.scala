@@ -371,7 +371,7 @@ final class ToolCommand private[reflection] (
     if (okay) Right(value) else Left(ToolError.InvalidInput("tool command constraints failed"))
   }
 
-  private def mapFailure(failure: ToolRpcFailure): ToolError[NamedToolError] = failure match {
+  private[reflection] def mapFailure(failure: ToolRpcFailure): ToolError[NamedToolError] = failure match {
     case ToolRpcFailure.ProtocolError(message)                                           => ToolError.Rpc(RpcError.Protocol(message))
     case ToolRpcFailure.Denied(message)                                                  => ToolError.Rpc(RpcError.Denied(message))
     case ToolRpcFailure.NotFound(message)                                                => ToolError.Rpc(RpcError.NotFound(message))
