@@ -357,9 +357,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     {
                         // Core initialization has already entered the executable Store. Losing it
                         // is terminal for an external owner, just as losing its invocation body is.
-                        self.parent
+                        if self
+                            .parent
                             .add_and_commit_oplog(OplogEntry::interrupted())
-                            .await;
+                            .await
+                            .is_err()
+                        {
+                            // The shard has a new owner. Give the agent up without archiving:
+                            // the archive would move an oplog that is no longer this executor's.
+                            self.stop_startup_given_up().await;
+                            break;
+                        }
                         self.stop_unloaded(Some(super::inactive_ephemeral_agent_error()))
                             .await;
                         self.archive_ephemeral_oplog();

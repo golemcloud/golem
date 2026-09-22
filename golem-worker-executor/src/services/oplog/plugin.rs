@@ -19,7 +19,7 @@ use crate::services::component::ComponentService;
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
-    OplogLifecycleGuard, OplogService, OrderedOplogStart, ReservedRawStartBuilder, downcast_oplog,
+    OplogLifecycleGuard, OplogService, OrderedOplogStart, ReservedRawStartBuilder,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -947,7 +947,7 @@ impl OplogService for ForwardingOplogService {
 pub struct ForwardingOplog {
     inner: Arc<dyn Oplog>,
     jobs: tokio::sync::mpsc::UnboundedSender<ForwardingJob>,
-    /// Completion of the actor task; also used by [`try_join_background_work`] to wait for a
+    /// Completion of the actor task; also used to wait for a
     /// cooperative shutdown without needing to take the `JoinHandle` out of a shared reference.
     closed: OplogCloseCompletion,
     retired: AtomicBool,
@@ -959,7 +959,7 @@ pub struct ForwardingOplog {
 /// A request processed by the [`ForwardingOplog`] actor task, which exclusively owns the
 /// [`ForwardingOplogState`].
 enum ForwardingJob {
-    /// Requests a graceful shutdown: sent by `Drop`, `retire`, and `try_join_background_work`.
+    /// Requests a graceful shutdown: sent by `Drop` and `retire`.
     /// Drains no further jobs after this one, so the actor exits once every job already queued
     /// ahead of it - including a stray `Tick` the timer enqueued in the instant before it was
     /// stopped - has been processed.
@@ -1342,7 +1342,7 @@ impl ForwardingOplog {
     /// Enqueues a job for the actor task and awaits its reply.
     ///
     /// A missing reply means the actor failed, or this handle was used after retirement or after
-    /// `try_join_background_work` stopped it - both cooperative shutdowns that run only once no
+    /// `retire` stopped it - both cooperative shutdowns that run only once no
     /// caller can still be in flight, and both drain every job queued before `Close`, so a
     /// missing reply otherwise means the actor itself panicked and the oplog's state is no
     /// longer trustworthy.
@@ -1383,31 +1383,6 @@ impl Drop for ForwardingOplog {
         // tasks are joined and it exits.
         let _ = self.jobs.send(ForwardingJob::Close);
     }
-}
-
-/// Stops this handle's periodic commit timer and forwarding actor and waits for both to actually
-/// finish, so no job either one is holding - or that the timer enqueues in the instant before it
-/// stops - can still be running once this returns. Does nothing for an oplog with no forwarding
-/// layer.
-///
-/// Unlike `Drop` (which only requests cancellation: by the time it runs no caller can still be
-/// waiting on a job reply, and a live oplog's own epoch fences anything the actor is still
-/// writing), a handle built for a fork target asserts no epoch at all - it is closed and hands off
-/// to the target's real owner before that owner opens its own primary oplog at its own epoch. A
-/// periodic checkpoint commit the actor is still running when the caller moves on would land,
-/// unfenced, into storage the owner may already be writing into.
-///
-/// Built on the same `retire`/`closed` mechanism the open-oplog cache uses to evict a stale
-/// handle, rather than a second, competing shutdown path: `retire` aborts the timer and sends
-/// `Close`, which drains everything already queued ahead of it - including a tick the timer sent
-/// in the instant before it was stopped - before the actor exits and its monitor tasks are
-/// joined; `closed` is that completion.
-pub(crate) async fn try_join_background_work(this: &Arc<dyn Oplog>) {
-    let Some(this) = downcast_oplog::<ForwardingOplog>(this) else {
-        return;
-    };
-    this.retire();
-    let _ = this.closed().await;
 }
 
 #[async_trait]

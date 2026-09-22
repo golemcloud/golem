@@ -134,7 +134,7 @@ pub(crate) async fn write_guest_result(
                 forced_commit: false,
             }),
         )
-        .await;
+        .await?;
     if let Some(start_index) = copied_scope_start {
         oplog
             .add(OplogEntry::End {
@@ -143,7 +143,7 @@ pub(crate) async fn write_guest_result(
                 response: None,
                 forced_commit: true,
             })
-            .await;
+            .await?;
     }
     Ok(())
 }
