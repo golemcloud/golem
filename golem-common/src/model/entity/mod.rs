@@ -694,6 +694,27 @@ impl EntityInvocationPlan {
                 );
             }
         }
+        let leaf_binding = match layers.last().unwrap().activation().policy() {
+            EntityActivationPolicy::Tool { binding, .. } => binding,
+            EntityActivationPolicy::ToolMiddleware { .. } => unreachable!(),
+        };
+        for layer in &layers[..layers.len() - 1] {
+            let policy = layer.activation().policy();
+            if !policy
+                .secret_keys_readable()
+                .is_subset_of(&leaf_binding.secret_keys_readable)
+                || !policy
+                    .secret_keys_revealable()
+                    .is_subset_of(&leaf_binding.secret_keys_revealable)
+                || !policy
+                    .secret_keys_revealable()
+                    .is_subset_of(policy.secret_keys_readable())
+            {
+                return Err(
+                    "Entity middleware secret policy exceeds the recorded leaf binding".to_string(),
+                );
+            }
+        }
         Ok(())
     }
 
