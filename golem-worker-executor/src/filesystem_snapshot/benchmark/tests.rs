@@ -244,6 +244,7 @@ fn a_selection_names_a_tree_and_a_phase_of_its_scenario() {
             found("smoke", "sqlite-tiny", "restore"),
             found("base", "objects-1g", "restore"),
             found("restore-threads", "files-1g", "restore-8"),
+            found("memory-pressure", "files-1g", "restore"),
             found("concurrent-restore-4", "files-128m", "restore-x200"),
             found("concurrent-save", "sqlite-1g", "save-x8"),
             found("base", "files-tiny", "save"),
@@ -254,7 +255,7 @@ fn a_selection_names_a_tree_and_a_phase_of_its_scenario() {
         ]
         .map(|found| found.is_ok()),
         [
-            true, true, true, true, true, true, false, false, false, false, false
+            true, true, true, true, true, true, true, false, false, false, false, false
         ]
     );
 }
