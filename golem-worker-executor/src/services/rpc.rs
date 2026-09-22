@@ -795,14 +795,9 @@ fn rpc_error_from_rejection(rejected: InvocationRejected) -> RpcError {
         InvocationRejectionReason::NotFound => RpcError::NotFound {
             details: rejected.error,
         },
-        // A routing miss is transient: a retry reaches the shard's owner once the routing table has
-        // been refreshed. The executor's text names the shard, or for a fenced oplog both epochs,
-        // so it is kept rather than replaced by a bare "Sharding not ready".
-        InvocationRejectionReason::Internal | InvocationRejectionReason::ShardingNotReady => {
-            RpcError::RemoteInternalError {
-                details: rejected.error,
-            }
-        }
+        InvocationRejectionReason::Internal => RpcError::RemoteInternalError {
+            details: rejected.error,
+        },
         _ => RpcError::ProtocolError {
             details: rejected.error,
         },
@@ -1915,13 +1910,9 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
 #[cfg(test)]
 mod protocol_tests {
-    use super::{
-        RpcError, method_validation_revision, rpc_error_from_failure, rpc_error_from_rejection,
-    };
+    use super::{RpcError, method_validation_revision, rpc_error_from_failure};
     use crate::services::worker_proxy::WorkerProxyError;
-    use golem_api_grpc::proto::golem::worker::{
-        InvocationFailure, InvocationFailureKind, InvocationRejected, InvocationRejectionReason,
-    };
+    use golem_api_grpc::proto::golem::worker::{InvocationFailure, InvocationFailureKind};
     use golem_common::model::agent::{
         AgentError as ModelAgentError, InvocationFreshnessDisposition,
     };
@@ -1999,28 +1990,6 @@ mod protocol_tests {
             }
         );
     }
-
-    #[test]
-    fn a_routing_miss_rejection_is_transient_and_keeps_the_executors_detail() {
-        let detail =
-            "Oplog write for x fenced: this executor asserted shard epoch 3, the stored epoch is 4";
-        let error = rpc_error_from_rejection(InvocationRejected {
-            reason: InvocationRejectionReason::ShardingNotReady as i32,
-            error: detail.to_string(),
-            idempotency_key: None,
-            agent_id: None,
-            component_revision: None,
-            worker_error: None,
-        });
-
-        assert_eq!(
-            error,
-            RpcError::RemoteInternalError {
-                details: detail.to_string(),
-            }
-        );
-    }
-
     #[test]
     fn invalid_remote_request_is_an_agent_input_error() {
         let error = RpcError::from(WorkerExecutorError::invalid_request("wrong argument shape"));

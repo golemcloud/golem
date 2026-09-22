@@ -126,8 +126,8 @@ impl TestWorkerExecutor {
             match response.response {
                 Some(invocation_response::Response::Accepted(_)) => {}
                 Some(invocation_response::Response::Rejected(rejected)) => {
-                    // The reason is what a caller acts on (the worker service reroutes
-                    // `SHARDING_NOT_READY`), so it is kept alongside the message.
+                    // Kept alongside the message: a rejection is refused before acceptance, and
+                    // the reason says as what.
                     let reason =
                         golem_api_grpc::proto::golem::worker::InvocationRejectionReason::try_from(
                             rejected.reason,

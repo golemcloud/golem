@@ -102,13 +102,11 @@ struct SessionDispatch {
 }
 
 impl SessionDispatch {
-    fn routing_miss(&self) -> Option<&InvocationRejected> {
+    fn routing_miss(&self) -> Option<WorkerExecutorError> {
         match &self.decision {
             Some(InvocationResponse {
                 response: Some(invocation_response::Response::Rejected(rejected)),
-            }) if rejected.reason == InvocationRejectionReason::ShardingNotReady as i32 => {
-                Some(rejected)
-            }
+            }) => routing_miss_error(rejected),
             _ => None,
         }
     }
@@ -154,6 +152,24 @@ enum OneShotInvocationSessionResult {
 
 fn protocol_failure(details: impl Into<String>) -> OneShotInvocationSessionResult {
     OneShotInvocationSessionResult::ProtocolFailure(details.into())
+}
+
+/// The executor error a rejection carries when the request reached an executor that does not
+/// own the agent's shard: a stale route, a lapsed lease, or an oplog with a new owner. Not a
+/// refusal of the invocation - the caller retries it on the shard's owner after refreshing its
+/// routing table - which is why it is read off the typed error rather than
+/// [`decode_invocation_rejection`], whose result is a service error nothing retries.
+fn routing_miss_error(rejected: &InvocationRejected) -> Option<WorkerExecutorError> {
+    if rejected.reason != InvocationRejectionReason::Internal as i32 {
+        return None;
+    }
+    let error: WorkerExecutorError = rejected.worker_error.clone()?.try_into().ok()?;
+    // A fenced oplog crosses the wire as `ShardingNotReady`.
+    matches!(
+        error,
+        WorkerExecutorError::InvalidShardId { .. } | WorkerExecutorError::ShardingNotReady
+    )
+    .then_some(error)
 }
 
 fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceError {
@@ -2001,22 +2017,19 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                 },
                 |outcome| match outcome {
                     OneShotInvocationSessionResult::Success(output) => Ok(output),
-                    // A routing miss, retried on the shard's owner like the typed failure an
-                    // executor sends for the same condition after accepting.
-                    OneShotInvocationSessionResult::Rejected(rejected)
-                        if rejected.reason
-                            == InvocationRejectionReason::ShardingNotReady as i32 =>
-                    {
-                        // The typed error is bare on purpose; the rejection text is what names the
-                        // agent and, for a fenced oplog, both epochs, so it is kept in the log.
-                        tracing::debug!(
-                            error = %rejected.error,
-                            "Executor turned the invocation away as a routing miss"
-                        );
-                        Err(WorkerExecutorError::ShardingNotReady.into())
-                    }
                     OneShotInvocationSessionResult::Rejected(rejected) => {
-                        Err(decode_invocation_rejection(rejected).into())
+                        // A routing miss is retried on the shard's owner, like the typed failure
+                        // an executor sends for the same condition after accepting.
+                        match routing_miss_error(&rejected) {
+                            Some(error) => {
+                                tracing::debug!(
+                                    %error,
+                                    "Executor turned the invocation away as a routing miss"
+                                );
+                                Err(error.into())
+                            }
+                            None => Err(decode_invocation_rejection(rejected).into()),
+                        }
                     }
                     OneShotInvocationSessionResult::Failure(failure) => {
                         Err(decode_invocation_failure(failure).into())
@@ -2076,12 +2089,12 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     Box::pin(dispatch_invocation_session(worker_executor_client, first))
                 },
                 |dispatch| match dispatch.routing_miss() {
-                    Some(rejected) => {
+                    Some(error) => {
                         tracing::debug!(
-                            error = %rejected.error,
+                            %error,
                             "Executor turned the invocation session away as a routing miss"
                         );
-                        Err(ResponseMapResult::ShardingNotReady)
+                        Err(error.into())
                     }
                     None => Ok(dispatch),
                 },
@@ -3217,21 +3230,30 @@ mod rejection_mapping_tests {
                     ..Default::default()
                 })
             } else {
-                let (reason, error) = if routing_miss {
+                let (reason, error, worker_error) = if routing_miss {
+                    let error = WorkerExecutorError::InvalidShardId {
+                        shard_id: golem_common::model::ShardId::new(0),
+                        shard_ids: Vec::new(),
+                    };
                     (
-                        InvocationRejectionReason::ShardingNotReady,
-                        "0 is not in shards []",
+                        InvocationRejectionReason::Internal,
+                        error.to_string(),
+                        Some(error.into()),
                     )
                 } else {
-                    (InvocationRejectionReason::NotFound, "agent not found")
+                    (
+                        InvocationRejectionReason::NotFound,
+                        "agent not found".to_string(),
+                        None,
+                    )
                 };
                 invocation_response::Response::Rejected(InvocationRejected {
                     reason: reason as i32,
-                    error: error.to_string(),
+                    error,
                     idempotency_key,
                     agent_id,
                     component_revision: None,
-                    worker_error: None,
+                    worker_error,
                 })
             };
             let accepted = matches!(response, invocation_response::Response::Accepted(_));

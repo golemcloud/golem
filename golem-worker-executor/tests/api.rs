@@ -7888,11 +7888,9 @@ async fn an_invocation_enqueued_onto_a_fenced_oplog_is_refused_rather_than_accep
     let error = answer.expect_err("the pending entry was never committed, so there is no value");
     let rendered = format!("{error:#}");
     assert!(
-        // Refused before acceptance, the fence arrives as a rejection carrying the reason the
+        // Refused before acceptance, the fence arrives as a rejection carrying the error the
         // worker service reroutes on.
-        rendered.contains("SHARDING_NOT_READY")
-            || rendered.contains("ShardingNotReady")
-            || rendered.contains("Sharding not ready"),
+        rendered.contains("Sharding not ready") || rendered.contains("fenced"),
         "the caller has to be given the error worker-service reroutes on; instead it got: \
          {rendered}"
     );

@@ -846,7 +846,10 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                 ),
             },
             // The client cannot act on the epochs; what it can do is what it does for a lapsed
-            // lease - refresh its routing table and retry on the owner.
+            // lease - refresh its routing table and retry on the owner. A fence can land in the
+            // middle of an invocation, and the retry is still one invocation, not a second: the
+            // worker service sends it under the same idempotency key, the new owner finds the key
+            // in the oplog it took over if the invocation got that far, and answers from it.
             WorkerExecutorError::OplogFenced { .. } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::ShardingNotReady(

@@ -111,7 +111,6 @@ use async_trait::async_trait;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
-use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::redis::RedisPool;
 use golem_service_base::clients::registry::{GrpcRegistryService, RegistryService};
