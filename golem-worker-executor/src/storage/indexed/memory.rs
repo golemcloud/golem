@@ -52,8 +52,9 @@ impl InMemoryIndexedStorage {
     }
 
     /// Gives the key of the map for `key` in `namespace`. The key holds no agent id, because
-    /// `key` already names the agent, as on the other indexed storage backends. An agent name can
-    /// hold `/`, so a separate part for it would make the scan of a key ambiguous.
+    /// `key` already names the agent. The other indexed storage backends do the same. An agent
+    /// name can hold `/`, so with a separate part for the name, a scan cannot find where the name
+    /// stops.
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog { agent_mode, .. } => {

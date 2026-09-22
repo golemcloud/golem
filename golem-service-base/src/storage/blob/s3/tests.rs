@@ -3029,8 +3029,8 @@ async fn a_filesystem_snapshot_blob_goes_to_its_own_bucket_and_to_the_key_of_its
 #[test]
 async fn an_oplog_payload_goes_to_the_key_of_its_agent_path_segment() {
     // The agent name holds a `..` segment, which the rules of a key refuse. So the key holds the
-    // bounded segment of the agent, and not the component id and the agent name. The path style
-    // of the client puts the bucket first in the URI.
+    // path segment of the agent, and not the component id and the agent name. The path style of
+    // the client puts the bucket first in the URI.
     let agent_id = AgentId {
         component_id: ComponentId(Uuid::nil()),
         agent_id: r#"counter("a/../b")"#.to_string(),

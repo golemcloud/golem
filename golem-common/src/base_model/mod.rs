@@ -281,8 +281,8 @@ impl AgentId {
         format!("urn:worker:{}/{}", self.component_id, self.agent_id)
     }
 
-    /// Gives the agent name with each character that is not an unreserved URL character
-    /// percent-encoded, so that the name is one segment of a URL path.
+    /// Gives the agent name in percent-encoding. The function encodes each character that is not
+    /// an unreserved URL character, so the result is one segment of a URL path.
     ///
     /// The result can be longer than a file name can be, so it is not a directory name.
     pub fn agent_name_encoded(&self) -> String {
@@ -293,8 +293,8 @@ impl AgentId {
 impl FromStr for AgentId {
     type Err = String;
 
-    /// Reads `<component_id>:<agent_name>`. The text splits at its first `:`, because a
-    /// component id holds no `:` and an agent name can hold one.
+    /// Reads `<component_id>:<agent_name>`. The function splits the text at its first `:`,
+    /// because a component id holds no `:` and an agent name can hold one.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some((component_id, agent_name)) = s.split_once(':') {
             let component_id_uuid = Uuid::from_str(component_id)

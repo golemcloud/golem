@@ -1107,7 +1107,7 @@ struct HttpWorkerLogEventStream {
 }
 
 /// Gives the URL of the WebSocket that streams the events of the agent. The agent name is one
-/// segment of the path, so it is percent-encoded.
+/// segment of the path, so the function percent-encodes it.
 fn worker_connect_url(base_url: &url::Url, agent_id: &AgentId) -> String {
     format!(
         "ws://{}:{}/v1/components/{}/workers/{}/connect",
