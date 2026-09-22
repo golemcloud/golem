@@ -94,4 +94,4 @@ class AgentTypeRegistryImpl {
   }
 }
 
-export const AgentTypeRegistry: AgentTypeRegistryImpl = new AgentTypeRegistryImpl();
+export const AgentTypeRegistry: AgentTypeRegistryImpl = /* @__PURE__ */ new AgentTypeRegistryImpl();

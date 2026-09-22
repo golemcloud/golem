@@ -347,4 +347,4 @@ function invalidInput(error: unknown): ToolError {
   };
 }
 
-export const ToolRegistry: ToolRegistryImpl = new ToolRegistryImpl();
+export const ToolRegistry: ToolRegistryImpl = /* @__PURE__ */ new ToolRegistryImpl();
