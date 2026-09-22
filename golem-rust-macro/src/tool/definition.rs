@@ -97,7 +97,9 @@ pub fn tool_definition_impl(
     let client = resolve_sdk(crate::tool::client::synthesize_client(&ir));
     let middleware_surface =
         resolve_sdk(crate::tool::middleware_surface::synthesize_middleware_surface(&ir));
-    let descriptor_fn_ident = crate::tool::descriptor::descriptor_fn_ident(&ir.trait_ident);
+    let descriptor_fn_ident =
+        crate::tool::descriptor::standalone_descriptor_fn_ident(&ir.trait_ident);
+    let prepared_fn_ident = crate::tool::descriptor::prepared_descriptor_fn_ident(&ir.trait_ident);
 
     strip_helper_attrs(&mut item_trait);
 
@@ -109,7 +111,7 @@ pub fn tool_definition_impl(
         where
             Self: Sized,
         {
-            #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
+            #descriptor_fn_ident()
                 .expect("tool descriptor build failed")
         }
     };
@@ -118,6 +120,20 @@ pub fn tool_definition_impl(
         Err(error) => return error.into_compile_error().into(),
     };
     item_trait.items.push(descriptor_item);
+
+    let prepared_item = quote! {
+        #[doc(hidden)]
+        fn __tool_prepared_descriptor() -> golem_rust::agentic::PreparedToolDescriptor
+        where
+            Self: Sized,
+        {
+            #prepared_fn_ident().expect("tool descriptor build failed")
+        }
+    };
+    match syn::parse2::<TraitItem>(resolve_sdk(prepared_item)) {
+        Ok(item) => item_trait.items.push(item),
+        Err(error) => return error.into_compile_error().into(),
+    }
 
     let method_paths = tool_method_paths(&ir);
     let method_paths_item: TraitItem = syn::parse_quote! {

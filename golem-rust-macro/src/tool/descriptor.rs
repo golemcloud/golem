@@ -40,10 +40,20 @@ pub fn descriptor_fn_ident(trait_ident: &Ident) -> Ident {
     format_ident!("__golem_tool_descriptor_for_{}", trait_ident)
 }
 
+pub fn standalone_descriptor_fn_ident(trait_ident: &Ident) -> Ident {
+    format_ident!("__golem_standalone_tool_descriptor_for_{}", trait_ident)
+}
+
+pub fn prepared_descriptor_fn_ident(trait_ident: &Ident) -> Ident {
+    format_ident!("__golem_prepared_tool_descriptor_for_{}", trait_ident)
+}
+
 /// Emits the module-level `__golem_tool_descriptor_for_<Trait>` free function.
 pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Error> {
     let plan = Plan::analyze(ir)?;
     let fn_ident = descriptor_fn_ident(&ir.trait_ident);
+    let standalone_ident = standalone_descriptor_fn_ident(&ir.trait_ident);
+    let prepared_ident = prepared_descriptor_fn_ident(&ir.trait_ident);
     let trait_name = ir.trait_ident.to_string();
 
     let version = match &ir.version {
@@ -68,7 +78,58 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
         }
     }
 
+    let needs_composition = ir.commands.iter().any(|cmd| {
+        cmd.subtree.is_some()
+            || cmd
+                .args
+                .iter()
+                .any(|arg| arg.placement == Some(ArgPlacement::Global))
+            || cmd.constraints.iter().any(constraint_has_value_is)
+    });
+    let standalone = if needs_composition {
+        quote! { #fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new()) }
+    } else {
+        quote! {
+            #[allow(unused_mut)]
+            let mut commands = ::std::vec![#root_node];
+            #(#links)*
+            ::std::result::Result::Ok(golem_rust::agentic::ExtendedToolType {
+                version: #version,
+                commands,
+            })
+        }
+    };
+    let prepare = if ir.commands.iter().any(|cmd| {
+        cmd.subtree.is_some()
+            || cmd.args.iter().any(|arg| arg.default.is_some())
+            || cmd.constraints.iter().any(constraint_has_value_is)
+    }) {
+        quote! { __tool.prepare() }
+    } else {
+        let schemas = schema_checks(ir);
+        quote! { __tool.prepare_without_literals(#schemas) }
+    };
+
     Ok(quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        pub fn #standalone_ident() -> ::std::result::Result<
+            golem_rust::agentic::ExtendedToolType,
+            golem_rust::agentic::ToolBuildError,
+        > {
+            #standalone
+        }
+
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        pub fn #prepared_ident() -> ::std::result::Result<
+            golem_rust::agentic::PreparedToolDescriptor,
+            golem_rust::agentic::ToolBuildError,
+        > {
+            let __tool = #standalone_ident()?;
+            #prepare
+        }
+
         #[doc(hidden)]
         #[allow(non_snake_case)]
         pub fn #fn_ident(
@@ -108,6 +169,62 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
             })
         }
     })
+}
+
+fn constraint_has_value_is(constraint: &ConstraintIr) -> bool {
+    let has = |refs: &[RefIr]| refs.iter().any(|r| matches!(r, RefIr::ValueIs { .. }));
+    match constraint {
+        ConstraintIr::RequiresAll(refs)
+        | ConstraintIr::AllOrNone(refs)
+        | ConstraintIr::RequiresAny(refs) => has(refs),
+        ConstraintIr::MutexGroups(groups) => groups.iter().any(|refs| has(refs)),
+        ConstraintIr::Implies { lhs, rhs, .. } | ConstraintIr::Forbids { lhs, rhs, .. } => {
+            has(lhs) || has(rhs)
+        }
+    }
+}
+
+fn schema_checks(ir: &ToolDefinitionIr) -> TokenStream {
+    // Refinement attributes change the graph after Rust's Schema implementation
+    // produced it. Error schemas are supplied by an independent user trait.
+    if ir.commands.iter().any(|cmd| {
+        split_result(&cmd.output).1.is_some()
+            || cmd.args.iter().any(|arg| {
+                arg.regex.is_some()
+                    || arg.min_length.is_some()
+                    || arg.max_length.is_some()
+                    || arg.path_kind.is_some()
+                    || arg.direction.is_some()
+                    || arg.mime.is_some()
+                    || arg.schemes.is_some()
+                    || arg.raw_min.is_some()
+                    || arg.raw_max.is_some()
+                    || arg.bounds.is_some()
+                    || arg.unit.is_some()
+            })
+    }) {
+        return quote! { golem_rust::agentic::ToolSchemaChecks::dynamic() };
+    }
+    let mut types = Vec::new();
+    for cmd in &ir.commands {
+        for param in &cmd.params {
+            if is_auto_injected_principal_type(&param.ty) || is_stream_type(&param.ty) {
+                continue;
+            }
+            types.push(unwrap_generic1(&param.ty, "Option").unwrap_or(&param.ty));
+        }
+        if let Some(ty) = split_result(&cmd.output).0 {
+            types.push(ty);
+        }
+    }
+    quote! {{
+        use golem_rust::agentic::SelectToolSchemaChecks as _;
+        let checks: &[::std::option::Option<golem_rust::agentic::ToolSchemaChecks>] = &[
+            #((&golem_rust::agentic::ToolSchemaProbe::<#types>(::std::marker::PhantomData)).tool_schema_checks()),*
+        ];
+        checks.iter().flatten().copied().next()
+            .unwrap_or_else(golem_rust::agentic::ToolSchemaChecks::scalar)
+    }}
 }
 
 /// Macro-time facts derived from the trait, with all divergence rules checked.
@@ -1731,9 +1848,11 @@ fn value_graph_tokens(
     min_max: MinMaxRole,
     position: &str,
 ) -> Result<TokenStream, Error> {
-    let base = quote! {
-        golem_rust::agentic::tool_value_schema::<#inner_ty>(#position)?
-    };
+    let base = quote! {{
+        use golem_rust::agentic::SelectToolSchemaChecks as _;
+        (&golem_rust::agentic::ToolSchemaProbe::<#inner_ty>(::std::marker::PhantomData))
+            .tool_value_schema(|| golem_rust::agentic::tool_value_schema::<#inner_ty>(#position))?
+    }};
     let Some(arg) = arg else {
         return Ok(base);
     };
@@ -1994,9 +2113,7 @@ fn build_result(cmd: &CommandIr) -> Result<(TokenStream, TokenStream), Error> {
 
     let result_spec = match ok_ty {
         Some(t) => {
-            let graph = quote! {
-                golem_rust::agentic::tool_value_schema::<#t>("result")?
-            };
+            let graph = value_graph_tokens(t, None, MinMaxRole::Forbidden, "result")?;
             let (formatters, default_formatter) = build_formatters(cmd.result.as_ref());
             let empty_doc = doc_tokens(&DocIr::default());
             quote! {
@@ -2429,7 +2546,65 @@ fn is_unit(ty: &Type) -> bool {
 mod tests {
     use super::*;
     use crate::tool::definition::build_tool_definition_ir;
+    use quote::ToTokens;
     use test_r::test;
+
+    fn generated_body(item: syn::ItemTrait, prefix: &str) -> String {
+        let ir = build_tool_definition_ir(&item, None).unwrap();
+        let file: syn::File = syn::parse2(synthesize_descriptor_fn(&ir).unwrap()).unwrap();
+        file.items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Fn(f) if f.sig.ident.to_string().starts_with(prefix) => {
+                    Some(f.block.to_token_stream().to_string())
+                }
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn standalone_specialization_does_not_retain_composition() {
+        let item: syn::ItemTrait = syn::parse_quote! {
+            trait Simple { fn run(&self, input: String) -> u32; }
+        };
+        let standalone = generated_body(item.clone(), "__golem_standalone");
+        assert!(!standalone.contains("ToolBuildCtx"));
+        assert!(!standalone.contains("normalize_inherited_globals"));
+        let prepared = generated_body(item.clone(), "__golem_prepared");
+        assert!(prepared.contains("prepare_without_literals"));
+        assert!(prepared.contains("ToolSchemaProbe :: < String >"));
+        assert!(!prepared.contains("dynamic"));
+        let composable = generated_body(item, "__golem_tool_descriptor");
+        assert!(composable.contains("apply_pending_graft_root"));
+        assert!(composable.contains("normalize_inherited_globals"));
+    }
+
+    #[test]
+    fn advanced_definitions_keep_required_runtime_checks() {
+        for item in [
+            syn::parse_quote! { trait Globals { #[arg(input = "global")] fn run(&self, input: String); } },
+            syn::parse_quote! { trait Parent { #[command(subtree = Child)] fn child(&self); } },
+            syn::parse_quote! { trait Values { #[constraint(requires_all = value_is("input", "x"))] fn run(&self, input: String); } },
+        ] {
+            assert!(generated_body(item, "__golem_standalone").contains("ToolBuildCtx"));
+        }
+        for item in [
+            syn::parse_quote! { trait Defaults { #[arg(input = "option", default = "x")] fn run(&self, input: String); } },
+            syn::parse_quote! { trait Values { #[constraint(requires_all = value_is("input", "x"))] fn run(&self, input: String); } },
+            syn::parse_quote! { trait Parent { #[command(subtree = Child)] fn child(&self); } },
+        ] {
+            assert!(generated_body(item, "__golem_prepared").contains("__tool . prepare ()"));
+        }
+        for item in [
+            syn::parse_quote! { trait Refined { #[arg(input = "option", regex = "x+")] fn run(&self, input: String); } },
+            syn::parse_quote! { trait Errors { fn run(&self) -> Result<(), CustomError>; } },
+        ] {
+            assert!(
+                generated_body(item, "__golem_prepared").contains("ToolSchemaChecks :: dynamic")
+            );
+        }
+    }
 
     #[test]
     fn ordinary_tool_types_named_native_tool_cancellation_remain_schema_inputs() {

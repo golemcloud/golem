@@ -36,6 +36,176 @@ pub struct ExtendedToolType {
     pub commands: Vec<ExtendedCommandNode>,
 }
 
+/// Immutable, validated metadata. Native conversion is performed once when
+/// preparing the descriptor. Wire values are encoded from the cached native
+/// form because the WIT model is not cloneable.
+///
+/// ```compile_fail
+/// use golem_tool_metadata::PreparedToolDescriptor;
+/// fn mutate(prepared: PreparedToolDescriptor) {
+///     prepared.clone().native().version.clear();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use golem_tool_metadata::PreparedToolDescriptor;
+/// fn mutate(prepared: PreparedToolDescriptor) {
+///     prepared.extended().commands.clear();
+/// }
+/// ```
+#[derive(Clone, Debug)]
+pub struct PreparedToolDescriptor {
+    extended: ExtendedToolType,
+    native: native::Tool,
+}
+
+impl PreparedToolDescriptor {
+    pub fn extended(&self) -> &ExtendedToolType {
+        &self.extended
+    }
+
+    pub fn native(&self) -> &native::Tool {
+        &self.native
+    }
+
+    #[cfg(feature = "guest")]
+    pub fn wire(&self) -> golem_schema::schema::tool::wit::wire::Tool {
+        golem_schema::schema::tool::wit::encode_tool(&self.native)
+            .expect("prepared tool metadata must remain encodable")
+    }
+
+    fn build(extended: ExtendedToolType) -> Result<Self, ToolBuildError> {
+        let native = extended.build_native_tool()?;
+        #[cfg(feature = "guest")]
+        golem_schema::schema::tool::wit::encode_tool(&native)
+            .map_err(|error| ToolBuildError::EncodeError(error.to_string()))?;
+        Ok(Self { extended, native })
+    }
+}
+
+/// Schema validation selected by generated descriptor code. The fields are
+/// private so callers cannot substitute a validator that accepts invalid data.
+#[derive(Clone, Copy)]
+pub struct ToolSchemaChecks(ToolGraphCheck);
+
+type ToolGraphCheck = fn(&SchemaGraph, &str) -> Result<(), ToolBuildError>;
+
+impl ToolSchemaChecks {
+    pub fn dynamic() -> Self {
+        Self(check_graph_closed)
+    }
+
+    pub fn scalar() -> Self {
+        Self(check_scalar_graph)
+    }
+}
+
+/// Autoref dispatch lets generated code select using the resolved Rust type,
+/// including aliases, without confusing a user type named `String` with std's.
+#[doc(hidden)]
+pub struct ToolSchemaProbe<T>(pub std::marker::PhantomData<T>);
+
+#[doc(hidden)]
+pub trait SelectToolSchemaChecks {
+    fn tool_schema_checks(self) -> Option<ToolSchemaChecks>;
+    fn tool_value_schema(
+        self,
+        fallback: impl FnOnce() -> Result<SchemaGraph, ToolBuildError>,
+    ) -> Result<SchemaGraph, ToolBuildError>;
+}
+
+impl<T> SelectToolSchemaChecks for &&ToolSchemaProbe<T> {
+    fn tool_schema_checks(self) -> Option<ToolSchemaChecks> {
+        Some(ToolSchemaChecks::dynamic())
+    }
+
+    fn tool_value_schema(
+        self,
+        fallback: impl FnOnce() -> Result<SchemaGraph, ToolBuildError>,
+    ) -> Result<SchemaGraph, ToolBuildError> {
+        fallback()
+    }
+}
+
+macro_rules! scalar_schema_checks {
+    ($($ty:ty => $constructor:ident),* $(,)?) => {$(
+        impl SelectToolSchemaChecks for &ToolSchemaProbe<$ty> {
+            fn tool_schema_checks(self) -> Option<ToolSchemaChecks> { None }
+
+            #[inline]
+            fn tool_value_schema(
+                self,
+                _fallback: impl FnOnce() -> Result<SchemaGraph, ToolBuildError>,
+            ) -> Result<SchemaGraph, ToolBuildError> {
+                Ok(SchemaGraph::anonymous(SchemaType::$constructor()))
+            }
+        }
+    )*};
+}
+
+scalar_schema_checks!(
+    bool => bool, u8 => u8, u16 => u16, u32 => u32, u64 => u64,
+    i8 => s8, i16 => s16, i32 => s32, i64 => s64,
+    f32 => f32, f64 => f64, char => char, String => string,
+);
+
+fn check_scalar_graph(graph: &SchemaGraph, position: &str) -> Result<(), ToolBuildError> {
+    let scalar = matches!(
+        graph.root,
+        SchemaType::Bool { .. }
+            | SchemaType::String { .. }
+            | SchemaType::Char { .. }
+            | SchemaType::U8 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::U16 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::U32 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::U64 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::S8 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::S16 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::S32 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::S64 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::F32 {
+                restrictions: None,
+                ..
+            }
+            | SchemaType::F64 {
+                restrictions: None,
+                ..
+            }
+    );
+    if scalar && graph.defs.is_empty() {
+        Ok(())
+    } else {
+        Err(ToolBuildError::IllFormedSchema {
+            position: position.to_string(),
+            detail: "expected an unrefined scalar schema".to_string(),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ExtendedCommandNode {
     pub name: String,
@@ -857,6 +1027,24 @@ impl ExtendedToolType {
         self.commands.first().map(|c| c.name.as_str()).unwrap_or("")
     }
 
+    /// Prepare an already normalized, genuinely dynamic descriptor with all
+    /// schema and literal checks enabled.
+    pub fn prepare(self) -> Result<PreparedToolDescriptor, ToolBuildError> {
+        validate_tool(&self)?;
+        PreparedToolDescriptor::build(self)
+    }
+
+    /// Prepare a generated descriptor with no defaults or `value-is` literals.
+    /// Unexpected literals are rejected, not ignored. Schema checks remain
+    /// enabled and are selected using macro facts and resolved Rust types.
+    pub fn prepare_without_literals(
+        self,
+        schemas: ToolSchemaChecks,
+    ) -> Result<PreparedToolDescriptor, ToolBuildError> {
+        validate_tool_with::<false>(&self, schemas.0)?;
+        PreparedToolDescriptor::build(self)
+    }
+
     #[cfg(feature = "guest")]
     pub fn to_tool(&self) -> golem_schema::schema::tool::wit::wire::Tool {
         self.try_to_tool().expect("failed to build tool metadata")
@@ -874,6 +1062,10 @@ impl ExtendedToolType {
     /// Builds the SDK-owned recursive metadata model used by middleware APIs.
     pub fn try_to_native_tool(&self) -> Result<native::Tool, ToolBuildError> {
         validate_tool(self)?;
+        self.build_native_tool()
+    }
+
+    fn build_native_tool(&self) -> Result<native::Tool, ToolBuildError> {
         let schema = merge_agent_graphs(collect_schema_graphs(self))
             .map_err(|error| ToolBuildError::EncodeError(error.to_string()))?;
         let commands = self
@@ -1735,8 +1927,15 @@ fn insert_unique_short(set: &mut BTreeSet<char>, short: char) -> Result<(), Tool
 /// Runs the structural command-tree check first so the subsequent recursive
 /// traversal can index the tree without bounds/cycle hazards.
 pub fn validate_tool(tool: &ExtendedToolType) -> Result<(), ToolBuildError> {
+    validate_tool_with::<true>(tool, check_graph_closed)
+}
+
+fn validate_tool_with<const VALUES: bool>(
+    tool: &ExtendedToolType,
+    graph_check: ToolGraphCheck,
+) -> Result<(), ToolBuildError> {
     check_command_tree_structure(tool)?;
-    visit_command(tool, 0, &[])
+    visit_command::<VALUES>(tool, 0, &[], graph_check)
 }
 
 /// Structural integrity of the command tree: non-empty, every subcommand index
@@ -1791,29 +1990,30 @@ fn dfs_command_tree(
 /// `ancestor_globals` are the globals of strict ancestors (root excluded only
 /// at the root call); the current node's own globals are appended to form the
 /// in-scope set for its body and children.
-fn visit_command(
+fn visit_command<const VALUES: bool>(
     tool: &ExtendedToolType,
     index: usize,
     ancestor_globals: &[&ExtendedGlobals],
+    graph_check: ToolGraphCheck,
 ) -> Result<(), ToolBuildError> {
     let node = &tool.commands[index];
     check_identifier("command name", &node.name)?;
     for alias in &node.aliases {
         check_identifier("command alias", alias)?;
     }
-    check_globals_decls(&node.globals)?;
+    check_globals_decls::<VALUES>(&node.globals, graph_check)?;
     check_global_scope_uniqueness(ancestor_globals, &node.globals)?;
 
     let mut in_scope: Vec<&ExtendedGlobals> = ancestor_globals.to_vec();
     in_scope.push(&node.globals);
 
     if let Some(body) = &node.body {
-        check_body(body, &in_scope)?;
+        check_body::<VALUES>(body, &in_scope, graph_check)?;
     }
     check_subcommand_uniqueness(tool, node)?;
 
     for sub in &node.subcommands {
-        visit_command(tool, *sub as usize, &in_scope)?;
+        visit_command::<VALUES>(tool, *sub as usize, &in_scope, graph_check)?;
     }
     Ok(())
 }
@@ -1821,9 +2021,12 @@ fn visit_command(
 /// Identifier, repeatable-map, default, and variant-in-input checks for the
 /// declarations within one command's `globals` (uniqueness is handled by
 /// [`check_global_scope_uniqueness`]).
-fn check_globals_decls(globals: &ExtendedGlobals) -> Result<(), ToolBuildError> {
+fn check_globals_decls<const VALUES: bool>(
+    globals: &ExtendedGlobals,
+    graph_check: ToolGraphCheck,
+) -> Result<(), ToolBuildError> {
     for opt in &globals.options {
-        check_option_decl(opt)?;
+        check_option_decl::<VALUES>(opt, graph_check)?;
     }
     for flag in &globals.flags {
         check_flag_identifiers(flag)?;
@@ -1831,12 +2034,15 @@ fn check_globals_decls(globals: &ExtendedGlobals) -> Result<(), ToolBuildError> 
     Ok(())
 }
 
-fn check_option_decl(opt: &ExtendedOptionSpec) -> Result<(), ToolBuildError> {
+fn check_option_decl<const VALUES: bool>(
+    opt: &ExtendedOptionSpec,
+    graph_check: ToolGraphCheck,
+) -> Result<(), ToolBuildError> {
     check_identifier("option long name", &opt.long)?;
     for alias in &opt.aliases {
         check_identifier("option alias", alias)?;
     }
-    check_graph_closed(
+    graph_check(
         option_authored_graph(&opt.shape),
         &format!("option --{}", opt.long),
     )?;
@@ -1846,6 +2052,11 @@ fn check_option_decl(opt: &ExtendedOptionSpec) -> Result<(), ToolBuildError> {
         return Err(ToolBuildError::RepeatableMapTypeNotMap(opt.long.clone()));
     }
     if let Some(default) = &opt.default {
+        if !VALUES {
+            return Err(ToolBuildError::DefaultTypeMismatch(
+                "literal-free descriptor contains a default".to_string(),
+            ));
+        }
         validate_default(default, &option_collected_graph(&opt.shape))?;
     }
     let input = option_input_graph(&opt.shape);
@@ -1959,9 +2170,10 @@ fn register_tail_scope(scope: &mut NameScope, tail: &ExtendedTailPositional) {
     );
 }
 
-fn check_body(
+fn check_body<const VALUES: bool>(
     body: &ExtendedCommandBody,
     in_scope: &[&ExtendedGlobals],
+    graph_check: ToolGraphCheck,
 ) -> Result<(), ToolBuildError> {
     // In-scope global tokens (for uniqueness) and resolution scope (for refs).
     let mut names: BTreeSet<String> = BTreeSet::new();
@@ -1978,7 +2190,7 @@ fn check_body(
     }
 
     for opt in &body.options {
-        check_option_decl(opt)?;
+        check_option_decl::<VALUES>(opt, graph_check)?;
         insert_unique(&mut names, &opt.long)?;
         for alias in &opt.aliases {
             insert_unique(&mut names, alias)?;
@@ -2010,13 +2222,18 @@ fn check_body(
     let mut saw_optional_positional = false;
     for positional in &body.positionals.fixed {
         check_identifier("positional name", &positional.name)?;
-        check_graph_closed(
+        graph_check(
             &positional.type_,
             &format!("positional {}", positional.name),
         )?;
         insert_unique(&mut names, &positional.name)?;
         register_fixed_positional_scope(&mut scope, positional);
         if let Some(default) = &positional.default {
+            if !VALUES {
+                return Err(ToolBuildError::DefaultTypeMismatch(
+                    "literal-free descriptor contains a default".to_string(),
+                ));
+            }
             validate_default(default, &positional.type_)?;
         }
         if graph_reaches_variant(&positional.type_) {
@@ -2037,7 +2254,7 @@ fn check_body(
 
     if let Some(tail) = &body.positionals.tail {
         check_identifier("positional name", &tail.name)?;
-        check_graph_closed(&tail.item_type, &format!("tail {}", tail.name))?;
+        graph_check(&tail.item_type, &format!("tail {}", tail.name))?;
         insert_unique(&mut names, &tail.name)?;
         register_tail_scope(&mut scope, tail);
         if graph_reaches_variant(&tail.item_type) {
@@ -2058,11 +2275,11 @@ fn check_body(
     }
 
     for constraint in &body.constraints {
-        check_constraint(constraint, &scope)?;
+        check_constraint::<VALUES>(constraint, &scope)?;
     }
 
     if let Some(result) = &body.result {
-        check_graph_closed(&result.type_, "result")?;
+        graph_check(&result.type_, "result")?;
         for formatter in &result.formatters {
             check_identifier("formatter name", &formatter.name)?;
         }
@@ -2080,7 +2297,7 @@ fn check_body(
     for error_case in &body.errors {
         check_identifier("error-case name", &error_case.name)?;
         if let Some(payload) = &error_case.payload {
-            check_graph_closed(payload, &format!("error {}", error_case.name))?;
+            graph_check(payload, &format!("error {}", error_case.name))?;
         }
     }
 
@@ -2112,29 +2329,35 @@ fn check_subcommand_uniqueness(
     Ok(())
 }
 
-fn check_constraint(c: &ExtendedConstraint, scope: &NameScope) -> Result<(), ToolBuildError> {
+fn check_constraint<const VALUES: bool>(
+    c: &ExtendedConstraint,
+    scope: &NameScope,
+) -> Result<(), ToolBuildError> {
     match c {
         ExtendedConstraint::RequiresAll(v)
         | ExtendedConstraint::AllOrNone(v)
-        | ExtendedConstraint::RequiresAny(v) => check_refs(v, scope),
+        | ExtendedConstraint::RequiresAny(v) => check_refs::<VALUES>(v, scope),
         ExtendedConstraint::MutexGroups(groups) => {
             for g in groups {
-                check_refs(&g.refs, scope)?;
+                check_refs::<VALUES>(&g.refs, scope)?;
             }
             Ok(())
         }
         ExtendedConstraint::Implies(i) => {
-            check_refs(&i.lhs, scope)?;
-            check_refs(&i.rhs, scope)
+            check_refs::<VALUES>(&i.lhs, scope)?;
+            check_refs::<VALUES>(&i.rhs, scope)
         }
         ExtendedConstraint::Forbids(f) => {
-            check_refs(&f.lhs, scope)?;
-            check_refs(&f.rhs, scope)
+            check_refs::<VALUES>(&f.lhs, scope)?;
+            check_refs::<VALUES>(&f.rhs, scope)
         }
     }
 }
 
-fn check_refs(refs: &[ExtendedRef], scope: &NameScope) -> Result<(), ToolBuildError> {
+fn check_refs<const VALUES: bool>(
+    refs: &[ExtendedRef],
+    scope: &NameScope,
+) -> Result<(), ToolBuildError> {
     for r in refs {
         match r {
             ExtendedRef::Present(name) => {
@@ -2143,6 +2366,9 @@ fn check_refs(refs: &[ExtendedRef], scope: &NameScope) -> Result<(), ToolBuildEr
                 }
             }
             ExtendedRef::ValueIs(v) => {
+                if !VALUES {
+                    return Err(ToolBuildError::UnresolvedValueIsLiteral(v.name.clone()));
+                }
                 if !scope.names.contains(&v.name) {
                     return Err(ToolBuildError::UnresolvedConstraintRef(v.name.clone()));
                 }
@@ -3735,6 +3961,132 @@ mod tests {
     }
     fn u32_graph() -> SchemaGraph {
         SchemaGraph::anonymous(SchemaType::u32())
+    }
+
+    #[test]
+    fn preparation_checks_once_and_caches_conversion() {
+        thread_local! {
+            static CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        }
+        fn counted(graph: &SchemaGraph, position: &str) -> Result<(), ToolBuildError> {
+            CHECKS.with(|count| count.set(count.get() + 1));
+            check_graph_closed(graph, position)
+        }
+        let tool = sample_tool();
+        let reference = tool.try_to_native_tool().unwrap();
+        let prepared = tool
+            .prepare_without_literals(ToolSchemaChecks(counted))
+            .unwrap();
+        assert_eq!(CHECKS.with(|count| count.get()), 4);
+        assert_eq!(prepared.native(), &reference);
+        assert!(std::ptr::eq(prepared.native(), prepared.native()));
+        let clone = prepared.clone();
+        assert_eq!(clone.native(), prepared.native());
+        #[cfg(feature = "guest")]
+        {
+            assert_eq!(
+                format!("{:?}", clone.wire()),
+                format!("{:?}", prepared.extended().try_to_tool().unwrap())
+            );
+        }
+        assert_eq!(CHECKS.with(|count| count.get()), 4);
+    }
+
+    #[test]
+    fn scalar_preparation_checks_structure_and_rejects_unexpected_literals() {
+        let mut tool = sample_tool();
+        tool.commands[1].body.as_mut().unwrap().options.clear();
+        let reference = tool.try_to_native_tool().unwrap();
+        assert_eq!(
+            tool.clone()
+                .prepare_without_literals(ToolSchemaChecks::scalar())
+                .unwrap()
+                .native(),
+            &reference
+        );
+
+        let mut duplicate = tool.clone();
+        duplicate.commands[1].body.as_mut().unwrap().flags[0].long = "input".into();
+        assert_eq!(
+            duplicate
+                .clone()
+                .prepare_without_literals(ToolSchemaChecks::scalar())
+                .unwrap_err()
+                .to_string(),
+            duplicate.prepare().unwrap_err().to_string(),
+        );
+
+        let mut default = tool.clone();
+        default.commands[1].body.as_mut().unwrap().positionals.fixed[0].default =
+            Some(SchemaValue::String("valid".into()));
+        assert!(default.clone().prepare().is_ok());
+        assert!(matches!(
+            default.prepare_without_literals(ToolSchemaChecks::scalar()),
+            Err(ToolBuildError::DefaultTypeMismatch(_))
+        ));
+
+        tool.commands[1]
+            .body
+            .as_mut()
+            .unwrap()
+            .constraints
+            .push(ExtendedConstraint::RequiresAll(vec![ExtendedRef::ValueIs(
+                ExtendedValueIsRef {
+                    name: "input".into(),
+                    value: ExtendedValueIsLiteral::Resolved(SchemaValue::String("valid".into())),
+                },
+            )]));
+        assert!(tool.clone().prepare().is_ok());
+        assert!(matches!(
+            tool.prepare_without_literals(ToolSchemaChecks::scalar()),
+            Err(ToolBuildError::UnresolvedValueIsLiteral(_))
+        ));
+    }
+
+    #[test]
+    fn schema_check_selection_uses_resolved_type_and_keeps_dynamic_checks() {
+        type Alias = String;
+        struct Custom;
+        assert!(
+            (&ToolSchemaProbe::<Alias>(std::marker::PhantomData))
+                .tool_schema_checks()
+                .is_none()
+        );
+        let dynamic = (&ToolSchemaProbe::<Custom>(std::marker::PhantomData))
+            .tool_schema_checks()
+            .unwrap();
+        let invalid = SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
+            regex: Some("[".into()),
+            ..Default::default()
+        }));
+        assert_eq!(
+            (dynamic.0)(&invalid, "test").unwrap_err().to_string(),
+            check_graph_closed(&invalid, "test")
+                .unwrap_err()
+                .to_string()
+        );
+        assert!((ToolSchemaChecks::scalar().0)(&invalid, "test").is_err());
+    }
+
+    #[test]
+    fn scalar_schema_constructors_match_reference_without_calling_fallback() {
+        macro_rules! check {
+            ($($ty:ty),*) => {$(
+                let graph = (&ToolSchemaProbe::<$ty>(std::marker::PhantomData))
+                    .tool_value_schema(|| panic!("scalar construction must be static"))
+                    .unwrap();
+                assert_eq!(graph, native_tool_value_schema::<$ty>("test").unwrap());
+                check_scalar_graph(&graph, "test").unwrap();
+            )*};
+        }
+        check!(
+            bool, u8, u16, u32, u64, i8, i16, i32, i64, f32, f64, char, String
+        );
+        struct Custom;
+        let graph = (&ToolSchemaProbe::<Custom>(std::marker::PhantomData))
+            .tool_value_schema(|| Ok(str_graph()))
+            .unwrap();
+        assert_eq!(graph, str_graph());
     }
 
     fn sample_tool() -> ExtendedToolType {

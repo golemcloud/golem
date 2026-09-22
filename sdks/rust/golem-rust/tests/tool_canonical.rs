@@ -49,6 +49,160 @@ test_r::enable!();
 #[cfg(feature = "export_golem_agentic")]
 #[test_r::sequential]
 mod canonical {
+    #[test_r::test]
+    #[test_r::never_capture]
+    fn prepared_canonical_descriptors_match_reference() {
+        use golem_rust::agentic::ToolBuildCtx;
+        for (prepared, reference) in [
+            (
+                grep_canonical::__golem_prepared_tool_descriptor_for_Grep().unwrap(),
+                grep_canonical::__golem_tool_descriptor_for_Grep(&mut ToolBuildCtx::new()).unwrap(),
+            ),
+            #[cfg(all(feature = "url", feature = "chrono"))]
+            (
+                git_canonical::__golem_prepared_tool_descriptor_for_Git().unwrap(),
+                git_canonical::__golem_tool_descriptor_for_Git(&mut ToolBuildCtx::new()).unwrap(),
+            ),
+        ] {
+            assert_eq!(prepared.native(), &reference.try_to_native_tool().unwrap());
+            assert_eq!(
+                format!("{:?}", prepared.wire()),
+                format!("{:?}", reference.try_to_tool().unwrap())
+            );
+        }
+    }
+
+    #[allow(dead_code)]
+    mod prepared {
+        use golem_rust::agentic::{Schema, StructuredSchema, ToolBuildCtx};
+        use golem_rust::{SchemaValue, tool_definition};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use test_r::test;
+
+        #[tool_definition(version = "3.2.1")]
+        trait Simple {
+            #[arg(limit = "option", short = 'n')]
+            #[constraint(requires_all = "limit")]
+            fn run(&self, input: std::string::String, limit: Option<u32>, force: bool) -> u64;
+        }
+
+        static BUILDS: AtomicUsize = AtomicUsize::new(0);
+
+        // Deliberately shadows the standard String: selecting validators by
+        // spelling would lose this custom schema (or reject a valid graph).
+        struct String;
+
+        impl golem_rust::FromSchema for String {
+            fn from_value(_: &SchemaValue) -> Result<Self, golem_rust::schema::FromSchemaError> {
+                Ok(Self)
+            }
+        }
+
+        impl Schema for String {
+            fn get_type() -> StructuredSchema {
+                BUILDS.fetch_add(1, Ordering::SeqCst);
+                StructuredSchema::Default(golem_rust::schema::SchemaGraph::anonymous(
+                    golem_rust::schema::SchemaType::text(Default::default()),
+                ))
+            }
+
+            fn to_schema_value(self) -> Result<SchemaValue, std::string::String> {
+                unreachable!()
+            }
+
+            fn from_schema_value(
+                _: SchemaValue,
+                _: StructuredSchema,
+            ) -> Result<Self, std::string::String> {
+                unreachable!()
+            }
+        }
+
+        #[tool_definition]
+        trait Custom {
+            fn run(&self, input: String);
+        }
+
+        #[tool_definition]
+        trait Refined {
+            #[arg(input = "option", regex = "[", default = "text")]
+            fn run(&self, input: std::string::String);
+        }
+
+        struct ChildHandle;
+
+        #[tool_definition]
+        trait Child {
+            fn child(&self, shared: std::string::String, payload: std::string::String);
+        }
+
+        #[tool_definition]
+        trait Parent {
+            #[command(subtree = Child)]
+            fn child(&self, shared: std::string::String) -> ChildHandle;
+        }
+
+        #[test]
+        #[test_r::never_capture]
+        fn simple_child_still_reconciles_globals_when_grafted() {
+            let child = __golem_prepared_tool_descriptor_for_Child().unwrap();
+            assert_eq!(
+                child.extended().commands[0]
+                    .body
+                    .as_ref()
+                    .unwrap()
+                    .positionals
+                    .fixed
+                    .len(),
+                2
+            );
+            let parent = __golem_prepared_tool_descriptor_for_Parent().unwrap();
+            let reference = __golem_tool_descriptor_for_Parent(&mut ToolBuildCtx::new()).unwrap();
+            assert_eq!(parent.native(), &reference.try_to_native_tool().unwrap());
+            let body = parent.extended().commands[1].body.as_ref().unwrap();
+            assert_eq!(body.positionals.fixed.len(), 1);
+            assert_eq!(body.positionals.fixed[0].name, "payload");
+        }
+
+        #[test]
+        #[test_r::never_capture]
+        fn standalone_prepared_matches_normalized_reference_and_is_immutable() {
+            let prepared = __golem_prepared_tool_descriptor_for_Simple().unwrap();
+            let reference = __golem_tool_descriptor_for_Simple(&mut ToolBuildCtx::new()).unwrap();
+            assert_eq!(prepared.native(), &reference.try_to_native_tool().unwrap());
+            assert_eq!(
+                format!("{:?}", prepared.wire()),
+                format!("{:?}", reference.try_to_tool().unwrap())
+            );
+            let clone = prepared.clone();
+            let mut detached = clone.extended().clone();
+            detached.version.clear();
+            assert_eq!(prepared.extended().version, "3.2.1");
+            assert_eq!(clone.native(), prepared.native());
+        }
+
+        #[test]
+        #[test_r::never_capture]
+        fn preparation_builds_custom_schema_once_and_preserves_refinement_validation() {
+            BUILDS.store(0, Ordering::SeqCst);
+            let prepared = __golem_prepared_tool_descriptor_for_Custom().unwrap();
+            assert_eq!(BUILDS.load(Ordering::SeqCst), 1);
+            let cloned = prepared.clone();
+            assert_eq!(cloned.native(), prepared.native());
+            assert_eq!(
+                format!("{:?}", cloned.wire()),
+                format!("{:?}", prepared.wire())
+            );
+            assert_eq!(BUILDS.load(Ordering::SeqCst), 1);
+
+            let prepared_error = __golem_prepared_tool_descriptor_for_Refined().unwrap_err();
+            let reference_error = __golem_tool_descriptor_for_Refined(&mut ToolBuildCtx::new())
+                .and_then(|tool| tool.try_to_native_tool())
+                .unwrap_err();
+            assert_eq!(prepared_error.to_string(), reference_error.to_string());
+        }
+    }
+
     #[allow(
         clippy::disallowed_names,
         dead_code,
