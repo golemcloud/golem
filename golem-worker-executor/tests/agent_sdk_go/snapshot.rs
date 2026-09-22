@@ -43,20 +43,11 @@ inherit_test_dep!(
 /// held in an unexported field, so only reachable through the SDK's Save/Load —
 /// is intact.
 ///
-/// IGNORED until CI builds Go components with golem's Go toolchain fork
-/// (`tmp/go-runtime-sampler-wasip1.patch`: goroutine scheduling-latency sampling
-/// disabled on wasip1). Why it is needed: Go's `casgstatus` reads the clock on
-/// every 8th transition of a goroutine, counted over the goroutine's whole life.
-/// Snapshot recovery skips history and the save/load hooks run outside the
-/// recording, so the long-lived event-loop goroutine's counter can never match
-/// the one the recording was made with, and a `monotonic_clock::now` lands in a
-/// different invocation: replay diverges ~15% on go1.25.5, ~80% on go1.27.1. The
-/// sampler feeds two metrics no runtime decision reads; with it off this test is
-/// 20/20 on go1.27.1. The executor half (the skipped bootstrap prefix re-seeding
-/// the runtime's PRNG) is fixed separately (GOL-611). Measured with
-/// `diagnostics.rs`; write-up in `tmp/snapshot-divergence-explainer.html`.
+/// The Go runtime's scheduling-latency sampler used to make this diverge: its
+/// clock reads are placed by a per-goroutine lifetime transition counter that
+/// snapshot recovery cannot reproduce. Golem's Go toolchain has the sampler off
+/// on wasip1, so the reads are gone; see `golemcloud/go`.
 #[test]
-#[ignore = "needs golem's go toolchain fork (tmp/go-runtime-sampler-wasip1.patch); replay diverges ~80% on the stock go1.27.1 fork CI still uses"]
 #[tracing::instrument]
 #[timeout("2m")]
 async fn go_custom_snapshot_round_trips_unexported_state(
