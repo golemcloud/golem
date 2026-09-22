@@ -347,7 +347,30 @@ describe('agent reflection', () => {
         },
       ]),
     ).toThrow("Invalid config value at 'greeting'");
+    expect(() =>
+      reflected.client.getValue(v.record([v.string('one')]), [
+        {
+          path: ['greeting'],
+          value: { graph: { defs: new Map(), root: t.u32() }, value: v.string('hello') },
+        },
+      ]),
+    ).toThrow("Incompatible config schema at 'greeting'");
     expect(vi.mocked(WasmRpc.create)).toHaveBeenCalledTimes(creates);
+
+    expect(() =>
+      reflected.client.getValue(v.record([v.string('one')]), [
+        {
+          path: ['greeting'],
+          value: {
+            graph: {
+              defs: new Map([['alias', { name: 'Alias', body: t.string() }]]),
+              root: t.ref('alias'),
+            },
+            value: v.string('hello'),
+          },
+        },
+      ]),
+    ).not.toThrow();
 
     reflected.client.get({ id: 'one' }, [{ path: ['greeting'], value: 'hello' }]);
     expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![3]).toMatchObject([{ path: ['greeting'] }]);

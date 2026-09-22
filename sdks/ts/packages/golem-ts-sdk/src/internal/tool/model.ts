@@ -702,6 +702,7 @@ function isRepeatable(shape: ExtendedOptionShape): boolean {
  * preserves graph equality when forwarding inherited arguments.
  */
 export function optionalCanonicalFieldCodec(inner: SchemaCodec): SchemaCodec {
+  if (resolveCodecRoot(inner).body.tag === 'option') return inner;
   return {
     graph: { defs: inner.graph.defs, root: t.option(inner.graph.root) },
     toValue: isolateCapabilityRoot((input) =>
