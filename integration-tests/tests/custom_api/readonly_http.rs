@@ -132,7 +132,7 @@ async fn h1_get_returns_etag_and_cache_control(
     );
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, serde_json::json!(0));
+    assert_eq!(body, serde_json::json!("0"));
 
     Ok(())
 }
@@ -237,7 +237,7 @@ async fn h3_etag_invalidates_after_write(
     );
 
     let body: serde_json::Value = revalidate.json().await?;
-    assert_eq!(body, serde_json::json!(1));
+    assert_eq!(body, serde_json::json!("1"));
 
     Ok(())
 }

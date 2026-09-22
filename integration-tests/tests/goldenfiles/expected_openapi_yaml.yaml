@@ -63,9 +63,11 @@ components:
         id:
           type: string
         limit:
-          maximum: 18446744073709551615
-          minimum: 0
-          type: integer
+          format: uint64
+          pattern: ^(?:0|[1-9][0-9]*)$
+          type: string
+          x-golem-maximum: '18446744073709551615'
+          x-golem-minimum: '0'
       required:
       - id
       - limit
@@ -162,9 +164,11 @@ components:
       additionalProperties: false
       properties:
         payload_length:
-          maximum: 18446744073709551615
-          minimum: 0
-          type: integer
+          format: uint64
+          pattern: ^(?:0|[1-9][0-9]*)$
+          type: string
+          x-golem-maximum: '18446744073709551615'
+          x-golem-minimum: '0'
       required:
       - payload_length
       title: WebhookResponse
@@ -232,9 +236,11 @@ components:
         id:
           type: string
         limit:
-          maximum: 18446744073709551615
-          minimum: 0
-          type: integer
+          format: uint64
+          pattern: ^(?:0|[1-9][0-9]*)$
+          type: string
+          x-golem-maximum: '18446744073709551615'
+          x-golem-minimum: '0'
       required:
       - id
       - limit
@@ -331,9 +337,11 @@ components:
       additionalProperties: false
       properties:
         payload_length:
-          maximum: 18446744073709551615
-          minimum: 0
-          type: integer
+          format: uint64
+          pattern: ^(?:0|[1-9][0-9]*)$
+          type: string
+          x-golem-maximum: '18446744073709551615'
+          x-golem-minimum: '0'
       required:
       - payload_length
       title: WebhookResponse
@@ -537,9 +545,11 @@ paths:
               additionalProperties: false
               properties:
                 count:
-                  maximum: 18446744073709551615
-                  minimum: 0
-                  type: integer
+                  format: uint64
+                  pattern: ^(?:0|[1-9][0-9]*)$
+                  type: string
+                  x-golem-maximum: '18446744073709551615'
+                  x-golem-minimum: '0'
                 name:
                   type: string
               required:
@@ -655,9 +665,11 @@ paths:
         name: limit
         required: true
         schema:
-          maximum: 18446744073709551615
-          minimum: 0
-          type: integer
+          format: uint64
+          pattern: ^(?:0|[1-9][0-9]*)$
+          type: string
+          x-golem-maximum: '18446744073709551615'
+          x-golem-minimum: '0'
         style: form
       responses:
         '200':
@@ -963,9 +975,11 @@ paths:
           content:
             application/json:
               schema:
-                maximum: 9223372036854775807
-                minimum: -9223372036854775808
-                type: integer
+                format: int64
+                pattern: ^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$
+                type: string
+                x-golem-maximum: '9223372036854775807'
+                x-golem-minimum: '-9223372036854775808'
           description: Response 200
   /http-agents/{agent-name}/string-path-var/{path-var}:
     get:
@@ -1029,9 +1043,11 @@ paths:
           content:
             application/json:
               schema:
-                maximum: 9223372036854775807
-                minimum: -9223372036854775808
-                type: integer
+                format: int64
+                pattern: ^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$
+                type: string
+                x-golem-maximum: '9223372036854775807'
+                x-golem-minimum: '-9223372036854775808'
           description: Response 200
   /openapi.json:
     get:
