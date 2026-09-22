@@ -17,7 +17,7 @@
 package golem.tool
 
 import golem.Principal
-import golem.schema.{FromSchema, SchemaGraph, SchemaType, SchemaTypeBody, SchemaValue, TypedSchemaValue}
+import golem.schema.{FromSchema, IntoSchema, SchemaGraph, SchemaType, SchemaTypeBody, SchemaValue, TypedSchemaValue}
 import golem.schema.validation.{ValueValidation, WellFormedness}
 import golem.tool.wire.WitTool
 
@@ -285,9 +285,25 @@ object ToolMiddlewareInvokerRuntime {
   }
 
   def fieldDecoder[A](
-    from: FromSchema[A]
+    from: FromSchema[A],
+    into: IntoSchema[A]
   ): CanonicalInputValue => Either[String, Any] =
-    field => ToolInvokerRuntime.fieldDecoder(from)(field.value)
+    field => {
+      val authored = into.graph
+      if (ToolGraphs.schemaShapesMatch(field.schema, authored))
+        ToolInvokerRuntime.fieldDecoder(from)(field.value)
+      else {
+        val optionalCarrier = SchemaGraph(authored.defs, SchemaType(SchemaTypeBody.OptionType(authored.root)))
+        if (!ToolGraphs.schemaShapesMatch(field.schema, optionalCarrier))
+          Left(s"tool input field `${field.name}` does not match its middleware parameter schema")
+        else
+          field.value match {
+            case SchemaValue.OptionValue(Some(value)) => ToolInvokerRuntime.fieldDecoder(from)(value)
+            case SchemaValue.OptionValue(None)        => Left(s"missing value for tool input field `${field.name}`")
+            case _                                    => Left(s"tool input field `${field.name}` must use an option carrier")
+          }
+      }
+    }
 
   def validateOutcome(
     tool: ExtendedToolType,

@@ -69,7 +69,13 @@ final case class ExtendedToolType(
    * index, returning `None` when the path does not resolve or the resolved
    * command has no body.
    */
-  def commandIndexByPath(commandPath: List[String]): Option[Int] = {
+  def commandIndexByPath(commandPath: List[String]): Option[Int] =
+    commandNodeIndexByPath(commandPath).filter(index => commands(index).body.nonEmpty)
+
+  /**
+   * Resolve a command path even when its target is a subtree without a body.
+   */
+  def commandNodeIndexByPath(commandPath: List[String]): Option[Int] = {
     if (commands.isEmpty) return None
     var current = 0
     val it      = commandPath.iterator
@@ -83,7 +89,7 @@ final case class ExtendedToolType(
         case None      => return None
       }
     }
-    commands(current).body.map(_ => current)
+    Some(current)
   }
 
   /**
