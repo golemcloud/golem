@@ -36,6 +36,7 @@ use rustic_core::{
     RepositoryOptions, RestoreOptions, RusticResult, SnapshotGroupCriterion, SnapshotOptions,
 };
 use std::fmt::{Debug, Formatter};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -180,17 +181,21 @@ impl Repository {
 
     /// Restores the newest snapshot with the name into the empty directory `into`.
     ///
-    /// The result is `None` when no snapshot has the name.
+    /// `reader_threads` is the number of threads that read the data of the files. Each of these
+    /// threads holds the data of one read, so the number sets the memory of the restore. `None`
+    /// keeps the default of rustic, which is 20 threads. The result is `None` when no snapshot has
+    /// the name.
     pub(super) async fn restore(
         &self,
         name: &SnapshotName,
         into: &Path,
+        reader_threads: Option<NonZeroUsize>,
     ) -> anyhow::Result<Option<RestoreReport>> {
         let backend = self.backend()?;
         let key = self.key.clone();
         let name = name.clone();
         let into: Box<Path> = into.into();
-        run_blocking(move || restore(backend, &key, &name, &into)).await
+        run_blocking(move || restore(backend, &key, &name, &into, reader_threads)).await
     }
 
     /// Deletes the snapshot files with the name, and gives their number.
@@ -255,6 +260,7 @@ fn restore(
     key: &RepositoryKey,
     name: &SnapshotName,
     into: &Path,
+    reader_threads: Option<NonZeroUsize>,
 ) -> anyhow::Result<Option<RestoreReport>> {
     let (repository, open) = timed(OperationPhase::Open, || open_existing(backend, key))?;
     let Some(repository) = repository else {
@@ -277,7 +283,7 @@ fn restore(
     let destination = LocalDestination::new(into, false, false)?;
     let node = repository.node_from_snapshot_and_path(&snapshot, "")?;
     let entries = repository.ls(&node, &LsOptions::default())?;
-    let options = RestoreOptions::default();
+    let options = RestoreOptions::default().reader_threads(reader_threads);
     let (plan, planning) = timed(OperationPhase::RestorePlan, || {
         repository.prepare_restore(&options, entries.clone(), &destination, false)
     })?;

@@ -509,7 +509,7 @@ async fn base_restore(context: &PhaseContext) -> PhaseOutcome {
     let (record, restored) = measure("cold_restore", storage, async {
         std::fs::create_dir(&into)?;
         repository
-            .restore(&snapshot_name(WARM_SAVE)?, &into)
+            .restore(&snapshot_name(WARM_SAVE)?, &into, None)
             .await?
             .ok_or_else(|| anyhow::anyhow!("no snapshot has the name {WARM_SAVE}"))
     })
