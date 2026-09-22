@@ -17,7 +17,6 @@ use crate::storage::indexed::{
     ScanCursor, ScanResume,
 };
 use async_trait::async_trait;
-use golem_common::model::AgentId;
 use regex::Regex;
 use std::collections::{BTreeMap, BinaryHeap};
 use std::ops::Bound::Included;
@@ -52,30 +51,20 @@ impl InMemoryIndexedStorage {
         self.read_count.load(Ordering::Relaxed)
     }
 
+    /// Gives the key of the map for `key` in `namespace`. The key holds no agent id, because
+    /// `key` already names the agent, as on the other indexed storage backends. An agent name can
+    /// hold `/`, so a separate part for it would make the scan of a key ambiguous.
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
-            IndexedStorageNamespace::OpLog {
-                agent_id:
-                    AgentId {
-                        component_id,
-                        agent_id: agent_name,
-                    },
-                agent_mode,
-            } => {
+            IndexedStorageNamespace::OpLog { agent_mode, .. } => {
                 let mode = super::agent_mode_prefix(agent_mode);
-                format!("{mode}/oplog/{component_id}/{agent_name}/{key}")
+                format!("{mode}/oplog/{key}")
             }
             IndexedStorageNamespace::CompressedOpLog {
-                agent_id:
-                    AgentId {
-                        component_id,
-                        agent_id: agent_name,
-                    },
-                agent_mode,
-                level,
+                agent_mode, level, ..
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
-                format!("{mode}/compressed-oplog/{level}/{component_id}/{agent_name}/{key}")
+                format!("{mode}/compressed-oplog/{level}/{key}")
             }
         }
     }
@@ -89,22 +78,19 @@ impl InMemoryIndexedStorage {
         match namespace {
             IndexedStorageMetaNamespace::Oplog { agent_mode } => {
                 let mode = super::agent_mode_prefix(agent_mode);
-                let pattern: String = format!(
-                    r"^{mode}/oplog/([^/]+)/([^/]+)/({}.*)$",
-                    regex::escape(prefix)
-                );
+                let pattern: String = format!(r"^{mode}/oplog/({}.*)$", regex::escape(prefix));
                 let regex = Regex::new(&pattern).unwrap();
 
                 Box::new(move |key| {
                     regex
                         .captures(key)
-                        .map(|caps| caps.get(3).unwrap().as_str().to_string())
+                        .map(|caps| caps.get(1).unwrap().as_str().to_string())
                 })
             }
             IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 let pattern: String = format!(
-                    r"^{mode}/compressed-oplog/{level}/([^/]+)/([^/]+)/({}.*)$",
+                    r"^{mode}/compressed-oplog/{level}/({}.*)$",
                     regex::escape(prefix)
                 );
                 let regex = Regex::new(&pattern).unwrap();
@@ -112,7 +98,7 @@ impl InMemoryIndexedStorage {
                 Box::new(move |key| {
                     regex
                         .captures(key)
-                        .map(|caps| caps.get(3).unwrap().as_str().to_string())
+                        .map(|caps| caps.get(1).unwrap().as_str().to_string())
                 })
             }
         }
@@ -483,6 +469,81 @@ mod tests {
             vec!["k5".to_string()],
         ];
         check!(pages == expected);
+    }
+
+    #[test]
+    async fn a_scan_gives_the_key_of_an_agent_whose_name_holds_a_slash() {
+        // The oplogs write each agent under its `to_redis_key`, and a scan of a component uses the
+        // component id as the prefix.
+        let storage = super::InMemoryIndexedStorage::new();
+        let api = storage.with_entity("test", "test", "test");
+        let agent_mode = golem_common::model::agent::AgentMode::Durable;
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: r#"counter("a/b")"#.to_string(),
+        };
+        let key = agent_id.to_redis_key();
+        let prefix = agent_id.component_id.0.to_string();
+        api.append(
+            IndexedStorageNamespace::OpLog {
+                agent_id: agent_id.clone(),
+                agent_mode,
+            },
+            &key,
+            1,
+            &100,
+        )
+        .await
+        .unwrap();
+        api.append(
+            IndexedStorageNamespace::CompressedOpLog {
+                agent_id: agent_id.clone(),
+                agent_mode,
+                level: 1,
+            },
+            &key,
+            1,
+            &100,
+        )
+        .await
+        .unwrap();
+
+        let scan = storage.with("test", "test");
+        let (_, scanned) = scan
+            .scan(
+                IndexedStorageMetaNamespace::Oplog { agent_mode },
+                Some(&prefix),
+                0,
+                10,
+            )
+            .await
+            .unwrap();
+        let (_, scanned_stable) = scan
+            .scan_stable(
+                IndexedStorageMetaNamespace::Oplog { agent_mode },
+                Some(&prefix),
+                None,
+                10,
+            )
+            .await
+            .unwrap();
+        let (_, scanned_compressed) = scan
+            .scan(
+                IndexedStorageMetaNamespace::CompressedOplog {
+                    agent_mode,
+                    level: 1,
+                },
+                Some(&prefix),
+                0,
+                10,
+            )
+            .await
+            .unwrap();
+
+        check!(
+            (scanned, scanned_stable, scanned_compressed)
+                == (vec![key.clone()], vec![key.clone()], vec![key])
+        );
     }
 
     #[test]
