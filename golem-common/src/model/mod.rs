@@ -1535,6 +1535,8 @@ impl DurableStreamSessionStatus {
             self.attachment_epoch = Some(cut.epoch_floor);
             self.attachment_attached = Some(false);
             if cut.revert.is_none() {
+                // Concrete Prepared invocation identities remain valid continuations on an
+                // ordinary fork. A target-only export identity is replaced on initialization.
                 if self.first_prepared.is_none() {
                     self.public_session_id = None;
                 }

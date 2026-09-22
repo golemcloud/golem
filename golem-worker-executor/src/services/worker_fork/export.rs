@@ -98,92 +98,13 @@ async fn execute<Ctx: WorkerCtx>(
     }
     service.shard_service.check_worker(&source_id)?;
 
-    let source_metadata = service
-        .worker_service
-        .get(&source)
-        .await?
-        .ok_or_else(|| reject(Reason::NotFound))?;
-    let metadata = source_metadata.initial_worker_metadata.clone();
     if let Some(receipt) = creation_receipt(service.oplog_service.as_ref(), &target).await? {
         if !receipt.live {
             return Err(reject(Reason::NotFound));
         }
-        let export = receipt
-            .cut
-            .export
-            .as_ref()
-            .filter(|export| {
-                export.source_fingerprint == metadata.fingerprint
-                    && matches_request(export, request, &source_id)
-            })
-            .ok_or_else(|| reject(Reason::Conflict))?;
-        if receipt.initialized.request_hash != receipt.cut.request_hash
-            || receipt.initialized.public_session_id != request.session
-            || receipt.initialized.expiry_policy != export.target_expiry_policy
-        {
-            return Err(reject(Reason::Conflict));
-        }
-        let status = crate::worker::status::calculate_last_known_status_with_checkpoint(
-            service,
-            &source,
-            metadata.agent_mode,
-            source_metadata.last_known_status,
-        )
-        .await
-        .map_err(WorkerExecutorError::runtime)?
-        .ok_or_else(|| reject(Reason::NotFound))?;
-        let binding = service
-            .worker_service
-            .lookup_durable_stream_public_binding(&source, metadata.agent_mode, &request.session)
-            .await
-            .map_err(WorkerExecutorError::runtime)?;
-        let Some(golem_common::model::DurableStreamPublicBinding::Live {
-            session_key: source_public_key,
-            expiry_deadline_millis,
-            ..
-        }) = binding
-        else {
-            return Err(reject(Reason::NotFound));
-        };
-        if expiry_deadline_millis
-            .is_some_and(|deadline| deadline <= Timestamp::now_utc().to_millis())
-        {
-            return Err(reject(Reason::NotFound));
-        }
-        let source_public_session = service
-            .worker_service
-            .lookup_durable_stream_session(
-                &source,
-                metadata.agent_mode,
-                &status,
-                &source_public_key,
-            )
-            .await
-            .map_err(WorkerExecutorError::runtime)?;
-        let source_content_key = source_public_session
-            .as_ref()
-            .and_then(|status| status.export_source_invocation.as_ref())
-            .map_or(&source_public_key, |source| &source.idempotency_key);
-        let source_content_session = service
-            .worker_service
-            .lookup_durable_stream_session(
-                &source,
-                metadata.agent_mode,
-                &status,
-                source_content_key,
-            )
-            .await
-            .map_err(WorkerExecutorError::runtime)?;
-        if source_content_key != &receipt.initialized.source_invocation.idempotency_key
-            || source_public_session
-                .as_ref()
-                .is_none_or(|status| status.tombstoned_slots.contains(&request.slot))
-            || source_content_session
-                .as_ref()
-                .is_none_or(|status| status.tombstoned_slots.contains(&request.slot))
-        {
-            return Err(reject(Reason::NotFound));
-        }
+        // The immutable target receipt is authoritative for a retry. Do not consult current
+        // source state: the source may have advanced, expired or been deleted after publication.
+        let export = matching_receipt_export(&receipt, request, &source_id)?;
         resume(service, &target_id, &auth).await?;
         return Ok(response(
             export,
@@ -192,6 +113,12 @@ async fn execute<Ctx: WorkerCtx>(
             &receipt.initialized.session_key,
         ));
     }
+    let source_metadata = service
+        .worker_service
+        .get(&source)
+        .await?
+        .ok_or_else(|| reject(Reason::NotFound))?;
+    let metadata = source_metadata.initial_worker_metadata.clone();
     if service
         .oplog_service
         .exists(&target, AgentMode::Durable)
@@ -364,22 +291,10 @@ async fn execute<Ctx: WorkerCtx>(
                 if let Some(receipt) =
                     creation_receipt(service.oplog_service.as_ref(), &target).await?
                 {
-                    let export = receipt
-                        .cut
-                        .export
-                        .as_ref()
-                        .filter(|export| {
-                            export.source_fingerprint == metadata.fingerprint
-                                && matches_request(export, request, &source_id)
-                        })
-                        .ok_or_else(|| reject(Reason::Conflict))?;
-                    if !receipt.live
-                        || receipt.initialized.request_hash != receipt.cut.request_hash
-                        || receipt.initialized.public_session_id != request.session
-                        || receipt.initialized.expiry_policy != export.target_expiry_policy
-                    {
+                    if !receipt.live {
                         return Err(reject(Reason::Conflict));
                     }
+                    let export = matching_receipt_export(&receipt, request, &source_id)?;
                     Ok(response(
                         export,
                         receipt.cut.cut_index,
@@ -474,6 +389,7 @@ async fn stage<Ctx: WorkerCtx>(
 }
 
 fn admitted_publication_deadline(candidate: &Candidate) -> Option<u64> {
+    // Admission::InvalidExpiry rejects unrepresentable TTLs before publication reaches here.
     match candidate.expiry_policy {
         StreamSessionExpiryPolicy::None => None,
         StreamSessionExpiryPolicy::Sliding { ttl_seconds } => Some(
@@ -530,6 +446,7 @@ async fn schedule_expiry<Ctx: WorkerCtx>(
     let Some(deadline_millis) = deadline_millis else {
         return Ok(());
     };
+    // Admission::InvalidExpiry validates the deadline before staged publication.
     let deadline = expiry_datetime(deadline_millis)
         .expect("admitted stream expiry must have a representable deadline");
     service
@@ -761,6 +678,26 @@ pub(super) fn matches_request(
         })
 }
 
+fn matching_receipt_export<'a>(
+    receipt: &'a CreationReceipt,
+    request: &ForkStreamSlotRequest,
+    source: &AgentId,
+) -> Result<&'a StreamExportFork, Error> {
+    let export = receipt
+        .cut
+        .export
+        .as_ref()
+        .filter(|export| matches_request(export, request, source))
+        .ok_or_else(|| reject(Reason::Conflict))?;
+    if receipt.initialized.request_hash != receipt.cut.request_hash
+        || receipt.initialized.public_session_id != request.session
+        || receipt.initialized.expiry_policy != export.target_expiry_policy
+    {
+        return Err(reject(Reason::Conflict));
+    }
+    Ok(export)
+}
+
 /// The first marker authored for this incarnation is its immutable creation receipt, even
 /// when later Revert entries hide it from the active stream projection.
 pub(crate) async fn creation_record(
@@ -942,16 +879,6 @@ mod tests {
                 Some(5_000)
             )
         );
-        assert_eq!(
-            effective_expiry_policy(Some(explicit), inherited).unwrap(),
-            (
-                StreamSessionExpiryPolicy::Absolute {
-                    expires_at_millis: 5_000
-                },
-                Some(5_000)
-            )
-        );
-
         let overflowing = ProtoExpiryPolicy {
             kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(u64::MAX)),
         };

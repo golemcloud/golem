@@ -372,7 +372,9 @@ fn append_response(
     );
     result.headers.insert(
         HeaderName::from_static("stream-closed"),
-        stream_closed.unwrap_or(true).to_string(),
+        stream_closed
+            .ok_or_else(|| anyhow::anyhow!("append outcome has no stream metadata"))?
+            .to_string(),
     );
     if let (Some(producer), Some(sequence)) = (producer, sequence) {
         result.headers.insert(
@@ -531,6 +533,27 @@ mod tests {
         assert_eq!(
             result.headers[&HeaderName::from_static("stream-closed")],
             "false"
+        );
+    }
+
+    #[test]
+    fn append_response_rejects_missing_stream_metadata() {
+        let offset = golem_common::model::durable_stream::StreamOffset::new(
+            golem_common::model::OplogIndex::from_u64(31),
+            2,
+        );
+        assert!(
+            append_response(
+                Outcome::Accepted(
+                    golem_api_grpc::proto::golem::workerexecutor::v1::AppendAccepted {
+                        offset: offset.as_bytes().to_vec(),
+                    },
+                ),
+                None,
+                Vec::new(),
+                None,
+            )
+            .is_err()
         );
     }
 

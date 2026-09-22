@@ -1080,10 +1080,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let expected_deadline_millis = binding.expiry_deadline_millis.ok_or_else(|| {
             WorkerExecutorError::runtime("sliding stream session has no expiry deadline")
         })?;
-        let deadline_millis = ttl_seconds
+        let ttl_millis = ttl_seconds
             .checked_mul(1_000)
-            .and_then(|ttl| refreshed_at_millis.checked_add(ttl))
             .ok_or_else(|| WorkerExecutorError::runtime("stream TTL deadline overflows"))?;
+        let deadline_millis = refreshed_at_millis
+            .checked_add(ttl_millis)
+            .ok_or_else(|| WorkerExecutorError::runtime("stream TTL deadline overflows"))?;
+        let minimum_extension_millis = (ttl_millis / 10).max(1);
+        if deadline_millis.saturating_sub(expected_deadline_millis) < minimum_extension_millis {
+            return Ok(None);
+        }
         Ok(Some(StreamSessionExpiryRefreshedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: binding.invocation_key.clone(),
@@ -1824,6 +1830,31 @@ mod tests {
     use super::*;
     use golem_common::schema::{InputSchema, NamedField, NamedFieldType};
     use test_r::test;
+
+    #[test]
+    fn sliding_expiry_refreshes_at_most_ten_times_per_ttl_window() {
+        let binding = PublicStreamSessionBinding {
+            invocation_key: IdempotencyKey::new("invocation".into()),
+            expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
+            expiry_deadline_millis: Some(20_000),
+        };
+
+        assert!(
+            Worker::<crate::workerctx::default::Context>::expiry_refresh(
+                "session", &binding, 10_999,
+            )
+            .unwrap()
+            .is_none()
+        );
+        let refresh = Worker::<crate::workerctx::default::Context>::expiry_refresh(
+            "session", &binding, 11_000,
+        )
+        .unwrap()
+        .expect("ten percent extension refreshes the deadline");
+        assert_eq!(refresh.expected_deadline_millis, 20_000);
+        assert_eq!(refresh.refreshed_at_millis, 11_000);
+        assert_eq!(refresh.deadline_millis, 21_000);
+    }
 
     #[test]
     fn named_slots_preserve_field_indices_and_scalar_results() {
