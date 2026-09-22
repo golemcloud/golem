@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  getReflectedAgentType,
-  isRemoteCallError,
-} from '@golemcloud/golem-ts-sdk';
+import { getReflectedAgentType, isRemoteCallError } from '@golemcloud/golem-ts-sdk';
 
 async function callDynamically() {
   const type = getReflectedAgentType('SearchAgent');

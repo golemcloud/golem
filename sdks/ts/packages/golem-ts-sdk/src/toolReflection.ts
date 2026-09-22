@@ -590,7 +590,8 @@ function optionalRoot(graph: SchemaGraph, root: SchemaType): SchemaType {
   let current = root;
   const seen = new Set<string>();
   while (current.body.tag === 'ref') {
-    if (seen.has(current.body.id)) throw new TypeError(`Cyclic tool schema ref '${current.body.id}'`);
+    if (seen.has(current.body.id))
+      throw new TypeError(`Cyclic tool schema ref '${current.body.id}'`);
     seen.add(current.body.id);
     const definition = graph.defs.get(current.body.id);
     if (!definition) throw new TypeError(`Unresolved tool schema ref '${current.body.id}'`);
