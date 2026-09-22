@@ -134,12 +134,7 @@ async fn execute<Ctx: WorkerCtx>(
         .ok_or_else(|| reject(Reason::NotFound))?;
         let binding = service
             .worker_service
-            .lookup_durable_stream_public_binding(
-                &source,
-                metadata.agent_mode,
-                &status,
-                &request.session,
-            )
+            .lookup_durable_stream_public_binding(&source, metadata.agent_mode, &request.session)
             .await
             .map_err(WorkerExecutorError::runtime)?;
         let Some(golem_common::model::DurableStreamPublicBinding::Live {

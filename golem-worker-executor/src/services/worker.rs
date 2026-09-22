@@ -33,9 +33,9 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
-    DurableStreamPublicBinding, DurableStreamPublicBindingState, DurableStreamSessionStatus,
-    FailedUpdateRecord, IdempotencyKey, InvocationResultMembership, OwnedAgentId,
-    ReceivedCardTransferIndex, ReceivedCardTransferState, ShardId, SuccessfulUpdateRecord,
+    DurableStreamPublicBinding, DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey,
+    InvocationResultMembership, OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState,
+    ShardId, SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -351,13 +351,10 @@ pub trait WorkerService: Send + Sync {
 
     async fn lookup_durable_stream_public_binding(
         &self,
-        _owned_agent_id: &OwnedAgentId,
-        _agent_mode: AgentMode,
-        _status: &AgentStatusRecord,
-        _public_session_id: &str,
-    ) -> Result<Option<DurableStreamPublicBinding>, String> {
-        Err("durable stream public binding index is unavailable".into())
-    }
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        public_session_id: &str,
+    ) -> Result<Option<DurableStreamPublicBinding>, String>;
 
     /// Reads per-session metadata through a captured persisted horizon, independently of status
     /// publication. Payloads remain in the oplog and are addressed by index.
@@ -1485,38 +1482,11 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        status: &AgentStatusRecord,
         public_session_id: &str,
     ) -> Result<Option<DurableStreamPublicBinding>, String> {
-        match status
-            .durable_stream_sessions
-            .public_binding(public_session_id)
-        {
-            DurableStreamPublicBindingState::Live {
-                session_key,
-                expiry_policy,
-                expiry_deadline_millis,
-            } => Ok(Some(DurableStreamPublicBinding::Live {
-                session_key: session_key.clone(),
-                expiry_policy,
-                expiry_deadline_millis,
-            })),
-            DurableStreamPublicBindingState::Retired { session_key } => {
-                Ok(Some(DurableStreamPublicBinding::Retired {
-                    session_key: session_key.clone(),
-                }))
-            }
-            DurableStreamPublicBindingState::NeverBound
-                if !status.durable_stream_sessions.has_history() =>
-            {
-                Ok(None)
-            }
-            DurableStreamPublicBindingState::NeverBound => {
-                self.stream_session_index
-                    .lookup_public_binding(owned_agent_id, agent_mode, public_session_id)
-                    .await
-            }
-        }
+        self.stream_session_index
+            .lookup_public_binding(owned_agent_id, agent_mode, public_session_id)
+            .await
     }
 
     async fn catch_up_invocation_result_index(
@@ -1972,6 +1942,15 @@ mod tests {
 
     #[async_trait]
     impl OplogService for IndexTestOplogService {
+        async fn staged_exists(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _stage_id: uuid::Uuid,
+        ) -> Result<bool, String> {
+            unimplemented!()
+        }
+
         async fn lock_lifecycle(&self, _: &AgentId) -> OplogLifecycleGuard {
             unreachable!()
         }
@@ -3091,6 +3070,15 @@ mod tests {
 
     #[async_trait]
     impl OplogService for FakeOplogService {
+        async fn staged_exists(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _stage_id: uuid::Uuid,
+        ) -> Result<bool, String> {
+            unimplemented!()
+        }
+
         async fn lock_lifecycle(&self, _: &AgentId) -> OplogLifecycleGuard {
             unreachable!()
         }

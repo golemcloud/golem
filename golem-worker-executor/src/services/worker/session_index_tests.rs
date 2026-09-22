@@ -2254,14 +2254,6 @@ async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
     for (index, record) in indexed_records {
         in_memory.apply_record(index, &record);
     }
-    assert!(matches!(
-        in_memory.public_binding(public),
-        golem_common::model::DurableStreamPublicBindingState::Live {
-            session_key,
-            expiry_deadline_millis: Some(40_000),
-            ..
-        } if session_key == &key
-    ));
     let status = in_memory.get(&key).unwrap();
     assert_eq!(status.public_session_id.as_deref(), Some(public));
     assert_eq!(status.expiry_deadline_millis, Some(40_000));
@@ -2280,7 +2272,7 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
         unreachable!()
     };
     record.public_session_id = public.into();
-    let prepared_index = append_session(oplog.as_ref(), prepared.clone()).await;
+    append_session(oplog.as_ref(), prepared).await;
     oplog.commit(CommitLevel::Always).await;
 
     assert!(matches!(
@@ -2304,7 +2296,7 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
         selected_stream_id: None,
         retained_through: None,
     });
-    let cut_index = append_session(oplog.as_ref(), cut.clone()).await;
+    append_session(oplog.as_ref(), cut).await;
     oplog.commit(CommitLevel::Always).await;
 
     assert_eq!(
@@ -2324,14 +2316,6 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
             .unwrap(),
         None
     );
-
-    let mut in_memory = DurableStreamSessionIndex::default();
-    in_memory.apply_record(prepared_index, &prepared);
-    in_memory.apply_record(cut_index, &cut);
-    assert!(matches!(
-        in_memory.public_binding(public),
-        golem_common::model::DurableStreamPublicBindingState::NeverBound
-    ));
 }
 
 #[test]

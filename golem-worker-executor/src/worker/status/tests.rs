@@ -2884,6 +2884,15 @@ impl HasOplogService for TestCase {
 
 #[async_trait]
 impl OplogService for TestCase {
+    async fn staged_exists(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _stage_id: uuid::Uuid,
+    ) -> Result<bool, String> {
+        unimplemented!()
+    }
+
     async fn lock_lifecycle(&self, _: &AgentId) -> crate::services::oplog::OplogLifecycleGuard {
         unreachable!()
     }

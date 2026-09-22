@@ -1789,25 +1789,11 @@ impl DurableStreamPublicBinding {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DurableStreamPublicBindingState<'a> {
-    NeverBound,
-    Live {
-        session_key: &'a IdempotencyKey,
-        expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
-        expiry_deadline_millis: Option<u64>,
-    },
-    Retired {
-        session_key: &'a IdempotencyKey,
-    },
-}
-
 /// An oplog-derived index of unfinished sessions and a bounded set of recent completions.
 /// Values contain only oplog indices; canonical invocation and result payloads remain in the oplog.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DurableStreamSessionIndex {
     sessions: OrdMap<String, Arc<DurableStreamSessionStatus>>,
-    public_bindings: OrdMap<String, Arc<DurableStreamPublicBinding>>,
     /// True once this status has observed local session lifecycle history. A cache miss is therefore
     /// not evidence that an older, completed session never existed.
     has_history: bool,
@@ -1816,24 +1802,6 @@ pub struct DurableStreamSessionIndex {
 impl DurableStreamSessionIndex {
     pub fn get(&self, key: &IdempotencyKey) -> Option<&DurableStreamSessionStatus> {
         self.sessions.get(&key.value).map(Arc::as_ref)
-    }
-
-    pub fn public_binding(&self, public_session_id: &str) -> DurableStreamPublicBindingState<'_> {
-        match self.public_bindings.get(public_session_id).map(Arc::as_ref) {
-            Some(DurableStreamPublicBinding::Live {
-                session_key,
-                expiry_policy,
-                expiry_deadline_millis,
-            }) => DurableStreamPublicBindingState::Live {
-                session_key,
-                expiry_policy: *expiry_policy,
-                expiry_deadline_millis: *expiry_deadline_millis,
-            },
-            Some(DurableStreamPublicBinding::Retired { session_key }) => {
-                DurableStreamPublicBindingState::Retired { session_key }
-            }
-            None => DurableStreamPublicBindingState::NeverBound,
-        }
     }
 
     pub fn apply_oplog_entry(
@@ -1897,10 +1865,7 @@ impl DurableStreamSessionIndex {
     ) {
         use crate::model::durable_stream::StreamSessionRecord;
 
-        if let StreamSessionRecord::ForkCut(cut) = record {
-            if cut.revert.is_none() {
-                self.public_bindings.clear();
-            }
+        if matches!(record, StreamSessionRecord::ForkCut(_)) {
             let retained: Vec<_> = self
                 .iter()
                 .map(|(key, status)| (key, status.clone()))
@@ -1911,8 +1876,6 @@ impl DurableStreamSessionIndex {
             }
             return;
         }
-
-        self.apply_public_binding(record);
 
         let Some(key) = record.local_session_key() else {
             return;
@@ -1931,23 +1894,6 @@ impl DurableStreamSessionIndex {
         };
         status.apply_record(index, record);
         self.insert(key.clone(), status);
-    }
-
-    fn apply_public_binding(&mut self, record: &crate::model::durable_stream::StreamSessionRecord) {
-        use crate::model::durable_stream::StreamSessionRecord;
-
-        let public_session_id = match record {
-            StreamSessionRecord::Prepared(record) => &record.public_session_id,
-            StreamSessionRecord::ExportForkInitialized(record) => &record.public_session_id,
-            StreamSessionRecord::ExpiryRefreshed(record) => &record.public_session_id,
-            StreamSessionRecord::Expired(record) => &record.public_session_id,
-            _ => return,
-        };
-        let current = self.public_bindings.get(public_session_id).map(Arc::as_ref);
-        if let Some(binding) = DurableStreamPublicBinding::fold(current, record) {
-            self.public_bindings
-                .insert(public_session_id.clone(), Arc::new(binding));
-        }
     }
 
     pub fn insert(&mut self, key: IdempotencyKey, status: DurableStreamSessionStatus) {
@@ -1991,8 +1937,7 @@ impl BinarySerializer for DurableStreamSessionIndex {
         context: &mut SerializationContext<Output>,
     ) -> desert_rust::Result<()> {
         BinarySerializer::serialize(&self.has_history, context)?;
-        desert_rust::serialize_iterator(&mut self.sessions.iter(), context)?;
-        desert_rust::serialize_iterator(&mut self.public_bindings.iter(), context)
+        desert_rust::serialize_iterator(&mut self.sessions.iter(), context)
     }
 }
 
@@ -2003,13 +1948,8 @@ impl BinaryDeserializer for DurableStreamSessionIndex {
             desert_rust::deserialize_iterator::<(String, Arc<DurableStreamSessionStatus>)>(context)
                 .0
                 .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
-        let public_bindings =
-            desert_rust::deserialize_iterator::<(String, Arc<DurableStreamPublicBinding>)>(context)
-                .0
-                .collect::<desert_rust::Result<OrdMap<_, _>>>()?;
         Ok(Self {
             sessions: entries,
-            public_bindings,
             has_history,
         })
     }

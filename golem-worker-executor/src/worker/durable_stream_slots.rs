@@ -483,12 +483,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         public_session_id: &str,
     ) -> Result<Option<DurableStreamPublicBinding>, WorkerExecutorError> {
-        let status = self.state_actor.try_attached_status().await?;
         self.worker_service()
             .lookup_durable_stream_public_binding(
                 &self.owned_agent_id,
                 self.agent_mode(),
-                &status,
                 public_session_id,
             )
             .await

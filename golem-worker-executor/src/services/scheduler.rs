@@ -87,16 +87,12 @@ pub trait SchedulerWorkerAccess {
 
     async fn expire_durable_stream_session(
         &self,
-        _owned_agent_id: &OwnedAgentId,
-        _target_agent_fingerprint: AgentFingerprint,
-        _public_session_id: String,
-        _session_key: IdempotencyKey,
-        _expected_deadline_millis: u64,
-    ) -> Result<(), WorkerExecutorError> {
-        Err(WorkerExecutorError::runtime(
-            "stream session expiry is not supported by this worker access",
-        ))
-    }
+        owned_agent_id: &OwnedAgentId,
+        target_agent_fingerprint: AgentFingerprint,
+        public_session_id: String,
+        session_key: IdempotencyKey,
+        expected_deadline_millis: u64,
+    ) -> Result<(), WorkerExecutorError>;
 
     // enqueue an invocation to the worker
     async fn enqueue_invocation(
@@ -1021,6 +1017,17 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
+        async fn expire_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_agent_fingerprint: AgentFingerprint,
+            _public_session_id: String,
+            _session_key: IdempotencyKey,
+            _expected_deadline_millis: u64,
+        ) -> Result<(), WorkerExecutorError> {
+            unimplemented!()
+        }
+
         async fn active_worker_fingerprint(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1092,6 +1099,17 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
+        async fn expire_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_agent_fingerprint: AgentFingerprint,
+            _public_session_id: String,
+            _session_key: IdempotencyKey,
+            _expected_deadline_millis: u64,
+        ) -> Result<(), WorkerExecutorError> {
+            unimplemented!()
+        }
+
         async fn active_worker_fingerprint(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1186,6 +1204,17 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for EphemeralWorkerAccessMock {
+        async fn expire_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_agent_fingerprint: AgentFingerprint,
+            _public_session_id: String,
+            _session_key: IdempotencyKey,
+            _expected_deadline_millis: u64,
+        ) -> Result<(), WorkerExecutorError> {
+            unimplemented!()
+        }
+
         async fn active_worker_fingerprint(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1279,6 +1308,17 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
+        async fn expire_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_agent_fingerprint: AgentFingerprint,
+            _public_session_id: String,
+            _session_key: IdempotencyKey,
+            _expected_deadline_millis: u64,
+        ) -> Result<(), WorkerExecutorError> {
+            unimplemented!()
+        }
+
         async fn active_worker_fingerprint(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1349,6 +1389,17 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for FailingActivationWorkerAccess {
+        async fn expire_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_agent_fingerprint: AgentFingerprint,
+            _public_session_id: String,
+            _session_key: IdempotencyKey,
+            _expected_deadline_millis: u64,
+        ) -> Result<(), WorkerExecutorError> {
+            unimplemented!()
+        }
+
         async fn active_worker_fingerprint(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1417,6 +1468,17 @@ mod tests {
 
     #[async_trait]
     impl SchedulerWorkerAccess for DelayedActiveWorkerAccessMock {
+        async fn expire_durable_stream_session(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _target_agent_fingerprint: AgentFingerprint,
+            _public_session_id: String,
+            _session_key: IdempotencyKey,
+            _expected_deadline_millis: u64,
+        ) -> Result<(), WorkerExecutorError> {
+            unimplemented!()
+        }
+
         async fn active_worker_fingerprint(
             &self,
             _owned_agent_id: &OwnedAgentId,
@@ -1491,6 +1553,15 @@ mod tests {
 
     #[async_trait]
     impl WorkerService for WorkerServiceMock {
+        async fn lookup_durable_stream_public_binding(
+            &self,
+            _owned_agent_id: &OwnedAgentId,
+            _agent_mode: AgentMode,
+            _public_session_id: &str,
+        ) -> Result<Option<golem_common::model::DurableStreamPublicBinding>, String> {
+            unimplemented!()
+        }
+
         async fn get(
             &self,
             _owned_agent_id: &OwnedAgentId,
