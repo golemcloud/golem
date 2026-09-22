@@ -66,9 +66,11 @@ impl StorageCall {
 /// These are the paths of the restic repository format.
 ///
 /// The backend holds a handle of the async runtime, which the caller gives when it makes the
-/// backend. A thread that is not a thread of the runtime can therefore call the backend. A call
-/// from a task of the runtime is an error of the caller: the call waits for the blob storage,
-/// and a task must not wait.
+/// backend. Each call waits for the blob storage with `Handle::block_on` on that runtime. Thus a
+/// thread that is not a thread of the runtime can call the backend, for example a thread of
+/// rustic. A call from a task of the runtime panics, because `Handle::block_on` panics in an async
+/// context. The executor builds with `panic = "abort"`, so that panic stops the executor. Thus the
+/// store runs rustic only through `execute_native`, which runs rustic on a blocking thread.
 #[derive(Debug)]
 pub(super) struct BlobBackend {
     storage: Arc<dyn BlobStorage>,
