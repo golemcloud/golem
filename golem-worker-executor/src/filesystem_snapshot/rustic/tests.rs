@@ -90,6 +90,32 @@ async fn stored_paths(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> V
     paths
 }
 
+/// Gives the path of each pack of the scope, in the order of the paths.
+async fn pack_paths(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> Vec<String> {
+    stored_paths(storage, scope)
+        .await
+        .into_iter()
+        .filter(|path| path.starts_with("data/"))
+        .collect()
+}
+
+/// Writes a tree of one file with the name and the content into a new directory, and gives the
+/// directory.
+fn one_file_tree(file: &'static str, content: &str) -> Scratch {
+    let tree = Scratch::new();
+    write_tree(
+        tree.path(),
+        &[(
+            file,
+            Spec::File {
+                content: Box::from(content.as_bytes()),
+                mode: 0o644,
+            },
+        )],
+    );
+    tree
+}
+
 /// Gives the id in hex of each pack of data blobs in the repository of the scope.
 async fn data_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -> Box<[Box<str>]> {
     with_existing_repository(
@@ -706,4 +732,59 @@ async fn a_prune_whose_pack_reads_get_no_answer_fails_and_stops_its_threads() {
     let stopped = dropped_within_limit(dropped).await;
 
     assert_eq!((failed_at_deadline(pruned), stopped), (Some(true), true));
+}
+
+#[test]
+async fn a_prune_after_a_forget_deletes_the_packs_of_that_name_and_the_other_name_restores() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    let repository = repository(&inner, &scope);
+    let first_tree = one_file_tree("first.txt", "only in the first tree");
+    let second_tree = one_file_tree("second.txt", "only in the second tree");
+    repository
+        .save(&name("first"), first_tree.path())
+        .await
+        .unwrap();
+    let first_packs = pack_paths(&inner, &scope).await;
+    repository
+        .save(&name("second"), second_tree.path())
+        .await
+        .unwrap();
+    let second_packs = pack_paths(&inner, &scope)
+        .await
+        .into_iter()
+        .filter(|path| !first_packs.contains(path))
+        .collect::<Vec<_>>();
+    let into = Scratch::new();
+
+    repository.forget(&name("first")).await.unwrap();
+    prune(
+        inner.clone(),
+        &scope,
+        STORAGE_CALL_DEADLINE,
+        PruneOptions::default().instant_delete(true),
+    )
+    .await
+    .unwrap();
+    let restored = repository
+        .restore(&name("second"), into.path(), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            first_packs.is_empty(),
+            second_packs.is_empty(),
+            pack_paths(&inner, &scope).await,
+            restored.is_some(),
+            listing(into.path()),
+        ),
+        (
+            false,
+            false,
+            second_packs.clone(),
+            true,
+            listing(second_tree.path())
+        )
+    );
 }
