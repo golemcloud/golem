@@ -30,7 +30,7 @@ use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult, PutIfAbsent,
-    agent_path_segment, is_agent_path_segment,
+    agent_path_segment,
 };
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -223,15 +223,11 @@ impl OplogArchiveService for BlobOplogArchiveService {
                     WorkerExecutorError::unknown(format!("Failed to list entries of compressed oplog for component {component_id} in blob storage: {err}"))
                 })?;
 
-            // A name that does not have the form of an agent path segment is a directory of an
-            // earlier layout, which used the agent name. The name rules can refuse a path below
-            // such a directory, so the scan makes no request there. The reads go one after the
-            // other, as the existence checks of the lower layers in the multi-layer scan do.
-            futures::stream::iter(
-                paths
-                    .into_iter()
-                    .filter(|path| path.to_str().is_some_and(is_agent_path_segment)),
-            )
+            // The name of a directory holds a hash, and a hash does not give back the agent name.
+            // So the scan reads the agent name from the `agent_id` blob of each directory. The
+            // reads go one after the other, as the existence checks of the lower layers in the
+            // multi-layer scan do.
+            futures::stream::iter(paths)
             .then(|directory| {
                 let namespace = namespace.clone();
                 async move {

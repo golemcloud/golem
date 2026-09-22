@@ -42,9 +42,9 @@ const MODE: AgentMode = AgentMode::Durable;
 /// at the first index, and the last index.
 type Observed = (bool, BTreeMap<OplogIndex, OplogEntry>, OplogIndex);
 
-/// The agent names of the tests. A layout that used the agent name as a path could not keep
-/// each of them: a `..` segment, a `.` segment, an empty segment, a `/`, and a name of 500 bytes,
-/// which is longer than a file name.
+/// The agent names of the tests. None of them can be the name of a directory in blob storage. The
+/// name rules refuse a `..` segment. The one form of a blob path removes a `.` segment and an
+/// empty segment, a `/` adds a directory, and a name of 500 bytes is longer than a file name.
 fn agent_names() -> [String; 5] {
     [
         r#"counter("a/../b")"#.to_string(),
@@ -109,9 +109,9 @@ async fn observe(service: &BlobOplogArchiveService, agent: &OwnedAgentId) -> Obs
     )
 }
 
-/// Each agent gets its own archive, which it can make, read, list and delete. The agents
-/// `counter("a/./b")`, `counter("a//b")` and `counter("a/b")` had one directory in the layout
-/// that used the agent name, so the test deletes one of them and reads the other two.
+/// Each agent gets its own archive, which it can make, read, list and delete. As blob paths,
+/// `counter("a/./b")`, `counter("a//b")` and `counter("a/b")` have one form. So the test deletes
+/// one of them and reads the other two.
 async fn check_that_each_agent_name_gets_its_own_archive(
     storage: Arc<dyn BlobStorage + Send + Sync>,
 ) {
@@ -321,53 +321,4 @@ async fn a_directory_without_an_agent_id_holds_no_archive() {
             )
         )
     );
-}
-
-/// The directories of the layout that used the agent name stay in the namespace, because there
-/// is no migration. The filesystem backend made a directory such as `counter("C:\x\..\y")` before,
-/// and the name rules now refuse a path below it. The scan skips each name that does not have the
-/// form of an agent path segment, so such a directory does not make the scan fail, and no
-/// directory of that layout is in the result.
-#[test]
-async fn directories_of_the_old_layout_do_not_make_the_scan_fail_or_appear_in_it() {
-    let root = TempDir::new().unwrap();
-    let storage = Arc::new(FileSystemBlobStorage::new(root.path()).await.unwrap());
-    let service = BlobOplogArchiveService::new(storage, 0);
-    let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let agent = owned_agent_id(environment_id, component_id, r#"counter("new")"#);
-    service
-        .open(&agent, MODE)
-        .await
-        .append(&[(OplogIndex::INITIAL, log_entry("new"))])
-        .await;
-
-    // The filesystem backend keeps the namespace in
-    // `compressed_oplog/<mode>/<environment>/<component>/<level>` below its root.
-    let namespace_directory = root
-        .path()
-        .join("compressed_oplog")
-        .join("durable")
-        .join(environment_id.to_string())
-        .join(component_id.to_string())
-        .join("0");
-    let refused = namespace_directory.join(r#"counter("C:\x\..\y")"#);
-    let with_chunk = namespace_directory.join(r#"counter("old")"#);
-    std::fs::create_dir(&refused).unwrap();
-    std::fs::create_dir(&with_chunk).unwrap();
-    std::fs::write(with_chunk.join("1"), b"chunk").unwrap();
-
-    let scanned = service
-        .scan_for_component(
-            &environment_id,
-            &component_id,
-            Some(MODE),
-            ScanCursor::default(),
-            100,
-        )
-        .await
-        .map(|(_, agents)| agents)
-        .map_err(|err| err.to_string());
-
-    assert_eq!(scanned, Ok(vec![agent]));
 }
