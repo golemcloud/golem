@@ -14,9 +14,9 @@
 
 //! Save, restore, forget and prune of a repository on the in-memory blob storage.
 //!
-//! The tests with a held call give each call a short deadline. Each of them keeps the gate of the
-//! held calls closed until the storage is dropped. So the threads of rustic stop because of the
-//! deadline, and not because the gate opens.
+//! The tests in which a held call gets no answer give each call a short deadline. Each of them
+//! keeps the gate of the held calls closed until the storage is dropped. So the threads of rustic
+//! stop because of the deadline, and not because the gate opens.
 
 use super::backend::BlobBackend;
 use super::holding::{holding_storage, reached_deadline};
@@ -48,7 +48,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::test;
 use tokio::runtime::Handle;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{Notify, oneshot, watch};
 use tokio::time::error::Elapsed;
 
 /// The deadline of each call in the tests that hold a call.
@@ -651,6 +651,47 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
     assert_eq!(
         (failed_at_deadline(saved), snapshots, stopped),
         (Some(true), Vec::<String>::new(), true)
+    );
+}
+
+#[test]
+async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restores() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    let held = Arc::new(Notify::new());
+    let (storage, gate, _dropped) = holding_storage(inner, {
+        let held = held.clone();
+        move |op_label, path| {
+            let selected = op_label == "write" && path.starts_with("data");
+            if selected {
+                held.notify_one();
+            }
+            selected
+        }
+    });
+    let repository = Repository::new(storage, scope, key(), Duration::from_secs(2));
+    let tree = fixture_tree();
+    let into = Scratch::new();
+    let opener = tokio::spawn(async move {
+        held.notified().await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        drop(gate);
+    });
+
+    let saved = tokio::time::timeout(LIMIT, repository.save(&name("first"), tree.path()))
+        .await
+        .map(|result| result.map(|_| ()).map_err(|error| format!("{error:#}")));
+    let opened = tokio::time::timeout(LIMIT, opener)
+        .await
+        .is_ok_and(|joined| joined.is_ok());
+    let restored = repository
+        .restore(&name("first"), into.path(), None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (saved, opened, restored.is_some(), listing(into.path())),
+        (Ok(Ok(())), true, true, listing(tree.path()))
     );
 }
 
