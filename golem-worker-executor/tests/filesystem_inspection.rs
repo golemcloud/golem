@@ -618,7 +618,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
                 .await
         })
     };
-    // Wait for durable acceptance, not a wall-clock guess about when the caller got scheduled.
+    // Wait for active execution, not just a queued invocation.
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let oplog = executor.get_oplog(&agent, before.next()).await.unwrap();
@@ -633,16 +633,6 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         }
     })
     .await?;
-    let mut read = Box::pin(worker.read_file(
-        CanonicalFilePath::from_abs_str("/a.txt").unwrap(),
-        FileByteSelection::Full,
-    ));
-    assert!(
-        tokio::time::timeout(Duration::from_secs(1), &mut read)
-            .await
-            .is_err(),
-        "read completed before the write"
-    );
 
     let final_write = {
         let executor = executor.clone();
@@ -670,6 +660,19 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
         }
     })
     .await?;
+
+    // The pending write predates this read, but inspection must observe the current state at
+    // the next invocation boundary instead of waiting for already-queued invocations.
+    let mut read = Box::pin(worker.read_file(
+        CanonicalFilePath::from_abs_str("/a.txt").unwrap(),
+        FileByteSelection::Full,
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), &mut read)
+            .await
+            .is_err(),
+        "read completed before the active write"
+    );
 
     let permit_agent = AgentId {
         component_id: component.id,

@@ -30,8 +30,6 @@ use crate::worker::invocation::{
     InvocationMode, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
     lower_invocation, materialize_streaming_result,
 };
-use crate::worker::invocation_queue;
-use crate::worker::invocation_queue::ResidentWork;
 use crate::worker::status_checkpointer;
 use crate::worker::{
     CreateWorkerInstanceError, FinalWorkerState, PendingLiveInvocationDisposition,
@@ -101,7 +99,7 @@ macro_rules! agent_phase_span {
 /// Context of a running worker's invocation loop
 pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub receiver: UnboundedReceiver<WorkerCommand>,
-    pub active: Arc<tokio::sync::RwLock<VecDeque<ResidentWork>>>,
+    pub active: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
     pub owned_agent_id: OwnedAgentId,
     pub parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     pub waiting_for_command: Arc<AtomicBool>,
@@ -257,7 +255,11 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
         let mut retry_was_live = false;
         'outer: loop {
-            invocation_queue::prune_abandoned(&mut *self.parent.queue.write().await);
+            self.parent
+                .queue
+                .write()
+                .await
+                .retain(|invocation| !invocation.is_abandoned());
             self.release_terminal_interrupt().await;
             // ADMISSION: gates the start of a generation, so
             // fencing refuses new generations and never interrupts a running one.
@@ -1457,7 +1459,7 @@ pub(super) async fn run_invocation_loop_task<T>(
 
 struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     receiver: &'a mut UnboundedReceiver<WorkerCommand>,
-    active: Arc<tokio::sync::RwLock<VecDeque<ResidentWork>>>,
+    active: Arc<tokio::sync::RwLock<VecDeque<QueuedWorkerInvocation>>>,
     owned_agent_id: OwnedAgentId,
     parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     waiting_for_command: Arc<AtomicBool>,
@@ -1686,13 +1688,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
     }
 
-    /// Samples durable and resident work under the same admission mutex. Durable status remains
-    /// authoritative; selecting a reference does not remove it from status or the oplog.
+    /// Filesystem commands require initialization, but otherwise observe current state at an
+    /// invocation boundary before pending work. Selecting a durable reference does not consume it.
     async fn select_next_work(&self) -> SelectedWork {
-        let _instance = self.parent.instance.lock().await;
         let status = self.parent.get_non_detached_last_known_status().await;
         let mut queue = self.active.write().await;
-        invocation_queue::prune_abandoned(&mut queue);
+        queue.retain(|invocation| !invocation.is_abandoned());
         if let Err(error) = Worker::<Ctx>::ensure_not_failed(
             &self.parent.deps,
             &self.parent.owned_agent_id,
@@ -1701,27 +1702,32 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         )
         .await
         {
-            invocation_queue::fail_resident(&mut queue, &error);
+            for invocation in queue.drain(..) {
+                invocation.fail(&error);
+            }
         }
 
-        let resident_position = invocation_queue::ready_position(&queue, &status);
-        let durable = status.pending_invocations.first();
-        if let Some(position) = resident_position
-            && invocation_queue::resident_precedes_durable(
-                &queue[position],
-                durable.map(|pending| pending.oplog_index),
+        // Creation reserves the constructor key before ordinary invocation admission. A pending
+        // constructor is therefore first; a started constructor completes during replay instead.
+        let needs_initialization = self.parent.parsed_agent_id.is_some()
+            && matches!(
+                queue.front(),
+                Some(
+                    QueuedWorkerInvocation::ReadFile { .. }
+                        | QueuedWorkerInvocation::GetFileSystemNode { .. }
+                )
             )
-        {
-            return SelectedWork::Resident(queue.remove(position).unwrap().invocation);
+            && status.pending_invocations.first().is_some_and(|pending| {
+                pending.has_idempotency_key(&self.parent.initialization_idempotency_key())
+            });
+        if !needs_initialization && let Some(invocation) = queue.pop_front() {
+            return SelectedWork::Resident(invocation);
         }
         if !status.pending_updates.is_empty() {
             return SelectedWork::ApplyPendingUpdate;
         }
-        if let Some(pending) = durable {
+        if let Some(pending) = status.pending_invocations.first() {
             return SelectedWork::Durable(pending.clone());
-        }
-        if let Some(position) = resident_position {
-            return SelectedWork::Resident(queue.remove(position).unwrap().invocation);
         }
         SelectedWork::Idle(status)
     }
@@ -1944,8 +1950,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     // idle), and re-enter through the scheduler queue.
                     return CommandOutcome::WaitForWakeup;
                 }
-                // The last older invocation may have released transient work.
-                // Revisit internal work before deciding the worker can become idle.
+                // Revisit commands that arrived during execution before entering idle.
                 CommandOutcome::Continue
             }
             other => other,
@@ -2017,8 +2022,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
 
     async fn inject_snapshot_as_next_action(&self) {
         let mut queue = self.active.write().await;
-        invocation_queue::prune_abandoned(&mut queue);
-        queue.push_front(ResidentWork::control(QueuedWorkerInvocation::SaveSnapshot));
+        queue.retain(|invocation| !invocation.is_abandoned());
+        queue.push_front(QueuedWorkerInvocation::SaveSnapshot);
     }
 
     /// Resumes an interrupted replay process

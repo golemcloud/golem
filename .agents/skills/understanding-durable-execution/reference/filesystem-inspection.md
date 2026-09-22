@@ -35,14 +35,15 @@ reads blob storage without activating an agent. Directory listing remains a sepa
 1. Shared `ActiveAgents` activation survives an individual waiter's cancellation. Existing
    initialization, replay, failure, update and ephemeral lifecycle rules apply. There is no
    filesystem-read-specific admission limit, semaphore, timeout or error.
-2. `Worker::read_file` enqueues a `ResidentWork` envelope ordered after `status.oplog_idx` while holding
-   the instance mutex, the same boundary as invocation acceptance. One selector samples attached
-   status under that mutex and compares the first durable pending index with the first eligible
-   resident envelope; selected durable references are hydrated from the oplog and remain pending
-   until the normal start transition. Controls may pass blocked ordered work but not earlier
-   eligible resident work. Pending updates block ordinary ordered work. Cancelled resident work is
-   pruned at enqueue, selection, idle/eviction, restart and cleanup boundaries; durable invocations
-   are never pruned on caller disconnect.
+2. Reads and listings enter the existing `QueuedWorkerInvocation` deque. The constructor must
+   complete first: creation reserves its idempotency key before ordinary invocation admission,
+   so a pending constructor is recognized at the head of the durable queue. After initialization,
+   the loop processes resident commands at invocation boundaries before pending updates or methods. They observe
+   the agent's current filesystem, regardless of how many invocations were queued first; there is
+   no cross-queue arrival ordering or oplog-position marker. An active invocation, including its
+   streaming production, must finish before inspection runs. Cancelled resident work is pruned at
+   enqueue, selection, idle/eviction, restart and cleanup boundaries; durable invocations are never
+   pruned on caller disconnect.
 3. `Invocation::read_file` acquires the exclusive `OwnerLane`, then
    calls `services/agent_filesystem/lifecycle/inspection/mod.rs::open_file_for_inspection`. It walks
    descriptor-relative components with no-follow semantics through the final target. Any symlink
@@ -86,10 +87,11 @@ loss aborts the external stream; there is no durable read reattachment contract.
   initializer failure, prior writes, EOF/drop/update ordering and the same exact path across update.
 - `services/agent_filesystem/lifecycle/{inspection,inspection_stream}/tests.rs` tests descriptor
   safety, range boundaries, bounded chunks, early EOF, backpressure without expiry and consumer cleanup.
-- `worker/invocation_queue.rs` tests durable-prefix ordering and transient cancellation pruning.
+- `worker/mod.rs` tests transient cancellation pruning and lifecycle failure delivery.
 - `grpc_read_waits_for_blocking_invocation_and_completes` proves a real gRPC read waits behind
   guest work and returns its final bytes. The Suspend runtime test proves a queued read survives
-  actual unload and completes after normal resume with the earlier invocation's final bytes.
+  actual unload and completes after normal resume with the active invocation's final bytes,
+  before a write that was already queued when the read arrived.
 
 Use the testing skill for fixture builds and test-r filters. Bun corpus checks only verify fixture
 integrity; they are not executor conformance tests. HTTP Range syntax, status codes, validators,
