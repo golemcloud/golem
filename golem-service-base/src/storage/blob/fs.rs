@@ -502,6 +502,12 @@ impl BlobStorage for FileSystemBlobStorage {
         self.ensure_path_is_inside_root(&from_full_path)?;
         self.ensure_path_is_inside_root(&to_full_path)?;
 
+        // As `put_raw` does, the copy makes the directory of the target when it is not there.
+        if let Some(parent) = to_full_path.parent()
+            && async_fs::metadata(parent).await.is_err()
+        {
+            async_fs::create_dir_all(parent).await?;
+        }
         async_fs::copy(&from_full_path, &to_full_path).await?;
         Ok(())
     }

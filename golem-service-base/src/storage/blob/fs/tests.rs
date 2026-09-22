@@ -158,3 +158,30 @@ async fn get_raw_slice_gives_the_error_of_get_raw_for_a_directory() {
         )
     );
 }
+
+#[test]
+async fn copy_makes_the_directory_of_the_target() {
+    let (_root, storage) = storage_with_blobs().await;
+
+    storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("ranges/blob"),
+            Path::new("other/below/blob"),
+        )
+        .await
+        .unwrap();
+    let copied = storage
+        .get_raw(
+            "test",
+            "get-raw",
+            namespace(),
+            Path::new("other/below/blob"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(copied, Some(b"abcdef".to_vec()));
+}
