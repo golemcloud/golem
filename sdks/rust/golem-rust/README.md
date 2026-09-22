@@ -120,6 +120,24 @@ branches can collide on the same tuple; a later acknowledged sequence is a typed
 `ProducerDiverged` error, never automatic renumbering. Create a distinct producer
 explicitly when independent writes are required, without abandoning uncertain data.
 
+## Guest exports and binary size
+
+Enable `export_golem_agentic` for every agent, tool, or middleware component.
+All such components export the same agent, tool, middleware, and snapshot
+interfaces. There is no role-selection or no-agent feature.
+
+Implementation macros install capability-specific dispatch tables at component
+startup. `#[agent_implementation]` retains the agent and snapshot runtime,
+`#[tool_implementation]` retains tool dispatch, and `#[tool_middleware]` or
+`#[universal_tool_middleware]` retains middleware dispatch. Definition-only
+macros and unused generated clients do not install runtimes.
+
+Absent capabilities discover as empty lists. Tool and middleware lookups and
+invocations return `InvalidToolName`; agent initialization and invocation return
+`InvalidInput`. Snapshot load returns an unsupported error. Agent definition
+and snapshot save trap with an explicit unsupported message because their WIT
+signatures have no error result.
+
 ## Tool middleware
 
 `#[tool_middleware]` and `#[universal_tool_middleware]` accept `parameters = P` for statically typed installation parameters. `P` must implement the SDK schema conversion traits. For monomorphic middleware, the declared `constructor` has signature `fn(P) -> Self`; universal middleware receives `P` as its first function argument. Without `parameters`, constructors remain zero-argument and universal functions have no parameter value.

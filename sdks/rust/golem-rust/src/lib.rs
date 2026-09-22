@@ -302,6 +302,7 @@ pub mod golem_agentic {
 
     pub use __export_golem_agentic_impl as export_golem_agentic;
 }
+
 #[cfg(feature = "export_golem_agentic")]
 pub(crate) use golem_agentic::golem::tool::underlying as tool_underlying_bindings;
 

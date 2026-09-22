@@ -136,9 +136,23 @@ async fn load_agent_snapshot(
     Ok(())
 }
 
-pub struct Component;
+struct AgentRuntime;
 
-impl Guest for Component {
+#[doc(hidden)]
+pub fn install_agent_exports() {
+    let _ = super::exports::AGENT.set(super::exports::AgentHooks {
+        initialize: |name, input, principal| {
+            Box::pin(AgentRuntime::initialize(name, input, principal))
+        },
+        invoke: |name, input, principal| Box::pin(AgentRuntime::invoke(name, input, principal)),
+        get_definition: AgentRuntime::get_definition,
+        discover: AgentRuntime::discover_agent_types,
+        load: |snapshot| Box::pin(AgentRuntime::load(snapshot)),
+        save: || Box::pin(AgentRuntime::save()),
+    });
+}
+
+impl Guest for AgentRuntime {
     async fn initialize(
         agent_type: String,
         input: crate::schema::wit::wire::SchemaValueTree,
@@ -219,7 +233,7 @@ impl Guest for Component {
     }
 }
 
-impl LoadSnapshotGuest for Component {
+impl LoadSnapshotGuest for AgentRuntime {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     async fn load(
@@ -241,7 +255,7 @@ impl LoadSnapshotGuest for Component {
     }
 }
 
-impl SaveSnapshotGuest for Component {
+impl SaveSnapshotGuest for AgentRuntime {
     // https://github.com/golemcloud/golem/issues/2374#issuecomment-3618565370
     #[allow(clippy::await_holding_refcell_ref)]
     async fn save() -> crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
@@ -534,7 +548,3 @@ mod tests {
         *get_state().agent_instance.borrow_mut() = Default::default();
     }
 }
-
-crate::golem_agentic::export_golem_agentic!(Component with_types_in crate::golem_agentic);
-crate::save_snapshot::export_save_snapshot!(Component with_types_in crate::save_snapshot);
-crate::load_snapshot::export_load_snapshot!(Component with_types_in crate::load_snapshot);

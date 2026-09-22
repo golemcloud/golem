@@ -671,6 +671,7 @@ fn generate_register_initiator_fn(
     quote! {
         ::golem_rust::ctor::__support::ctor_parse!(
             #[ctor] fn #register_initiator_fn_name() {
+                golem_rust::agentic::install_agent_exports();
                 <#self_ty as #agent_trait_path>::__register_agent_type();
 
                 golem_rust::agentic::register_agent_initiator(

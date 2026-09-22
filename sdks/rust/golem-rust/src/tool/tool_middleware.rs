@@ -33,9 +33,9 @@ pub type InputStream = wit_bindgen::StreamReader<
 >;
 
 /// Writable byte stream supplied to middleware for tool stdout.
-#[cfg(any(test, feature = "export_golem_agentic"))]
+#[cfg(feature = "export_golem_agentic")]
 pub type OutputStream = crate::agentic::OutputStream;
-#[cfg(not(any(test, feature = "export_golem_agentic")))]
+#[cfg(not(feature = "export_golem_agentic"))]
 #[doc(hidden)]
 pub struct OutputStream;
 #[cfg(feature = "export_golem_agentic")]
@@ -148,7 +148,7 @@ impl<E: Error + 'static> Error for ToolInvokeError<E> {
 /// The runtime is the only producer of this handle. It is intentionally not
 /// cloneable. Shared invocation permits a middleware to overlap calls to the
 /// same runtime-minted capability.
-#[cfg_attr(not(any(test, feature = "export_golem_agentic",)), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "export_golem_agentic")), allow(dead_code))]
 pub struct UnderlyingTool {
     inner: UnderlyingToolInner,
 }
@@ -157,10 +157,10 @@ pub struct UnderlyingTool {
 ///
 /// Dropping this value only stops observing the invocation. Use [`Self::cancel`]
 /// to explicitly request cancellation of this child.
-#[cfg_attr(not(any(test, feature = "export_golem_agentic",)), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "export_golem_agentic")), allow(dead_code))]
 pub struct UnderlyingInvocation {
     result: Rc<UnderlyingInvocationResult>,
-    #[cfg(any(test, feature = "export_golem_agentic",))]
+    #[cfg(any(test, feature = "export_golem_agentic"))]
     terminal: Rc<
         super::invocation_result::InvocationResultDriver<
             Result<Option<TypedSchemaValue>, ToolInvokeError<std::convert::Infallible>>,
@@ -170,7 +170,7 @@ pub struct UnderlyingInvocation {
 }
 
 /// Typed view of a started underlying invocation generated for a tool command.
-#[cfg_attr(not(any(test, feature = "export_golem_agentic",)), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "export_golem_agentic")), allow(dead_code))]
 pub struct TypedUnderlyingInvocation<T, E> {
     invocation: UnderlyingInvocation,
     pub stdout: Option<InputStream>,
@@ -178,7 +178,7 @@ pub struct TypedUnderlyingInvocation<T, E> {
     decode_error: fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 impl<T, E> TypedUnderlyingInvocation<T, E> {
     #[doc(hidden)]
     pub fn new(
@@ -209,6 +209,7 @@ impl<T, E> TypedUnderlyingInvocation<T, E> {
 
     /// Waits for the structured result while forwarding the underlying stdout
     /// to the writer supplied to this middleware invocation.
+    #[cfg(feature = "export_golem_agentic")]
     pub async fn get_forwarding_stdout(
         mut self,
         stdout: Option<OutputStream>,
@@ -256,7 +257,7 @@ struct FakeInvocationResult {
     cancelled: Rc<std::cell::Cell<bool>>,
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 impl UnderlyingInvocation {
     fn new(result: UnderlyingInvocationResult, stdout: Option<InputStream>) -> Self {
         let result = Rc::new(result);
@@ -371,7 +372,7 @@ pub(crate) type FakeInvoke = Box<
     ),
 >;
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 impl UnderlyingTool {
     #[cfg(feature = "export_golem_agentic")]
     #[allow(dead_code)]
@@ -422,6 +423,7 @@ impl UnderlyingTool {
 
     /// Invokes the next layer while forwarding its stdout to the writer
     /// supplied to this middleware invocation.
+    #[cfg(feature = "export_golem_agentic")]
     pub async fn invoke_forwarding_stdout(
         &self,
         command_path: Vec<String>,
@@ -506,7 +508,7 @@ impl UnderlyingTool {
     }
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(feature = "export_golem_agentic")]
 async fn forward_stdout<E>(
     stdout: Option<InputStream>,
     mut output: Option<OutputStream>,
@@ -542,7 +544,7 @@ async fn forward_stdout<E>(
     }
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(feature = "export_golem_agentic")]
 fn classify_stream_write_result<E>(
     result: Result<(), crate::golem_agentic::golem::tool::streams::StreamWriteError>,
 ) -> Result<bool, ToolInvokeError<E>> {
@@ -556,7 +558,7 @@ fn classify_stream_write_result<E>(
     }
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 async fn join_results<A, B>(a: A, b: B) -> (A::Output, B::Output)
 where
     A: Future,
@@ -605,7 +607,7 @@ fn decode_underlying_error<E>(
     }
 }
 
-#[cfg(any(test, feature = "export_golem_agentic",))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 fn decode_wire_error<E>(
     error: wire::ToolError,
     decode_custom_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
@@ -713,6 +715,7 @@ mod tests {
     use std::rc::Rc;
     use test_r::test;
 
+    #[cfg(feature = "export_golem_agentic")]
     #[test]
     fn stdout_write_result_classification_only_accepts_consumer_cancellation() {
         use crate::golem_agentic::golem::tool::streams::{

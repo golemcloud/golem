@@ -836,49 +836,6 @@ async fn audit(
     }
 
     #[test]
-    fn default_world_compiles_generated_middleware_definition_and_authoring_surfaces() {
-        let output = cargo_tool_crate_with_dependency(
-            "pure-middleware-generated-surfaces",
-            "pure-middleware-generated-surfaces",
-            r#"
-use golem_rust::{tool_definition, tool_middleware};
-
-#[tool_definition]
-trait Echo {
-    fn echo(&self, value: String) -> String;
-}
-
-struct Policy;
-
-impl Policy {
-    fn new() -> Self {
-        Self
-    }
-}
-
-#[tool_middleware(name = "pure-policy", constructor = Policy::new)]
-impl EchoMiddleware for Policy {
-    async fn echo(
-        &self,
-        underlying: &EchoUnderlying,
-        value: String,
-    ) -> Result<String, golem_rust::tool::ToolInvokeError<std::convert::Infallible>> {
-        underlying.echo(value).await
-    }
-}
-"#,
-            "check",
-            "golem-rust = { path = PATH, features = [\"export_golem_agentic\"] }",
-        );
-
-        assert!(
-            output.status.success(),
-            "the default world must compile generated descriptors, clients, proxies, and authoring adapters:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    #[test]
     fn multilevel_subtree_suppresses_inherited_globals_at_depth() {
         let tool = __golem_tool_descriptor_for_Outer(&mut ToolBuildCtx::new())
             .expect("outer descriptor builds");

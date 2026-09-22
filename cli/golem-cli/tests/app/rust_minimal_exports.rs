@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-test_r::enable!();
-
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +22,8 @@ const AGENT_GUEST: &str = "golem:agent/guest@2.0.0";
 const TOOL_GUEST: &str = "golem:tool/guest@0.1.0";
 const TOOL_HOST: &str = "golem:tool/host@0.1.0";
 const TOOL_MIDDLEWARE_GUEST: &str = "golem:tool/tool-middleware-guest@0.1.0";
+const LOAD_SNAPSHOT: &str = "golem:api/load-snapshot@1.5.0";
+const SAVE_SNAPSHOT: &str = "golem:api/save-snapshot@1.5.0";
 const CONSTRUCTOR_DIAGNOSTIC: &str = "tool middleware `constructor` must be synchronous, infallible, zero-argument, and return the middleware implementation type (`fn() -> Self`)";
 const CONSTRUCTOR_DIAGNOSTIC_SYMBOL: &str =
     "constructor_must_be_synchronous_infallible_zero_argument_and_return_self";
@@ -44,7 +44,7 @@ impl Drop for FixtureLockfile {
 }
 
 #[test]
-fn tool_middleware_cross_crate_components_and_compile_failures() {
+async fn tool_middleware_cross_crate_components_and_compile_failures() {
     let fixture = fixture_root();
     let _lockfile = FixtureLockfile(fixture.join("Cargo.lock"));
     let target = target_dir();
@@ -52,18 +52,110 @@ fn tool_middleware_cross_crate_components_and_compile_failures() {
     assert_feature_fixture_contract(&fixture, &target);
     check_fixture(&fixture, &target, "all-sdk-features-native");
 
-    let pure = build_component(&fixture, &target, "pure-middleware-component");
-    assert_component_contract(&component_wit(&pure), true, true, true, true);
+    let pure = build_component(&fixture, &target, "pure-middleware-component", "");
+    assert_component_contract(&component_wit(&pure), false);
 
-    let ordinary = build_component(&fixture, &target, "ordinary-agentic-component");
-    assert_component_contract(&component_wit(&ordinary), true, true, true, true);
+    let ordinary = build_component(&fixture, &target, "ordinary-agentic-component", "");
+    assert_component_contract(&component_wit(&ordinary), true);
 
-    let combined = build_component(&fixture, &target, "combined-agentic-middleware-component");
-    assert_component_contract(&component_wit(&combined), true, true, true, true);
+    let combined = build_component(
+        &fixture,
+        &target,
+        "combined-agentic-middleware-component",
+        "",
+    );
+    assert_component_contract(&component_wit(&combined), true);
 
-    let all_wasi_features =
-        build_component(&fixture, &target, "all-wasi-compatible-features-component");
-    assert_component_contract(&component_wit(&all_wasi_features), true, true, true, true);
+    let all_wasi_features = build_component(
+        &fixture,
+        &target,
+        "all-wasi-compatible-features-component",
+        "",
+    );
+    assert_component_contract(&component_wit(&all_wasi_features), true);
+
+    let matrix = target.join("minimal-exports");
+    fs::create_dir_all(&matrix).unwrap();
+    for (name, features) in [
+        ("empty", ""),
+        ("tool", "tool"),
+        ("agent", "agent"),
+        ("middleware", "middleware"),
+        ("mixed", "agent,tool,middleware"),
+    ] {
+        let output = cargo(
+            &fixture,
+            &target,
+            [
+                "test",
+                "-p",
+                "minimal-exports-component",
+                "--lib",
+                "--features",
+                features,
+                "--",
+                "--report-time",
+            ],
+        );
+        assert_success(&output, &format!("checking {name} export behavior"));
+        let component = build_component(&fixture, &target, "minimal-exports-component", features);
+        assert_component_contract(&component_wit(&component), false);
+        let metadata = golem_common::model::agent::extraction::extract_component_metadata(
+            &component, true, false,
+        )
+        .await
+        .unwrap();
+        let enabled =
+            |capability| usize::from(features.split(',').any(|feature| feature == capability));
+        assert_eq!(metadata.agent_types.len(), enabled("agent"), "{name}");
+        assert_eq!(metadata.tools.len(), enabled("tool"), "{name}");
+        assert_eq!(
+            metadata.tool_middlewares.len(),
+            enabled("middleware"),
+            "{name}"
+        );
+        if let Some(agent) = metadata.agent_types.first() {
+            assert_eq!(agent.type_name.0, "MinimalAgent");
+        }
+        if let Some(tool) = metadata.tools.first() {
+            assert_eq!(tool.commands.nodes[0].name, "public-echo");
+        }
+        if let Some(middleware) = metadata.tool_middlewares.first() {
+            assert_eq!(middleware.name, "minimal-policy");
+        }
+        let bytes = fs::read(&component).unwrap();
+        // These symbols are in the unstripped name section, including functions
+        // retained only through ctor-installed tables and generated client code.
+        let symbols = String::from_utf8_lossy(&bytes);
+        for (capability, symbol) in [
+            ("agent", "agent_impl"),
+            ("agent", "agent_registry"),
+            ("agent", "principal_serde"),
+            ("tool", "tool_registry"),
+            ("middleware", "tool_middleware_impl"),
+            ("middleware", "tool_middleware_registry"),
+        ] {
+            if !features.split(',').any(|feature| feature == capability) {
+                assert!(!symbols.contains(symbol), "{name} retained {symbol}");
+            }
+        }
+        fs::copy(&component, matrix.join(format!("{name}.wasm"))).unwrap();
+        let stripped = matrix.join(format!("{name}.stripped.wasm"));
+        let output = Command::new("wasm-tools")
+            .arg("strip")
+            .arg("--all")
+            .arg(&component)
+            .arg("-o")
+            .arg(&stripped)
+            .output()
+            .unwrap();
+        assert_success(&output, "stripping the component");
+        eprintln!(
+            "{name}: release={} stripped={}",
+            bytes.len(),
+            fs::metadata(stripped).unwrap().len()
+        );
+    }
 
     for (binary, fragments) in [
         (
@@ -93,18 +185,14 @@ fn tool_middleware_cross_crate_components_and_compile_failures() {
 }
 
 fn fixture_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tool-middleware")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../sdks/rust/golem-rust/tests/fixtures/tool-middleware")
 }
 
 fn target_dir() -> PathBuf {
     std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .expect("golem-rust crate has an SDK workspace parent")
-                .join("target")
-        })
+        .unwrap_or_else(|| fixture_root().join("target"))
 }
 
 fn assert_feature_fixture_contract(fixture: &Path, target: &Path) {
@@ -187,14 +275,17 @@ fn check_fixture(fixture: &Path, target: &Path, package: &str) {
     assert_success(&output, &format!("checking fixture package `{package}`"));
 }
 
-fn build_component(fixture: &Path, target: &Path, package: &str) -> PathBuf {
+fn build_component(fixture: &Path, target: &Path, package: &str, features: &str) -> PathBuf {
     let output = cargo(
         fixture,
         target,
         [
             "build",
+            "--release",
             "-p",
             package,
+            "--features",
+            features,
             "--target",
             "wasm32-wasip2",
             "--message-format=json-render-diagnostics",
@@ -241,14 +332,10 @@ fn component_wit(component: &Path) -> String {
     String::from_utf8(output.stdout).expect("wasm-tools emits UTF-8 WIT")
 }
 
-fn assert_component_contract(
-    wit: &str,
-    exports_agent: bool,
-    exports_tool: bool,
-    exports_middleware: bool,
-    imports_tool_host: bool,
-) {
+fn assert_component_contract(wit: &str, invokes_tool_host: bool) {
     let (imports, exports) = root_world_interfaces(wit);
+    assert!(exports.iter().any(|export| export == LOAD_SNAPSHOT));
+    assert!(exports.iter().any(|export| export == SAVE_SNAPSHOT));
     let relevant = [AGENT_GUEST, TOOL_GUEST, TOOL_MIDDLEWARE_GUEST, TOOL_HOST];
     let mut actual_imports = imports
         .into_iter()
@@ -258,20 +345,14 @@ fn assert_component_contract(
         .into_iter()
         .filter(|interface| relevant.contains(&interface.as_str()))
         .collect::<Vec<_>>();
-    let mut expected_imports = [imports_tool_host.then_some(TOOL_HOST)]
+    let mut expected_imports = [TOOL_HOST]
         .into_iter()
-        .flatten()
         .map(str::to_string)
         .collect::<Vec<_>>();
-    let mut expected_exports = [
-        exports_agent.then_some(AGENT_GUEST),
-        exports_tool.then_some(TOOL_GUEST),
-        exports_middleware.then_some(TOOL_MIDDLEWARE_GUEST),
-    ]
-    .into_iter()
-    .flatten()
-    .map(str::to_string)
-    .collect::<Vec<_>>();
+    let mut expected_exports = [AGENT_GUEST, TOOL_GUEST, TOOL_MIDDLEWARE_GUEST]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
 
     actual_imports.sort();
     actual_exports.sort();
@@ -287,10 +368,12 @@ fn assert_component_contract(
         "unexpected relevant root-world exports in component contract:\n{wit}"
     );
 
-    if !imports_tool_host {
+    if !invokes_tool_host {
+        // The mandatory stream signatures share a binding vtable whose type
+        // alias lives in tool/host; retaining that alias is not an RPC client.
         assert!(
-            !wit.contains(TOOL_HOST),
-            "component contract unexpectedly contains `{TOOL_HOST}`:\n{wit}"
+            !wit.contains("resource tool-rpc"),
+            "component contract unexpectedly retains ambient tool RPC:\n{wit}"
         );
     }
 }

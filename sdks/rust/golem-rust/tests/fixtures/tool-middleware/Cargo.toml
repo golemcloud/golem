@@ -8,4 +8,5 @@ members = [
     "all-wasi-compatible-features-component",
     "all-sdk-features-native",
     "compile-fail",
+    "minimal-exports",
 ]
