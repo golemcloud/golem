@@ -273,12 +273,20 @@ fn main {
 
 In a pure middleware component, the `#derive.tool` declarations, signatures, and annotations
 describe the typed tool shape for code generation. Their method bodies are not registered or
-invoked as ordinary tool implementations. A handler may make zero, one, or multiple
-**sequential** calls through its `underlying` argument. For example, a retry can call the same
-generated method again after an error. Overlapping calls are rejected.
+invoked as ordinary tool implementations. A handler may make zero, one, or multiple calls through
+its `underlying` argument. The awaited generated methods are convenient for forwarding and retry.
+For overlap/fan-out, generated `start_<command>` methods return independent
+`@toolMiddleware.UnderlyingInvocation` values: call `get()` for the typed result, inspect
+`stdout()`, call `cancel()` explicitly to cancel, and call `drop()` only to release observation.
 
 A **universal middleware** handles any runtime-provided tool shape and forwards the opaque wire
 carriers without rebuilding them:
+
+Both middleware forms support typed static installation parameters. Add `parameters="Type"` to
+the derive annotation; `Type` must implement `IntoSchema` and `FromSchema`. A monomorphic handler
+then receives `parameters : Type` immediately after `underlying`, while a universal handler receives
+it before `invocation`. Without the option, the installation schema is the normalized empty record
+and no handler parameter is added.
 
 ```moonbit nocheck
 ///|
@@ -333,9 +341,24 @@ code registers every declared middleware when the component loads. Do not import
 runtime-provided `underlying` capability is its only path to the next inner layer.
 
 The underlying capability and invocation streams belong to one middleware invocation. Generated
-wrappers enforce once-only transfer, sequential use, cleanup, and revocation when the handler
-returns, but MoonBit itself does not provide affine type-system guarantees. Return only the final
-stdout stream; abandoned or unforwarded streams are cleaned up by the SDK.
+wrappers enforce once-only transfer, cleanup, and revocation when the handler returns, but MoonBit
+itself does not provide affine type-system guarantees. Return only the final stdout stream;
+abandoned or unforwarded streams are cleaned up by the SDK.
+
+Sequential and concurrent `get()` calls on an underlying observer share one host observation and
+return the cached terminal result, including errors. This does not duplicate or rewind stdout.
+`Cancelled` and `ResourceExhausted` remain distinguishable to middleware code; they become
+`ConstraintViolation` only when forwarded as the middleware's own wire result.
+
+For structural-subtype and nominal compatibility, every inner tool error must be declared by the
+expected tool with a compatible payload. Expected-only errors are allowed; inner-only errors are
+rejected. Strict equality requires matching error vocabularies.
+
+Handler return revokes new underlying admissions but does not implicitly cancel admitted calls;
+observer disposal is likewise not cancellation. Commands declaring stdout receive a host writer at
+the guest boundary. Generated dispatch forwards the selected readable stdout into it concurrently
+with the result, finishes it after clean EOF, and fails it on forwarding errors; middleware authors
+return the readable stream and never operate the writer directly.
 
 Presented and expected tool declarations must currently be in the middleware's own MoonBit
 package. A qualified or cross-package reference is rejected with:
@@ -383,6 +406,32 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 - **Logging** — structured logging via `@logging.with_name("my-agent")` with level filtering
 - **Tracing** — span-based tracing via `@context.with_span(...)` with attributes
 - **Host API** - exports Golem's host API
+- **Semantic retries** — install policies in the host or interpret them around user code locally
+
+### Local semantic retries
+
+`@api.retry_local` interprets a Golem `RetryPolicy` around arbitrary asynchronous code without
+installing it as an executor policy. The property callback runs for every failure, and the final
+operation error is returned unchanged when the policy gives up:
+
+```moonbit nocheck
+///|
+let policy = try! @api.Policy::exponential(@api.Duration::millis(100), 2.0)
+  .max_retries(4)
+  .only_when(
+    @api.Predicate::eq(@api.Props::error_type(), @api.Value::text("transient")),
+  )
+  .to_raw()
+
+///|
+let result = @api.retry_local(policy, () => call_remote_service(), properties=error => {
+  [("error-type", @api.PredicateValue::Text(error.kind()))]
+})
+```
+
+Unlike retry policies installed with `set_named_policy`, local retries are ordinary user-space
+attempts. They do not create executor `RetryAttempt` oplog entries and do not survive recovery as
+one host-managed retry sequence.
 
 ## Packages
 

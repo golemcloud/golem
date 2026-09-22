@@ -49,7 +49,9 @@ use golem_common::model::agent::{InvocationFreshnessDisposition, ParsedAgentId};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{AgentVerb, PermissionTarget, ScopeCard};
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::durable_stream::{StreamInvocationId, StreamSessionKey};
+use golem_common::model::durable_stream::{
+    StreamInvocationId, StreamRegistrationInvocation, StreamSessionKey,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
@@ -318,10 +320,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .collect::<anyhow::Result<BTreeMap<_, _>>>()?,
         );
         let agent_mode = registered_agent_type.agent_type.mode;
+        let owner_component = self.owner_component_metadata();
         let remote_owner = AgentOwnerPattern::Agent {
             account: registered_agent_type.implemented_by.account_email.clone(),
-            application: self.owner_component_metadata().application_name.clone(),
-            environment: self.owner_component_metadata().environment_name.clone(),
+            application: owner_component.application_name.clone(),
+            environment: owner_component.environment_name.clone(),
             component: golem_common::model::component::ComponentName(
                 registered_agent_type.implemented_by.component_name.clone(),
             ),
@@ -611,6 +614,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let parent_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
+            let live_streaming_origin = current_streaming_origin(self, parent_key.clone());
             // Reserve the atomic region's logical identity once, on both live and replay paths.
             // Outside a region, concurrent calls require the exact physical Start index.
             let atomic_key = self
@@ -637,6 +641,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     let request_parent_key = parent_key.clone();
                     let request_atomic_key = atomic_key.clone();
                     let request_scope_card = scope_card.clone();
+                    let request_streaming_origin = live_streaming_origin.clone();
                     begun
                         .start_live_with_index(self, move |start_index| {
                             let idempotency_key = request_atomic_key.unwrap_or_else(|| {
@@ -652,6 +657,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                                 &remote_agent_id,
                                 &idempotency_key,
                                 request_scope_card.as_ref(),
+                                Some(request_streaming_origin),
                             ))
                         })
                         .await?
@@ -679,6 +685,31 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     return Err(err);
                 }
             };
+            if self.is_live() && !handle.is_live() {
+                handle = match handle.replay(self).await? {
+                    CallReplayOutcome::Incomplete(handle) => handle,
+                    CallReplayOutcome::Replayed(_) => {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "incomplete RPC before a newly authored invocation span",
+                            "completed RPC",
+                        )
+                        .into());
+                    }
+                };
+            }
+            let logical_streaming_origin = handle
+                .recorded_request(self)
+                .await?
+                .logical_streaming_origin
+                .ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "streaming RPC Start with logical origin",
+                        format!(
+                            "streaming RPC Start at {} without logical origin",
+                            handle.start_index()
+                        ),
+                    )
+                })?;
             let mut auth_ctx = handle.is_live().then(|| handle.agent_auth_ctx().clone());
             let (target_fingerprint, _demand) = match streaming_target_fingerprint(
                 self,
@@ -695,11 +726,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
             };
             let stream_auth_ctx = auth_ctx.clone().unwrap_or_else(|| self.agent_auth_ctx());
-            let streams = caller_durable_rpc_streams(
+            let (streams, origin_invocation) = caller_durable_rpc_streams(
                 self,
                 &remote_agent_id,
                 target_fingerprint,
                 idempotency_key.clone(),
+                logical_streaming_origin,
                 stream_auth_ctx,
             )
             .await?;
@@ -754,6 +786,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .await
                 .map_err(anyhow::Error::msg)?;
             let input_mappings = input.proto_mappings();
+            let (accepted_inputs, acceptance) = tokio::sync::oneshot::channel();
             let interrupt_signal = self.create_interrupt_signal();
             let remote_result = {
                 let _wait = register_rpc_wait(self);
@@ -766,22 +799,28 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     interrupt_signal,
                     || self.state.safe_to_suspend(),
                 ));
-                let call = rpc.invoke_and_await_streaming(
-                    &remote_agent_id,
-                    idempotency_key,
-                    prepared.method_name.clone(),
-                    input.value,
-                    input_mappings,
-                    target_fingerprint,
-                    attempt_id.0,
-                    created_by,
-                    &agent_id,
-                    &prepared.env,
-                    stack,
-                    prepared.config,
-                    &auth_ctx,
-                    scope_card,
-                );
+                let call = Box::pin(await_streaming_rpc_acceptance(
+                    &streams,
+                    acceptance,
+                    rpc.invoke_and_await_streaming(
+                        &remote_agent_id,
+                        idempotency_key,
+                        prepared.method_name.clone(),
+                        input.value,
+                        input_mappings,
+                        target_fingerprint,
+                        attempt_id.0,
+                        origin_invocation,
+                        accepted_inputs,
+                        created_by,
+                        &agent_id,
+                        &prepared.env,
+                        stack,
+                        prepared.config,
+                        &auth_ctx,
+                        scope_card,
+                    ),
+                ));
                 match futures::future::select(call, interrupt_signal).await {
                     Either::Left((result, _)) => result,
                     Either::Right((error, _)) => {
@@ -896,8 +935,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             &idempotency_key,
         )?;
         let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-        let request =
-            prepared.invoke_request(&remote_agent_id, &idempotency_key, scope_card.as_ref());
+        let request = prepared.invoke_request(
+            &remote_agent_id,
+            &idempotency_key,
+            scope_card.as_ref(),
+            None,
+        );
         let dispatched_scope_card = request.scope_card.clone();
         let mut handle = match call {
             Either::Left(begun) => begun.start_live(self, request).await?,
@@ -1018,7 +1061,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             &idempotency_key,
         )?;
         let metadata = invocation_metadata(&remote_agent_id, &idempotency_key);
-        let request = prepared.invoke_request(&remote_agent_id, &idempotency_key, None);
+        let request = prepared.invoke_request(&remote_agent_id, &idempotency_key, None, None);
         let mut handle = match call {
             Either::Left(begun) => begun.start_live(self, request).await?,
             Either::Right(handle) => handle,
@@ -1206,6 +1249,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let parent_key = self.state.get_current_idempotency_key().ok_or_else(|| {
                 anyhow::anyhow!("durable streaming RPC requires a caller invocation key")
             })?;
+            let live_streaming_origin = current_streaming_origin(self, parent_key.clone());
             // Consume the same logical counter slot during replay as during live initiation.
             let atomic_key = self
                 .state
@@ -1234,6 +1278,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     let request_method_name = method_name.clone();
                     let request_input = strip_streams(input_value.clone());
                     let request_scope_card = scope_card.clone();
+                    let request_streaming_origin = live_streaming_origin.clone();
                     begun
                         .start_live_with_index(self, move |start_index| {
                             let idempotency_key = request_atomic_key.unwrap_or_else(|| {
@@ -1250,6 +1295,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                                 idempotency_key,
                                 method_name: request_method_name,
                                 input: request_input,
+                                logical_streaming_origin: Some(request_streaming_origin),
                                 remote_agent_type: None,
                                 remote_agent_parameters: None,
                                 scope_card: request_scope_card,
@@ -1270,11 +1316,37 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let span =
                 create_invocation_span(self, &connection_span_id, &method_name, &idempotency_key)
                     .await?;
+            if self.is_live() && !handle.is_live() {
+                handle = match handle.replay(self).await? {
+                    CallReplayOutcome::Incomplete(handle) => handle,
+                    CallReplayOutcome::Replayed(_) => {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "incomplete RPC before a newly authored invocation span",
+                            "completed RPC",
+                        )
+                        .into());
+                    }
+                };
+            }
+            let logical_streaming_origin = handle
+                .recorded_request(self)
+                .await?
+                .logical_streaming_origin
+                .ok_or_else(|| {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "streaming RPC Start with logical origin",
+                        format!(
+                            "streaming RPC Start at {} without logical origin",
+                            handle.start_index()
+                        ),
+                    )
+                })?;
             let request = HostRequestGolemRpcInvoke {
                 remote_agent_id: remote_agent_id.agent_id(),
                 idempotency_key: idempotency_key.clone(),
                 method_name: method_name.clone(),
                 input: strip_streams(input_value.clone()),
+                logical_streaming_origin: Some(logical_streaming_origin.clone()),
                 remote_agent_type: None,
                 remote_agent_parameters: None,
                 scope_card: scope_card.clone(),
@@ -1304,11 +1376,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 Err(error) => return Err(handle.trap(error)),
             };
             let stream_auth_ctx = auth_ctx.clone().unwrap_or_else(|| self.agent_auth_ctx());
-            let streams = caller_durable_rpc_streams(
+            let (streams, origin_invocation) = caller_durable_rpc_streams(
                 self,
                 &remote_agent_id,
                 target_fingerprint,
                 idempotency_key.clone(),
+                logical_streaming_origin,
                 stream_auth_ctx,
             )
             .await?;
@@ -1332,6 +1405,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 input: input.value,
                 expected_callee_fingerprint: target_fingerprint,
                 attempt_id: attempt_id.0,
+                origin_invocation,
                 output_graph: Arc::new(remote_agent_type.schema.clone()),
                 output_root: rpc_output_root(&prepared),
             };
@@ -1455,6 +1529,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             idempotency_key: idempotency_key.clone(),
             method_name: method_name.clone(),
             input: input_value.clone(),
+            logical_streaming_origin: None,
             remote_agent_type: None,
             remote_agent_parameters: None,
             scope_card: scope_card.clone(),
@@ -2213,6 +2288,7 @@ fn denied_rpc_request(
         // A denied request records only a structurally valid placeholder. The durable response is
         // authoritative and no invocation is dispatched, so the decoded input need not be stored.
         input: SchemaValue::Tuple { elements: vec![] },
+        logical_streaming_origin: None,
         remote_agent_type: None,
         remote_agent_parameters: None,
         scope_card: None,
@@ -2502,12 +2578,14 @@ impl PreparedRpcInvocation {
         remote_agent_id: &OwnedAgentId,
         idempotency_key: &IdempotencyKey,
         scope_card: Option<&ScopeCard>,
+        logical_streaming_origin: Option<StreamInvocationId>,
     ) -> HostRequestGolemRpcInvoke {
         HostRequestGolemRpcInvoke {
             remote_agent_id: remote_agent_id.agent_id(),
             idempotency_key: idempotency_key.clone(),
             method_name: self.method_name.clone(),
             input: strip_streams(self.input_value.clone()),
+            logical_streaming_origin,
             remote_agent_type: None,
             remote_agent_parameters: None,
             scope_card: scope_card.cloned(),
@@ -2558,19 +2636,46 @@ fn rpc_output_root(prepared: &PreparedRpcInvocation) -> SchemaType {
         .unwrap_or_else(|| SchemaType::tuple(Vec::new()))
 }
 
+fn current_streaming_origin<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    idempotency_key: IdempotencyKey,
+) -> StreamInvocationId {
+    let caller = ctx.public_state.worker().get_initial_worker_metadata();
+    StreamInvocationId {
+        callee_environment_id: caller.environment_id,
+        callee: caller.agent_id,
+        callee_fingerprint: caller.fingerprint,
+        idempotency_key,
+    }
+}
+
 async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     remote_agent_id: &OwnedAgentId,
     remote_fingerprint: AgentFingerprint,
     child_key: IdempotencyKey,
+    logical_streaming_origin: StreamInvocationId,
     auth_ctx: AuthCtx,
-) -> Result<StreamSession, Error> {
+) -> Result<
+    (
+        StreamSession,
+        golem_api_grpc::proto::golem::worker::StreamInvocationIdentity,
+    ),
+    Error,
+> {
     let worker = ctx.public_state.worker();
     let caller = worker.get_initial_worker_metadata();
     let parent_key = ctx
         .state
         .get_current_idempotency_key()
         .ok_or_else(|| anyhow::anyhow!("durable streaming RPC requires a caller invocation key"))?;
+    let producer = worker.durable_stream_producer().await?;
+    let origin_invocation = golem_api_grpc::proto::golem::worker::StreamInvocationIdentity {
+        callee_environment_id: Some(logical_streaming_origin.callee_environment_id.into()),
+        callee: Some(logical_streaming_origin.callee.into()),
+        callee_fingerprint: Some(logical_streaming_origin.callee_fingerprint.0.into()),
+        idempotency_key: Some(logical_streaming_origin.idempotency_key.into()),
+    };
     let session_key = StreamSessionKey {
         callee_environment_id: remote_agent_id.environment_id,
         callee: remote_agent_id.agent_id(),
@@ -2584,9 +2689,9 @@ async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
         idempotency_key: parent_key,
     };
     let streams = StreamSession::new(
-        worker.durable_stream_producer().await?,
+        producer,
         worker.oplog(),
-        session_key,
+        StreamRegistrationInvocation::Remote(session_key),
         [],
     )
     .with_consumer_invocation(consumer_invocation)
@@ -2599,7 +2704,7 @@ async fn caller_durable_rpc_streams<Ctx: WorkerCtx>(
         .recover_session_mappings()
         .await
         .map_err(anyhow::Error::msg)?;
-    Ok(streams)
+    Ok((streams, origin_invocation))
 }
 
 async fn streaming_target_fingerprint<Ctx: WorkerCtx>(
@@ -4445,8 +4550,41 @@ struct DurableStreamingTaskParams {
     input_mappings: Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
     expected_callee_fingerprint: AgentFingerprint,
     attempt_id: uuid::Uuid,
+    origin_invocation: golem_api_grpc::proto::golem::worker::StreamInvocationIdentity,
     output_graph: Arc<SchemaGraph>,
     output_root: SchemaType,
+}
+
+async fn await_streaming_rpc_acceptance(
+    streams: &StreamSession,
+    mut acceptance: tokio::sync::oneshot::Receiver<
+        Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
+    >,
+    invocation: impl std::future::Future<
+        Output = Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError>,
+    >,
+) -> Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError> {
+    tokio::pin!(invocation);
+    let (mappings, result) = tokio::select! {
+        biased;
+        result = &mut invocation => (acceptance.try_recv().ok(), Some(result)),
+        mappings = &mut acceptance => (mappings.ok(), None),
+    };
+    if let Some(mappings) = mappings {
+        let mappings = mappings
+            .into_iter()
+            .map(durable_stream_mapping_from_proto)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|details| InternalRpcError::ProtocolError { details })?;
+        streams
+            .cancel_unbound_rpc_inputs(&mappings)
+            .await
+            .map_err(|details| InternalRpcError::ProtocolError { details })?;
+    }
+    match result {
+        Some(result) => result,
+        None => invocation.await,
+    }
 }
 
 fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
@@ -4495,8 +4633,11 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                 } else {
                     None
                 };
-                let result = rpc
-                    .invoke_and_await_streaming(
+                let (accepted_inputs, acceptance) = tokio::sync::oneshot::channel();
+                let result = await_streaming_rpc_acceptance(
+                    &params.streams,
+                    acceptance,
+                    rpc.invoke_and_await_streaming(
                         &remote_agent_id,
                         idempotency_key,
                         method_name,
@@ -4504,6 +4645,8 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                         params.input_mappings,
                         params.expected_callee_fingerprint,
                         params.attempt_id,
+                        params.origin_invocation,
+                        accepted_inputs,
                         created_by,
                         &agent_id,
                         &env,
@@ -4511,8 +4654,9 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                         config,
                         &auth_ctx,
                         scope_card,
-                    )
-                    .await;
+                    ),
+                )
+                .await;
                 let result = match result {
                     Ok(result) => {
                         let mappings = result

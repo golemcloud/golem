@@ -901,11 +901,18 @@ async fn manual_periodic_snapshot_failed_manual_baseline_returns_error_without_l
     let mut manual_failures = 0;
     let mut periodic_failures = 0;
     let outcome = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut outcome = None;
         loop {
+            // Invocation responses and captured events use independent transports.
+            if periodic_failures > 0 && manual_failures > 0
+                && let Some(result) = outcome.take()
+            {
+                break result;
+            }
             tokio::select! {
                 biased;
                 event = events.recv() => {
-                    let event = event.expect("Recovery event stream ended before invocation returned");
+                    let event = event.expect("Recovery event stream ended before both failures arrived");
                     if let Ok(AgentEvent::SnapshotRecoveryFailed { snapshot_index, error, .. }) = AgentEvent::try_from(event) {
                         if snapshot_index == periodic_index {
                             periodic_failures += 1;
@@ -916,7 +923,7 @@ async fn manual_periodic_snapshot_failed_manual_baseline_returns_error_without_l
                         }
                     }
                 }
-                result = &mut invocation => break result,
+                result = &mut invocation, if outcome.is_none() => outcome = Some(result),
             }
         }
     }).await.expect("Recovery must return the manual snapshot load failure rather than retry forever");
@@ -2523,10 +2530,23 @@ async fn assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_basel
     // A failed start stays on the worker until it is resumed or unloaded, like any other
     // instance-creation failure; the resume is the next start attempt.
     executor.resume(&worker_id, true).await?;
-    executor
+    // Loading can still expose the cached idle status before recovery completes.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            if oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::RecoverySucceeded(_)))
+            {
+                break anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    let recovered_metadata = executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
         .await?;
-    let recovered_metadata = executor.get_worker_metadata(&worker_id).await?;
     assert_eq!(recovered_metadata.status, AgentStatus::Idle);
     assert_eq!(recovered_metadata.last_error_kind, None);
     assert_eq!(recovered_metadata.last_error, None);

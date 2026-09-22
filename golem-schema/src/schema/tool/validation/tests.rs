@@ -1,5 +1,7 @@
 use super::*;
-use crate::schema::graph::SchemaGraph;
+use crate::schema::graph::{SchemaGraph, SchemaTypeDef};
+use crate::schema::metadata::TypeId;
+use crate::schema::schema_type::{NamedFieldType, VariantCaseType};
 use crate::schema::tool::{CommandTree, Doc, MonomorphicToolMiddlewareScope, ToolMiddlewareScope};
 use test_r::test;
 
@@ -31,6 +33,7 @@ fn rejects_malformed_middleware_identity_and_both_embedded_tools() {
             presented: tool("BadPresented"),
             expected: Some(tool("BadExpected")),
         })),
+        parameter_schema: SchemaGraph::empty(),
     };
 
     let errors = validate_tool_middleware(&middleware).unwrap_err();
@@ -73,9 +76,81 @@ fn rejects_empty_tool_and_middleware_versions() {
         aliases: vec![],
         doc: Doc::default(),
         scope: ToolMiddlewareScope::Universal,
+        parameter_schema: SchemaGraph::empty(),
     };
     assert_eq!(
         validate_tool_middleware(&middleware).unwrap_err(),
         vec![ToolMiddlewareValidationError::EmptyVersion]
+    );
+}
+
+fn universal_middleware(parameter_schema: SchemaGraph) -> ToolMiddleware {
+    ToolMiddleware {
+        name: "valid".into(),
+        version: "1".into(),
+        aliases: vec![],
+        doc: Doc::default(),
+        scope: ToolMiddlewareScope::Universal,
+        parameter_schema,
+    }
+}
+
+#[test]
+fn accepts_static_record_and_variant_parameter_schema() {
+    let schema = SchemaGraph::anonymous(SchemaType::Record {
+        fields: vec![NamedFieldType {
+            name: "mode".into(),
+            body: SchemaType::Variant {
+                cases: vec![VariantCaseType {
+                    name: "named".into(),
+                    payload: Some(SchemaType::string()),
+                    metadata: Default::default(),
+                }],
+                metadata: Default::default(),
+            },
+            metadata: Default::default(),
+        }],
+        metadata: Default::default(),
+    });
+    assert!(validate_tool_middleware(&universal_middleware(schema)).is_ok());
+}
+
+#[test]
+fn rejects_nested_and_definition_host_or_async_parameter_types() {
+    let schema = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: TypeId::new("capability"),
+            name: None,
+            body: SchemaType::permission_card(Default::default()),
+        }],
+        root: SchemaType::tuple(vec![
+            SchemaType::list(SchemaType::stream(Some(SchemaType::string()))),
+            SchemaType::ref_to(TypeId::new("capability")),
+        ]),
+    };
+    let errors = validate_tool_middleware(&universal_middleware(schema)).unwrap_err();
+    assert!(
+        errors.contains(&ToolMiddlewareValidationError::ForbiddenParameterType(
+            "stream"
+        ))
+    );
+    assert!(
+        errors.contains(&ToolMiddlewareValidationError::ForbiddenParameterType(
+            "permission-card"
+        ))
+    );
+}
+
+#[test]
+fn rejects_malformed_parameter_graph() {
+    let schema = SchemaGraph::anonymous(SchemaType::ref_to(TypeId::new("missing")));
+    assert!(
+        validate_tool_middleware(&universal_middleware(schema))
+            .unwrap_err()
+            .iter()
+            .any(|error| matches!(
+                error,
+                ToolMiddlewareValidationError::InvalidParameterSchema(_)
+            ))
     );
 }

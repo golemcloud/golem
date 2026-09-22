@@ -12624,6 +12624,7 @@ components:
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByComponentInitial'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
       discriminator:
         propertyName: type
@@ -12632,6 +12633,7 @@ components:
           EnvironmentDefault: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
           PermissionShare: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
           AgentInitial: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+          ComponentInitial: '#/components/schemas/CardManagedBy_CardManagedByComponentInitial'
           RuntimeDerived: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
     CardManagedByAccountRoot:
       type: object
@@ -12658,6 +12660,19 @@ components:
           format: uint64
         agentType:
           type: string
+    CardManagedByComponentInitial:
+      type: object
+      title: CardManagedByComponentInitial
+      required:
+      - componentId
+      - componentRevision
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        componentRevision:
+          type: integer
+          format: uint64
     CardManagedByEnvironmentDefault:
       type: object
       title: CardManagedByEnvironmentDefault
@@ -12719,6 +12734,18 @@ components:
             - AgentInitial
             example: AgentInitial
       - $ref: '#/components/schemas/CardManagedByAgentInitial'
+    CardManagedBy_CardManagedByComponentInitial:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentInitial
+            example: ComponentInitial
+      - $ref: '#/components/schemas/CardManagedByComponentInitial'
     CardManagedBy_CardManagedByEnvironmentDefault:
       allOf:
       - type: object
@@ -12856,6 +12883,15 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/CommandNode'
+    ComponentConfigSchema:
+      type: object
+      properties:
+        schema:
+          $ref: '#/components/schemas/SchemaGraph'
+        declarations:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentConfigDeclarationSchema'
     ComponentCreation:
       type: object
       title: ComponentCreation
@@ -12864,6 +12900,48 @@ components:
       properties:
         componentName:
           type: string
+        configSchema:
+          default:
+            schema:
+              root:
+                kind: record
+                value:
+                  fields: []
+          allOf:
+          - $ref: '#/components/schemas/ComponentConfigSchema'
+          - default:
+              schema:
+                root:
+                  kind: record
+                  value:
+                    fields: []
+        componentProvisionConfig:
+          default:
+            config: []
+            env: {}
+            files: {}
+            initialPermissions:
+              lowerBound:
+                negative: []
+                positive: []
+              upperBound:
+                negative: []
+                positive: []
+            pluginInstallations: []
+          allOf:
+          - $ref: '#/components/schemas/ComponentProvisionConfigCreation'
+          - default:
+              config: []
+              env: {}
+              files: {}
+              initialPermissions:
+                lowerBound:
+                  negative: []
+                  positive: []
+                upperBound:
+                  negative: []
+                  positive: []
+              pluginInstallations: []
         agentTypes:
           type: array
           default: []
@@ -12948,6 +13026,7 @@ components:
       - knownExports
       - producers
       - memories
+      - componentProvisionConfig
       - agentMethodStreams
       properties:
         knownExports:
@@ -12964,6 +13043,23 @@ components:
           type: string
         rootPackageVersion:
           type: string
+        configSchema:
+          default:
+            schema:
+              root:
+                kind: record
+                value:
+                  fields: []
+          allOf:
+          - $ref: '#/components/schemas/ComponentConfigSchema'
+          - default:
+              schema:
+                root:
+                  kind: record
+                  value:
+                    fields: []
+        componentProvisionConfig:
+          $ref: '#/components/schemas/ComponentProvisionConfig'
         agentTypes:
           type: array
           default: []
@@ -12996,6 +13092,62 @@ components:
           default: {}
           additionalProperties:
             $ref: '#/components/schemas/ToolMiddlewareDeploymentMetadata'
+    ComponentProvisionConfig:
+      type: object
+      title: ComponentProvisionConfig
+      required:
+      - initialPermissions
+      - env
+      - config
+      - plugins
+      - files
+      properties:
+        initialPermissions:
+          $ref: '#/components/schemas/PolymorphicCard'
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        config:
+          type: array
+          items:
+            $ref: '#/components/schemas/TypedAgentConfigEntry'
+        plugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstalledPlugin'
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialAgentFile'
+    ComponentProvisionConfigCreation:
+      type: object
+      title: ComponentProvisionConfigCreation
+      required:
+      - initialPermissions
+      properties:
+        initialPermissions:
+          $ref: '#/components/schemas/AgentTypeInitialPermissions'
+        env:
+          type: object
+          default: {}
+          additionalProperties:
+            type: string
+        config:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/AgentConfigEntryDto'
+        pluginInstallations:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/PluginInstallation'
+        files:
+          type: object
+          default: {}
+          additionalProperties:
+            $ref: '#/components/schemas/AgentFileOptions'
     ComponentUpdate:
       type: object
       title: ComponentUpdate
@@ -13005,6 +13157,10 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        configSchema:
+          $ref: '#/components/schemas/ComponentConfigSchema'
+        componentProvisionConfig:
+          $ref: '#/components/schemas/ComponentProvisionConfigCreation'
         agentTypes:
           type: array
           items:
@@ -15457,6 +15613,7 @@ components:
       - domain
       - hash
       - agents
+      - tools
       - createdAt
       properties:
         id:
@@ -15477,6 +15634,10 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
         createdAt:
           type: string
           format: date-time
@@ -15492,6 +15653,7 @@ components:
       required:
       - domain
       - agents
+      - tools
       properties:
         domain:
           type: string
@@ -15499,6 +15661,28 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
+    McpDeploymentToolOptions:
+      type: object
+      title: McpDeploymentToolOptions
+      required:
+      - ownerComponent
+      properties:
+        ownerComponent:
+          type: string
+        securityScheme:
+          type: string
+        include:
+          type: array
+          items:
+            type: string
+        exclude:
+          type: array
+          items:
+            type: string
     McpDeploymentUpdate:
       type: object
       title: McpDeploymentUpdate
@@ -15512,6 +15696,10 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
     MemoryLimit:
       type: object
       title: MemoryLimit
@@ -16980,6 +17168,11 @@ components:
           $ref: '#/components/schemas/ToolProvisionConfig'
         environmentBinding:
           $ref: '#/components/schemas/ToolBindingInput'
+        componentBindings:
+          type: object
+          default: {}
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           type: object
           default: {}
@@ -19101,6 +19294,11 @@ components:
           $ref: '#/components/schemas/ToolProvisionConfigCreation'
         environmentBinding:
           $ref: '#/components/schemas/ToolBindingInput'
+        componentBindings:
+          type: object
+          default: {}
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           type: object
           default: {}
@@ -19117,6 +19315,10 @@ components:
           allOf:
           - $ref: '#/components/schemas/OptionalFieldUpdate_ToolBindingInput'
           - default: null
+        componentBindings:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           type: object
           additionalProperties:
@@ -19134,6 +19336,11 @@ components:
           $ref: '#/components/schemas/ToolProvisionConfig'
         environmentBinding:
           $ref: '#/components/schemas/ToolBindingInput'
+        componentBindings:
+          type: object
+          default: {}
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           type: object
           default: {}
@@ -19153,6 +19360,7 @@ components:
       - aliases
       - doc
       - scope
+      - parameter_schema
       properties:
         name:
           type: string
@@ -19166,6 +19374,8 @@ components:
           $ref: '#/components/schemas/Doc'
         scope:
           $ref: '#/components/schemas/ToolMiddlewareScope'
+        parameter_schema:
+          $ref: '#/components/schemas/SchemaGraph'
     ToolMiddlewareDeploymentMetadata:
       type: object
       title: ToolMiddlewareDeploymentMetadata

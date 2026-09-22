@@ -191,8 +191,8 @@ enum StatusJob {
         entry: Box<OplogEntry>,
         _worker_keepalive: Arc<dyn Any + Send + Sync>,
         _instance_guard: OwnedMutexGuard<WorkerInstance>,
-        _card_event_boundary_guard: OwnedMutexGuard<()>,
-        done: oneshot::Sender<Result<(), OplogError>>,
+        _card_event_boundary_guard: Option<OwnedMutexGuard<()>>,
+        done: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
     AppendInvocationIfVersion {
         entry: Box<OplogEntry>,
@@ -275,6 +275,16 @@ impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
     }
 }
 
+/// The error a refused append or commit replies with. The give-up is spawned inside the actor,
+/// so the caller only needs an error it will not mistake for a delivered entry.
+fn fenced_error(fence: &OplogFence) -> WorkerExecutorError {
+    WorkerExecutorError::oplog_fenced(
+        fence.agent_id.clone(),
+        fence.expected_epoch.0,
+        fence.actual_epoch.map(|epoch| epoch.0),
+    )
+}
+
 impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -340,16 +350,22 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                             .commit_and_update_state(CommitLevel::Always, None)
                                             .await
                                         {
-                                            return Err(OplogError::Fenced(fence));
+                                            return Err(fenced_error(&fence));
                                         }
                                         state.ensure_status_attached().await;
-                                        Ok(())
+                                        if state.detached.load(Ordering::Acquire) {
+                                            Err(WorkerExecutorError::runtime(
+                                                "Committed worker status could not be reconstructed",
+                                            ))
+                                        } else {
+                                            Ok(())
+                                        }
                                     }
                                     // The shard has a new owner: give the agent up and leave no
                                     // further trace in an oplog that is no longer ours.
                                     Err(OplogError::Fenced(fence)) => {
                                         state.give_up_fenced_agent(fence.clone());
-                                        Err(OplogError::Fenced(fence))
+                                        Err(fenced_error(&fence))
                                     }
                                     Err(error) => panic!("oplog write: {error}"),
                                 }
@@ -549,8 +565,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         entry: OplogEntry,
         worker: Arc<Worker<Ctx>>,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
-        card_event_boundary_guard: OwnedMutexGuard<()>,
-    ) -> Result<(), OplogError> {
+        card_event_boundary_guard: Option<OwnedMutexGuard<()>>,
+    ) -> Result<(), WorkerExecutorError> {
         let worker_keepalive: Arc<dyn Any + Send + Sync> = worker;
         self.commit
             .run_status_job(|done| StatusJob::AppendAndCommitAttached {
@@ -587,6 +603,14 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         self.commit
             .run_status_job(|done| StatusJob::AttachedStatus { done })
             .await
+    }
+
+    pub async fn try_attached_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        self.reattach_worker_status().await;
+        self.commit
+            .run_status_job(|done| StatusJob::NonDetachedStatus { done })
+            .await
+            .ok_or_else(|| WorkerExecutorError::runtime("Worker status could not be reconstructed"))
     }
 
     /// Returns the published status, asserting it is attached to the oplog. Serialized behind

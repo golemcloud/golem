@@ -15,13 +15,13 @@
 use crate::invocation_session_token::{
     CursorTokenPayload, InvocationSessionTokenBindings, InvocationSessionTokenKeyring,
     InvocationSessionTokenKind, InvocationSessionTokenPayload, SessionAgentIdentity,
-    SessionTokenPayload, StreamTokenPayload, StreamTokenRole, decode_session_agent_identity,
-    encode_session_agent_identity,
+    SessionInvocationTarget, SessionTokenPayload, StreamTokenPayload, StreamTokenRole,
+    decode_session_agent_identity, encode_session_agent_identity,
 };
 use crate::service::auth::AuthServiceError;
 use crate::service::worker::{
     PublicAgentSessionResume, PublicAgentSessionStart, PublicAgentSessionStartError,
-    StartedPublicAgentSession, WorkerService, WorkerServiceError,
+    PublicToolSessionStart, StartedPublicAgentSession, WorkerService, WorkerServiceError,
     decode_public_session_schema_value,
 };
 use futures::{SinkExt, StreamExt};
@@ -39,11 +39,11 @@ use golem_common::SafeDisplay;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64, MAX_LOGICAL_VALUE_SIZE,
     MAX_STREAM_MAPPINGS, MAX_WEBSOCKET_MESSAGE_SIZE, PublicAttachmentRevokedReason,
-    PublicClientCancelReason, PublicClientMessage, PublicErrorCode, PublicInputHighWater,
-    PublicInvocationOutcome, PublicInvocationResult, PublicOutputStreamOutcome,
-    PublicResumeOperation, PublicServerCancelReason, PublicServerMessage, PublicStreamDirection,
-    PublicStreamMapping, decode_binary_message, decode_client_text, encode_binary_message,
-    encode_text,
+    PublicByteStreamRole, PublicClientCancelReason, PublicClientMessage, PublicErrorCode,
+    PublicInputHighWater, PublicInvocationOutcome, PublicInvocationResult,
+    PublicOutputStreamOutcome, PublicResumeOperation, PublicServerCancelReason,
+    PublicServerMessage, PublicStreamDirection, PublicStreamMapping, PublicTypedValue,
+    decode_binary_message, decode_client_text, encode_binary_message, encode_text,
 };
 use golem_common::schema::fingerprint::{
     SchemaFingerprintV1, resolve_stream_element_schema_v1, schema_fingerprint_v1,
@@ -303,6 +303,11 @@ enum InitialMessage {
         attempt_id: Uuid,
         _admission: OwnedSemaphorePermit,
     },
+    ToolStart {
+        start: PublicToolSessionStart,
+        attempt_id: Uuid,
+        _admission: OwnedSemaphorePermit,
+    },
     Resume {
         resume: PublicAgentSessionResume,
         attempt_id: Uuid,
@@ -364,6 +369,7 @@ struct AdapterState {
     channel_by_transport: HashMap<u64, u32>,
     provisional_refs: HashMap<Uuid, ProvisionalBinding>,
     private_mappings: HashMap<u64, PrivateMapping>,
+    byte_roles: HashMap<u64, PublicByteStreamRole>,
     tokens: Option<TokenContext>,
     attachment_epoch: u64,
 }
@@ -395,6 +401,7 @@ impl AdapterState {
             channel_by_transport: HashMap::new(),
             provisional_refs: HashMap::new(),
             private_mappings: HashMap::new(),
+            byte_roles: HashMap::new(),
             tokens: None,
             attachment_epoch: 0,
         }
@@ -411,9 +418,8 @@ impl AdapterState {
         self.identity = Some(SessionAgentIdentity {
             component_id: started.agent_id.component_id.0,
             component_revision: started.component_revision.get(),
-            agent_type: started.agent_type.0.clone(),
             agent_id: started.agent_id.agent_id.clone(),
-            method: started.method.clone(),
+            target: started.target.clone(),
         });
         Ok(())
     }
@@ -570,6 +576,7 @@ impl AdapterState {
         Ok(Some(PublicStreamMapping {
             channel,
             direction: state.direction,
+            byte_role: self.byte_roles.get(&mapping.transport_stream_id).copied(),
             input_high_water: (state.direction == PublicStreamDirection::Input).then_some(
                 PublicInputHighWater {
                     sequence: DecimalU64(state.next_input_sequence),
@@ -741,6 +748,7 @@ impl AdapterState {
         Ok(PublicStreamMapping {
             channel,
             direction: state.direction,
+            byte_role: self.byte_roles.get(&transport_id).copied(),
             input_high_water,
             provisional_ref: state.provisional_ref,
             stream_token,
@@ -784,6 +792,7 @@ impl AdapterState {
                 let mapping = PublicStreamMapping {
                     channel,
                     direction: state.direction,
+                    byte_role: self.byte_roles.get(&transport_id).copied(),
                     input_high_water: None,
                     provisional_ref: state.provisional_ref,
                     stream_token: stream_token.clone(),
@@ -862,11 +871,13 @@ pub async fn serve_public_invocation_session(
         }
     };
     let (attempt_id, token_bindings, token_key_id) = match &initial {
-        InitialMessage::Start { attempt_id, .. } => (
-            *attempt_id,
-            bindings.clone(),
-            keyring.active_key_id().to_string(),
-        ),
+        InitialMessage::Start { attempt_id, .. } | InitialMessage::ToolStart { attempt_id, .. } => {
+            (
+                *attempt_id,
+                bindings.clone(),
+                keyring.active_key_id().to_string(),
+            )
+        }
         InitialMessage::Resume {
             attempt_id,
             token_bindings,
@@ -895,6 +906,39 @@ pub async fn serve_public_invocation_session(
                         )
                     },
                 )
+                .await;
+            drop(_admission);
+            result
+        }
+        InitialMessage::ToolStart {
+            start, _admission, ..
+        } => {
+            let token_application = start.application.clone();
+            let token_environment = start.environment.clone();
+            let token_idempotency_key = start.idempotency_key.clone();
+            let result = worker_service
+                .invoke_public_tool_session_v1(start, Box::pin(tail), auth.clone(), |identity| {
+                    let encoded = encode_session_agent_identity(identity).map_err(|error| {
+                        PublicSchemaValueError::new(error.code, error.to_string())
+                    })?;
+                    keyring
+                        .sign(
+                            &bindings,
+                            &InvocationSessionTokenPayload::Session(SessionTokenPayload {
+                                application: token_application,
+                                environment: token_environment,
+                                agent: encoded,
+                                idempotency_key: token_idempotency_key,
+                                logical_invocation_id: Uuid::nil(),
+                                attachment_id: Uuid::nil(),
+                                expected_attachment_generation: 0,
+                                callee_incarnation: Uuid::nil(),
+                                stream_key_id: keyring.active_key_id().to_string(),
+                            }),
+                        )
+                        .map(|_| ())
+                        .map_err(|error| PublicSchemaValueError::new(error.code, error.to_string()))
+                })
                 .await;
             drop(_admission);
             result
@@ -1047,6 +1091,35 @@ where
                             idempotency_key,
                             attempt_id,
                             method_parameters,
+                        },
+                        attempt_id,
+                        _admission: admission,
+                    })),
+                    PublicClientMessage::ToolStart {
+                        attempt_id,
+                        application,
+                        environment,
+                        idempotency_key,
+                        tool_name,
+                        command_path,
+                        target,
+                        input,
+                        stdin,
+                        stdout,
+                        ..
+                    } => Ok(Some(InitialMessage::ToolStart {
+                        start: PublicToolSessionStart {
+                            application,
+                            environment,
+                            target,
+                            tool_name,
+                            command_path,
+                            input: *input,
+                            stdin,
+                            stdout,
+                            idempotency_key,
+                            attempt_id,
+                            expected_deployment_revision: None,
                         },
                         attempt_id,
                         _admission: admission,
@@ -1471,11 +1544,11 @@ async fn translate_client_text(
                 cancelled_output,
             })
         }
-        PublicClientMessage::InvocationStart { .. } | PublicClientMessage::ResumeAttach { .. } => {
-            Err(AdapterError::protocol(
-                "start and resume messages are only valid as the first application message",
-            ))
-        }
+        PublicClientMessage::InvocationStart { .. }
+        | PublicClientMessage::ToolStart { .. }
+        | PublicClientMessage::ResumeAttach { .. } => Err(AdapterError::protocol(
+            "start and resume messages are only valid as the first application message",
+        )),
     }
 }
 
@@ -1969,15 +2042,36 @@ fn translate_accepted(
             "accepted agent identity differs from the pinned invocation",
         ));
     }
-    if let Some(component_revision) = accepted.component_revision {
-        identity.component_revision = component_revision;
+    if let Some(revision) = accepted.component_revision {
+        identity.component_revision = revision;
     }
-    if let Some(method_name) = accepted.method_name
-        && method_name != identity.method
-    {
-        return Err(AdapterError::protocol(
-            "accepted method differs from the pinned invocation",
-        ));
+    match &identity.target {
+        SessionInvocationTarget::Method { method, .. } => {
+            if accepted.method_name.as_deref() != Some(method) {
+                return Err(AdapterError::protocol(
+                    "accepted method differs from the pinned invocation",
+                ));
+            }
+            if accepted.tool_name.is_some() || !accepted.command_path.is_empty() {
+                return Err(AdapterError::protocol(
+                    "accepted target unexpectedly names a native tool",
+                ));
+            }
+        }
+        SessionInvocationTarget::ExternalTool {
+            tool_name,
+            command_path,
+            ..
+        } => {
+            if accepted.method_name.is_some()
+                || accepted.tool_name.as_deref() != Some(tool_name)
+                || accepted.command_path != *command_path
+            {
+                return Err(AdapterError::protocol(
+                    "accepted native tool metadata differs from the pinned invocation",
+                ));
+            }
+        }
     }
     let logical_invocation_id =
         invocation_uuid(&agent_id, &idempotency_key.value, callee_incarnation);
@@ -2005,13 +2099,27 @@ fn translate_accepted(
             }),
         )
         .map_err(|error| AdapterError::new(error.code, error.to_string()))?;
+    if accepted.tool_name.is_some() {
+        for mapping in &accepted.stream_mappings {
+            let role = match mapping.role() {
+                StreamMappingRole::Input => PublicByteStreamRole::Stdin,
+                StreamMappingRole::Output => PublicByteStreamRole::Stdout,
+                StreamMappingRole::Unspecified => continue,
+            };
+            state.byte_roles.insert(mapping.transport_stream_id, role);
+        }
+    }
     for mapping in accepted.stream_mappings {
         state.add_private_mapping(mapping)?;
     }
     let transport_ids = state.private_mappings.keys().copied().collect::<Vec<_>>();
     let mut mappings = Vec::with_capacity(transport_ids.len());
     for transport_id in transport_ids {
-        mappings.push(state.expose_transport(transport_id, None, keyring)?);
+        let byte_schema = state
+            .byte_roles
+            .contains_key(&transport_id)
+            .then(SchemaType::u8);
+        mappings.push(state.expose_transport(transport_id, byte_schema.as_ref(), keyring)?);
     }
     Ok(PublicServerMessage::InvocationAccepted {
         attempt_id,
@@ -2055,12 +2163,124 @@ fn translate_result(
             )?;
             PublicInvocationResult::Value { value }
         }
+        Some(invocation_session_result::Result::ToolResult(value)) => {
+            use golem_api_grpc::proto::golem::worker::{
+                public_external_tool_result, public_tool_error, public_tool_rpc_error,
+            };
+            let decode_typed = |typed: golem_api_grpc::proto::golem::schema::TypedSchemaValue,
+                                state: &mut AdapterState,
+                                mappings: &mut Vec<PublicStreamMapping>|
+             -> Result<PublicTypedValue, AdapterError> {
+                let graph: SchemaGraph = typed
+                    .graph
+                    .ok_or_else(|| {
+                        AdapterError::protocol("private typed tool result has no schema")
+                    })?
+                    .try_into()
+                    .map_err(AdapterError::protocol)?;
+                let value = decode_public_session_schema_value(typed.value.ok_or_else(|| {
+                    AdapterError::protocol("private typed tool result has no value")
+                })?)
+                .map_err(AdapterError::protocol)?;
+                let root = graph.root.clone();
+                state.graph = Some(graph.clone());
+                let (value, _) = encode_public_schema_value_with_charge(
+                    &graph,
+                    &root,
+                    &value,
+                    |stream, element| {
+                        let (reference, mapping) =
+                            state.expose_output_reference(stream, element, keyring)?;
+                        mappings.push(mapping);
+                        Ok(reference)
+                    },
+                )?;
+                Ok::<_, PublicSchemaValueError>(PublicTypedValue {
+                    schema: graph,
+                    value,
+                })
+                .map_err(AdapterError::from)
+            };
+            match value
+                .result
+                .ok_or_else(|| AdapterError::protocol("private tool result has no payload"))?
+            {
+                public_external_tool_result::Result::Success(success) => {
+                    let result = success
+                        .result
+                        .map(|typed| decode_typed(typed, state, &mut mappings))
+                        .transpose()?;
+                    PublicInvocationResult::ToolSuccess { result }
+                }
+                public_external_tool_result::Result::Error(error) => {
+                    let (code, message, custom_error) = match error.error.ok_or_else(|| {
+                        AdapterError::protocol("private tool error has no payload")
+                    })? {
+                        public_tool_rpc_error::Error::ProtocolError(message) => {
+                            ("protocol-error", Some(message), None)
+                        }
+                        public_tool_rpc_error::Error::Denied(message) => {
+                            ("denied", Some(message), None)
+                        }
+                        public_tool_rpc_error::Error::NotFound(message) => {
+                            ("not-found", Some(message), None)
+                        }
+                        public_tool_rpc_error::Error::RemoteInternalError(message) => {
+                            ("remote-internal-error", Some(message), None)
+                        }
+                        public_tool_rpc_error::Error::Cancelled(_) => ("cancelled", None, None),
+                        public_tool_rpc_error::Error::ResourceExhausted(message) => {
+                            ("resource-exhausted", Some(message), None)
+                        }
+                        public_tool_rpc_error::Error::RemoteToolError(error) => {
+                            match error.error.ok_or_else(|| {
+                                AdapterError::protocol("private remote tool error has no payload")
+                            })? {
+                                public_tool_error::Error::CustomError(error) => (
+                                    "custom-error",
+                                    Some(error.name),
+                                    Some(decode_typed(
+                                        error.payload.ok_or_else(|| {
+                                            AdapterError::protocol(
+                                                "private custom tool error has no payload",
+                                            )
+                                        })?,
+                                        state,
+                                        &mut mappings,
+                                    )?),
+                                ),
+                                public_tool_error::Error::InvalidToolName(message) => {
+                                    ("invalid-tool-name", Some(message), None)
+                                }
+                                public_tool_error::Error::InvalidInput(message) => {
+                                    ("invalid-input", Some(message), None)
+                                }
+                                public_tool_error::Error::ConstraintViolation(message) => {
+                                    ("constraint-violation", Some(message), None)
+                                }
+                                public_tool_error::Error::InvalidResult(message) => {
+                                    ("invalid-result", Some(message), None)
+                                }
+                                public_tool_error::Error::InvalidCommandPath(path) => {
+                                    ("invalid-command-path", Some(path.values.join("/")), None)
+                                }
+                            }
+                        }
+                    };
+                    PublicInvocationResult::ToolFailure {
+                        code: code.to_string(),
+                        message,
+                        custom_error,
+                    }
+                }
+            }
+        }
         None => return Err(AdapterError::protocol("private result has no payload")),
     };
     Ok(vec![frame(text_message(
         &PublicServerMessage::InvocationResult {
             mappings,
-            result,
+            result: Box::new(result),
             version: 1,
         },
     )?)])
@@ -2855,6 +3075,7 @@ mod tests {
                 }),
                 producer: Some(proto_agent_id()),
                 expected_producer_fingerprint: Some(proto_uuid(4)),
+                producer_generation: 0,
                 source_invocation: Some(StreamInvocationIdentity {
                     callee_environment_id: Some(EnvironmentId {
                         value: Some(proto_uuid(3)),
@@ -2886,6 +3107,7 @@ mod tests {
         protocol_state
             .validate_trusted_request(&request(invocation_request::Request::Start(
                 InvocationStart {
+                    method_name: Some("run".to_string()),
                     input: Some(stream_value(7)),
                     idempotency_key: idempotency_key(),
                     ..Default::default()
@@ -2908,6 +3130,7 @@ mod tests {
                         }),
                         callee_fingerprint: Some(proto_uuid(4)),
                         method_name: Some("run".to_string()),
+                        ..Default::default()
                     },
                 )),
             })
@@ -2947,6 +3170,7 @@ mod tests {
             channel_by_transport: HashMap::from([(7, 1)]),
             provisional_refs: HashMap::new(),
             private_mappings: HashMap::new(),
+            byte_roles: HashMap::new(),
             tokens: Some(TokenContext {
                 bindings: token_bindings(&AuthCtx::system()),
                 key_id: keyring().active_key_id().to_string(),
@@ -3134,6 +3358,113 @@ mod tests {
     }
 
     #[test]
+    fn acceptance_pins_executor_revision_and_exposes_native_byte_roots() {
+        let keyring = keyring();
+        let bindings = token_bindings(&AuthCtx::system());
+        for (native, revision) in [(false, None), (false, Some(17)), (true, Some(9))] {
+            let mut state = AdapterState::new();
+            state.graph = Some(SchemaGraph::empty());
+            state.identity = Some(SessionAgentIdentity {
+                component_id: Uuid::from_u128(20),
+                component_revision: 12,
+                agent_id: "agent".to_string(),
+                target: if native {
+                    SessionInvocationTarget::ExternalTool {
+                        tool_name: "tool".to_string(),
+                        command_path: vec!["run".to_string()],
+                    }
+                } else {
+                    SessionInvocationTarget::Method {
+                        agent_type: "test-agent".to_string(),
+                        method: "run".to_string(),
+                    }
+                },
+            });
+            state.application = Some("app".to_string());
+            state.environment = Some("env".to_string());
+            let fingerprint = schema_fingerprint_v1(&SchemaGraph::empty(), Some(&SchemaType::u8()))
+                .unwrap()
+                .0;
+            let accepted = translate_accepted(
+                &mut state,
+                InvocationAccepted {
+                    agent_id: Some(proto_agent_id()),
+                    idempotency_key: idempotency_key(),
+                    component_revision: revision,
+                    attachment_id: Some(proto_uuid(1)),
+                    attempt_id: Some(proto_uuid(2)),
+                    epoch: 1,
+                    callee_fingerprint: Some(proto_uuid(4)),
+                    method_name: (!native).then(|| "run".to_string()),
+                    tool_name: native.then(|| "tool".to_string()),
+                    command_path: if native {
+                        vec!["run".to_string()]
+                    } else {
+                        Vec::new()
+                    },
+                    stream_mappings: if native {
+                        vec![
+                            private_mapping(7, StreamMappingRole::Input, fingerprint),
+                            private_mapping(8, StreamMappingRole::Output, fingerprint),
+                        ]
+                    } else {
+                        Vec::new()
+                    },
+                    ..Default::default()
+                },
+                &keyring,
+                &bindings,
+                keyring.active_key_id(),
+                Uuid::from_u128(2),
+            )
+            .unwrap();
+            let PublicServerMessage::InvocationAccepted {
+                mappings,
+                session_token,
+                ..
+            } = accepted
+            else {
+                panic!("expected acceptance")
+            };
+            let verified = keyring
+                .verify(
+                    &session_token,
+                    InvocationSessionTokenKind::Session,
+                    &bindings.account,
+                    &bindings.effective_principal,
+                )
+                .unwrap();
+            let InvocationSessionTokenPayload::Session(session) = verified.payload else {
+                panic!("expected session token")
+            };
+            assert_eq!(
+                decode_session_agent_identity(&session.agent)
+                    .unwrap()
+                    .component_revision,
+                revision.unwrap_or(12)
+            );
+            assert_eq!(mappings.len(), if native { 2 } else { 0 });
+            if native {
+                for (role, direction) in [
+                    (PublicByteStreamRole::Stdin, PublicStreamDirection::Input),
+                    (PublicByteStreamRole::Stdout, PublicStreamDirection::Output),
+                ] {
+                    let mapping = mappings
+                        .iter()
+                        .find(|mapping| mapping.byte_role == Some(role))
+                        .unwrap();
+                    assert_eq!(mapping.direction, direction);
+                    let channel = &state.channels[&mapping.channel];
+                    assert_eq!(
+                        binary_lane(state.graph.as_ref().unwrap(), &channel.schema),
+                        Some(BinaryMessageKind::InputU8)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn distinct_connections_never_reuse_public_channel_ranges() {
         let mut first = AdapterState::new_connection(Uuid::from_u128(0));
         let mut reconnected = AdapterState::new_connection(Uuid::from_u128(1));
@@ -3167,9 +3498,11 @@ mod tests {
         state.identity = Some(SessionAgentIdentity {
             component_id: Uuid::from_u128(20),
             component_revision: 12,
-            agent_type: "test-agent".to_string(),
             agent_id: "agent".to_string(),
-            method: "run".to_string(),
+            target: SessionInvocationTarget::Method {
+                agent_type: "test-agent".to_string(),
+                method: "run".to_string(),
+            },
         });
         state.application = Some("app".to_string());
         state.environment = Some("env".to_string());
@@ -3189,6 +3522,7 @@ mod tests {
                 }),
                 callee_fingerprint: Some(proto_uuid(4)),
                 method_name: Some("run".to_string()),
+                ..Default::default()
             },
             &keyring,
             &bindings,
@@ -3541,6 +3875,7 @@ mod tests {
         protocol_state
             .validate_trusted_request(&request(invocation_request::Request::Start(
                 InvocationStart {
+                    method_name: Some("run".to_string()),
                     input: Some(ProtoSchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),
@@ -3565,6 +3900,7 @@ mod tests {
                         }),
                         callee_fingerprint: Some(proto_uuid(4)),
                         method_name: Some("run".to_string()),
+                        ..Default::default()
                     },
                 )),
             })
@@ -3630,6 +3966,7 @@ mod tests {
             channel_by_transport: HashMap::from([(8, 1)]),
             provisional_refs: HashMap::new(),
             private_mappings: HashMap::new(),
+            byte_roles: HashMap::new(),
             tokens: None,
             attachment_epoch: 1,
         }));
@@ -3661,9 +3998,11 @@ mod tests {
         state.identity = Some(SessionAgentIdentity {
             component_id: Uuid::from_u128(20),
             component_revision: 12,
-            agent_type: "test-agent".to_string(),
             agent_id: "agent".to_string(),
-            method: "run".to_string(),
+            target: SessionInvocationTarget::Method {
+                agent_type: "test-agent".to_string(),
+                method: "run".to_string(),
+            },
         });
         state.application = Some("app".to_string());
         state.environment = Some("env".to_string());
@@ -3671,6 +4010,7 @@ mod tests {
             .protocol_state
             .validate_trusted_request(&request(invocation_request::Request::Start(
                 InvocationStart {
+                    method_name: Some("run".to_string()),
                     input: Some(ProtoSchemaValue {
                         value: Some(schema_value::Value::U8Value(1)),
                     }),
@@ -3700,6 +4040,7 @@ mod tests {
                     }),
                     callee_fingerprint: Some(proto_uuid(4)),
                     method_name: Some("run".to_string()),
+                    ..Default::default()
                 },
             )),
         };
@@ -3769,12 +4110,13 @@ mod tests {
         )
         .unwrap();
         let PublicServerMessage::InvocationResult {
-            mappings,
-            result: PublicInvocationResult::Value { value },
-            ..
+            mappings, result, ..
         } = result
         else {
             panic!("stream result translated to the wrong public message")
+        };
+        let PublicInvocationResult::Value { value } = *result else {
+            panic!("stream result translated to the wrong public value")
         };
         assert_eq!(mappings.len(), 1);
         assert_eq!(mappings[0].direction, PublicStreamDirection::Output);
@@ -3945,9 +4287,11 @@ mod tests {
         let identity = SessionAgentIdentity {
             component_id: Uuid::from_u128(20),
             component_revision: 12,
-            agent_type: "test-agent".to_string(),
             agent_id: "agent".to_string(),
-            method: "run".to_string(),
+            target: SessionInvocationTarget::Method {
+                agent_type: "test-agent".to_string(),
+                method: "run".to_string(),
+            },
         };
         let session = SessionTokenPayload {
             application: "app".to_string(),
@@ -4007,5 +4351,72 @@ mod tests {
             resume.cursors[0].last_observed_offset,
             Some(durable_offset(4))
         );
+    }
+
+    #[test]
+    fn native_tool_result_preserves_validation_error_kinds() {
+        use golem_api_grpc::proto::golem::worker::{
+            PublicExternalToolResult, PublicToolError, PublicToolRpcError,
+            public_external_tool_result, public_tool_error, public_tool_rpc_error,
+        };
+        let cases = [
+            (
+                public_tool_error::Error::InvalidToolName("missing".into()),
+                "invalid-tool-name",
+            ),
+            (
+                public_tool_error::Error::InvalidInput("wrong type".into()),
+                "invalid-input",
+            ),
+            (
+                public_tool_error::Error::ConstraintViolation("outside range".into()),
+                "constraint-violation",
+            ),
+            (
+                public_tool_error::Error::InvalidResult("wrong result".into()),
+                "invalid-result",
+            ),
+        ];
+        for (error, expected_code) in cases {
+            let frames = translate_result(
+                &mut AdapterState::new(),
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::ToolResult(
+                        PublicExternalToolResult {
+                            result: Some(public_external_tool_result::Result::Error(
+                                PublicToolRpcError {
+                                    error: Some(public_tool_rpc_error::Error::RemoteToolError(
+                                        PublicToolError { error: Some(error) },
+                                    )),
+                                },
+                            )),
+                        },
+                    )),
+                    ..Default::default()
+                },
+                &keyring(),
+            )
+            .unwrap();
+            let Message::Text(text) = &frames[0].message else {
+                panic!("expected text result")
+            };
+            let PublicServerMessage::InvocationResult { result, .. } =
+                golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
+                    .unwrap()
+            else {
+                panic!("expected invocation result")
+            };
+            let PublicInvocationResult::ToolFailure {
+                code,
+                message,
+                custom_error,
+            } = *result
+            else {
+                panic!("expected tool failure")
+            };
+            assert_eq!(code, expected_code);
+            assert!(message.is_some());
+            assert!(custom_error.is_none());
+        }
     }
 }

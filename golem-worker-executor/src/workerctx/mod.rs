@@ -48,7 +48,7 @@ use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
@@ -176,7 +176,7 @@ pub trait WorkerCtx:
     /// instead of re-executing.
     const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = true;
 
-    /// Wraps a worker's oplog before it is shared with the worker internals and its context.
+    /// Wraps per-agent oplog handles used by worker internals, their context, and fork source reads.
     fn wrap_oplog(
         _owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -229,7 +229,7 @@ pub trait WorkerCtx:
     async fn create(
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -295,6 +295,10 @@ pub trait WorkerCtx:
 
     /// Get the agent-id resolved from the worker name
     fn parsed_agent_id(&self) -> Option<ParsedAgentId>;
+
+    /// Authoritative persisted execution-owner identity. Authorization and component-scoped
+    /// runtime selection must use this instead of interpreting `parsed_agent_id() == None`.
+    fn owner_context(&self) -> &ResolvedOwnerContext;
 
     fn agent_mode(&self) -> AgentMode;
 

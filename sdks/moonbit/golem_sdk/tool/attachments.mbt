@@ -1,11 +1,11 @@
 ///|
-fn stream_failure(error : @toolHost.ByteStreamFailure) -> ToolStreamError {
+fn stream_failure(error : @toolStreams.ByteStreamFailure) -> ToolStreamError {
   match error {
-    @toolHost.ByteStreamFailure::Cancelled => ToolStreamError::Cancelled
-    @toolHost.ByteStreamFailure::Abandoned => ToolStreamError::Abandoned
-    @toolHost.ByteStreamFailure::ResourceExhausted =>
+    @toolStreams.ByteStreamFailure::Cancelled => ToolStreamError::Cancelled
+    @toolStreams.ByteStreamFailure::Abandoned => ToolStreamError::Abandoned
+    @toolStreams.ByteStreamFailure::ResourceExhausted =>
       ToolStreamError::ResourceExhausted
-    @toolHost.ByteStreamFailure::Failed(message) =>
+    @toolStreams.ByteStreamFailure::Failed(message) =>
       ToolStreamError::Failed(message)
   }
 }
@@ -13,7 +13,7 @@ fn stream_failure(error : @toolHost.ByteStreamFailure) -> ToolStreamError {
 ///|
 priv struct ToolByteStreamSource {
   source : @async-core.Stream[
-    Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ]
   mut pending : FixedArray[Byte]?
   mut pending_offset : Int
@@ -99,7 +99,7 @@ fn ToolByteStreamSource::close_sync(self : ToolByteStreamSource) -> Unit {
 ///|
 pub fn byte_stream(
   source : @async-core.Stream[
-    Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ],
 ) -> @async-core.Stream[Byte] {
   let source = ToolByteStreamSource::{
@@ -118,13 +118,15 @@ pub fn byte_stream(
 ///|
 async fn reject_stdin_source(
   source : @async-core.Stream[Byte],
-  sink : @async-core.Sink[Result[FixedArray[Byte], @toolHost.ByteStreamFailure]],
-  failure : @toolHost.ByteStreamFailure,
+  sink : @async-core.Sink[
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
+  ],
+  failure : @toolStreams.ByteStreamFailure,
 ) -> Unit {
   @async-core.protect_from_cancel(
     async fn() {
       source.drop()
-      let failure : Result[FixedArray[Byte], @toolHost.ByteStreamFailure] = Err(
+      let failure : Result[FixedArray[Byte], @toolStreams.ByteStreamFailure] = Err(
         failure,
       )
       ignore(sink.write_all([failure]))
@@ -136,7 +138,9 @@ async fn reject_stdin_source(
 ///|
 fn stdin_byte_stream(
   source : @async-core.Stream[Byte],
-) -> @async-core.Stream[Result[FixedArray[Byte], @toolHost.ByteStreamFailure]] {
+) -> @async-core.Stream[
+  Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
+] {
   @async-core.Stream::produce(
     async fn(sink) {
       for ;; {
@@ -145,7 +149,7 @@ fn stdin_byte_stream(
             reject_stdin_source(
               source,
               sink,
-              @toolHost.ByteStreamFailure::Cancelled,
+              @toolStreams.ByteStreamFailure::Cancelled,
             )
             return
           }
@@ -153,7 +157,7 @@ fn stdin_byte_stream(
             reject_stdin_source(
               source,
               sink,
-              @toolHost.ByteStreamFailure::Abandoned,
+              @toolStreams.ByteStreamFailure::Abandoned,
             )
             return
           }
@@ -161,7 +165,7 @@ fn stdin_byte_stream(
             reject_stdin_source(
               source,
               sink,
-              @toolHost.ByteStreamFailure::ResourceExhausted,
+              @toolStreams.ByteStreamFailure::ResourceExhausted,
             )
             return
           }
@@ -169,7 +173,7 @@ fn stdin_byte_stream(
             reject_stdin_source(
               source,
               sink,
-              @toolHost.ByteStreamFailure::Failed(message),
+              @toolStreams.ByteStreamFailure::Failed(message),
             )
             return
           }
@@ -177,7 +181,7 @@ fn stdin_byte_stream(
             reject_stdin_source(
               source,
               sink,
-              @toolHost.ByteStreamFailure::Cancelled,
+              @toolStreams.ByteStreamFailure::Cancelled,
             )
             return
           }
@@ -185,7 +189,7 @@ fn stdin_byte_stream(
             reject_stdin_source(
               source,
               sink,
-              @toolHost.ByteStreamFailure::Failed(repr(error)),
+              @toolStreams.ByteStreamFailure::Failed(repr(error)),
             )
             return
           }
@@ -194,7 +198,7 @@ fn stdin_byte_stream(
           None => return
           Some(bytes) if bytes.length() == 0 => continue
           Some(bytes) => {
-            let item : Result[FixedArray[Byte], @toolHost.ByteStreamFailure] = Ok(
+            let item : Result[FixedArray[Byte], @toolStreams.ByteStreamFailure] = Ok(
               bytes,
             )
             if !sink.write_all([item]) {
@@ -221,7 +225,7 @@ fn prepare_stdin(source : @async-core.Stream[Byte]?) -> @toolHost.ToolStdin? {
 ///|
 fn invocation_stdout(
   source : @async-core.Stream[
-    Result[FixedArray[Byte], @toolHost.ByteStreamFailure],
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ],
 ) -> @async-core.Stream[Byte] {
   byte_stream(source)

@@ -3,7 +3,7 @@ declare module 'agent-guest' {
   import * as golemApi150Host from 'golem:api/host@1.5.0';
   import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as golemTool010Common from 'golem:tool/common@0.1.0';
-  import * as golemTool010Host from 'golem:tool/host@0.1.0';
+  import * as golemTool010Streams from 'golem:tool/streams@0.1.0';
   /**
    * Interface exported by a component that provides tools. The component
    * declares which tools it exposes, supplies their metadata, and accepts
@@ -54,8 +54,8 @@ declare module 'agent-guest' {
     export type Tool = golemTool010Common.Tool;
     export type ToolError = golemTool010Common.ToolError;
     export type InvocationResult = golemTool010Common.InvocationResult;
-    export type ByteStreamItem = golemTool010Host.ByteStreamItem;
-    export type ToolStdoutWriter = golemTool010Host.ToolStdoutWriter;
+    export type ByteStreamItem = golemTool010Streams.ByteStreamItem;
+    export type ToolStdoutWriter = golemTool010Streams.ToolStdoutWriter;
     export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
     export type Principal = golemAgent200Common.Principal;
     export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };

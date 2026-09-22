@@ -129,6 +129,14 @@ fn simple_tool(name: &str) -> Tool {
     }
 }
 
+fn parameter_schema() -> SchemaGraph {
+    SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
+        name: "value".to_string(),
+        body: SchemaType::s32(),
+        metadata: Default::default(),
+    }]))
+}
+
 fn installation(name: &str, value: i32) -> ToolMiddlewareInstallation {
     ToolMiddlewareInstallation {
         name: ToolMiddlewareName::try_from(name).unwrap(),
@@ -148,6 +156,7 @@ fn registered_middleware(name: &str, scope: ToolMiddlewareScope) -> RegisteredTo
             version: "2.0.0".to_string(),
             aliases: Vec::new(),
             doc: Doc::default(),
+            parameter_schema: parameter_schema(),
             scope,
         },
         provision: Default::default(),
@@ -191,11 +200,14 @@ impl CompilerFixture {
                 owner_account_email: "tool@example.com".into(),
                 metadata_version: "tool-metadata".to_string(),
                 metadata_digest: Default::default(),
+                component_bindings: BTreeMap::new(),
             },
             binding: CompiledToolBinding {
                 deployment_revision: DeploymentRevision::INITIAL,
                 release_id: None,
-                agent_type_name: agent.clone(),
+                owner: golem_common::model::tool::ToolBindingOwner::AgentType {
+                    agent_type_name: agent.clone(),
+                },
                 tool_name: tool_name.clone(),
                 version: "1.0.0".to_string(),
                 metadata_version: "tool-metadata".to_string(),
@@ -230,6 +242,7 @@ impl CompilerFixture {
             universal,
             environment,
             agent,
+            &BTreeMap::new(),
             mode,
         )
     }
@@ -315,6 +328,7 @@ fn registry_is_validated_without_bindings() {
         owner_account_id: Default::default(),
         owner_account_email: "owner@example.com".into(),
         metadata_version: String::new(),
+        component_bindings: BTreeMap::new(),
         metadata_digest: Default::default(),
     };
 
@@ -324,6 +338,7 @@ fn registry_is_validated_without_bindings() {
         &[],
         &[],
         &[],
+        &Default::default(),
         &Default::default(),
         &Default::default(),
         golem_common::schema::tool::compatibility::ToolCompatibilityMode::StructuralSubtype,
@@ -336,6 +351,107 @@ fn registry_is_validated_without_bindings() {
             .iter()
             .all(|error| { error.agent_type_name.is_none() && error.tool_name.is_none() })
     );
+}
+
+#[test]
+fn installed_parameters_are_validated_without_compiled_bindings() {
+    let registration = registered_middleware("universal", ToolMiddlewareScope::Universal);
+    let mut installed = installation("universal", 0);
+    installed.parameters = NormalizedJsonValue::new(serde_json::json!({}));
+
+    let compiled = compile_tool_middleware_chains(
+        DeploymentRevision::INITIAL,
+        &[],
+        &[],
+        &[registration],
+        &[installed],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        ToolCompatibilityMode::StructuralSubtype,
+    );
+
+    assert!(compiled.chains.is_empty());
+    assert_eq!(compiled.errors.len(), 1);
+    assert!(compiled.errors[0].message.contains("occurrence 1"));
+    assert!(compiled.errors[0].message.contains("value"));
+}
+
+#[test]
+fn unresolved_unselected_installation_is_not_reported_as_a_parameter_error() {
+    let compiled = compile_tool_middleware_chains(
+        DeploymentRevision::INITIAL,
+        &[],
+        &[],
+        &[],
+        &[installation("missing", 0)],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        ToolCompatibilityMode::StructuralSubtype,
+    );
+
+    assert_eq!(compiled.errors.len(), 1);
+    assert!(
+        compiled.errors[0]
+            .message
+            .contains("unresolved middleware name")
+    );
+    assert!(!compiled.errors[0].message.contains("parameters"));
+}
+
+#[test]
+fn shadowed_environment_installation_parameters_are_validated_once() {
+    let fixture = CompilerFixture::new();
+    let registration = registered_middleware(
+        "scoped",
+        ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+            presented: simple_tool("leaf"),
+            expected: Some(fixture.tool.definition.clone()),
+        })),
+    );
+    let mut invalid = installation("scoped", 0);
+    invalid.parameters = NormalizedJsonValue::new(serde_json::json!({}));
+    let environment = BTreeMap::from([(
+        fixture.tool_name.clone(),
+        ToolBindingInput {
+            middleware: Some(vec![invalid]),
+            ..Default::default()
+        },
+    )]);
+    let agent = BTreeMap::from([(
+        fixture.agent.clone(),
+        BTreeMap::from([(
+            fixture.tool_name.clone(),
+            ToolBindingInput {
+                middleware: Some(vec![installation("scoped", 1)]),
+                middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+                ..Default::default()
+            },
+        )]),
+    )]);
+
+    let compiled = fixture.compile(
+        &[registration],
+        &[],
+        &environment,
+        &agent,
+        ToolCompatibilityMode::StructuralSubtype,
+    );
+
+    assert_eq!(compiled.chains.len(), 1);
+    assert_eq!(compiled.errors.len(), 1);
+    assert_eq!(compiled.errors[0].agent_type_name, None);
+    assert_eq!(
+        compiled.errors[0].tool_name.as_ref(),
+        Some(&fixture.tool_name)
+    );
+    assert!(
+        compiled.errors[0]
+            .message
+            .contains("occurrence 1 parameters")
+    );
+    assert!(compiled.errors[0].message.contains("value"));
 }
 
 #[test]
@@ -437,7 +553,13 @@ fn compiler_builds_universal_and_monomorphic_chain_in_order_with_duplicate_param
             .iter()
             .map(|occurrence| (
                 occurrence.middleware.definition.name.as_str(),
-                occurrence.parameters.0["value"].as_i64(),
+                golem_schema::schema::render::to_json_value(
+                    occurrence.parameters.graph(),
+                    occurrence.parameters.root_type(),
+                    occurrence.parameters.value(),
+                )
+                .unwrap()["value"]
+                    .as_i64(),
             ))
             .collect::<Vec<_>>(),
         [
@@ -466,6 +588,79 @@ fn compiler_builds_universal_and_monomorphic_chain_in_order_with_duplicate_param
                 ToolMiddlewareSource::Component { .. }
             )
     }));
+}
+
+#[test]
+fn compiler_decodes_nested_parameters_and_explicit_optional_null() {
+    let fixture = CompilerFixture::new();
+    let mut registration = registered_middleware("universal", ToolMiddlewareScope::Universal);
+    registration.definition.parameter_schema = SchemaGraph::anonymous(SchemaType::record(vec![
+        NamedFieldType {
+            name: "nested".to_string(),
+            body: SchemaType::record(vec![NamedFieldType {
+                name: "labels".to_string(),
+                body: SchemaType::list(SchemaType::string()),
+                metadata: Default::default(),
+            }]),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "note".to_string(),
+            body: SchemaType::option(SchemaType::string()),
+            metadata: Default::default(),
+        },
+    ]));
+    let mut installed = installation("universal", 0);
+    installed.parameters = NormalizedJsonValue::new(serde_json::json!({
+        "nested": { "labels": ["one", "two"] },
+        "note": null
+    }));
+
+    let compiled = fixture.compile(
+        &[registration],
+        &[installed],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        ToolCompatibilityMode::StructuralSubtype,
+    );
+
+    assert!(compiled.errors.is_empty(), "{:?}", compiled.errors);
+    let parameters = &compiled.chains[0].occurrences[0].parameters;
+    assert_eq!(parameters.graph().root, parameters.root_type().clone());
+    assert_eq!(
+        golem_schema::schema::render::to_json_value(
+            parameters.graph(),
+            parameters.root_type(),
+            parameters.value(),
+        )
+        .unwrap(),
+        serde_json::json!({ "nested": { "labels": ["one", "two"] }, "note": null })
+    );
+}
+
+#[test]
+fn compiler_rejects_wrong_and_missing_parameter_fields_with_occurrence_paths() {
+    let fixture = CompilerFixture::new();
+    let registration = registered_middleware("universal", ToolMiddlewareScope::Universal);
+    let mut wrong = installation("universal", 0);
+    wrong.parameters = NormalizedJsonValue::new(serde_json::json!({ "value": "wrong" }));
+    let mut missing = installation("universal", 0);
+    missing.parameters = NormalizedJsonValue::new(serde_json::json!({}));
+
+    let compiled = fixture.compile(
+        &[registration],
+        &[wrong, missing],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        ToolCompatibilityMode::StructuralSubtype,
+    );
+
+    assert!(compiled.chains.is_empty());
+    assert_eq!(compiled.errors.len(), 2);
+    assert!(compiled.errors[0].message.contains("occurrence 2"));
+    assert!(compiled.errors[0].message.contains("value"));
+    assert!(compiled.errors[1].message.contains("occurrence 1"));
+    assert!(compiled.errors[1].message.contains("value"));
 }
 
 #[test]
@@ -516,6 +711,7 @@ fn compiler_rejects_pin_scope_and_leaf_mismatches() {
         &[missing],
         &[],
         &[],
+        &BTreeMap::new(),
         &BTreeMap::new(),
         &BTreeMap::new(),
         ToolCompatibilityMode::StructuralSubtype,

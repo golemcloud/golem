@@ -84,6 +84,9 @@
       "golem:agent/common@2.0.0": [
         "golem-types/golem_agent_2_0_0_common.d.ts"
       ],
+      "golem:agent/durable-streams@2.0.0": [
+        "golem-types/golem_agent_2_0_0_durable_streams.d.ts"
+      ],
       "golem:agent/host@2.0.0": [
         "golem-types/golem_agent_2_0_0_host.d.ts"
       ],

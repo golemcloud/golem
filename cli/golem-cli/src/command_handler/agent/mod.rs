@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod invocation_session;
+pub(crate) mod invocation_session;
 mod stream;
 mod stream_output;
 

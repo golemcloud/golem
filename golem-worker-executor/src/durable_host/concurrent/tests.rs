@@ -202,6 +202,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             "test:monotonic_clock::now",
         ),
         executor_shutdown: tokio_util::sync::CancellationToken::new(),
+        runtime_teardown: Arc::new(|| false),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: Some(sink),
@@ -245,6 +246,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
             "test:monotonic_clock::now",
         ),
         executor_shutdown: tokio_util::sync::CancellationToken::new(),
+        runtime_teardown: Arc::new(|| false),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: None,
@@ -1523,6 +1525,24 @@ fn executor_shutdown_leaves_unfinished_call_incomplete_for_replay() {
         rx.try_recv().is_err(),
         "executor shutdown must not report cancellation or a policy violation"
     );
+}
+
+#[test]
+fn owner_teardown_leaves_unfinished_call_incomplete_without_cancellation() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut handle = live_unfinished_handle::<Cancellable>(idx(9), tx);
+    handle.runtime_teardown = Arc::new(|| true);
+    drop(handle);
+    assert!(matches!(
+        rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Disconnected)
+    ));
+
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut handle = live_unfinished_handle::<NotCancellable>(idx(10), tx);
+    handle.drop_sink = None;
+    handle.runtime_teardown = Arc::new(|| true);
+    drop(handle);
 }
 
 #[test]

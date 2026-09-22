@@ -222,6 +222,7 @@ resourceDefaults:
 secretDefaults:
   local:
     apiKey: "sk-effect-golem-test-1234"
+    durableStreamToken: "effect-durable-streams-test-token"
     # Per-RDBMS DSNs. Each adapter reads through its own
     # agent-scoped config field so the registry holds them as
     # independent secrets.

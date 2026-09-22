@@ -20,9 +20,11 @@ import golem.host.js._
 
 import java.util.concurrent.TimeUnit
 import scala.collection.mutable
+import scala.concurrent.Future
 import scala.concurrent.duration.FiniteDuration
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
+import scala.util.control.NonFatal
 
 /**
  * Scala-native retry policy builders and validated conversion to raw host
@@ -30,6 +32,30 @@ import scala.scalajs.js.JSConverters._
  */
 object Retry {
   final case class ValidationError(message: String)
+
+  /**
+   * Retries `operation` locally according to `policy`. Each failed attempt is
+   * passed to `properties` before filtered policy nodes are evaluated. This is
+   * user-space control flow: unlike [[RetryApi]], it neither changes the host
+   * retry policy nor records executor retry-attempt oplog entries.
+   */
+  def retry[A](policy: Policy)(operation: => Future[A]): Future[A] =
+    retry(policy, _ => Nil)(operation)
+
+  def retry[A](policy: Policy, properties: Throwable => Iterable[Property])(operation: => Future[A]): Future[A] =
+    LocalRetry.retry(policy, properties, () => operation)
+
+  /** Retries locally using a raw policy returned by the host retry API. */
+  def retry[A](policy: JsRetryPolicyTree)(operation: => Future[A]): Future[A] =
+    retry(policy, _ => Nil)(operation)
+
+  def retry[A](policy: JsRetryPolicyTree, properties: Throwable => Iterable[Property])(
+    operation: => Future[A]
+  ): Future[A] =
+    try retry(Policy.fromJs(policy), properties)(operation)
+    catch {
+      case NonFatal(error) => Future.failed(error)
+    }
 
   private sealed trait DecodeError extends Throwable {
     def message: String

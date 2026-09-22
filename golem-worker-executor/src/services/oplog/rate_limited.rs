@@ -394,6 +394,46 @@ impl OplogService for RateLimitedOplogService {
         self.inner.stream_session_index()
     }
 
+    async fn create_staged(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+        initial_worker_metadata: AgentMetadata,
+    ) -> Result<Arc<dyn Oplog>, String> {
+        self.inner
+            .create_staged(
+                owned_agent_id,
+                agent_mode,
+                stage_id,
+                initial_worker_metadata,
+            )
+            .await
+    }
+
+    async fn publish_staged(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+        expected_last_index: OplogIndex,
+    ) -> Result<bool, String> {
+        self.inner
+            .publish_staged(owned_agent_id, agent_mode, stage_id, expected_last_index)
+            .await
+    }
+
+    async fn discard_staged(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+    ) -> Result<(), String> {
+        self.inner
+            .discard_staged(owned_agent_id, agent_mode, stage_id)
+            .await
+    }
+
     async fn create(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
@@ -620,6 +660,7 @@ mod tests {
     ) -> AgentMetadata {
         AgentMetadata {
             agent_id,
+            owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             env: vec![],
             environment_id,
             created_by,

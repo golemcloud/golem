@@ -75,10 +75,14 @@ use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::{AgentTypeSchemaResolver, ParsedAgentId};
 use crate::model::card::{CardId, ScopeCard, StoredCard};
 use crate::model::invocation_context::InvocationContextStack;
+use crate::model::oplog::payload::types::{
+    SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
+};
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
 use crate::model::regions::DeletedRegions;
-use crate::schema::{ResultValuePayload, SchemaValue};
+use crate::model::tool::{ToolActivationSnapshot, ToolName};
+use crate::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
 use crate::{SafeDisplay, grpc_uri};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
@@ -100,7 +104,9 @@ use url::Url;
 use uuid::Uuid;
 
 /// Status of an idempotency key lookup on a worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Enum)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub enum InvocationStatus {
     /// The idempotency key is not known (never seen or expired).
     Unknown,
@@ -884,6 +890,7 @@ impl Display for ShardAssignment {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentMetadata {
     pub agent_id: AgentId,
+    pub owner_kind: crate::model::agent::OwnerKind,
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
@@ -1344,6 +1351,7 @@ pub struct AgentStatusRecord {
     pub invocation_results: InvocationResultMembership,
     pub received_card_transfers: ReceivedCardTransferIndex,
     pub durable_stream_sessions: DurableStreamSessionIndex,
+    pub export_fork_admissions: ExportForkAdmissions,
     pub has_durable_stream_history: bool,
     pub pending_durable_stream_cancellations:
         HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
@@ -1398,6 +1406,7 @@ impl Default for AgentStatusRecord {
             invocation_results: InvocationResultMembership::default(),
             received_card_transfers: ReceivedCardTransferIndex::default(),
             durable_stream_sessions: DurableStreamSessionIndex::default(),
+            export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
             pending_durable_stream_cancellations: HashSet::new(),
             current_idempotency_key: None,
@@ -1420,6 +1429,22 @@ impl Default for AgentStatusRecord {
             agent_mode: AgentMode::Durable,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, BinaryCodec)]
+pub struct ExportForkAdmissions {
+    pub owner_fingerprint: Option<AgentFingerprint>,
+    pub reservations: HashMap<AgentId, ExportForkReservation>,
+    pub session_counts: HashMap<String, u32>,
+    pub updated_millis: u64,
+    pub credit_millis: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct ExportForkReservation {
+    pub oplog_index: OplogIndex,
+    pub request_hash: Vec<u8>,
+    pub session: String,
 }
 
 /// The durable target-side identity associated with a permission-card transfer ID.
@@ -1503,7 +1528,7 @@ pub struct DurableStreamSessionStatus {
     pub prepared: Option<OplogIndex>,
     pub invocation_result: Option<OplogIndex>,
     pub finished: Option<OplogIndex>,
-    pub session_key: Option<crate::model::durable_stream::StreamSessionKey>,
+    pub session_key: Option<IdempotencyKey>,
     pub prepared_attempt_id: Option<crate::model::durable_stream::AttemptId>,
     pub initial_attachment_epoch: Option<u64>,
     pub initial_attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
@@ -1556,7 +1581,7 @@ impl DurableStreamSessionStatus {
             || self
                 .session_key
                 .as_ref()
-                .is_none_or(|key| &key.idempotency_key != idempotency_key)
+                .is_none_or(|key| key != idempotency_key)
             || self
                 .prepared
                 .is_none_or(|prepared_idx| oplog_idx <= prepared_idx)
@@ -1577,11 +1602,20 @@ impl DurableStreamSessionStatus {
     ) {
         use crate::model::durable_stream::StreamSessionRecord;
 
-        let record_key = match record {
-            StreamSessionRecord::Prepared(v) => Some(&v.attempt.session_key),
+        if let StreamSessionRecord::ForkCut(cut) = record {
+            self.attachment_epoch = Some(cut.epoch_floor);
+            self.attachment_attached = Some(false);
+            return;
+        }
+
+        let local_record_key = match record {
+            StreamSessionRecord::Prepared(v) => Some(&v.session_key),
             StreamSessionRecord::Attached(v) => Some(&v.session_key),
-            StreamSessionRecord::ResumeAttempt(v) => Some(&v.attempt.session_key),
+            StreamSessionRecord::ResumeAttempt(v) => Some(&v.session_key),
             StreamSessionRecord::Detached(v) => Some(&v.session_key),
+            _ => None,
+        };
+        let relative_record_key = match record {
             StreamSessionRecord::InvocationResult(v) => Some(&v.session_key),
             StreamSessionRecord::Finished(v) => Some(&v.session_key),
             StreamSessionRecord::Tombstoned(v) => Some(&v.session_key),
@@ -1589,15 +1623,28 @@ impl DurableStreamSessionStatus {
             StreamSessionRecord::ConsumerCancelApplied(v) => Some(&v.intent.session_key),
             _ => None,
         };
-        let Some(record_key) = record_key else { return };
-        if self
-            .session_key
-            .as_ref()
-            .is_some_and(|key| key != record_key)
-        {
+        if let Some(record_key) = local_record_key {
+            if self
+                .session_key
+                .as_ref()
+                .is_some_and(|key| key != record_key)
+            {
+                return;
+            }
+            self.session_key.get_or_insert_with(|| record_key.clone());
+        } else if let Some(record_key) = relative_record_key {
+            let Some(key) = self.session_key.as_ref() else {
+                return;
+            };
+            if !matches!(record_key,
+                crate::model::durable_stream::StreamRegistrationInvocation::Local(local)
+                    if local == key)
+            {
+                return;
+            }
+        } else {
             return;
         }
-        self.session_key.get_or_insert_with(|| record_key.clone());
         if self.lifecycle_error.is_some() {
             return;
         }
@@ -1762,17 +1809,20 @@ impl DurableStreamSessionIndex {
     ) {
         use crate::model::durable_stream::StreamSessionRecord;
 
-        let key = match record {
-            StreamSessionRecord::Prepared(v) => &v.attempt.session_key.idempotency_key,
-            StreamSessionRecord::Attached(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::ResumeAttempt(v) => &v.attempt.session_key.idempotency_key,
-            StreamSessionRecord::Detached(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::InvocationResult(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::Finished(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::Tombstoned(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::CancelRequested(v) => &v.session_key.idempotency_key,
-            StreamSessionRecord::ConsumerCancelApplied(v) => &v.intent.session_key.idempotency_key,
-            _ => return,
+        if matches!(record, StreamSessionRecord::ForkCut(_)) {
+            let retained: Vec<_> = self
+                .iter()
+                .map(|(key, status)| (key, status.clone()))
+                .collect();
+            for (key, mut status) in retained {
+                status.apply_record(index, record);
+                self.insert(key, status);
+            }
+            return;
+        }
+
+        let Some(key) = record.local_session_key() else {
+            return;
         };
         let mut status = match self.get(key) {
             Some(status) => status.clone(),
@@ -1881,6 +1931,7 @@ pub enum AgentInvocationKind {
     LoadSnapshot,
     SaveSnapshot,
     ProcessOplogEntries,
+    ExternalTool,
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -1899,6 +1950,18 @@ pub enum AgentInvocation {
         idempotency_key: IdempotencyKey,
         method_name: String,
         input: SchemaValue,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+        scope_card: Option<ScopeCard>,
+    },
+    ExternalTool {
+        idempotency_key: IdempotencyKey,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        activation: Box<ToolActivationSnapshot>,
         invocation_context: InvocationContextStack,
         principal: Principal,
         scope_card: Option<ScopeCard>,
@@ -1937,6 +2000,16 @@ pub enum AgentInvocationPayload {
         principal: Principal,
         scope_card: Option<ScopeCard>,
     },
+    ExternalTool {
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        activation: Box<ToolActivationSnapshot>,
+        principal: Principal,
+        scope_card: Option<ScopeCard>,
+    },
     LoadSnapshot {
         snapshot: RawSnapshotData,
     },
@@ -1954,11 +2027,22 @@ pub enum AgentInvocationPayload {
 #[desert(evolution())]
 pub enum AgentInvocationResult {
     AgentInitialization,
-    AgentMethod { output: SchemaValue },
+    AgentMethod {
+        output: SchemaValue,
+    },
     ManualUpdate,
-    LoadSnapshot { error: Option<String> },
-    SaveSnapshot { snapshot: RawSnapshotData },
-    ProcessOplogEntries { error: Option<String> },
+    LoadSnapshot {
+        error: Option<String>,
+    },
+    SaveSnapshot {
+        snapshot: RawSnapshotData,
+    },
+    ProcessOplogEntries {
+        error: Option<String>,
+    },
+    ExternalTool {
+        result: Result<SerializableToolInvocationResult, SerializableToolRpcError>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -2063,6 +2147,35 @@ impl AgentInvocationResult {
                 AgentInvocationResult::ProcessOplogEntries { error: a },
                 AgentInvocationResult::ProcessOplogEntries { error: b },
             ) => a == b,
+            (
+                AgentInvocationResult::ExternalTool { result: a },
+                AgentInvocationResult::ExternalTool { result: b },
+            ) => match (a, b) {
+                (Ok(a), Ok(b)) => match (&a.result, &b.result) {
+                    (Some(a), Some(b)) => {
+                        a.graph() == b.graph()
+                            && schema_value_replay_equivalent(a.value(), b.value())
+                    }
+                    (None, None) => true,
+                    _ => false,
+                },
+                (
+                    Err(SerializableToolRpcError::RemoteToolError(a)),
+                    Err(SerializableToolRpcError::RemoteToolError(b)),
+                ) => match (a.as_ref(), b.as_ref()) {
+                    (
+                        SerializableToolError::CustomError(a),
+                        SerializableToolError::CustomError(b),
+                    ) => {
+                        a.name == b.name
+                            && a.payload.graph() == b.payload.graph()
+                            && schema_value_replay_equivalent(a.payload.value(), b.payload.value())
+                    }
+                    _ => a == b,
+                },
+                (Err(a), Err(b)) => a == b,
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -2089,6 +2202,37 @@ impl std::fmt::Debug for RedactedAgentInvocationResult<'_> {
                     &crate::schema::redacted_schema_value_debug(output),
                 )
                 .finish(),
+            AgentInvocationResult::ExternalTool { result } => {
+                let mut debug = f.debug_struct("ExternalTool");
+                match result {
+                    Ok(result) => match &result.result {
+                        Some(value) => debug.field(
+                            "result",
+                            &format_args!(
+                                "Ok({:?})",
+                                crate::schema::redact_host_managed_typed_value((**value).clone())
+                            ),
+                        ),
+                        None => debug.field("result", &"Ok(None)"),
+                    },
+                    Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
+                        crate::base_model::tool::SerializableToolError::CustomError(value) => debug
+                            .field(
+                                "result",
+                                &format_args!(
+                                    "Err(RemoteToolError(CustomError {{ name: {:?}, payload: {:?} }}))",
+                                    value.name,
+                                    crate::schema::redact_host_managed_typed_value(value.payload.clone())
+                                ),
+                            ),
+                        error => {
+                            debug.field("result", &format_args!("Err(RemoteToolError({error:?}))"))
+                        }
+                    },
+                    Err(error) => debug.field("result", &format_args!("Err({error:?})")),
+                };
+                debug.finish()
+            }
             other => std::fmt::Debug::fmt(other, f),
         }
     }
@@ -2121,6 +2265,27 @@ impl AgentInvocation {
                 idempotency_key,
                 method_name,
                 input,
+                invocation_context,
+                principal,
+                scope_card,
+            },
+            AgentInvocationPayload::ExternalTool {
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                activation,
+                principal,
+                scope_card,
+            } => Self::ExternalTool {
+                idempotency_key,
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                activation,
                 invocation_context,
                 principal,
                 scope_card,
@@ -2187,6 +2352,32 @@ impl AgentInvocation {
                 },
                 invocation_context,
             ),
+            Self::ExternalTool {
+                idempotency_key,
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                activation,
+                invocation_context,
+                principal,
+                scope_card,
+                ..
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::ExternalTool {
+                    tool_name,
+                    command_path,
+                    input,
+                    stdin,
+                    stdout,
+                    activation,
+                    principal,
+                    scope_card,
+                },
+                invocation_context,
+            ),
             Self::LoadSnapshot {
                 idempotency_key,
                 snapshot,
@@ -2230,6 +2421,9 @@ impl AgentInvocation {
             Self::AgentMethod {
                 idempotency_key, ..
             } => Some(idempotency_key),
+            Self::ExternalTool {
+                idempotency_key, ..
+            } => Some(idempotency_key),
             Self::AgentInitialization {
                 idempotency_key, ..
             } => Some(idempotency_key),
@@ -2252,6 +2446,9 @@ impl AgentInvocation {
             Self::AgentMethod {
                 invocation_context, ..
             } => invocation_context.clone(),
+            Self::ExternalTool {
+                invocation_context, ..
+            } => invocation_context.clone(),
             _ => InvocationContextStack::fresh(),
         }
     }
@@ -2261,6 +2458,7 @@ impl AgentInvocation {
             Self::ManualUpdate { .. } => AgentInvocationKind::ManualUpdate,
             Self::AgentInitialization { .. } => AgentInvocationKind::AgentInitialization,
             Self::AgentMethod { .. } => AgentInvocationKind::AgentMethod,
+            Self::ExternalTool { .. } => AgentInvocationKind::ExternalTool,
             Self::LoadSnapshot { .. } => AgentInvocationKind::LoadSnapshot,
             Self::SaveSnapshot { .. } => AgentInvocationKind::SaveSnapshot,
             Self::ProcessOplogEntries { .. } => AgentInvocationKind::ProcessOplogEntries,
@@ -2272,9 +2470,32 @@ impl AgentInvocation {
             Self::ManualUpdate { .. } => String::new(),
             Self::AgentInitialization { .. } => "initialize".to_string(),
             Self::AgentMethod { method_name, .. } => method_name.clone(),
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+                ..
+            } => format!("{tool_name}:{}", command_path.join("/")),
             Self::LoadSnapshot { .. } => "load-snapshot".to_string(),
             Self::SaveSnapshot { .. } => "save-snapshot".to_string(),
             Self::ProcessOplogEntries { .. } => "process-oplog-entries".to_string(),
+        }
+    }
+
+    pub fn principal(&self) -> Option<&Principal> {
+        match self {
+            Self::AgentInitialization { principal, .. }
+            | Self::AgentMethod { principal, .. }
+            | Self::ExternalTool { principal, .. } => Some(principal),
+            _ => None,
+        }
+    }
+
+    pub fn scope_card(&self) -> Option<&ScopeCard> {
+        match self {
+            Self::AgentMethod { scope_card, .. } | Self::ExternalTool { scope_card, .. } => {
+                scope_card.as_ref()
+            }
+            _ => None,
         }
     }
 }

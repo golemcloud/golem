@@ -12,19 +12,19 @@ import {
 // Values
 pub fn build_canonical_input(CanonicalInputModel, Array[(String, @schema_model.SchemaValue)]) -> @schema_model.TypedSchemaValue raise ToolBuildError
 
-pub fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field(Array[CanonicalInputValue], String, String) -> T raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field(Array[CanonicalInputValue], String, String) -> T raise @types.ToolError
 
-pub fn decode_canonical_input(ToolDef, Int, @types.TypedSchemaValue, String) -> Array[CanonicalInputValue] raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub fn decode_canonical_input(ToolDef, Int, @types.TypedSchemaValue, String) -> Array[CanonicalInputValue] raise @types.ToolError
 
 pub fn[T : @schema.FromSchema] decode_custom_error(@schema_model.TypedSchemaValue) -> Result[T, String]
 
-pub fn decode_invocation_input(@types.TypedSchemaValue, Int, String) -> Array[@schema_model.SchemaValue] raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub fn decode_invocation_input(@types.TypedSchemaValue, Int, String) -> Array[@schema_model.SchemaValue] raise @types.ToolError
 
 pub fn decode_invocation_result(@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult) -> Result[InvocationResult, String]
 
 pub fn[E : ToolErrorSchema] decode_named_tool_error(String, @schema_model.TypedSchemaValue) -> Result[E, String]?
 
-pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int, String) -> T raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub fn[T : @schema.FromSchema] decode_param(Array[@schema_model.SchemaValue], Int, String) -> T raise @types.ToolError
 
 pub fn decode_typed_value(@types.TypedSchemaValue, String) -> Result[@schema_model.TypedSchemaValue, String]
 
@@ -38,9 +38,9 @@ pub async fn[T : @schema.IntoSchema] encode_result_value(T) -> @types.TypedSchem
 
 pub fn encode_typed_input(@schema_model.TypedSchemaValue) -> Result[@types.TypedSchemaValue, String]
 
-pub fn forward_canonical_input(Array[CanonicalInputValue], ToolDef, Int) -> @types.TypedSchemaValue raise @golemcloud/golem_sdk/interface/golem/tool/common.ToolError
+pub fn forward_canonical_input(Array[CanonicalInputValue], ToolDef, Int) -> @types.TypedSchemaValue raise @types.ToolError
 
-pub fn get_registered_tool(String) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.Tool, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+pub fn get_registered_tool(String) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.Tool, @types.ToolError]
 
 pub fn invocation_result_empty() -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
@@ -78,11 +78,11 @@ pub fn register_wire_tool(@golemcloud/golem_sdk/interface/golem/tool/common.Tool
 
 pub fn registered_tool_def(String) -> ToolDef?
 
-pub fn reject_decoded_invocation(Array[CanonicalInputValue], @async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+pub fn reject_decoded_invocation(Array[CanonicalInputValue], @async-core.Stream[Byte]?, @types.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]
 
-pub fn reject_undecoded_invocation(@async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+pub fn reject_undecoded_invocation(@async-core.Stream[Byte]?, @types.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]
 
-pub fn reject_wire_invocation(@types.TypedSchemaValue, @async-core.Stream[Byte]?, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @golemcloud/golem_sdk/interface/golem/tool/common.ToolError]
+pub fn reject_wire_invocation(@types.TypedSchemaValue, @async-core.Stream[Byte]?, @types.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]
 
 pub fn release_registered_subtool_input(Array[CanonicalInputValue]) -> Unit
 

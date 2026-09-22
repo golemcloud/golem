@@ -15,7 +15,7 @@
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_file_name_to_string,
-    blob_parent_to_string, blob_path_to_string, validate_relative_blob_path,
+    blob_parent_to_string, blob_path_is_root, blob_path_to_string, validate_relative_blob_path,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -374,6 +374,11 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
     ) -> Result<bool, Error> {
         validate_relative_blob_path(path)?;
+
+        if blob_path_is_root(path) {
+            return Ok(false);
+        }
+
         let dir = blob_path_to_string(path)?;
 
         let key = Key {
@@ -382,27 +387,21 @@ impl BlobStorage for InMemoryBlobStorage {
             file: None,
         };
 
-        let result = self.data.remove_async(&key).await;
+        let Some((_, Entry::Directory { .. })) = self.data.remove_async(&key).await else {
+            return Ok(false);
+        };
 
-        if let Some((_, entry)) = result {
-            match entry {
-                Entry::Directory { files } => {
-                    self.data
-                        .retain_async(|k, _| {
-                            if k.dir == dir {
-                                !files.contains(&k.file.clone().unwrap_or_default())
-                            } else {
-                                true
-                            }
-                        })
-                        .await;
-                    Ok(true)
-                }
-                _ => Ok(false),
-            }
-        } else {
-            Ok(false)
-        }
+        // A key is below the deleted directory when it is in that directory or in one nested
+        // under it, so the files and the directory entries at any depth go with it.
+        let nested = format!("{dir}/");
+        self.data
+            .retain_async(|below, _| {
+                below.namespace != key.namespace
+                    || (below.dir != dir && !below.dir.starts_with(&nested))
+            })
+            .await;
+
+        Ok(true)
     }
 
     async fn exists(

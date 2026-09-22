@@ -43,15 +43,15 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
-    CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
-    ToolSource,
+    CompiledToolBinding, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::{agent_id, data_value, widen_infallible};
-use golem_schema::schema::wit::encode_graph;
+use golem_schema::schema::wit::{decode_value, encode_graph};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -195,10 +195,11 @@ async fn initialize_entity(
     let result =
         invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await?;
     match result {
-        InvokeResult::Succeeded {
-            result: AgentInvocationResult::AgentInitialization,
-            ..
-        } => Ok(()),
+        InvokeResult::Succeeded { result, .. }
+            if matches!(*result, AgentInvocationResult::AgentInitialization) =>
+        {
+            Ok(())
+        }
         result => Err(
             golem_service_base::error::worker_executor::WorkerExecutorError::runtime(format!(
                 "entity initialization did not succeed: {result:?}"
@@ -233,10 +234,8 @@ async fn invoke_sleep_p3(
         invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await?;
     assert!(matches!(
         result,
-        InvokeResult::Succeeded {
-            result: AgentInvocationResult::AgentMethod { .. },
-            ..
-        }
+        InvokeResult::Succeeded { result, .. }
+            if matches!(*result, AgentInvocationResult::AgentMethod { .. })
     ));
     Ok(())
 }
@@ -266,7 +265,7 @@ async fn invoke_entity_method(
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
     match invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await? {
-        InvokeResult::Succeeded { result, .. } => Ok(result),
+        InvokeResult::Succeeded { result, .. } => Ok(*result),
         result => Err(
             golem_service_base::error::worker_executor::WorkerExecutorError::runtime(format!(
                 "entity method did not succeed: {result:?}"
@@ -359,7 +358,7 @@ fn activation_with_policy(
     let binding = CompiledToolBinding {
         deployment_revision,
         release_id: None,
-        agent_type_name,
+        owner: ToolBindingOwner::AgentType { agent_type_name },
         tool_name,
         version: "1.0.0".to_string(),
         metadata_version: "0.1.0".to_string(),
@@ -466,6 +465,7 @@ fn middleware_activation(
         EntityActivationPolicy::ToolMiddleware {
             middleware_name,
             provision: ToolProvisionConfig::default(),
+            config_keys_readable: Default::default(),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: ToolFilesystemAccess::Denied,
@@ -496,6 +496,10 @@ fn invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("instance-layer-live-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("instance-layer-live-streams".to_string()),
     )
     .unwrap()
 }
@@ -521,6 +525,10 @@ fn replay_invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::ReplayingCompleted,
+        IdempotencyKey::new("instance-layer-replay-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("instance-layer-replay-streams".to_string()),
     )
     .unwrap()
 }
@@ -815,8 +823,13 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         activation,
         principal,
         InvocationExecutionMode::ReplayingIncomplete,
+        IdempotencyKey::new("instance-layer-incomplete-replay-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("instance-layer-incomplete-replay-streams".to_string()),
     )
     .unwrap();
+    let replay_parent_id = parent_id.clone();
     let replay = active_agent.start_entity_invocation(
         parent_id.clone(),
         replay_scope,
@@ -825,6 +838,10 @@ async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_rep
         move |_instance, store| {
             Box::pin(async move {
                 let ctx = store.data_mut().durable_ctx_mut();
+                ctx.test_install_entity_tool_operation(
+                    replay_parent_id,
+                    EntityCallMode::Synchronous,
+                )?;
                 let recorded = AgentHost::get_config_value(
                     ctx,
                     vec!["unconfigured".to_string()],
@@ -944,6 +961,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         owner_activation,
         principal.clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("owner-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("owner-entity-streams".to_string()),
     )
     .unwrap();
 
@@ -1036,6 +1057,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("second-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("second-entity-streams".to_string()),
     )
     .unwrap();
     let expected_error = second_hosted
@@ -1074,6 +1099,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("cancelled-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("cancelled-entity-streams".to_string()),
     )
     .unwrap();
     let (sleep_started, sleep_started_rx) = tokio::sync::oneshot::channel();
@@ -1154,6 +1183,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("panicking-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("panicking-entity-streams".to_string()),
     )
     .unwrap();
     let invoked_scope = panic_scope.clone();
@@ -2612,6 +2645,11 @@ async fn entity_agent_config_uses_owner_component_declarations(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
+    let entity_component = executor
+        .update_component(&entity_component.id, &host_api_tests.wasm_name)
+        .await?;
+    assert_ne!(owner_component.id, entity_component.id);
+    assert_ne!(owner_component.revision, entity_component.revision);
     let agent_id = agent_id!("LocalConfigAgent", "entity-owner-config");
     let worker_id = executor
         .start_agent(&owner_component.id, agent_id.clone())
@@ -2645,10 +2683,13 @@ async fn entity_agent_config_uses_owner_component_declarations(
         context.account_id,
         FilesystemCapability::Incapable,
     ));
-    // The executable deliberately has no LocalConfigAgent declaration. A successful lookup proves
-    // the entity host resolves configuration through the owner component and owner agent state,
-    // rather than accidentally consulting the executable component's metadata.
+    // The executable deliberately has no LocalConfigAgent declaration. Successful config and
+    // agent-type lookups therefore prove that both use the pinned owner component revision.
     let expected = encode_graph(&SchemaGraph::anonymous(SchemaType::s32()))?;
+    let expected_owner_component_id = owner_component.id;
+    let expected_owner_component_revision = owner_component.revision;
+    let expected_entity_component_id = entity_component.id;
+    let expected_entity_component_revision = entity_component.revision;
     run_synchronous_entity_invocation(
         &active_agent,
         owner_metadata,
@@ -2657,14 +2698,48 @@ async fn entity_agent_config_uses_owner_component_declarations(
         activation,
         move |_instance, store, _principal| {
             Box::pin(async move {
-                AgentHost::get_config_value(
+                assert_eq!(
+                    store.data().component_metadata().id,
+                    expected_entity_component_id
+                );
+                assert_eq!(
+                    store.data().component_metadata().revision,
+                    expected_entity_component_revision
+                );
+                assert_eq!(
+                    store.data().durable_ctx().owner_component_metadata().id,
+                    expected_owner_component_id
+                );
+                assert_eq!(
+                    store
+                        .data()
+                        .durable_ctx()
+                        .owner_component_metadata()
+                        .revision,
+                    expected_owner_component_revision
+                );
+
+                let config = AgentHost::get_config_value(
                     store.data_mut().durable_ctx_mut(),
                     vec!["foo".to_string()],
                     expected,
                 )
-                .await
-                .map(|_| ())
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+                .await?
+                .map_err(|error| WorkerExecutorError::runtime(format!("{error:?}")))?;
+                let config = decode_value(&config)
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                assert_eq!(config, SchemaValue::S32(7));
+
+                let agent_type = AgentHost::get_agent_type(
+                    store.data_mut().durable_ctx_mut(),
+                    "LocalConfigAgent".to_string(),
+                )
+                .await?;
+                assert!(
+                    agent_type.is_some(),
+                    "entity agent-type lookup must use the owner's component revision"
+                );
+                Ok(())
             })
         },
     )

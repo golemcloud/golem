@@ -176,6 +176,10 @@ impl Drop for RunDetails {
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
+    /// Called after the complete service graph has been assembled and before it is moved into the
+    /// servers. In-process harnesses can retain a clone to exercise internal admission paths.
+    fn capture_services(&self, _services: &All<Ctx>) {}
+
     fn create_native_tool_catalog(
         &self,
     ) -> anyhow::Result<Arc<crate::native_tool::NativeToolCatalog<Ctx>>> {
@@ -386,6 +390,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>> {
         let native_tool_catalog = self.create_native_tool_catalog()?;
+        let external_durable_streams = Arc::new(
+            services::external_durable_stream::DefaultExternalDurableStreamService::new()?,
+        );
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -420,6 +427,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            external_durable_streams.clone(),
             shutdown_token.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
@@ -463,6 +471,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            external_durable_streams.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
             additional_deps.clone(),
@@ -474,6 +483,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             active_agents,
             agent_types_service,
             agent_webhooks_service,
+            external_durable_streams,
             card_service,
             engine,
             linker,
@@ -538,6 +548,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
+        crate::preview2::golem::agent::durable_streams::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
         crate::preview2::golem::tool::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
@@ -1183,6 +1197,7 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let leak_detector = worker_executor_impl.leak_detector();
     let invocation_loops = worker_executor_impl.active_agents().invocation_loops();
+    bootstrap.capture_services(&worker_executor_impl);
 
     crate::metrics::runtime::install_runtime_metrics(
         runtime.clone(),

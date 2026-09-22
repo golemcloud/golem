@@ -202,6 +202,45 @@ class CodegenPipelineSpec extends munit.FunSuite {
     assert(initializer.contains("if (!registered)"), initializer)
   }
 
+  test("auto-register preserves and resolves structured middleware parameter types") {
+    val source = SourceDiscovery.SourceInput(
+      "ParameterizedMiddleware.scala",
+      """|package example.middleware
+         |import external.parameters.ImportedParameters
+         |import golem.runtime.annotations._
+         |import golem.tool.UniversalToolMiddleware
+         |
+         |@toolDefinition(name = "presented", version = "1.0.0")
+         |trait Presented { def call(value: String): String }
+         |@toolDefinition(name = "expected", version = "1.0.0")
+         |trait Expected { def call(value: String): String }
+         |
+         |@toolMiddleware(name = "map")
+         |final class MapParameters extends PresentedMiddleware.WithParameters[Map[String, Int]]
+         |@toolMiddleware(name = "tuple-adapter")
+         |final class TupleParameters
+         |    extends PresentedMiddleware.AdapterWithParameters[ExpectedUnderlying, (String, Int)]
+         |@universalToolMiddleware(name = "imported")
+         |final class Imported extends UniversalToolMiddleware.WithParameters[ImportedParameters]
+         |""".stripMargin
+    )
+    val content = CodegenPipeline
+      .run(discover(source), Some("example"), rpcEnabled = true)
+      .autoRegister
+      .get
+      .files
+      .find(_.relativePath.endsWith("__GolemAutoRegister_example_middleware.scala"))
+      .get
+      .content
+
+    assert(content.contains("Map[String, Int]"), content)
+    assert(content.contains("(String, Int)"), content)
+    assert(content.contains("external.parameters.ImportedParameters"), content)
+    assert(content.contains("registerTransparentWithParameters"), content)
+    assert(content.contains("registerAdapterWithParameters"), content)
+    assert(content.contains("registerUniversalWithParameters"), content)
+  }
+
   test("pure universal middleware generates registration without agent or tool implementations") {
     val source = SourceDiscovery.SourceInput(
       "Universal.scala",

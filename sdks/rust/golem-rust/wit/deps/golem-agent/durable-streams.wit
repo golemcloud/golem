@@ -1,0 +1,112 @@
+package golem:agent@2.0.0;
+
+/// External Durable Streams descriptors are recorded when resources are created.
+/// Callers own checkpoints, buffered items, producer progress and retries.
+interface durable-streams {
+    use golem:core/types@2.0.0.{secret};
+
+    enum durable-stream-mode { json, bytes }
+    enum durable-stream-transport { catch-up, long-poll, sse }
+
+    /// Both values are server-generated opaque tokens, not Golem stream offsets.
+    record durable-stream-checkpoint {
+      offset: string,
+      cursor: option<string>,
+    }
+
+    record durable-stream-reader-options {
+      url: string,
+      mode: durable-stream-mode,
+      /// Whole-attempt deadline, in milliseconds, from 1 through 300000.
+      timeout-ms: u64,
+    }
+
+    record durable-stream-read-request {
+      checkpoint: durable-stream-checkpoint,
+      transport: durable-stream-transport,
+      /// Pin the original stream media type after the initial catch-up read.
+      /// Required for SSE, whose HTTP media type is text/event-stream.
+      content-type: option<string>,
+    }
+
+    /// A complete HTTP body or SSE data/control pair. Empty is not EOF unless closed.
+    record durable-stream-batch {
+      payload: list<u8>,
+      content-type: string,
+      next: durable-stream-checkpoint,
+      up-to-date: bool,
+      closed: bool,
+    }
+
+    record durable-stream-writer-options {
+      url: string,
+      content-type: string,
+      producer-id: string,
+      producer-epoch: u64,
+      /// Whole-attempt deadline, in milliseconds, from 1 through 300000.
+      timeout-ms: u64,
+    }
+
+    variant durable-stream-append-payload {
+      /// Individually encoded complete JSON values; the host frames the outer array.
+      json(list<string>),
+      bytes(list<u8>),
+    }
+
+    record durable-stream-append-request {
+      payload: durable-stream-append-payload,
+      sequence: u64,
+      close: bool,
+    }
+
+    record durable-stream-append-receipt {
+      /// Duplicate acknowledgements may omit the offset.
+      next-offset: option<string>,
+      epoch: u64,
+      sequence: u64,
+      closed: bool,
+    }
+
+    enum durable-stream-error-kind {
+      invalid-request,
+      permission-denied,
+      not-found,
+      gone,
+      closed,
+      sequence-conflict,
+      fenced,
+      producer-diverged,
+      protocol-error,
+      payload-too-large,
+      timeout,
+      transport,
+      rate-limited,
+      unavailable,
+    }
+
+    record durable-stream-error {
+      kind: durable-stream-error-kind,
+      message: string,
+      retry-after-ms: option<u64>,
+      producer-epoch: option<u64>,
+      expected-sequence: option<u64>,
+    }
+
+    /// Immutable read descriptor. Construction records no HTTP effect and captures
+    /// the secret's pinned identity, not its plaintext or the borrowed handle.
+    resource durable-stream-reader {
+      constructor(options: durable-stream-reader-options, auth: option<borrow<secret>>);
+
+      /// One protocol attempt. Replay returns the recorded batch without HTTP.
+      read: async func(request: durable-stream-read-request) -> result<durable-stream-batch, durable-stream-error>;
+    }
+
+    /// Immutable writer descriptor. The caller owns sequence progress and pending
+    /// append state; retaining this resource does not advance either automatically.
+    resource durable-stream-writer {
+      constructor(options: durable-stream-writer-options, auth: option<borrow<secret>>);
+
+      /// One protocol-idempotent attempt. Retry the identical sequence, body and close flag.
+      append: async func(request: durable-stream-append-request) -> result<durable-stream-append-receipt, durable-stream-error>;
+    }
+}

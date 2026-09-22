@@ -128,6 +128,15 @@ return redis.error_reply('FENCED ' .. epoch .. ' 0')
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:c{level}-oplog-epoch:{key}")
             }
+            // A stage is hidden and has one writer, so it never asserts an epoch; the key exists
+            // only to keep this total.
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id: _,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:staged-oplog-epoch:{key}")
+            }
         }
     }
 
@@ -201,6 +210,13 @@ return redis.error_reply('FENCED ' .. epoch .. ' 0')
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:oplog:{key}")
+            }
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id: _,
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:staged-oplog:{key}")
             }
             IndexedStorageNamespace::CompressedOpLog {
                 agent_id: _,
@@ -425,7 +441,10 @@ impl IndexedStorage for RedisIndexedStorage {
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
-        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
+        let primary_oplog_insert = matches!(
+            &namespace,
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+        );
         let options = primary_oplog_insert.then_some(Options {
             max_attempts: Some(1),
             ..Default::default()
@@ -473,7 +492,10 @@ impl IndexedStorage for RedisIndexedStorage {
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if !pairs.is_empty() {
-            let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
+            let primary_oplog_insert = matches!(
+                namespace,
+                IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+            );
             let options = primary_oplog_insert.then_some(Options {
                 max_attempts: Some(1),
                 ..Default::default()
@@ -559,6 +581,33 @@ impl IndexedStorage for RedisIndexedStorage {
             .del(Self::epoch_key(namespace, key))
             .await
             .map_err(|e| IndexedStorageError::Other(e.to_string()))
+    }
+
+    async fn move_if_absent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        let source = Self::composite_key(source_namespace, source_key);
+        let target = Self::composite_key(target_namespace, target_key);
+        match self
+            .redis
+            .with(svc_name, api_name)
+            .move_stream_if_absent(source, target, expected_last_id)
+            .await
+            .map_err(|error| Self::classify_append_error(error, true))?
+        {
+            1 => Ok(true),
+            0 => Ok(false),
+            _ => Err(IndexedStorageError::Other(
+                "source index is missing, empty, gapped, or has an unexpected tip".to_string(),
+            )),
+        }
     }
 
     async fn length(

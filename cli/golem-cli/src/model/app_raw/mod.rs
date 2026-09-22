@@ -30,6 +30,7 @@ use golem_common::model::quota::{EnforcementAction, ResourceLimit, ResourceName}
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::{ToolFilesystemAccess, ToolName};
 use golem_common::model::tool_middleware::{ToolMiddlewareMergeMode, ToolMiddlewareName};
+use golem_common::schema::ComponentConfigSchema;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -841,6 +842,8 @@ pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_card: Option<ManifestInitialCard>,
@@ -856,6 +859,10 @@ pub struct ComponentTemplate {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ComponentPreset>,
 }
@@ -870,6 +877,7 @@ impl ComponentTemplate {
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
+            config_schema: self.config_schema.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
                 initial_card: self.initial_card.clone(),
@@ -879,8 +887,8 @@ impl ComponentTemplate {
                 plugins: self.plugins.clone(),
                 files_merge_mode: self.files_merge_mode,
                 files: self.files.clone(),
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools.clone(),
             },
         }
     }
@@ -908,6 +916,8 @@ pub struct Component {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_card: Option<ManifestInitialCard>,
@@ -923,6 +933,10 @@ pub struct Component {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub presets: IndexMap<String, ComponentPreset>,
 }
@@ -937,6 +951,7 @@ impl Component {
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
+            config_schema: self.config_schema.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
                 initial_card: self.initial_card.clone(),
@@ -946,8 +961,8 @@ impl Component {
                 plugins: self.plugins.clone(),
                 files_merge_mode: self.files_merge_mode,
                 files: self.files.clone(),
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools.clone(),
             },
         }
     }
@@ -973,6 +988,8 @@ pub struct ComponentPreset {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<ComponentConfigSchema>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_card: Option<ManifestInitialCard>,
@@ -988,6 +1005,10 @@ pub struct ComponentPreset {
     pub files_merge_mode: Option<VecMergeMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools_merge_mode: Option<MapMergeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<IndexMap<String, ToolBinding>>,
 }
 
 impl ComponentPreset {
@@ -1000,6 +1021,7 @@ impl ComponentPreset {
             build: self.build,
             custom_commands: self.custom_commands,
             clean: self.clean,
+            config_schema: self.config_schema,
             agent_properties: AgentLayerProperties {
                 config: self.config,
                 initial_card: self.initial_card,
@@ -1009,8 +1031,8 @@ impl ComponentPreset {
                 plugins: self.plugins,
                 files_merge_mode: self.files_merge_mode,
                 files: self.files,
-                tools_merge_mode: None,
-                tools: None,
+                tools_merge_mode: self.tools_merge_mode,
+                tools: self.tools,
             },
         }
     }
@@ -1163,6 +1185,8 @@ pub struct McpDeployment {
     pub subdomain: Option<DeploymentSubdomain>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub agents: IndexMap<AgentTypeName, McpDeploymentAgentOptions>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub tools: IndexMap<golem_common::model::tool::ToolName, McpDeploymentToolOptions>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1170,6 +1194,18 @@ pub struct McpDeployment {
 pub struct McpDeploymentAgentOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security_scheme: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpDeploymentToolOptions {
+    pub owner_component: ComponentName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_scheme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -1204,7 +1240,7 @@ pub struct LocalServer {
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
-        with = "crate::model::byte_size::optional"
+        with = "golem_common::config::byte_size::optional"
     )]
     pub system_memory_override: Option<std::num::NonZeroU64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -1597,6 +1633,7 @@ pub struct ComponentLayerProperties {
     pub build: Vec<BuildCommand>,
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     pub clean: Vec<String>,
+    pub config_schema: Option<ComponentConfigSchema>,
     pub agent_properties: AgentLayerProperties,
 }
 
