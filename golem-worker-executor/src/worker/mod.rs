@@ -2028,7 +2028,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     },
                 )
                 .await?;
-            let status = worker.last_known_status.load_full();
+            let status = worker.state_actor.attached_status().await;
             worker
                 .state_actor
                 .append_invocation_if_version(
@@ -3067,7 +3067,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn get_latest_worker_metadata(&self) -> AgentMetadata {
-        let updated_status = self.last_known_status.load_full().as_ref().clone();
+        let updated_status = self.state_actor.attached_status().await.as_ref().clone();
         let result = self.get_initial_worker_metadata();
         AgentMetadata {
             last_known_status: updated_status,
@@ -3079,7 +3079,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// `invocation_results` grows with the invocations the agent has served, and every caller
     /// here only reads a field or two out of it.
     pub async fn get_last_known_status(&self) -> Arc<AgentStatusRecord> {
-        self.last_known_status.load_full()
+        self.state_actor.attached_status().await
     }
 
     // Outside of reverts and updates, this will return the same status as get_latest_worker_metadata.
@@ -3633,7 +3633,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // The resident component snapshot starts at the CREATE revision and is only refreshed by
             // instance startup. Admission can happen while the owner is cold, so resolve against the
             // revision folded from the authoritative oplog status instead.
-            let component_revision = self.last_known_status.load().component_revision;
+            let component_revision = self.state_actor.attached_status().await.component_revision;
             let component = self
                 .component_service()
                 .get_metadata(self.owned_agent_id.component_id(), Some(component_revision))
@@ -4209,7 +4209,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn pending_invocations(&self) -> Vec<PendingInvocationRef> {
-        self.last_known_status.load().pending_invocations.clone()
+        self.state_actor
+            .attached_status()
+            .await
+            .pending_invocations
+            .clone()
     }
 
     /// Reads the `PendingAgentInvocation` oplog entry referenced by `pending` and reconstructs the
@@ -5118,7 +5122,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if let Some(idempotency_key) = semantic_idempotency_key.as_ref() {
                 drop(caller_instance_guard.take());
                 loop {
-                    let status = self.last_known_status.load_full();
+                    let status = self.state_actor.attached_status().await;
                     if self.lookup_invocation_result(idempotency_key).await != LookupResult::New {
                         return Ok(None);
                     }
@@ -5130,6 +5134,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     {
                         continue;
                     }
+                    drop(current);
                     let instance_guard = self.lock_non_stopping_worker_owned().await;
                     if instance_guard.ensure_not_deleting().is_err() {
                         return Err(WorkerExecutorError::invalid_request(
@@ -5282,7 +5287,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let mut wallet = receiver.await.unwrap()?;
         let revoked_cards = self
-            .get_last_known_status()
+            .get_attached_last_known_status()
             .await
             .pending_card_events
             .iter()
@@ -6371,7 +6376,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         idempotency_key: &IdempotencyKey,
     ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, WorkerExecutorError> {
-        let status = self.last_known_status.load_full();
+        let status = self.state_actor.attached_status().await;
         self.worker_service()
             .lookup_durable_stream_session(
                 &self.owned_agent_id,
@@ -6627,7 +6632,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn recover_finished_durable_streaming_sessions(&self) -> Result<(), WorkerExecutorError> {
-        let status = self.last_known_status.load_full();
+        let status = self.state_actor.attached_status().await;
         for (idempotency_key, session) in status.durable_stream_sessions.iter() {
             if session.prepared.is_none() || session.finished.is_some() {
                 continue;
@@ -7426,6 +7431,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         result
     }
 
+    /// Enqueues an actor-owned commit + fold and waits only until the commit is acknowledged.
+    /// Later ordered status reads remain behind the fold on the same FIFO queue.
+    pub async fn commit_oplog_before_status_update(&self, commit_level: CommitLevel) {
+        self.state_actor
+            .enqueue_commit_and_update_state_notifying(commit_level)
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Worker state actor for {} stopped before acknowledging commit",
+                    self.owned_agent_id
+                )
+            });
+    }
+
     // Should only be called from invocation loop
     pub async fn add_and_commit_oplog(&self, entry: OplogEntry) -> OplogIndex {
         let result = self.add_to_oplog(entry).await;
@@ -7451,7 +7470,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         card_ids: &[CardId],
     ) -> Vec<OplogIndex> {
-        let status = self.get_last_known_status().await;
+        let status = self.state_actor.attached_status().await;
         let pending_revocations = status
             .pending_card_events
             .iter()
@@ -8143,11 +8162,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn lookup_invocation_result(&self, key: &IdempotencyKey) -> LookupResult {
-        // Kept as an `Arc` rather than cloned out of. The record owns
+        // Kept as an `Arc` rather than cloned out of. The ordered actor read ensures a preceding
+        // completion fold is published first. The record owns
         // `invocation_results`, which gains an entry per invocation, so deep-copying it to read
-        // one key made each lookup cost more than the last. `load_full` already gives a
-        // consistent snapshot with the lifetime this needs.
-        let status = self.last_known_status.load_full();
+        // one key made each lookup cost more than the last.
+        let status = self.state_actor.attached_status().await;
         let cached = self
             .hydrated_invocation_results
             .read()

@@ -271,6 +271,9 @@ pub trait OplogService: Debug + Send + Sync {
 pub enum CommitLevel {
     /// Always commit immediately and do not return until it is done
     Always,
+    /// Flush and report entries, allowing ephemeral storage writes to finish asynchronously.
+    /// Durable oplogs still wait for persistence. Explicit protocol barriers use `Always`.
+    Deferred,
     /// Only commit immediately if the worker is durable
     DurableOnly,
 }
@@ -1065,7 +1068,7 @@ pub trait OplogOps: Oplog {
         method_name: Option<String>,
         consumed_fuel: u64,
         component_revision: ComponentRevision,
-    ) -> Result<OplogEntry, String> {
+    ) -> Result<OplogIndex, String> {
         let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
             i64::MAX
         } else {
@@ -1080,8 +1083,7 @@ pub trait OplogOps: Oplog {
             consumed_fuel,
             component_revision,
         };
-        self.add(entry.clone()).await;
-        Ok(entry)
+        Ok(self.add(entry).await)
     }
 
     async fn create_snapshot_based_update_description(

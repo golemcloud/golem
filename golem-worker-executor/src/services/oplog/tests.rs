@@ -3073,6 +3073,10 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     assert_eq!(added.len(), 2);
     assert_eq!(added[1].0, added[0].0.next());
     assert_eq!(oplog.current_oplog_index().await, OplogIndex::from_u64(3));
+    let resident = oplog.read_exact(added[0].0, 2).await;
+    assert_eq!(resident, added.iter().cloned().collect());
+    // Threshold handoff is asynchronous; protocol publication uses an explicit barrier.
+    oplog.commit(CommitLevel::Always).await;
     let persisted = service
         .read_exact(
             &owned_agent_id,
@@ -4185,8 +4189,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             ComponentRevision::INITIAL,
         )
         .await
-        .unwrap()
-        .rounded();
+        .unwrap();
+    let entry3 = oplog.read(entry3).await.rounded();
 
     let desc = oplog
         .create_snapshot_based_update_description(
@@ -4534,8 +4538,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             ComponentRevision::INITIAL,
         )
         .await
-        .unwrap()
-        .rounded();
+        .unwrap();
+    let entry3 = oplog.read(entry3).await.rounded();
 
     let desc = oplog
         .create_snapshot_based_update_description(

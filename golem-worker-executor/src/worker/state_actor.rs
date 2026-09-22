@@ -179,6 +179,7 @@ enum StatusJob {
     CommitAndUpdateState {
         level: CommitLevel,
         committed: Option<oneshot::Sender<()>>,
+        notify_after_fold: bool,
         done: oneshot::Sender<(OplogIndex, bool)>,
     },
     /// Appends an entry and completes its commit + fold transaction even if the caller is
@@ -300,6 +301,11 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             published_authority_generation,
         };
 
+        let notification_queued = Arc::new(AtomicBool::new(false));
+        let notification_queued_task = notification_queued.clone();
+        let (lifecycle_jobs, mut lifecycle_rx) = mpsc::unbounded_channel::<LifecycleJob<Ctx>>();
+        let status_lifecycle_jobs = lifecycle_jobs.clone();
+        let status_notification_queued = notification_queued.clone();
         let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob>();
         let status_task = tokio::spawn(async move {
             while let Some(job) = status_rx.recv().await {
@@ -308,17 +314,18 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     StatusJob::CommitAndUpdateState {
                         level,
                         committed,
+                        notify_after_fold,
                         done,
                     } => {
-                        complete_status_job(
-                            async {
-                                let changed = state.commit_and_update_state(level, committed).await;
-                                let index = state.oplog.current_oplog_index().await;
-                                (index, changed)
-                            },
-                            done,
-                        )
-                        .await;
+                        let changed = state.commit_and_update_state(level, committed).await;
+                        let index = state.oplog.current_oplog_index().await;
+                        if changed && notify_after_fold {
+                            queue_status_notification(
+                                &status_lifecycle_jobs,
+                                &status_notification_queued,
+                            );
+                        }
+                        let _ = done.send((index, changed));
                     }
                     StatusJob::AppendAndCommitAttached {
                         entry,
@@ -402,9 +409,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             }
         });
 
-        let notification_queued = Arc::new(AtomicBool::new(false));
-        let notification_queued_task = notification_queued.clone();
-        let (lifecycle_jobs, mut lifecycle_rx) = mpsc::unbounded_channel::<LifecycleJob<Ctx>>();
         let lifecycle_task = tokio::spawn(async move {
             let mut drains = Vec::new();
             while let Some(job) = lifecycle_rx.recv().await {
@@ -496,6 +500,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
                 committed: None,
+                notify_after_fold: false,
                 done,
             })
             .await
@@ -510,9 +515,37 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
                 committed: Some(committed),
+                notify_after_fold: false,
                 done,
             })
             .await
+    }
+
+    /// Enqueues the complete commit + fold transaction, returning a receipt fulfilled directly
+    /// after the commit. The actor retains the fold and queues lifecycle notification afterwards.
+    pub fn enqueue_commit_and_update_state_notifying(
+        &self,
+        level: CommitLevel,
+    ) -> oneshot::Receiver<()> {
+        let (committed, committed_rx) = oneshot::channel();
+        let (done, _done_rx) = oneshot::channel();
+        if self
+            .commit
+            .status_jobs
+            .send(StatusJob::CommitAndUpdateState {
+                level,
+                committed: Some(committed),
+                notify_after_fold: true,
+                done,
+            })
+            .is_err()
+        {
+            panic!(
+                "Worker state actor for {} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
+        committed_rx
     }
 
     pub async fn append_and_commit_attached(
@@ -594,14 +627,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     /// forget: never blocks, and safe to call from store-polled futures and store-keeping
     /// fibers alike, because the worker lifecycle lock is only taken on the lifecycle task.
     pub fn notify_status_changed(&self) {
-        if !self.notification_queued.swap(true, Ordering::AcqRel)
-            && self
-                .lifecycle_jobs
-                .send(LifecycleJob::NotifyStatusChanged)
-                .is_err()
-        {
-            self.notification_queued.store(false, Ordering::Release);
-        }
+        queue_status_notification(&self.lifecycle_jobs, &self.notification_queued);
     }
 
     /// Joins queued lifecycle work and its requeued descendants after execution has stopped.
@@ -674,6 +700,7 @@ impl OwnerCommitController {
         self.run_status_job(|done| StatusJob::CommitAndUpdateState {
             level,
             committed: None,
+            notify_after_fold: false,
             done,
         })
         .await
@@ -698,6 +725,19 @@ impl OwnerCommitController {
                 self.owned_agent_id
             ),
         }
+    }
+}
+
+fn queue_status_notification<Ctx: WorkerCtx>(
+    lifecycle_jobs: &mpsc::UnboundedSender<LifecycleJob<Ctx>>,
+    notification_queued: &AtomicBool,
+) {
+    if !notification_queued.swap(true, Ordering::AcqRel)
+        && lifecycle_jobs
+            .send(LifecycleJob::NotifyStatusChanged)
+            .is_err()
+    {
+        notification_queued.store(false, Ordering::Release);
     }
 }
 
@@ -755,6 +795,13 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 // than retaining every automatically flushed entry in memory until this commit.
                 // The gap may contain authority changes absent from the commit receipt.
                 authority_change_count = authority_change_count.max(1);
+                if self.agent_mode == AgentMode::Ephemeral && commit_level == CommitLevel::Deferred
+                {
+                    // A bounded receipt cache may have dropped part of a long invocation. The
+                    // completion receipt has already been sent; make the deferred tail readable
+                    // from storage before taking this exceptional reconstruction path.
+                    self.oplog.commit(CommitLevel::Always).await;
+                }
                 try_fold_status_from(
                     &self.deps,
                     &self.owned_agent_id,
