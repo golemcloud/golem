@@ -770,11 +770,6 @@ impl ToolClientDefinitionBuilder {
         S: Into<String>,
     {
         let path = path.into_iter().map(Into::into).collect::<Vec<_>>();
-        if path.is_empty() {
-            return Err(ToolReflectionError::InvalidMetadata(
-                "tool client command paths cannot be empty".to_string(),
-            ));
-        }
         if path.iter().any(String::is_empty) {
             return Err(ToolReflectionError::InvalidMetadata(
                 "tool client command paths cannot contain empty segments".to_string(),
@@ -1150,9 +1145,11 @@ mod tests {
     use crate::IntoSchema;
     use crate::schema::SchemaType;
     use crate::schema::tool::{
-        BoolFlagShape, CommandBody, CommandIndex, CommandNode, CommandTree, FlagSpec, Globals,
-        OptionShape, OptionSpec, Positional, Positionals, ResultSpec, ValueIsRef,
+        BoolFlagShape, CommandBody, CommandIndex, CommandNode, CommandTree, ErrorCase, ErrorKind,
+        FlagSpec, Globals, OptionShape, OptionSpec, Positional, Positionals, ResultSpec,
+        ValueIsRef,
     };
+    use crate::schema::{NamedFieldType, SchemaTypeDef, TypeId};
     use test_r::test;
 
     fn sample() -> ToolType {
@@ -1287,15 +1284,23 @@ mod tests {
 
     #[test]
     fn caller_owned_definition_rejects_duplicate_paths() {
+        let builder = ToolClientDefinition::unnamed()
+            .unit_command::<String, _, _>(Vec::<String>::new())
+            .unwrap()
+            .unit_command::<String, _, _>(["run"])
+            .unwrap();
         assert!(
-            ToolClientDefinition::unnamed()
+            builder
+                .clone()
                 .unit_command::<String, _, _>(Vec::<String>::new())
                 .is_err()
         );
-        let builder = ToolClientDefinition::unnamed()
-            .unit_command::<String, _, _>(["run"])
-            .unwrap();
         assert!(builder.unit_command::<String, _, _>(["run"]).is_err());
+        assert!(
+            ToolClientDefinition::unnamed()
+                .unit_command::<String, _, _>([""])
+                .is_err()
+        );
     }
 
     #[test]
@@ -1355,6 +1360,109 @@ mod tests {
             }),
             Err(ToolError::MalformedRemoteOutput(_))
         ));
+    }
+
+    fn named_record_graph(id: &str, field: &str) -> SchemaGraph {
+        SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: TypeId::new(id),
+                name: None,
+                body: SchemaType::record(vec![NamedFieldType {
+                    name: field.to_string(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                }]),
+            }],
+            root: SchemaType::ref_to(TypeId::new(id)),
+        }
+    }
+
+    #[test]
+    fn reflected_result_checks_definitions_behind_identical_reference_ids() {
+        let mut tool = sample();
+        let expected = named_record_graph("example.Result", "old_field");
+        let definition = Arc::make_mut(&mut tool.definition);
+        definition.schema = expected.clone();
+        definition.commands.nodes[1]
+            .body
+            .as_mut()
+            .unwrap()
+            .result
+            .as_mut()
+            .unwrap()
+            .type_ = expected.root.clone();
+        tool.schema = Arc::new(expected);
+        let command = tool.command(&["run"]).unwrap();
+        let remote_value = SchemaValue::Record {
+            fields: vec![SchemaValue::String("value".to_string())],
+        };
+        assert!(matches!(
+            command.decode_result(InvocationResult {
+                result: Some(TypedSchemaValue::new(
+                    named_record_graph("example.Result", "new_field"),
+                    remote_value.clone(),
+                )),
+            }),
+            Err(ToolError::MalformedRemoteOutput(_))
+        ));
+        assert_eq!(
+            command
+                .decode_result(InvocationResult {
+                    result: Some(TypedSchemaValue::new(
+                        named_record_graph("remote.Result", "old_field"),
+                        remote_value.clone(),
+                    )),
+                })
+                .unwrap(),
+            Some(remote_value)
+        );
+    }
+
+    #[test]
+    fn reflected_custom_error_checks_definitions_behind_identical_reference_ids() {
+        let mut tool = sample();
+        let expected = named_record_graph("example.Error", "old_field");
+        let definition = Arc::make_mut(&mut tool.definition);
+        definition.schema = expected.clone();
+        definition.commands.nodes[1]
+            .body
+            .as_mut()
+            .unwrap()
+            .errors
+            .push(ErrorCase {
+                name: "bad".to_string(),
+                doc: Doc::default(),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 1,
+                payload: Some(expected.root.clone()),
+            });
+        tool.schema = Arc::new(expected);
+        let command = tool.command(&["run"]).unwrap();
+        let remote_value = SchemaValue::Record {
+            fields: vec![SchemaValue::String("value".to_string())],
+        };
+        let decode = command.error_decoder();
+        assert!(
+            decode(
+                "bad".to_string(),
+                TypedSchemaValue::new(
+                    named_record_graph("example.Error", "new_field"),
+                    remote_value.clone(),
+                ),
+            )
+            .is_err()
+        );
+        assert!(
+            decode(
+                "bad".to_string(),
+                TypedSchemaValue::new(
+                    named_record_graph("remote.Error", "old_field"),
+                    remote_value
+                ),
+            )
+            .unwrap()
+            .is_some()
+        );
     }
 
     #[test]

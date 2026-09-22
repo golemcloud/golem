@@ -16,6 +16,7 @@ use heck::ToUpperCamelCase;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use std::collections::HashSet;
+use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::visit_mut::VisitMut;
@@ -433,7 +434,7 @@ fn expand(
 fn fresh_param_ident(params: &[(Ident, Type)], preferred_name: &str) -> Ident {
     let occupied = params
         .iter()
-        .map(|(ident, _)| ident.to_string())
+        .map(|(ident, _)| ident.unraw().to_string())
         .collect::<HashSet<_>>();
     let mut suffix = 0;
     loop {

@@ -261,6 +261,7 @@ pub struct AgentType {
     graph: Arc<SchemaGraph>,
     constructor_input: SchemaRef,
     methods: Arc<[AgentMethod]>,
+    config_schemas: Arc<[(Vec<String>, SchemaRef)]>,
     mode: AgentMode,
 }
 
@@ -268,12 +269,15 @@ impl AgentType {
     fn from_registered(registered: host::RegisteredAgentType) -> Result<Self, GolemReflectError> {
         let component_id = crate::wire_component_id_to_schema(registered.implemented_by);
         let raw = Arc::new(registered.agent_type);
-        let graph = Arc::new(
-            crate::decode_schema_graph(&raw.schema)
+        let decoder = crate::schema::wit::GraphDecoder::new(&raw.schema)
+            .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?;
+        let graph = Arc::new(SchemaGraph {
+            defs: decoder
+                .decode_defs()
                 .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?,
-        );
-        let constructor_input =
-            input_schema_ref(&raw.schema, &raw.constructor.input_schema, &graph)?;
+            root: decode_root(&decoder, raw.schema.root)?,
+        });
+        let constructor_input = input_schema_ref(&decoder, &raw.constructor.input_schema, &graph)?;
         let methods = raw
             .methods
             .iter()
@@ -281,9 +285,22 @@ impl AgentType {
                 Ok(AgentMethod {
                     agent_type_name: raw.type_name.clone(),
                     raw: method.clone(),
-                    input: input_schema_ref(&raw.schema, &method.input_schema, &graph)?,
-                    output: output_schema_ref(&raw.schema, &method.output_schema, &graph)?,
+                    input: input_schema_ref(&decoder, &method.input_schema, &graph)?,
+                    output: output_schema_ref(&decoder, &method.output_schema, &graph)?,
                 })
+            })
+            .collect::<Result<Vec<_>, GolemReflectError>>()?;
+        let config_schemas = raw
+            .config
+            .iter()
+            .map(|declaration| {
+                Ok((
+                    declaration.path.clone(),
+                    SchemaRef::with_root(
+                        graph.clone(),
+                        decode_root(&decoder, declaration.value_type)?,
+                    ),
+                ))
             })
             .collect::<Result<Vec<_>, GolemReflectError>>()?;
         let mode = match raw.mode {
@@ -296,6 +313,7 @@ impl AgentType {
             graph,
             constructor_input,
             methods: methods.into(),
+            config_schemas: config_schemas.into(),
             mode,
         })
     }
@@ -382,12 +400,13 @@ impl AgentType {
                 path.join(".")
             )));
         }
-        let mut wire_graph = self.raw.schema.clone();
-        wire_graph.root = declaration.value_type;
-        Ok(SchemaRef::new(
-            crate::decode_schema_graph(&wire_graph)
-                .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))?,
-        ))
+        self.config_schemas
+            .iter()
+            .find(|(candidate, _)| candidate == path)
+            .map(|(_, schema)| schema.clone())
+            .ok_or_else(|| {
+                GolemReflectError::InvalidInput(format!("unknown config path `{}`", path.join(".")))
+            })
     }
 
     fn validate_config(
@@ -1383,7 +1402,7 @@ impl RpcTransport {
 }
 
 fn input_schema_ref(
-    wire_graph: &crate::schema::wit::wire::SchemaGraph,
+    decoder: &crate::schema::wit::GraphDecoder<'_>,
     input: &wire_common::InputSchema,
     graph: &Arc<SchemaGraph>,
 ) -> Result<SchemaRef, GolemReflectError> {
@@ -1394,7 +1413,7 @@ fn input_schema_ref(
         .map(|field| {
             Ok(NamedFieldType {
                 name: field.name.clone(),
-                body: decode_root(wire_graph, field.schema)?,
+                body: decode_root(decoder, field.schema)?,
                 metadata: crate::schema::wit::decode_metadata(&field.metadata),
             })
         })
@@ -1409,7 +1428,7 @@ fn input_schema_ref(
 }
 
 fn output_schema_ref(
-    wire_graph: &crate::schema::wit::wire::SchemaGraph,
+    decoder: &crate::schema::wit::GraphDecoder<'_>,
     output: &wire_common::OutputSchema,
     graph: &Arc<SchemaGraph>,
 ) -> Result<Option<SchemaRef>, GolemReflectError> {
@@ -1417,19 +1436,17 @@ fn output_schema_ref(
         wire_common::OutputSchema::Unit => Ok(None),
         wire_common::OutputSchema::Single(root) => Ok(Some(SchemaRef::with_root(
             graph.clone(),
-            decode_root(wire_graph, *root)?,
+            decode_root(decoder, *root)?,
         ))),
     }
 }
 
 fn decode_root(
-    wire_graph: &crate::schema::wit::wire::SchemaGraph,
+    decoder: &crate::schema::wit::GraphDecoder<'_>,
     root: i32,
 ) -> Result<SchemaType, GolemReflectError> {
-    let mut rooted = wire_graph.clone();
-    rooted.root = root;
-    crate::decode_schema_graph(&rooted)
-        .map(|graph| graph.root)
+    decoder
+        .decode_type_at(root)
         .map_err(|error| GolemReflectError::SchemaDecode(error.to_string()))
 }
 

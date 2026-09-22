@@ -985,7 +985,7 @@ fn generate_method_code(
 fn fresh_param_ident(occupied: &[syn::Ident], preferred_name: &str) -> syn::Ident {
     let occupied = occupied
         .iter()
-        .map(ToString::to_string)
+        .map(|ident| syn::ext::IdentExt::unraw(ident).to_string())
         .collect::<HashSet<_>>();
     if !occupied.contains(preferred_name) {
         return format_ident!("{}", preferred_name);

@@ -968,12 +968,18 @@ impl ExtendedToolType {
     }
 
     pub fn command_index_by_path(&self, command_path: &[String]) -> Option<usize> {
+        let current = self.node_index_by_path(command_path)?;
+        self.commands[current].body.as_ref().map(|_| current)
+    }
+
+    /// Resolves a command or namespace node without requiring an invokable body.
+    pub fn node_index_by_path(&self, command_path: &[String]) -> Option<usize> {
         let mut current = 0usize;
         if self.commands.is_empty() {
             return None;
         }
         if command_path.is_empty() {
-            return self.commands[current].body.as_ref().map(|_| current);
+            return Some(current);
         }
         for segment in command_path {
             let next = self.commands[current].subcommands.iter().find_map(|idx| {
@@ -984,7 +990,7 @@ impl ExtendedToolType {
             })?;
             current = next;
         }
-        self.commands[current].body.as_ref().map(|_| current)
+        Some(current)
     }
 
     /// Projects the canonical-relevant subset of this descriptor onto the
@@ -1367,18 +1373,11 @@ pub fn build_canonical_input_with_prefix(
 ) -> Result<crate::TypedSchemaValue, String> {
     let mut canonical_fields: Vec<CanonicalInputField> = inherited_prefix
         .iter()
-        .map(|value| {
-            let schema = command_fields
-                .iter()
-                .find(|field| canonical_surfaces_overlap(value, field))
-                .map(|field| field.schema.clone())
-                .unwrap_or_else(|| value.schema.clone());
-            CanonicalInputField {
-                name: value.name.clone(),
-                aliases: value.aliases.clone(),
-                short: value.short,
-                schema,
-            }
+        .map(|value| CanonicalInputField {
+            name: value.name.clone(),
+            aliases: value.aliases.clone(),
+            short: value.short,
+            schema: value.schema.clone(),
         })
         .collect();
     let inherited_names: BTreeSet<&str> = inherited_prefix
@@ -1430,14 +1429,6 @@ fn canonical_input_carrier(field: &CanonicalInputField, value: SchemaValue) -> S
     } else {
         value
     }
-}
-
-fn canonical_surfaces_overlap(value: &CanonicalInputValue, field: &CanonicalInputField) -> bool {
-    value.name == field.name
-        || value.aliases.iter().any(|alias| alias == &field.name)
-        || field.aliases.iter().any(|alias| {
-            alias == &value.name || value.aliases.iter().any(|value_alias| value_alias == alias)
-        })
 }
 
 /// Maps the shared canonical/validation error type onto the SDK's
@@ -4142,6 +4133,50 @@ mod tests {
             adapt_canonical_input_value(source, "format", &bare).unwrap_err(),
             "canonical tool input field `count` is absent but forwarded field `format` is required"
         );
+    }
+
+    #[test]
+    fn inherited_prefix_keeps_parent_carrier_when_child_redeclares_field() {
+        let bare = u32_graph();
+        let optional = option_wrapper_graph(&bare);
+        for value in [
+            SchemaValue::Option { inner: None },
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(7))),
+            },
+        ] {
+            let input = build_canonical_input_with_prefix(
+                vec![CanonicalInputField {
+                    name: "count".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: bare.clone(),
+                }],
+                &[CanonicalInputValue {
+                    name: "count".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: optional.clone(),
+                    value: value.clone(),
+                }],
+                vec![],
+            )
+            .unwrap();
+            assert_eq!(
+                input.value(),
+                &SchemaValue::Record {
+                    fields: vec![value]
+                }
+            );
+            let expected = CanonicalInputModel::from_fields(vec![CanonicalInputField {
+                name: "count".to_string(),
+                aliases: vec![],
+                short: None,
+                schema: optional.clone(),
+            }])
+            .unwrap();
+            assert_eq!(input.graph(), &expected.record_schema);
+        }
     }
 
     #[test]

@@ -16,6 +16,8 @@ trait SearchApi {
     fn status(&self) -> String;
     fn search(&self, query: Query, limit: u32) -> Vec<String>;
     fn reschedule(&self, at: String);
+    fn schedule_raw(&self, r#at: String);
+    fn schedule_mixed(&self, at: String, r#at1: String);
     fn transform(&self, input: AgentStream<String>) -> AgentStream<String>;
     fn invalidate(&self, key: String);
 }
