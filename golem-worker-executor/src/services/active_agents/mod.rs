@@ -1130,8 +1130,9 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     ///
     /// The snapshot includes suspended, loading and already-stopping agents; the stop state
     /// machine has an arm for each, so none is skipped. An agent still being resolved is not in
-    /// it, as a creation in progress never was: see `shard_epoch_to_assert` for why its oplog
-    /// cannot open unfenced on a shard that has already left the assignment.
+    /// it: one that read the assignment before the shard left opens its oplog at the epoch it
+    /// was granted, and checks the assignment again once it is published - see
+    /// `Worker::give_up_if_shard_left_during_construction`.
     pub(crate) async fn give_up_matching(
         &self,
         reason: GiveUpReason,

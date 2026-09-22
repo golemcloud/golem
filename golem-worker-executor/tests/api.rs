@@ -7905,6 +7905,118 @@ async fn an_invocation_enqueued_onto_a_fenced_oplog_is_refused_rather_than_accep
     Ok(())
 }
 
+/// A stop can be the first write to find that the shard has a new owner. Its final commit is
+/// then refused, and the waiters of the invocations it cuts short have to be told to retry on the
+/// new owner - not handed the stop's own error, which is cached as a failure the new owner's run
+/// of the invocation never corrects.
+///
+/// The invocation is paused with its `AgentInvocationStarted` buffered and not yet committed,
+/// so the stop's commit is not empty: an empty commit queries nothing and finds no fence.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_stop_that_finds_the_fence_on_its_own_commit_tells_the_caller_to_reroute(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clocks", "fenced-on-the-stops-commit");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "sleep_for", data_value!(0.0f64))
+        .await?;
+
+    let mut started = executor
+        .gate_next_invocation_started(&owned_agent_id)
+        .await?;
+    let idempotency_key = IdempotencyKey::fresh();
+    let mut caller = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        let idempotency_key = idempotency_key.clone();
+        tokio::spawn(
+            async move {
+                executor
+                    .invoke_and_await_agent_with_key(
+                        &component,
+                        &agent_id,
+                        &idempotency_key,
+                        "sleep_for",
+                        data_value!(0.0f64),
+                    )
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+    tokio::time::timeout(Duration::from_secs(10), started.entered())
+        .await
+        .map_err(|_| anyhow!("the invocation never buffered its start entry"))?;
+
+    take_agent_oplog_over_at_epoch(deps, &context, &owned_agent_id, 1).await?;
+    // An external stop carrying an error of its own, which the waiters must not be given.
+    let deletion = {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        tokio::spawn(async move { executor.delete_worker(&worker_id).await }.in_current_span())
+    };
+    // The stop waits for the paused guest; let it go once the stop is under way.
+    sleep(Duration::from_millis(500)).await;
+    started.release();
+    let _ = tokio::time::timeout(Duration::from_secs(30), deletion).await;
+
+    let answer = match tokio::time::timeout(Duration::from_secs(30), &mut caller).await {
+        Ok(joined) => joined?,
+        Err(_) => {
+            caller.abort();
+            bail!("the caller was never answered");
+        }
+    };
+    info!(result = ?answer, "caller was answered");
+    let error = answer.expect_err("the invocation moved to the shard's new owner");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("Sharding not ready") || rendered.contains("fenced"),
+        "the caller has to be told to retry on the new owner; instead it got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("deleted"),
+        "the stop's own error reached the caller: {rendered}"
+    );
+
+    // Nothing was cached for the key. A retry on this executor is turned away at admission - the
+    // agent is being deleted here - but never answered from a cached failure, which comes back as
+    // an invocation failure rather than a rejection.
+    let retried = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &idempotency_key,
+            "sleep_for",
+            data_value!(0.0f64),
+        )
+        .await;
+    if let Err(error) = &retried {
+        let rendered = format!("{error:#}");
+        assert!(
+            !(rendered.contains("invocation failed") && rendered.contains("deleted")),
+            "the retry was answered from a cached failure: {rendered}"
+        );
+    }
+    Ok(())
+}
+
 /// The test executor runs `ShardManagerServiceSingleShard`, so every agent in
 /// these tests lives on shard 0. Moving that one shard moves all of them.
 async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> {

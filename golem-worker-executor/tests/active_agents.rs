@@ -729,3 +729,97 @@ async fn ttl_eviction_removes_the_evicted_owners_card_interests(
     );
     Ok(())
 }
+
+/// A revoke's sweep selects from the resolved agents, so one still being created when its shard
+/// leaves is not in it. It read the assignment before the revoke and opens its oplog at the epoch
+/// it was granted, so it must be given up once it is published - not left cached here, unfenced,
+/// until the shard's new owner claims the oplog. Prepared rather than started: a started agent's
+/// invocation loop checks ownership on its own, and this is the agent that has no loop to.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn an_agent_whose_shard_leaves_while_it_is_being_created_is_given_up_once_published(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = golem_common::model::AgentId {
+        component_id: component.id,
+        agent_id: agent_id!("Clock", "created-while-the-shard-leaves").to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &agent_id);
+    // The harness learns the executor's agent registry from the first agent that runs, and the
+    // agent under test never does.
+    let warm_up = agent_id!("Clock", "created-while-the-shard-leaves-warm-up");
+    executor.start_agent(&component.id, warm_up.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &warm_up, "healthcheck", data_value!())
+        .await?;
+
+    // Creation pauses with the oplog open at the epoch the assignment held, before the agent is
+    // published.
+    let mut gate = executor
+        .gate_next_agent_initialization_enqueue(&agent_id)
+        .await;
+    let creation = tokio::spawn({
+        let mut client = executor.client.clone();
+        let request = CreateWorkerRequest {
+            agent_id: Some(agent_id.clone().into()),
+            component_owner_account_id: Some(context.account_id.into()),
+            environment_id: Some(context.default_environment_id.into()),
+            env: std::collections::HashMap::new(),
+            config: Vec::new(),
+            ignore_already_existing: false,
+            auth_ctx: Some(executor.auth_ctx().into()),
+            principal: None,
+            invocation_context: None,
+        };
+        async move { client.prepare_worker(request).await }
+    });
+    tokio::time::timeout(Duration::from_secs(20), gate.entered())
+        .await
+        .map_err(|_| anyhow::anyhow!("creation never reached the initialization enqueue"))?;
+
+    let mut client = executor.client.clone();
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![ShardId { value: 0 }],
+            revision: 1,
+            incarnation_id: String::new(),
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+
+    drop(gate);
+    let created = tokio::time::timeout(Duration::from_secs(20), creation).await??;
+    assert!(
+        matches!(
+            created?.into_inner().result,
+            Some(create_worker_response::Result::Success(_))
+        ),
+        "the creation had started before the shard left, and completes"
+    );
+
+    // Nothing else touches the agent: no invocation, no second delivery.
+    wait_until(
+        "the agent created on a shard that left to be given up",
+        || async { !executor.worker_is_cached(&owned_agent_id).await },
+    )
+    .await?;
+    Ok(())
+}

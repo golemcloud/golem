@@ -1822,7 +1822,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             Self::start_durable_stream_attachment_reconciler(&worker);
                         }
                         drop(instance);
+                        let resolved = published.is_ok();
                         let _ = sender.send(published);
+                        if resolved {
+                            worker.give_up_if_shard_left_during_construction().await;
+                        }
                     });
                     (true, completion)
                 }
@@ -1840,6 +1844,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         };
         (started, completion.await)
+    }
+
+    /// The sweep a delivery runs selects from the resolved agents, so one still being built when
+    /// the shard left is not in it: it read the assignment before the revoke, opened its oplog at
+    /// the epoch it was granted, and would stay here, unfenced, until the new owner claims the
+    /// oplog. This is the sweep's late half for that agent, run once it is published - after the
+    /// instance guard is released, because giving up takes it.
+    async fn give_up_if_shard_left_during_construction(self: &Arc<Self>) {
+        let assignment = self.shard_service().try_get_current_assignment();
+        if given_up_by_assignment(
+            assignment.as_ref(),
+            &self.owned_agent_id.agent_id,
+            self.oplog().shard_epoch(),
+        ) {
+            info!("The agent's shard left this executor while the agent was being created");
+            self.give_up(GiveUpReason::ShardNotAssigned).await;
+        }
     }
 
     async fn finish_construction(
@@ -8184,12 +8205,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     fail_pending_invocations.is_some()
                 );
 
-                // TODO: fail pending invocations should be factored out of here and be guaranteed to run
-                // even if there are multiple concurrent stop attempts.
-                if let Some(ref error) = fail_pending_invocations {
-                    self.fail_pending_invocations(error.clone()).await;
-                };
-
                 // Make sure the oplog is committed. Best-effort: a stop must finish.
                 let fenced = match self.oplog.commit(CommitLevel::Always).await {
                     Ok(_) => false,
@@ -8204,6 +8219,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         warn!(%error, "Committing the oplog while stopping failed");
                         false
                     }
+                };
+
+                // After the commit: it can be the first write to find that the shard has a new
+                // owner, and the waiters are then told to retry there rather than handed the
+                // stop's own error, which would be cached as a failure the new owner's run of the
+                // invocation could never correct.
+                //
+                // TODO: fail pending invocations should be factored out of here and be guaranteed to run
+                // even if there are multiple concurrent stop attempts.
+                if let Some(ref error) = fail_pending_invocations {
+                    self.fail_pending_invocations(error.clone()).await;
                 };
 
                 // Persist any pending cached-status changes synchronously before the worker leaves

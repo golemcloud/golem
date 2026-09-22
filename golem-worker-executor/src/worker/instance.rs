@@ -127,6 +127,10 @@ pub struct OwnerExecution {
     wall_clock_now_gate: Mutex<Option<Arc<ClockNowGate>>>,
     #[cfg(feature = "test-utils")]
     skip_wall_clock_now_durability: AtomicBool,
+    /// Pauses an invocation between buffering its `AgentInvocationStarted` and committing it, so
+    /// a test can act while the entry is in the buffer and nothing has queried storage yet.
+    #[cfg(feature = "test-utils")]
+    invocation_started_gate: Mutex<Option<Arc<ClockNowGate>>>,
 }
 
 #[cfg(feature = "test-utils")]
@@ -191,6 +195,8 @@ impl OwnerExecution {
             wall_clock_now_gate: Mutex::new(None),
             #[cfg(feature = "test-utils")]
             skip_wall_clock_now_durability: AtomicBool::new(false),
+            #[cfg(feature = "test-utils")]
+            invocation_started_gate: Mutex::new(None),
         }
     }
 
@@ -377,6 +383,34 @@ impl OwnerExecution {
             }
         }
         Ok(())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_gate_next_invocation_started(&self) -> ClockNowGateHandle {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ClockNowGate {
+            entered: Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+            abort_as_restart: AtomicBool::new(false),
+        });
+        *self.invocation_started_gate.lock().unwrap() = Some(gate.clone());
+        ClockNowGateHandle { entered, gate }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_after_invocation_started_buffered(&self) {
+        let gate = self.invocation_started_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            if let Some(entered) = gate.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("invocation started gate was closed")
+                .forget();
+        }
     }
 
     #[cfg(feature = "test-utils")]

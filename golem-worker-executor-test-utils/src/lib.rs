@@ -1157,6 +1157,20 @@ impl TestWorkerExecutor {
             .test_gate_next_monotonic_clock_start())
     }
 
+    /// Pauses the next invocation once its `AgentInvocationStarted` is buffered and before it is
+    /// committed, so the entry sits in the buffer while the test acts.
+    pub async fn gate_next_invocation_started(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<golem_worker_executor::worker::instance::ClockNowGateHandle> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker.owner_execution().test_gate_next_invocation_started())
+    }
+
     /// Pauses the next exclusive wall-clock `now` call before it starts durability.
     pub async fn gate_next_wall_clock_now(
         &self,

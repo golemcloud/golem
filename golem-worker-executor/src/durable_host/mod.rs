@@ -4991,6 +4991,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 })?;
             self.primary_invocation_start_index = Some(start_index);
 
+            #[cfg(feature = "test-utils")]
+            self.owner_execution
+                .test_after_invocation_started_buffered()
+                .await;
+
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
