@@ -88,21 +88,20 @@ async fn invoke_discovered_tool_dynamically() -> String {
     Ok(value) => value
     Err(error) => return "input:\{describe_dynamic_tool_error(error)}"
   }
-  command.input_schema.validate_value(packed) catch {
+  command.input_schema().validate_value(packed) catch {
     error => return "input:\{Repr(error)}"
   }
+  let typed_input = command.input_schema().typed_value(packed) catch {
+      error => return "input:\{Repr(error)}"
+    }
 
-  let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name)
-  let raw = match
-    dynamic.invoke_value(command.path, {
-      graph: command.input_schema.graph,
-      value: packed,
-    }) {
+  let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name())
+  let raw = match dynamic.invoke_value(command.path(), typed_input) {
     Ok(raw) => raw
     Err(error) => return "invoke:\{describe_dynamic_tool_error(error)}"
   }
 
-  match (command.result, raw.result) {
+  match (command.result(), raw.result) {
     (None, None) => "ok"
     (Some(schema), Some(output)) => {
       schema.validate_value(output.value) catch {
@@ -173,20 +172,23 @@ pub async fn MoonBitToolReflectionCaller::round_trip(self : Self) -> String {
     Ok(value) => value
     Err(_) => return "input-error"
   }
-  command.input_schema.validate_value(packed) catch {
+  command.input_schema().validate_value(packed) catch {
     error => return "input-validation:\{Repr(error)}"
   }
+  let typed_input = command.input_schema().typed_value(packed) catch {
+      error => return "input-validation:\{Repr(error)}"
+    }
   let invalid = command.pack_json(Json::object({ "label": Json::number(42.0) }))
     is Err(_)
   let native = command.invoke_value(packed)
   let encoded = command.invoke_json(input)
-  let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name).invoke_value(
-    command.path,
-    { graph: command.input_schema.graph, value: packed, },
+  let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name()).invoke_value(
+    command.path(),
+    typed_input,
   )
   let typed = @reflection.ToolClientDefinition::unnamed(fn(name) {
     MoonbitReflectionTestClient::new_for(name)
-  }).client_for(tool.lookup_name) catch {
+  }).client_for(tool.lookup_name()) catch {
     error => return "typed-definition:\{Repr(error)}"
   }
   defer typed.drop()
@@ -209,7 +211,7 @@ pub async fn MoonBitToolReflectionCaller::round_trip(self : Self) -> String {
   }
   let dynamic_text = match dynamic {
     Ok(result) =>
-      match (command.result, result.result) {
+      match (command.result(), result.result) {
         (Some(schema), Some(value)) => {
           schema.validate_value(value.value) catch {
             _ => {

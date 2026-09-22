@@ -54,7 +54,7 @@ let result = counter.invoke_json(
 )
 ```
 
-For explicit reflected packing, call `add.input.pack_json`, invoke through
+For explicit reflected packing, call `add.input().pack_json`, invoke through
 `invoke_value`, await the result, and call the output `SchemaRef::unpack_json`.
 Reflected schema-native constructor and method inputs are checked locally
 against the selected schema graph before opening RPC. Declared native outputs
@@ -121,14 +121,17 @@ async fn invoke_discovered_tool_dynamically() -> String {
     Ok(value) => value
     Err(error) => return "input:\{describe_dynamic_tool_error(error)}"
   }
-  command.input_schema.validate_value(packed) catch {
+  command.input_schema().validate_value(packed) catch {
+    error => return "input:\{Repr(error)}"
+  }
+  let typed_input = command.input_schema().typed_value(packed) catch {
     error => return "input:\{Repr(error)}"
   }
 
-  let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name)
+  let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name())
   let raw = match dynamic.invoke_value(
-    command.path,
-    { graph: command.input_schema.graph, value: packed },
+    command.path(),
+    typed_input,
   ) {
     Ok(raw) => raw
     Err(error) => {
@@ -136,7 +139,7 @@ async fn invoke_discovered_tool_dynamically() -> String {
     }
   }
 
-  match (command.result, raw.result) {
+  match (command.result(), raw.result) {
     (None, None) => "ok"
     (Some(schema), Some(output)) => {
       schema.validate_value(output.value) catch {

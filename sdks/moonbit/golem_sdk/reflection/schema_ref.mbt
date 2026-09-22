@@ -1,13 +1,151 @@
 ///|
 /// A graph-backed view of one reflected schema root.
-pub(all) struct SchemaRef {
+pub struct SchemaRef {
   graph : @model.SchemaGraph
   root : @model.SchemaType
 } derive(Debug, Eq)
 
 ///|
-pub fn SchemaRef::new(graph : @model.SchemaGraph) -> SchemaRef {
+fn SchemaRef::new(graph : @model.SchemaGraph) -> SchemaRef {
   { root: graph.root, graph, }
+}
+
+///|
+fn clone_metadata(
+  metadata : @types.MetadataEnvelope,
+) -> @types.MetadataEnvelope {
+  {
+    ..metadata,
+    aliases: metadata.aliases.copy(),
+    examples: metadata.examples.copy(),
+  }
+}
+
+///|
+fn clone_schema_type(schema : @model.SchemaType) -> @model.SchemaType {
+  let body = match schema.body {
+    Record(fields) =>
+      @model.SchemaTypeBody::Record(
+        fields.map(field => {
+          ..field,
+          body: clone_schema_type(field.body),
+          metadata: clone_metadata(field.metadata),
+        }),
+      )
+    Variant(cases) =>
+      @model.SchemaTypeBody::Variant(
+        cases.map(case => {
+          ..case,
+          payload: case.payload.map(clone_schema_type),
+          metadata: clone_metadata(case.metadata),
+        }),
+      )
+    Enum(cases) => @model.SchemaTypeBody::Enum(cases.copy())
+    Flags(names) => @model.SchemaTypeBody::Flags(names.copy())
+    Tuple(elements) =>
+      @model.SchemaTypeBody::Tuple(elements.map(clone_schema_type))
+    List(element) => @model.SchemaTypeBody::List(clone_schema_type(element))
+    FixedList(element, length) =>
+      @model.SchemaTypeBody::FixedList(clone_schema_type(element), length)
+    Map(key, value) =>
+      @model.SchemaTypeBody::Map(
+        clone_schema_type(key),
+        clone_schema_type(value),
+      )
+    Option(element) => @model.SchemaTypeBody::Option(clone_schema_type(element))
+    Result(ok, err) =>
+      @model.SchemaTypeBody::Result(
+        ok.map(clone_schema_type),
+        err.map(clone_schema_type),
+      )
+    Text(restrictions) =>
+      @model.SchemaTypeBody::Text({
+        ..restrictions,
+        languages: restrictions.languages.map(values => values.copy()),
+      })
+    Binary(restrictions) =>
+      @model.SchemaTypeBody::Binary({
+        ..restrictions,
+        mime_types: restrictions.mime_types.map(values => values.copy()),
+      })
+    Path(spec) =>
+      @model.SchemaTypeBody::Path({
+        ..spec,
+        allowed_mime_types: spec.allowed_mime_types.map(values => values.copy()),
+        allowed_extensions: spec.allowed_extensions.map(values => values.copy()),
+      })
+    Url(restrictions) =>
+      @model.SchemaTypeBody::Url({
+        allowed_schemes: restrictions.allowed_schemes.map(values => {
+          values.copy()
+        }),
+        allowed_hosts: restrictions.allowed_hosts.map(values => values.copy()),
+      })
+    Quantity(spec) =>
+      @model.SchemaTypeBody::Quantity({
+        ..spec,
+        allowed_suffixes: spec.allowed_suffixes.copy(),
+      })
+    Union(branches) =>
+      @model.SchemaTypeBody::Union(
+        branches.map(branch => {
+          ..branch,
+          body: clone_schema_type(branch.body),
+          metadata: clone_metadata(branch.metadata),
+        }),
+      )
+    Secret(spec) =>
+      @model.SchemaTypeBody::Secret({
+        ..spec,
+        inner: clone_schema_type(spec.inner),
+      })
+    Future(element) =>
+      @model.SchemaTypeBody::Future(element.map(clone_schema_type))
+    Stream(element) =>
+      @model.SchemaTypeBody::Stream(element.map(clone_schema_type))
+    other => other
+  }
+  { body, metadata: clone_metadata(schema.metadata), }
+}
+
+///|
+fn clone_schema_graph(graph : @model.SchemaGraph) -> @model.SchemaGraph {
+  {
+    defs: graph.defs.map(def => { ..def, body: clone_schema_type(def.body), }),
+    root: clone_schema_type(graph.root),
+  }
+}
+
+///|
+fn SchemaRef::owned_graph(self : SchemaRef) -> @model.SchemaGraph {
+  let closed = @model.schema_graph_closure({
+    defs: self.graph.defs,
+    root: self.root,
+  })
+  clone_schema_graph(closed)
+}
+
+///|
+/// Return a self-contained defensive copy of this schema graph.
+pub fn SchemaRef::graph(self : SchemaRef) -> @model.SchemaGraph {
+  self.owned_graph()
+}
+
+///|
+/// Return a defensive copy of this schema root.
+pub fn SchemaRef::root(self : SchemaRef) -> @model.SchemaType {
+  self.owned_graph().root
+}
+
+///|
+/// Validate a value and pair it with a self-contained defensive graph copy for
+/// fully dynamic invocation.
+pub fn SchemaRef::typed_value(
+  self : SchemaRef,
+  value : @model.SchemaValue,
+) -> @model.TypedSchemaValue raise ReflectError {
+  self.validate_value(value)
+  { graph: self.owned_graph(), value, }
 }
 
 ///|
