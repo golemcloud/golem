@@ -189,10 +189,11 @@ impl std::error::Error for SnapshotStoreError {
 pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// Saves a directory tree as a snapshot with the name, and waits until it is durable.
     ///
-    /// A snapshot appears in one step. Before the call returns, the name resolves to nothing.
-    /// After it returns, the name resolves to the whole tree, on every executor. An interrupted
-    /// save publishes nothing and leaves the name free for a new attempt. It can leave data that
-    /// no snapshot uses, which a later save or delete in the scope removes.
+    /// A snapshot appears in one step. Before the call returns, the name resolves to nothing. After
+    /// it returns, the name resolves to the whole tree, on every executor. An interrupted save
+    /// publishes nothing and leaves the name free for a new attempt. A save is interrupted when it
+    /// fails, when its process stops, or when the caller drops the call before it returns. It can
+    /// leave data that no snapshot uses, which a later save or delete in the scope removes.
     ///
     /// The tree must not change while the call runs. The store reads it and locks nothing.
     /// Symlinks are read and not followed. A name that is already in use gives `AlreadyExists`

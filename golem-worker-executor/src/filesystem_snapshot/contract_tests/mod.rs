@@ -158,8 +158,8 @@ const CASES: &[(&str, Case)] = &[
         |open| two_stores_save_into_a_new_scope_at_the_same_time(open).boxed(),
     ),
     (
-        "a_dropped_save_publishes_the_whole_tree_or_nothing",
-        |open| a_dropped_save_publishes_the_whole_tree_or_nothing(open).boxed(),
+        "a_dropped_save_publishes_nothing_and_leaves_the_name_free",
+        |open| a_dropped_save_publishes_nothing_and_leaves_the_name_free(open).boxed(),
     ),
     ("no_method_blocks_the_runtime", |open| {
         no_method_blocks_the_runtime(open).boxed()
@@ -953,25 +953,45 @@ async fn two_stores_save_into_a_new_scope_at_the_same_time(open: OpenStore) {
     );
 }
 
-async fn a_dropped_save_publishes_the_whole_tree_or_nothing(open: OpenStore) {
-    // The save is polled one time and then dropped. A store can finish the save after the drop,
-    // so the name can resolve, but only to the whole tree.
+async fn a_dropped_save_publishes_nothing_and_leaves_the_name_free(open: OpenStore) {
+    // The save is polled one time and then dropped before it returns. A dropped save is an
+    // interrupted save, so it publishes nothing and leaves the name free. This case checks at
+    // once after the drop, and it cannot see a publish that comes much later. So an adapter that
+    // runs its save in the background also proves in its own tests that a dropped save stops.
     let store = open();
     let scope = new_scope();
+    let dropped_name = name("p-dropped");
     let tree = new_tree(&fixture());
+    let other = new_tree(&one_file("other tree"));
 
     let dropped = store
-        .save(&scope, &name("p-dropped"), tree.path())
+        .save(&scope, &dropped_name, tree.path())
         .now_or_never();
-    let restore = restored(&*store, &scope, &name("p-dropped")).await;
+    assert!(
+        dropped.is_none(),
+        "the save returned in one poll, so the case cannot drop it before it returns: {dropped:?}"
+    );
+    let stat = store.stat(&scope, &dropped_name).await.unwrap();
+    let restore = restored(&*store, &scope, &dropped_name).await;
+    let names_after_the_drop = listed_names(&*store, &scope).await;
+    let saved_again = store.save(&scope, &dropped_name, other.path()).await;
 
-    match (dropped, restore) {
-        (Some(Ok(_)), Ok((restored, _))) | (None, Ok((restored, _))) => {
-            assert_eq!(restored, listing(tree.path()))
-        }
-        (None, Err(SnapshotStoreError::NotFound)) => {}
-        (dropped, restore) => panic!("the save gave {dropped:?} and the restore {restore:?}"),
-    }
+    assert!(is_not_found(&restore), "{restore:?}");
+    assert!(saved_again.is_ok(), "{saved_again:?}");
+    assert_eq!(
+        (
+            stat,
+            names_after_the_drop,
+            restored_listing(&*store, &scope, &dropped_name).await,
+            listed_names(&*store, &scope).await
+        ),
+        (
+            None,
+            Vec::<String>::new(),
+            listing(other.path()),
+            vec!["p-dropped".to_string()]
+        )
+    );
 }
 
 async fn no_method_blocks_the_runtime(open: OpenStore) {
