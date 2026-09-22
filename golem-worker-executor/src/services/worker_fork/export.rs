@@ -532,7 +532,7 @@ pub(crate) async fn creation_record(
     let initial = service
         .read_source(target, mode, OplogIndex::INITIAL, 1)
         .await;
-    let Some(OplogEntry::Create { instance_id, .. }) = initial.get(&OplogIndex::INITIAL) else {
+    let Some(OplogEntry::Create { parameters, .. }) = initial.get(&OplogIndex::INITIAL) else {
         return Ok(None);
     };
     let mut covered = OplogIndex::INITIAL;
@@ -554,7 +554,7 @@ pub(crate) async fn creation_record(
                     .await
                     .map_err(WorkerExecutorError::runtime)?;
                 if let StreamSessionRecord::ForkCut(cut) = record
-                    && cut.creation_fingerprint.0 == *instance_id
+                    && cut.creation_fingerprint.0 == parameters.instance_id
                     && cut.revert.is_none()
                 {
                     return Ok(Some(cut));

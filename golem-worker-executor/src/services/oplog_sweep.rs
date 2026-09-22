@@ -987,22 +987,22 @@ mod tests {
     }
 
     fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry {
-        OplogEntry::create(
-            agent_id.clone(),
-            OwnerKind::ComponentAgent,
-            AgentMode::Ephemeral,
-            ComponentRevision::new(1).unwrap(),
-            Vec::new(),
+        OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            agent_id: agent_id.clone(),
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_mode: AgentMode::Ephemeral,
+            component_revision: ComponentRevision::new(1).unwrap(),
+            env: Vec::new(),
             environment_id,
-            AccountId::new(),
-            None,
-            100,
-            100,
-            HashSet::new(),
-            Vec::new(),
-            None,
-            Uuid::new_v4(),
-        )
+            created_by: AccountId::new(),
+            parent: None,
+            component_size: 100,
+            initial_total_linear_memory_size: 100,
+            initial_active_plugins: HashSet::new(),
+            local_agent_config: Vec::new(),
+            original_phantom_id: None,
+            instance_id: Uuid::new_v4(),
+        }))
     }
 
     // --- pure functions -----------------------------------------------------------------------

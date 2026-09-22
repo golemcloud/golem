@@ -5113,12 +5113,7 @@
         "type": { "const": "AgentInvocationStarted" },
         "timestamp": { "type": "string" },
         "invocation": { "$ref": "#/definitions/PublicAgentInvocation" },
-        "walletPin": {
-          "oneOf": [
-            { "$ref": "#/definitions/PublicInvocationWalletPin" },
-            { "type": "null" }
-          ]
-        }
+        "walletPin": { "$ref": "#/definitions/PublicInvocationWalletPin" }
       },
       "additionalProperties": false
     },
@@ -5394,7 +5389,7 @@
     "PublicOplogEntryCardInstalled": {
       "type": "object",
       "required": ["type", "timestamp", "queuedEventIndex", "cardId", "walletGeneration"],
-      "properties": { "type": { "const": "CardInstalled" }, "timestamp": { "type": "string" }, "queuedEventIndex": { "type": ["integer", "null"], "minimum": 0 }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardInstalled" }, "timestamp": { "type": "string" }, "queuedEventIndex": { "type": ["integer", "null"], "minimum": 0 }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardInstallFailed": {
@@ -5406,37 +5401,37 @@
     "PublicOplogEntryCardRevoked": {
       "type": "object",
       "required": ["type", "timestamp", "queuedEventIndex", "cardId", "walletGeneration"],
-      "properties": { "type": { "const": "CardRevoked" }, "timestamp": { "type": "string" }, "queuedEventIndex": { "type": "integer", "minimum": 0 }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardRevoked" }, "timestamp": { "type": "string" }, "queuedEventIndex": { "type": "integer", "minimum": 0 }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardExpired": {
       "type": "object",
       "required": ["type", "timestamp", "cardId", "walletGeneration"],
-      "properties": { "type": { "const": "CardExpired" }, "timestamp": { "type": "string" }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardExpired" }, "timestamp": { "type": "string" }, "cardId": { "$ref": "#/definitions/CardId" }, "walletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardDerived": {
       "type": "object",
       "required": ["type", "timestamp", "cardId", "parentIds", "walletGeneration"],
-      "properties": { "type": { "const": "CardDerived" }, "timestamp": { "type": "string" }, "cardId": { "$ref": "#/definitions/CardId" }, "parentIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } }, "walletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardDerived" }, "timestamp": { "type": "string" }, "cardId": { "$ref": "#/definitions/CardId" }, "parentIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } }, "walletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardTransferStarted": {
       "type": "object",
       "required": ["type", "timestamp", "transferId", "cardId", "targetHolder", "sourceWalletGeneration"],
-      "properties": { "type": { "const": "CardTransferStarted" }, "timestamp": { "type": "string" }, "transferId": { "type": "string", "format": "uuid" }, "cardId": { "$ref": "#/definitions/CardId" }, "targetHolder": { "$ref": "#/definitions/CardHolder" }, "sourceWalletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardTransferStarted" }, "timestamp": { "type": "string" }, "transferId": { "type": "string", "format": "uuid" }, "cardId": { "$ref": "#/definitions/CardId" }, "targetHolder": { "$ref": "#/definitions/CardHolder" }, "sourceWalletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardTransferred": {
       "type": "object",
       "required": ["type", "timestamp", "transferId", "sourceCardId", "installedCardId", "targetHolder", "targetWalletGeneration"],
-      "properties": { "type": { "const": "CardTransferred" }, "timestamp": { "type": "string" }, "transferId": { "type": "string", "format": "uuid" }, "sourceCardId": { "oneOf": [{ "$ref": "#/definitions/CardId" }, { "type": "null" }] }, "installedCardId": { "$ref": "#/definitions/CardId" }, "targetHolder": { "$ref": "#/definitions/CardHolder" }, "targetWalletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardTransferred" }, "timestamp": { "type": "string" }, "transferId": { "type": "string", "format": "uuid" }, "sourceCardId": { "$ref": "#/definitions/CardId" }, "installedCardId": { "$ref": "#/definitions/CardId" }, "targetHolder": { "$ref": "#/definitions/CardHolder" }, "targetWalletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardRevokedCascade": {
       "type": "object",
       "required": ["type", "timestamp", "revokedCardIds", "localWalletGeneration"],
-      "properties": { "type": { "const": "CardRevokedCascade" }, "timestamp": { "type": "string" }, "revokedCardIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } }, "localWalletGeneration": { "type": ["integer", "null"], "minimum": 0 } },
+      "properties": { "type": { "const": "CardRevokedCascade" }, "timestamp": { "type": "string" }, "revokedCardIds": { "type": "array", "items": { "$ref": "#/definitions/CardId" } }, "localWalletGeneration": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryCardTransferConfirmed": {

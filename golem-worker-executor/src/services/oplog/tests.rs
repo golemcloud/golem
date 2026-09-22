@@ -62,6 +62,54 @@ use tokio::sync::{Mutex, Notify, oneshot};
 use tracing::{debug, info};
 use uuid::Uuid;
 
+macro_rules! create_oplog_entry {
+    ($agent_id:expr, $agent_mode:expr, $component_revision:expr, $env:expr,
+     $environment_id:expr, $created_by:expr, $parent:expr, $component_size:expr,
+     $memory_size:expr, $plugins:expr, $config:expr, $phantom_id:expr, $instance_id:expr $(,)?) => {
+        OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            agent_id: $agent_id,
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_mode: $agent_mode,
+            component_revision: $component_revision,
+            env: $env,
+            environment_id: $environment_id,
+            created_by: $created_by,
+            parent: $parent,
+            component_size: $component_size,
+            initial_total_linear_memory_size: $memory_size,
+            initial_active_plugins: $plugins,
+            local_agent_config: $config,
+            original_phantom_id: $phantom_id,
+            instance_id: $instance_id,
+        }))
+    };
+}
+
+fn create_test_entry(
+    agent_id: AgentId,
+    agent_mode: AgentMode,
+    component_revision: ComponentRevision,
+    environment_id: EnvironmentId,
+    created_by: AccountId,
+    instance_id: Uuid,
+) -> OplogEntry {
+    create_oplog_entry!(
+        agent_id,
+        agent_mode,
+        component_revision,
+        Vec::new(),
+        environment_id,
+        created_by,
+        None,
+        100,
+        100,
+        HashSet::new(),
+        Vec::new(),
+        None,
+        instance_id,
+    )
+}
+
 struct Tracing;
 
 impl Tracing {
@@ -1148,20 +1196,12 @@ async fn ephemeral_create_baseline_uses_lower_storage_and_checked_reads_find_it(
         agent_id: "ephemeral-baseline".into(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -1249,20 +1289,12 @@ async fn fresh_ephemeral_create_does_not_probe_lower_storage(_tracing: &Tracing)
         agent_id: "fresh-ephemeral".into(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -1366,20 +1398,12 @@ async fn fresh_ephemeral_create_with_compressed_layers_does_not_read_storage(_tr
         agent_id: "fresh-ephemeral-compressed-storage".into(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -1434,20 +1458,12 @@ async fn primary_fresh_ephemeral_create_does_not_read_storage(_tracing: &Tracing
         agent_id: "fresh-ephemeral-primary-storage".into(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -1511,20 +1527,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     };
     let owned = OwnedAgentId::new(EnvironmentId::new(), &agent);
     let metadata = make_agent_metadata(agent.clone(), AccountId::new(), owned.environment_id);
-    let create = OplogEntry::create(
+    let create = create_test_entry(
         agent.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Durable,
         ComponentRevision::INITIAL,
-        vec![],
         owned.environment_id,
         metadata.created_by,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        vec![],
-        None,
         metadata.fingerprint.0,
     )
     .rounded();
@@ -1778,20 +1786,12 @@ async fn fresh_ephemeral_create_with_blob_layers_does_not_read_storage(_tracing:
         agent_id: "fresh-ephemeral-blob-storage".into(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -2183,20 +2183,12 @@ async fn explicit_commit_reports_threshold_commits_once_and_preserves_add_receip
         agent_id: "threshold-commit-reporting".to_string(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Durable,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
@@ -2838,7 +2830,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
             vec![
                 DurableStreamOplogRecord::Registered(
                     None,
-                    StreamRegisteredRecord {
+                    Box::new(StreamRegisteredRecord {
                         format_version: 1,
                         coordinate: StreamRegistrationRecordCoordinate::Root {
                             invocation: StreamRegistrationInvocation::Local(
@@ -2854,7 +2846,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                         element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
                         source_kind: StreamSourceKind::InvocationOutput,
                         session_role: None,
-                    },
+                    }),
                 ),
                 DurableStreamOplogRecord::Items(
                     None,
@@ -2999,20 +2991,12 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Ephemeral,
-            OplogEntry::create(
+            create_test_entry(
                 agent_id.clone(),
-                OwnerKind::ComponentAgent,
                 AgentMode::Ephemeral,
                 ComponentRevision::INITIAL,
-                Vec::new(),
                 environment_id,
                 account_id,
-                None,
-                100,
-                100,
-                HashSet::new(),
-                Vec::new(),
-                None,
                 Uuid::new_v4(),
             )
             .rounded(),
@@ -5084,23 +5068,25 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let timestamp = Timestamp::now_utc();
     let create_entry = OplogEntry::Create {
         timestamp,
-        owner_kind: OwnerKind::ComponentAgent,
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "test".to_string(),
-        },
-        agent_mode: AgentMode::Durable,
-        component_revision: ComponentRevision::new(1).unwrap(),
-        env: vec![],
-        local_agent_config: Vec::new(),
-        environment_id,
-        created_by: account_id,
-        parent: None,
-        component_size: 0,
-        initial_total_linear_memory_size: 0,
-        initial_active_plugins: HashSet::new(),
-        original_phantom_id: None,
-        instance_id: Uuid::new_v4(),
+        parameters: Box::new(golem_common::model::oplog::CreateParameters {
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_id: AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "test".to_string(),
+            },
+            agent_mode: AgentMode::Durable,
+            component_revision: ComponentRevision::new(1).unwrap(),
+            env: vec![],
+            local_agent_config: Vec::new(),
+            environment_id,
+            created_by: account_id,
+            parent: None,
+            component_size: 0,
+            initial_total_linear_memory_size: 0,
+            initial_active_plugins: HashSet::new(),
+            original_phantom_id: None,
+            instance_id: Uuid::new_v4(),
+        }),
     }
     .rounded();
 
@@ -5225,23 +5211,25 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
     let timestamp = Timestamp::now_utc();
     let create_entry = OplogEntry::Create {
         timestamp,
-        owner_kind: OwnerKind::ComponentAgent,
-        agent_id: AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "test".to_string(),
-        },
-        agent_mode: AgentMode::Ephemeral,
-        component_revision: ComponentRevision::new(1).unwrap(),
-        env: vec![],
-        local_agent_config: Vec::new(),
-        environment_id,
-        created_by: account_id,
-        parent: None,
-        component_size: 0,
-        initial_total_linear_memory_size: 0,
-        initial_active_plugins: HashSet::new(),
-        original_phantom_id: None,
-        instance_id: Uuid::new_v4(),
+        parameters: Box::new(golem_common::model::oplog::CreateParameters {
+            owner_kind: OwnerKind::ComponentAgent,
+            agent_id: AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "test".to_string(),
+            },
+            agent_mode: AgentMode::Ephemeral,
+            component_revision: ComponentRevision::new(1).unwrap(),
+            env: vec![],
+            local_agent_config: Vec::new(),
+            environment_id,
+            created_by: account_id,
+            parent: None,
+            component_size: 0,
+            initial_total_linear_memory_size: 0,
+            initial_active_plugins: HashSet::new(),
+            original_phantom_id: None,
+            instance_id: Uuid::new_v4(),
+        }),
     }
     .rounded();
 
@@ -6539,20 +6527,12 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             component_id,
             agent_id: format!("worker-{i}"),
         };
-        let create_entry = OplogEntry::create(
+        let create_entry = create_test_entry(
             agent_id.clone(),
-            OwnerKind::ComponentAgent,
             AgentMode::Durable,
             ComponentRevision::new(1).unwrap(),
-            Vec::new(),
             environment_id,
             account_id,
-            None,
-            100,
-            100,
-            HashSet::new(),
-            Vec::new(),
-            None,
             Uuid::new_v4(),
         );
 
@@ -6701,20 +6681,12 @@ async fn multilayer_scan_for_component_ephemeral(_tracing: &Tracing) {
             agent_id: name,
         };
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-        let create_entry = OplogEntry::create(
+        let create_entry = create_test_entry(
             agent_id.clone(),
-            OwnerKind::ComponentAgent,
             mode,
             ComponentRevision::new(1).unwrap(),
-            Vec::new(),
             environment_id,
             account_id,
-            None,
-            100,
-            100,
-            HashSet::new(),
-            Vec::new(),
-            None,
             Uuid::now_v7(),
         );
         let oplog = oplog_service
@@ -7179,37 +7151,21 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
 
-    let durable_create = OplogEntry::create(
+    let durable_create = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Durable,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::now_v7(),
     )
     .rounded();
-    let ephemeral_create = OplogEntry::create(
+    let ephemeral_create = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(2).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::now_v7(),
     )
     .rounded();
@@ -7312,20 +7268,12 @@ async fn make_workers(
             component_id,
             agent_id: format!("{name_prefix}-{i}"),
         };
-        let create_entry = OplogEntry::create(
+        let create_entry = create_test_entry(
             agent_id.clone(),
-            OwnerKind::ComponentAgent,
             mode,
             ComponentRevision::new(1).unwrap(),
-            Vec::new(),
             environment_id,
             account_id,
-            None,
-            100,
-            100,
-            HashSet::new(),
-            Vec::new(),
-            None,
             Uuid::now_v7(),
         );
         let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
@@ -8118,20 +8066,12 @@ async fn ephemeral_reserved_start_uploads_payload_eagerly(_tracing: &Tracing) {
         agent_id: "ephemeral-reserved".to_string(),
     };
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
-    let create_entry = OplogEntry::create(
+    let create_entry = create_test_entry(
         agent_id.clone(),
-        OwnerKind::ComponentAgent,
         AgentMode::Ephemeral,
         ComponentRevision::new(1).unwrap(),
-        Vec::new(),
         environment_id,
         account_id,
-        None,
-        100,
-        100,
-        HashSet::new(),
-        Vec::new(),
-        None,
         Uuid::new_v4(),
     )
     .rounded();
