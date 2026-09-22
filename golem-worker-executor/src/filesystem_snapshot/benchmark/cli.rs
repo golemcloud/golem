@@ -19,7 +19,8 @@
 //! comes from the `GOLEM__BLOB_STORAGE__*` environment variables of the executor, with the object
 //! prefix of the run. The exit code is 0 when each step succeeded, 1 when a step failed, the
 //! restored tree differs or the result could not be written, and 2 for an error of the arguments
-//! or of the configuration.
+//! or of the configuration, or for an error of the environment that each later phase finds again,
+//! such as an async runtime that does not start.
 
 use super::{Selection, is_key_segment, plan, run_phase};
 use clap::Parser;
@@ -124,7 +125,7 @@ fn run(arguments: RunArguments) -> ExitCode {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("error: failed to start the async runtime: {error}");
-            return ExitCode::from(1);
+            return ExitCode::from(2);
         }
     };
     runtime.block_on(async {
