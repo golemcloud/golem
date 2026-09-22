@@ -502,14 +502,14 @@ describe('tool registration', () => {
     expect(received).toBe('supplied');
   });
 
-  it('rejects an ambiguous optional-of-option canonical field', () => {
+  it('uses one canonical option carrier for an already optional field', async () => {
     const definition = toolDefinition('nested-optional-tool').body((body) =>
       body.option('label', z.string().optional()).returns(z.void()),
     );
-    let called = false;
+    let received: unknown;
     definition.implement({
-      'nested-optional-tool': async () => {
-        called = true;
+      'nested-optional-tool': async (args) => {
+        received = args.label;
         return ok(undefined);
       },
     });
@@ -517,10 +517,22 @@ describe('tool registration', () => {
     const registered = ToolRegistry.get('nested-optional-tool');
     const commandNode = registered?.extended.commandByPath([]);
     if (!registered || !commandNode) throw new Error('nested optional tool was not registered');
-    expect(() => registered.extended.canonicalInputModel(commandNode)).toThrow(
-      'option<option<_>> is invalid',
-    );
-    expect(called).toBe(false);
+    const model = registered.extended.canonicalInputModel(commandNode);
+    const root = model.codec.graph.root.body;
+    if (root.tag !== 'record') throw new Error('expected canonical input record');
+    expect(root.fields[0].body.body.tag).toBe('option');
+    if (root.fields[0].body.body.tag === 'option') {
+      expect(root.fields[0].body.body.element.body.tag).not.toBe('option');
+    }
+
+    await expect(
+      registered.invoker([], model.encodeTyped({ label: undefined }), {}),
+    ).resolves.toEqual(ok(undefined));
+    expect(received).toBeUndefined();
+    await expect(
+      registered.invoker([], model.encodeTyped({ label: 'supplied' }), {}),
+    ).resolves.toEqual(ok(undefined));
+    expect(received).toBe('supplied');
   });
 
   it('rejects non-canonical values for required fields without an outer option carrier', async () => {
