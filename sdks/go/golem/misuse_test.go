@@ -55,9 +55,9 @@ func TestMisuseRepeatedDesc(t *testing.T) {
 	type St struct{}
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
-		m := DefineMethod[Id, Unit, Unit]("m", Desc("a"), Desc("b"))
+		m := def.Method[Unit, Unit]("m", Desc("a"), Desc("b"))
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-		Handle(impl, m, func(*Context[St], Unit) Unit { return Unit{} })
+		impl.Handle(m, func(*Context[St], Unit) Unit { return Unit{} })
 		mustDefErr(t, d, "Desc set 2 times")
 	})
 }
@@ -115,7 +115,7 @@ func TestMisuseNilHandler(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-		Handle(impl, DefineMethod[Id, Unit, Unit]("m"), (func(*Context[St], Unit) Unit)(nil))
+		impl.Handle(def.Method[Unit, Unit]("m"), (func(*Context[St], Unit) Unit)(nil))
 		mustDefErr(t, d, "non-nil handler")
 	})
 }
@@ -128,7 +128,7 @@ func TestMisuseEmptyMethodName(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-		Handle(impl, DefineMethod[Id, Unit, Unit](""), func(*Context[St], Unit) Unit { return Unit{} })
+		impl.Handle(def.Method[Unit, Unit](""), func(*Context[St], Unit) Unit { return Unit{} })
 		mustDefErr(t, d, "non-empty method name")
 	})
 }
@@ -138,11 +138,11 @@ func TestMisuseDuplicateMethod(t *testing.T) {
 	type St struct{}
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
-		m := DefineMethod[Id, Unit, Unit]("m")
+		m := def.Method[Unit, Unit]("m")
 		h := func(*Context[St], Unit) Unit { return Unit{} }
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-		Handle(impl, m, h)
-		Handle(impl, m, h)
+		impl.Handle(m, h)
+		impl.Handle(m, h)
 		mustDefErr(t, d, "already implemented")
 	})
 }
@@ -171,12 +171,12 @@ func TestMisuseDuplicateRoute(t *testing.T) {
 	type In struct{ X string }
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A", HTTP: &Mount{Path: "/a/{name}"}})
-		m1 := DefineMethod[Id, In, Unit]("m1", HTTP(GET("/dup/{x}")))
-		m2 := DefineMethod[Id, In, Unit]("m2", HTTP(GET("/dup/{x}")))
+		m1 := def.Method[In, Unit]("m1", HTTP(GET("/dup/{x}")))
+		m2 := def.Method[In, Unit]("m2", HTTP(GET("/dup/{x}")))
 		h := func(*Context[St], In) Unit { return Unit{} }
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-		Handle(impl, m1, h)
-		Handle(impl, m2, h)
+		impl.Handle(m1, h)
+		impl.Handle(m2, h)
 		mustDefErr(t, d, "collides")
 	})
 }

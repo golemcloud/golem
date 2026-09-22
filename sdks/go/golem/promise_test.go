@@ -16,6 +16,8 @@ package golem
 
 import (
 	"bytes"
+	"fmt"
+	"strings"
 	"testing"
 
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -33,7 +35,7 @@ func TestPromisePayloadJSON(t *testing.T) {
 	if string(data) != `{"Approved":true,"By":"alice"}` {
 		t.Fatalf("encoded JSON = %s", data)
 	}
-	if got := decodePromisePayload[Decision](data); got != want {
+	if got := decodePromisePayload[Decision](PromiseID{}, data); got != want {
 		t.Fatalf("round-trip = %+v, want %+v", got, want)
 	}
 }
@@ -47,7 +49,7 @@ func TestPromisePayloadRawBytes(t *testing.T) {
 	if !bytes.Equal(data, raw) {
 		t.Fatalf("[]byte should pass through raw, got %v", data)
 	}
-	if got := decodePromisePayload[[]byte](data); !bytes.Equal(got, raw) {
+	if got := decodePromisePayload[[]byte](PromiseID{}, data); !bytes.Equal(got, raw) {
 		t.Fatalf("[]byte round-trip = %v, want %v", got, raw)
 	}
 }
@@ -98,4 +100,72 @@ func TestPromiseIDFromWit(t *testing.T) {
 	if id.ComponentID != (UUID{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}) {
 		t.Fatalf("component uuid not mapped: %v", id.ComponentID)
 	}
+}
+
+// TestPromisePayloadDecodeFailureNamesPromiseAndPayload — a mismatched payload
+// is reported with the promise, the expected type and the bytes the completer
+// actually wrote, because the completer is usually somewhere else entirely.
+func TestPromisePayloadDecodeFailureNamesPromiseAndPayload(t *testing.T) {
+	type Verdict struct{ Approved bool }
+	id := PromiseID{AgentID: `ApprovalAgent("q")`, OplogIndex: 12}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("decoding a string as a struct should panic")
+		}
+		msg := fmt.Sprint(r)
+		for _, want := range []string{`ApprovalAgent("q")`, "golem.Verdict", "approved"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("panic message %q does not mention %q", msg, want)
+			}
+		}
+	}()
+	_ = decodePromisePayload[Verdict](id, []byte(`"approved"`))
+}
+
+// TestPromisePayloadTruncatesLongPayloads — the payload is quoted for a failure
+// message, so a large one must not flood the trap.
+func TestPromisePayloadTruncatesLongPayloads(t *testing.T) {
+	got := truncatedPayload(bytes.Repeat([]byte("x"), 500))
+	if len(got) > 200 {
+		t.Errorf("truncated payload is %d chars, want it short: %s", len(got), got)
+	}
+	if !strings.Contains(got, "500 bytes") {
+		t.Errorf("truncated payload should state the full size: %s", got)
+	}
+}
+
+// TestPromiseTypeMismatchIsCaughtAtTheMistake — a promise id carries no type, so
+// nothing stops a later invocation from rebuilding it as the wrong one. When the
+// creating invocation ran in this worker, the SDK catches it at PromiseByID
+// instead of letting it surface as a decode failure (or, for a struct with no
+// overlapping fields, as a silently zero value).
+func TestPromiseTypeMismatchIsCaughtAtTheMistake(t *testing.T) {
+	type Verdict struct{ Approved bool }
+	id := PromiseID{AgentID: `ApprovalAgent("q")`, OplogIndex: 3}
+	recordPromisePayloadType[Verdict](id)
+	t.Cleanup(func() { delete(promisePayloadTypes, id) })
+
+	// Same type: no complaint.
+	checkPromisePayloadType[Verdict](id)
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("using a promise as another type should panic")
+		}
+		msg := fmt.Sprint(r)
+		if !strings.Contains(msg, "created as golem.Verdict") || !strings.Contains(msg, "used as string") {
+			t.Errorf("panic message should name both types, got: %s", msg)
+		}
+	}()
+	checkPromisePayloadType[string](id)
+}
+
+// TestPromiseTypeCheckIsSilentWithoutARecord — the check is best-effort: after a
+// snapshot-based recovery the creating invocation may not have re-executed, so
+// an unknown id must pass rather than fail.
+func TestPromiseTypeCheckIsSilentWithoutARecord(t *testing.T) {
+	checkPromisePayloadType[string](PromiseID{AgentID: "never-created", OplogIndex: 99})
 }

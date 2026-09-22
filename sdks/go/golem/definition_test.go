@@ -60,7 +60,7 @@ func TestPublicAccessors(t *testing.T) {
 	if got := (&AgentDefinition[struct{}, NoConfig]{name: "N"}).Name(); got != "N" {
 		t.Errorf("AgentDefinition.Name = %q", got)
 	}
-	md := DefineMethod[struct{}, struct{}, struct{}]("m", Desc("d"), HTTP(GET("/x")))
+	md := (&AgentDefinition[struct{}, NoConfig]{name: "N"}).Method[struct{}, struct{}]("m", Desc("d"), HTTP(GET("/x")))
 	if md.Name() != "m" {
 		t.Errorf("MethodDef.Name = %q", md.Name())
 	}
@@ -105,9 +105,9 @@ func TestValidAgentFinalizesAndPublishesItsMount(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		a := defineAgentInto[Id, NoConfig](d,
 			Spec{Name: "Counter", HTTP: &Mount{Path: "/c/{name}"}})
-		add := DefineMethod[Id, AddIn, int64]("add", HTTP(POST("/add?by={by}")))
+		add := a.Method[AddIn, int64]("add", HTTP(POST("/add?by={by}")))
 		impl := implementInto[Id, St, NoConfig](d, a, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-		Handle(impl, add, func(*Context[St], AddIn) int64 { return 0 })
+		impl.Handle(add, func(*Context[St], AddIn) int64 { return 0 })
 
 		types, errs := d.discover()
 		if len(errs) != 0 {
@@ -140,7 +140,7 @@ func TestSeparateDefinitionsDoNotLeak(t *testing.T) {
 		withDefs(t, func(d *definitions) {
 			def := defineAgentInto[Id, NoConfig](d, Spec{Name: "Solo"})
 			impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-			Handle(impl, DefineMethod[Id, Unit, Unit]("ping"), func(*Context[St], Unit) Unit { return Unit{} })
+			impl.Handle(def.Method[Unit, Unit]("ping"), func(*Context[St], Unit) Unit { return Unit{} })
 			_, errs = d.discover()
 		})
 		return errs

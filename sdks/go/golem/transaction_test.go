@@ -69,8 +69,8 @@ func TestFallibleCommit(t *testing.T) {
 	tr := &tracker{}
 	a, b := okOp(tr, "1"), okOp(tr, "2")
 	out := runFallible(&Transaction[string]{}, func(tx *Transaction[string]) Result[int, string] {
-		r1 := Step(tx, a, 10)
-		r2 := Step(tx, b, r1.Ok())
+		r1 := tx.Step(a, 10)
+		r2 := tx.Step(b, r1.Ok())
 		return Ok[int, string](r2.Ok())
 	})
 	if out.IsErr() {
@@ -91,13 +91,13 @@ func TestFallibleRollbackComplete(t *testing.T) {
 	a, b := okOp(tr, "1"), okOp(tr, "2")
 	bad := failOp(tr, "3", "boom")
 	out := runFallible(&Transaction[string]{}, func(tx *Transaction[string]) Result[int, string] {
-		if r := Step(tx, a, 1); r.IsErr() {
+		if r := tx.Step(a, 1); r.IsErr() {
 			return r
 		}
-		if r := Step(tx, b, 2); r.IsErr() {
+		if r := tx.Step(b, 2); r.IsErr() {
 			return r
 		}
-		if r := Step(tx, bad, 3); r.IsErr() {
+		if r := tx.Step(bad, 3); r.IsErr() {
 			return r
 		}
 		return Ok[int, string](0)
@@ -134,13 +134,13 @@ func TestFallibleRollbackPartial(t *testing.T) {
 	b := okOp(tr, "b")
 	bad := failOp(tr, "c", "boom")
 	out := runFallible(&Transaction[string]{}, func(tx *Transaction[string]) Result[int, string] {
-		if r := Step(tx, a, 1); r.IsErr() {
+		if r := tx.Step(a, 1); r.IsErr() {
 			return r
 		}
-		if r := Step(tx, b, 2); r.IsErr() {
+		if r := tx.Step(b, 2); r.IsErr() {
 			return r
 		}
-		if r := Step(tx, bad, 3); r.IsErr() {
+		if r := tx.Step(bad, 3); r.IsErr() {
 			return r
 		}
 		return Ok[int, string](0)

@@ -22,28 +22,28 @@ var tCounter = DefineAgent[tCounterId](
 )
 
 var (
-	tValue = DefineMethod[tCounterId, Unit, int64]("value", Desc("current value"))
-	tInc   = DefineMethod[tCounterId, Unit, int64]("increment")
-	tAdd   = DefineMethod[tCounterId, tAddIn, int64]("add")
-	tReset = DefineMethod[tCounterId, Unit, Unit]("reset")
-	tBoom  = DefineMethod[tCounterId, Unit, int64]("boom")
+	tValue = tCounter.Method[Unit, int64]("value", Desc("current value"))
+	tInc   = tCounter.Method[Unit, int64]("increment")
+	tAdd   = tCounter.Method[tAddIn, int64]("add")
+	tReset = tCounter.Method[Unit, Unit]("reset")
+	tBoom  = tCounter.Method[Unit, int64]("boom")
 )
 
 func init() {
-	c := Implement(tCounter, func(id tCounterId) *tCounterState { return &tCounterState{} })
-	Handle(c, tValue, func(ctx *Context[tCounterState], _ Unit) int64 {
+	c := tCounter.Implement(func(id tCounterId) *tCounterState { return &tCounterState{} })
+	c.Handle(tValue, func(ctx *Context[tCounterState], _ Unit) int64 {
 		return ctx.State.count
 	})
-	Handle(c, tInc, func(ctx *Context[tCounterState], _ Unit) int64 {
+	c.Handle(tInc, func(ctx *Context[tCounterState], _ Unit) int64 {
 		ctx.State.count++
 		return ctx.State.count
 	})
-	Handle(c, tAdd, func(ctx *Context[tCounterState], in tAddIn) int64 {
+	c.Handle(tAdd, func(ctx *Context[tCounterState], in tAddIn) int64 {
 		ctx.State.count += in.By
 		return ctx.State.count
 	})
-	Handle(c, tReset, Bind0Unit((*tCounterState).reset)) // method-expression binding
-	Handle(c, tBoom, func(*Context[tCounterState], Unit) int64 {
+	c.Handle(tReset, Bind0Unit((*tCounterState).reset)) // method-expression binding
+	c.Handle(tBoom, func(*Context[tCounterState], Unit) int64 {
 		panic("kaboom from agent code")
 	})
 }
@@ -235,16 +235,16 @@ var tEcho = DefineAgent[tEchoId](
 	Spec{Name: "TestEcho", Mode: Ephemeral},
 )
 
-var tSay = DefineMethod[tEchoId, tEchoIn, string]("say")
+var tSay = tEcho.Method[tEchoIn, string]("say")
 
 func init() {
 	// tPay is declared below — package vars initialize before any init runs, so it
 	// is safe to reference here.
-	e := Implement(tEcho, func(id tEchoId) *tEchoState { return &tEchoState{prefix: id.Prefix} })
-	Handle(e, tSay, func(ctx *Context[tEchoState], in tEchoIn) string {
+	e := tEcho.Implement(func(id tEchoId) *tEchoState { return &tEchoState{prefix: id.Prefix} })
+	e.Handle(tSay, func(ctx *Context[tEchoState], in tEchoIn) string {
 		return ctx.State.prefix + in.Msg
 	})
-	Handle(e, tPay, func(*Context[tEchoState], Unit) PaymentMethod {
+	e.Handle(tPay, func(*Context[tEchoState], Unit) PaymentMethod {
 		return Transfer{IBAN: "GB33"}
 	})
 }
@@ -290,7 +290,7 @@ func TestWorkerRunsOneOfSeveralAgentTypes(t *testing.T) {
 // keep that declared type through encoding. reflect.ValueOf on an interface
 // yields the concrete type it holds, so encoding the handler result directly
 // would look up the wrong codec. Bound into tEcho's Implement above.
-var tPay = DefineMethod[tEchoId, Unit, PaymentMethod]("pay")
+var tPay = tEcho.Method[Unit, PaymentMethod]("pay")
 
 func TestVariantTypedMethodOutputRoundTripsThroughTheExports(t *testing.T) {
 	active = nil

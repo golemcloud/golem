@@ -32,7 +32,7 @@ func TestReadOnlyLowering(t *testing.T) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
 		handle := func(name string, opts ...MethodOpt) {
-			Handle(impl, DefineMethod[Id, Unit, Unit](name, opts...), h)
+			impl.Handle(def.Method[Unit, Unit](name, opts...), h)
 		}
 		handle("rw")             // read-write
 		handle("ro", ReadOnly()) // default => until-write
@@ -77,24 +77,26 @@ func TestReadOnlyMisuse(t *testing.T) {
 	type St struct{}
 	h := func(*Context[St], Unit) Unit { return Unit{} }
 
+	// The descriptor is built inside the closure: a method descriptor comes from
+	// the agent definition, which only exists once the test's definitions do.
 	cases := []struct {
-		name   string
-		mode   Mode
-		method MethodDef[Id, Unit, Unit]
-		want   string
+		name string
+		mode Mode
+		opts []MethodOpt
+		want string
 	}{
-		{"repeated", Durable, DefineMethod[Id, Unit, Unit]("m", ReadOnly(), ReadOnly()), "ReadOnly set 2 times"},
-		{"two policies", Durable, DefineMethod[Id, Unit, Unit]("m", ReadOnly(NoCache(), CacheFor(time.Second))), "at most one cache policy"},
-		{"zero ttl", Durable, DefineMethod[Id, Unit, Unit]("m", ReadOnly(CacheFor(0))), "positive ttl"},
-		{"negative ttl", Durable, DefineMethod[Id, Unit, Unit]("m", ReadOnly(CacheFor(-time.Second))), "positive ttl"},
-		{"ephemeral", Ephemeral, DefineMethod[Id, Unit, Unit]("m", ReadOnly()), "only valid on a Durable agent"},
+		{"repeated", Durable, []MethodOpt{ReadOnly(), ReadOnly()}, "ReadOnly set 2 times"},
+		{"two policies", Durable, []MethodOpt{ReadOnly(NoCache(), CacheFor(time.Second))}, "at most one cache policy"},
+		{"zero ttl", Durable, []MethodOpt{ReadOnly(CacheFor(0))}, "positive ttl"},
+		{"negative ttl", Durable, []MethodOpt{ReadOnly(CacheFor(-time.Second))}, "positive ttl"},
+		{"ephemeral", Ephemeral, []MethodOpt{ReadOnly()}, "only valid on a Durable agent"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			withDefs(t, func(d *definitions) {
 				def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A", Mode: c.mode})
 				impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-				Handle(impl, c.method, h)
+				impl.Handle(def.Method[Unit, Unit]("m", c.opts...), h)
 				mustDefErr(t, d, c.want)
 			})
 		})

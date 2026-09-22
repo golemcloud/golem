@@ -64,14 +64,14 @@ func TestImplementRegistersMethods(t *testing.T) {
 	type St struct{ n int64 }
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "Counter"})
-		add := DefineMethod[Id, int64, int64]("add", Desc("adds to the counter"))
-		get := DefineMethod[Id, Unit, int64]("get")
+		add := def.Method[int64, int64]("add", Desc("adds to the counter"))
+		get := def.Method[Unit, int64]("get")
 
 		// Implement binds the constructor + returns the handle; Handle registers each
 		// method, In/Out inferred from the handler and tied to the agent's Id + St.
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-		Handle(impl, add, func(ctx *Context[St], in int64) int64 { ctx.State.n += in; return ctx.State.n })
-		Handle(impl, get, Bind0(func(s *St) int64 { return s.n })) // method-expression style
+		impl.Handle(add, func(ctx *Context[St], in int64) int64 { ctx.State.n += in; return ctx.State.n })
+		impl.Handle(get, Bind0(func(s *St) int64 { return s.n })) // method-expression style
 
 		e := d.agents["Counter"]
 		if e == nil || e.methods["add"] == nil || e.methods["get"] == nil {
@@ -89,11 +89,11 @@ func TestHandleRejectsDuplicateMethod(t *testing.T) {
 	type St struct{}
 	withDefs(t, func(d *definitions) {
 		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
-		m := DefineMethod[Id, Unit, Unit]("m")
+		m := def.Method[Unit, Unit]("m")
 		h := func(*Context[St], Unit) Unit { return Unit{} }
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-		Handle(impl, m, h)
-		Handle(impl, m, h)
+		impl.Handle(m, h)
+		impl.Handle(m, h)
 		mustDefErr(t, d, "method already implemented")
 	})
 }

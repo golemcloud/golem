@@ -303,11 +303,18 @@ func millis(ms uint64) time.Time { return time.UnixMilli(int64(ms)) }
 // ── Typed store ───────────────────────────────────────────────────────────────
 
 // Store is a typed view over a [Container]: object bodies are JSON-encoded T.
-// Build one with [Typed].
+// Build one with [Container.Typed].
 type Store[T any] struct{ c *Container }
 
-// Typed wraps a container as a JSON-encoded store of T.
-func Typed[T any](c *Container) *Store[T] { return &Store[T]{c: c} }
+// Typed returns a view of the container that encodes and decodes objects as T
+// (JSON, or raw bytes when T is []byte).
+//
+//	report, found, err := container.Typed[Report]().Get("2026-09.json")
+func (c *Container) Typed[T any]() *Store[T] { return &Store[T]{c: c} }
+
+// Typed is [Container.Typed] as a free function, for call sites that read better
+// with the type first.
+func Typed[T any](c *Container) *Store[T] { return c.Typed[T]() }
 
 // Get decodes the named object as T. found is false (nil error) when absent.
 func (s *Store[T]) Get(name string) (value T, found bool, err error) {

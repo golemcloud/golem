@@ -101,7 +101,7 @@ func TestSnapshotPolicyMapsToWit(t *testing.T) {
 			withDefs(t, func(d *definitions) {
 				def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A", Snapshot: c.policy})
 				impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
-				Handle(impl, DefineMethod[Id, Unit, Unit]("m"), func(*Context[St], Unit) Unit { return Unit{} })
+				impl.Handle(def.Method[Unit, Unit]("m"), func(*Context[St], Unit) Unit { return Unit{} })
 				types, errs := d.discover()
 				if len(errs) != 0 {
 					t.Fatalf("errs: %v", errs)

@@ -37,11 +37,11 @@ var tPayment = DefineAgent[tPayId](
 	Spec{Name: "TestPayment", Mode: Durable},
 )
 
-var tCharge = DefineMethod[tPayId, tChargeIn, Money]("charge")
+var tCharge = tPayment.Method[tChargeIn, Money]("charge")
 
 func init() {
-	p := Implement(tPayment, func(id tPayId) *tPayState { return &tPayState{} })
-	Handle(p, tCharge, func(ctx *Context[tPayState], in tChargeIn) Money {
+	p := tPayment.Implement(func(id tPayId) *tPayState { return &tPayState{} })
+	p.Handle(tCharge, func(ctx *Context[tPayState], in tChargeIn) Money {
 		ctx.State.charged += in.AmountCents
 		return Money{Amount: ctx.State.charged, Currency: "EUR"}
 	})

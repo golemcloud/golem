@@ -17,6 +17,7 @@ package golem
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
@@ -87,13 +88,16 @@ type Promise[T any] struct {
 // host mints the id. Persist [Promise.ID] in the agent's state (or send it out)
 // if the promise will be awaited or completed in a later invocation.
 func NewPromise[T any]() *Promise[T] {
-	return &Promise[T]{id: promiseIDFromWit(apiHost.CreatePromise())}
+	id := promiseIDFromWit(apiHost.CreatePromise())
+	recordPromisePayloadType[T](id)
+	return &Promise[T]{id: id}
 }
 
 // PromiseByID rebuilds a handle to an existing promise from a stored [PromiseID]
 // — e.g. an id saved in agent state during an earlier invocation, so a later
 // invocation of the same agent can [Promise.Await] it.
 func PromiseByID[T any](id PromiseID) *Promise[T] {
+	checkPromisePayloadType[T](id)
 	return &Promise[T]{id: id}
 }
 
@@ -114,7 +118,7 @@ func (p *Promise[T]) Await() T {
 	res := apiHost.GetPromise(p.id.toWit())
 	data := res.Get()
 	res.Drop()
-	return decodePromisePayload[T](data)
+	return decodePromisePayload[T](p.id, data)
 }
 
 // WebhookURL mints an external URL that completes this promise: a POST to the URL
@@ -171,14 +175,56 @@ func encodePromisePayload[T any](v T) []byte {
 	return b
 }
 
-// decodePromisePayload is the inverse of [encodePromisePayload].
-func decodePromisePayload[T any](data []byte) T {
+// decodePromisePayload is the inverse of [encodePromisePayload]. id names the
+// promise in a failure, and the payload is shown (truncated) because the bytes
+// come from whoever completed the promise — often another agent or an external
+// webhook — so seeing them is what identifies the mismatch.
+func decodePromisePayload[T any](id PromiseID, data []byte) T {
 	var out T
 	if _, ok := any(out).([]byte); ok {
 		return any(data).(T)
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
-		panic(fmt.Errorf("golem: decoding promise payload: %w", err))
+		panic(fmt.Errorf("golem: promise %s: payload does not decode as %s: %w; payload: %s",
+			id, promisePayloadTypeName[T](), err, truncatedPayload(data)))
 	}
 	return out
+}
+
+// truncatedPayload renders payload bytes for an error message, keeping it short
+// enough to stay readable in a trap message.
+func truncatedPayload(data []byte) string {
+	const max = 120
+	if len(data) > max {
+		return fmt.Sprintf("%q… (%d bytes)", data[:max], len(data))
+	}
+	return fmt.Sprintf("%q", data)
+}
+
+// promisePayloadTypes remembers the payload type each promise was CREATED with,
+// so awaiting it as another type is caught at the mistake instead of surfacing
+// as a decode failure (or, worse, as a silently zero-valued struct).
+//
+// It is ordinary guest memory: nothing is recorded in the oplog and no host call
+// is made, so it cannot affect replay. It is therefore best-effort — after a
+// snapshot-based recovery the invocation that created the promise may not have
+// re-executed, leaving the map empty, and the check simply does not fire.
+var promisePayloadTypes = map[PromiseID]string{}
+
+func promisePayloadTypeName[T any]() string {
+	return reflect.TypeFor[T]().String()
+}
+
+func recordPromisePayloadType[T any](id PromiseID) {
+	promisePayloadTypes[id] = promisePayloadTypeName[T]()
+}
+
+func checkPromisePayloadType[T any](id PromiseID) {
+	created, ok := promisePayloadTypes[id]
+	if !ok {
+		return
+	}
+	if awaited := promisePayloadTypeName[T](); awaited != created {
+		panic(fmt.Errorf("golem: promise %s was created as %s, used as %s", id, created, awaited))
+	}
 }

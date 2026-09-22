@@ -179,12 +179,19 @@ func outgoing(value []byte) (*kvtypes.OutgoingValue, error) {
 
 // ── Typed store ───────────────────────────────────────────────────────────────
 
-// Store is a typed view over a [Bucket]: values are JSON-encoded T. Build one with
-// [Typed].
+// Store is a typed view over a [Bucket]: values are JSON-encoded T. Build one
+// with [Bucket.Typed].
 type Store[T any] struct{ b *Bucket }
 
-// Typed wraps a bucket as a JSON-encoded store of T.
-func Typed[T any](b *Bucket) *Store[T] { return &Store[T]{b: b} }
+// Typed returns a view of the bucket that encodes and decodes values as T
+// (JSON, or raw bytes when T is []byte).
+//
+//	cart, found, err := bucket.Typed[Cart]().Get("cart-1")
+func (b *Bucket) Typed[T any]() *Store[T] { return &Store[T]{b: b} }
+
+// Typed is [Bucket.Typed] as a free function, for call sites that read better
+// with the type first.
+func Typed[T any](b *Bucket) *Store[T] { return b.Typed[T]() }
 
 // Get decodes the value at key as T. found is false (nil error) when absent.
 func (s *Store[T]) Get(key string) (value T, found bool, err error) {

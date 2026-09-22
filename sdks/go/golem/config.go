@@ -186,10 +186,12 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 // pure and covered by native tests.
 // ---------------------------------------------------------------------------
 
-// Config returns the running agent's config from within a method. def is the
-// agent's [AgentDefinition] — its Cfg gives the config type — and scope is the
-// running method's *[Context]: requiring a context means config can be read only
-// from inside a running method, not from arbitrary code.
+// Config returns the running agent's config, typed by def — the agent's
+// [AgentDefinition], whose Cfg gives the config type. It is a method on the
+// running method's *[Context] so that config can only be read from inside a
+// running method, not from arbitrary code.
+//
+//	cfg := ctx.Config(shopagent.Agent)
 //
 // The config is materialized once per worker and cached, so repeated calls on a
 // hot method are near-free: its local fields are read from the host on the first
@@ -198,10 +200,11 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 // so a rotated secret is observed and the user decides when to read (and whether
 // to store) it. A read failure has no in-band recovery, so it panics rather than
 // returning an error; the panic surfaces as an agent-error.
-func Config[Id any, S any, Cfg any](def *AgentDefinition[Id, Cfg], scope agentScope[S]) Cfg {
-	// def fixes Cfg; scope (the running method's *Context) is a compile-time gate.
+func (c *Context[S]) Config[Id any, Cfg any](def *AgentDefinition[Id, Cfg]) Cfg {
+	// def fixes Cfg; the receiver is the compile-time "inside a running method"
+	// gate. Neither carries the config itself: it is materialized from the
+	// process-global active instance.
 	_ = def
-	_ = scope
 	return materializeAgentConfig[Cfg]()
 }
 

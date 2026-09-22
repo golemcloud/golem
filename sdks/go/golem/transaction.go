@@ -80,12 +80,11 @@ func (tx *Transaction[E]) compensate() Option[E] {
 	return None[E]()
 }
 
-// Step runs op against input inside tx. On success it records op's compensation
-// (to be run if the transaction later rolls back) and returns the Ok result; on
-// failure it returns the error result — return it from the transaction body to
-// trigger rollback. It is a free function because Go methods cannot take type
-// parameters.
-func Step[In, Out, E any](tx *Transaction[E], op Operation[In, Out, E], input In) Result[Out, E] {
+// Step runs op against input inside the transaction. On success it records op's
+// compensation (to be run if the transaction later rolls back) and returns the
+// Ok result; on failure it returns the error result — return it from the
+// transaction body to trigger rollback.
+func (tx *Transaction[E]) Step[In, Out any](op Operation[In, Out, E], input In) Result[Out, E] {
 	r := op.execute(input)
 	if r.IsErr() {
 		return r

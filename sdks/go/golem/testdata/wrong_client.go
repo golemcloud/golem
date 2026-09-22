@@ -21,7 +21,7 @@ var Payment = golem.DefineAgent[PaymentID](golem.Spec{Name: "PaymentAgent"})
 var Order = golem.DefineAgent[OrderID](golem.Spec{Name: "OrderAgent"})
 
 // Charge is a method of the PAYMENT agent (its Id is PaymentID).
-var Charge = golem.DefineMethod[PaymentID, ChargeIn, int64]("charge")
+var Charge = Payment.Method[ChargeIn, int64]("charge")
 
 func main() {
 	// A client for the ORDER agent — Client[OrderID].

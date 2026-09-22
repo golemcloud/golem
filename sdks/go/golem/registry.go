@@ -180,11 +180,16 @@ func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinitio
 	return &AgentDefinition[Id, Cfg]{name: spec.Name}
 }
 
-// DefineMethod declares a typed method descriptor. The type parameters are
-// explicit because none can be inferred from the arguments:
+// Method declares a typed method descriptor on the agent. In and Out are
+// explicit because neither can be inferred from the arguments; Id comes from the
+// agent, so a descriptor can never name a foreign agent:
 //
-//	var Add = golem.DefineMethod[CounterId, AddIn, int64]("add")
-func DefineMethod[Id any, In any, Out any](name string, opts ...MethodOpt) MethodDef[Id, In, Out] {
+//	var Add = Agent.Method[AddIn, int64]("add")
+//
+// It registers nothing: the descriptor is the shareable contract a caller uses
+// to invoke the method ([MethodDef.Call] and friends), and the implementation
+// package binds a handler to it with [AgentImpl.Handle].
+func (a *AgentDefinition[Id, Cfg]) Method[In any, Out any](name string, opts ...MethodOpt) MethodDef[Id, In, Out] {
 	var o methodOpts
 	for _, f := range opts {
 		f(&o)
@@ -198,60 +203,57 @@ func DefineMethod[Id any, In any, Out any](name string, opts ...MethodOpt) Metho
 	}
 }
 
-// Implement attaches an agent's constructor (init, which builds the private state
-// from the constructor parameters) and returns a state-bound implementation
-// handle. Put it in the agent's IMPLEMENTATION package, then register each method
-// on the handle with [Handle]. The state type S is introduced here and stays
-// private to this package — callers of the agent never see it.
+// Implement attaches the agent's constructor (init, which builds the private
+// state from the constructor parameters) and returns a state-bound
+// implementation handle. Call it in the agent's IMPLEMENTATION package, then
+// register each method on the handle with [AgentImpl.Handle]. The state type S
+// is introduced here and stays private to that package — callers of the agent
+// never see it.
 //
 //	type state struct{ count int64 }
-//	var counter = golem.Implement(counteragent.Agent, func(counteragent.CounterId) *state { return &state{} })
+//	var counter = counteragent.Agent.Implement(func(counteragent.CounterId) *state { return &state{} })
 //	func init() {
-//	    golem.Handle(counter, counteragent.Add, func(ctx *golem.Context[state], in counteragent.AddIn) int64 {
+//	    counter.Handle(counteragent.Add, func(ctx *golem.Context[state], in counteragent.AddIn) int64 {
 //	        ctx.State.count += in.By
 //	        return ctx.State.count
 //	    })
 //	}
 //
-// For an agent whose constructor reads config, use [ImplementConfigured].
-func Implement[Id any, S any, Cfg any](
-	def *AgentDefinition[Id, Cfg],
-	init func(Id) *S,
-) *AgentImpl[Id, S, Cfg] {
-	return implementInto[Id, S, Cfg](defs, def, simpleNewState[Id, S](init), init == nil)
+// For an agent whose constructor reads config, use
+// [AgentDefinition.ImplementConfigured].
+func (a *AgentDefinition[Id, Cfg]) Implement[S any](init func(Id) *S) *AgentImpl[Id, S, Cfg] {
+	return implementInto[Id, S, Cfg](defs, a, simpleNewState[Id, S](init), init == nil)
 }
 
-// ImplementConfigured is [Implement] for an agent whose constructor reads config:
-// init receives an *[InitContext] carrying the id ([InitContext.ID]) and the
-// config ([InitContext.Config]).
-func ImplementConfigured[Id any, S any, Cfg any](
-	def *AgentDefinition[Id, Cfg],
+// ImplementConfigured is [AgentDefinition.Implement] for an agent whose
+// constructor reads config: init receives an *[InitContext] carrying the id
+// ([InitContext.ID]) and the config ([InitContext.Config]).
+func (a *AgentDefinition[Id, Cfg]) ImplementConfigured[S any](
 	init func(*InitContext[Id, S, Cfg]) *S,
 ) *AgentImpl[Id, S, Cfg] {
-	return implementInto[Id, S, Cfg](defs, def, configuredNewState[Id, S, Cfg](init), init == nil)
+	return implementInto[Id, S, Cfg](defs, a, configuredNewState[Id, S, Cfg](init), init == nil)
 }
 
 // Handle registers one method handler on the implementation handle returned by
-// [Implement] / [ImplementConfigured]. S, In and Out are inferred from the
-// handler, and Id must match the descriptor's agent, so binding a descriptor to
-// the wrong agent, or a handler with the wrong signature or state type, is a
-// compile error. Compose it with the method-expression adapters ([Bind] etc.) to
-// author handlers as ordinary Go methods. Call it once per method — typically
-// inside func init(). The handler is wrapped once, here, into a uniform
-// dispatcher; dispatch itself never uses reflection to call it.
+// [AgentDefinition.Implement] / [AgentDefinition.ImplementConfigured]. In and
+// Out are inferred from the handler, and Id and S come from the handle, so
+// binding a descriptor of another agent, or a handler with the wrong signature
+// or state type, is a compile error. Compose it with the method-expression
+// adapters ([Bind] etc.) to author handlers as ordinary Go methods. Call it once
+// per method — typically inside func init(). The handler is wrapped once, here,
+// into a uniform dispatcher; dispatch itself never uses reflection to call it.
 //
 // A handler returns only its output value. There is no error return: a failed
 // invocation is signalled by panicking (the SDK recovers it into a non-retriable
 // agent-error surfaced to the caller — the worker survives). Reserve panic for
 // genuine failures; model expected, typed outcomes as a [Result] in the output.
 // Use [Must] to turn an inner (value, error) call into a panic-on-error.
-func Handle[Id any, S any, Cfg any, In any, Out any](
-	impl *AgentImpl[Id, S, Cfg],
+func (i *AgentImpl[Id, S, Cfg]) Handle[In any, Out any](
 	m MethodDef[Id, In, Out],
 	h func(*Context[S], In) Out,
 ) Registered {
-	if impl != nil && impl.e != nil {
-		bindMethodInto[Id, S, In, Out](impl.d, impl.e, m, h)
+	if i != nil && i.e != nil {
+		bindMethodInto[Id, S, In, Out](i.d, i.e, m, h)
 	}
 	return Registered{}
 }

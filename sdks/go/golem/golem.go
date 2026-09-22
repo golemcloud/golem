@@ -185,22 +185,6 @@ type Context[S any] struct {
 // AgentID returns the raw agent id the running instance was initialized with.
 func (c *Context[S]) AgentID() string { return c.agentID }
 
-// agentScope is the unexported capability carried by a method's *[Context].
-// [Config] requires it, so config can be read only from inside a running
-// method. The *S in the signature ties the scope to the agent's state type, so
-// one agent cannot read another agent's config (whose state type differs) at
-// compile time. (A constructor reads config off its own *[InitContext] via
-// [InitContext.Config], so it is not an agentScope.)
-type agentScope[S any] interface {
-	agentScopeState() *S
-}
-
-// agentScopeState satisfies [agentScope] for a method context. It exists only to
-// gate [Config] at compile time.
-//
-//nolint:unused // false positive: staticcheck's unused can't trace generic-interface satisfaction; the compiler requires this method for agentScope[S].
-func (c *Context[S]) agentScopeState() *S { return c.State }
-
 // InitContext is the execution scope passed to a [DefineConfiguredAgent]
 // constructor. It carries the constructor parameters ([InitContext.ID]) and reads
 // the agent's config with [InitContext.Config]. Its Cfg type parameter is what
