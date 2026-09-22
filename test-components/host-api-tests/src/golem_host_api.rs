@@ -968,7 +968,8 @@ impl GolemHostApi for GolemHostApiImpl {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String> {
-        tool_host::ToolRpc::new(&tool_name)
+        tool_host::ToolRpc::create(&tool_name)
+            .map_err(|error| format!("{error:?}"))?
             .invoke(&command_path, encode_tool_input(input)?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -980,7 +981,8 @@ impl GolemHostApi for GolemHostApiImpl {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String> {
-        tool_host::ToolRpc::new(&tool_name)
+        tool_host::ToolRpc::create(&tool_name)
+            .map_err(|error| format!("{error:?}"))?
             .async_invoke_and_await(&command_path, encode_tool_input(input)?, None, None)
             .get()
             .await
@@ -994,7 +996,8 @@ impl GolemHostApi for GolemHostApiImpl {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String> {
-        tool_host::ToolRpc::new(&tool_name)
+        tool_host::ToolRpc::create(&tool_name)
+            .map_err(|error| format!("{error:?}"))?
             .invoke_and_await(command_path, encode_tool_input(input)?, None, None)
             .await
             .map(|_| ())
