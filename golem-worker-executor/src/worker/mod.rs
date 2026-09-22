@@ -736,6 +736,10 @@ pub(crate) struct DurableTopologyRecoveryCache {
 }
 
 impl DurableTopologyRecoveryCache {
+    fn needs_recovery(&self) -> bool {
+        !self.consumer_deleting && !self.dirty.is_empty()
+    }
+
     fn acknowledge_recovery(&mut self, key: &StreamSessionKey, covered_through: OplogIndex) {
         if self
             .sessions
@@ -775,8 +779,23 @@ impl DurableTopologyRecoveryCache {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn refresh(
         &mut self,
+        oplog: &dyn Oplog,
+        service: &dyn WorkerService,
+        owner: &OwnedAgentId,
+        mode: AgentMode,
+        fingerprint: AgentFingerprint,
+    ) -> Result<(), String> {
+        let current = oplog.current_oplog_index().await;
+        self.refresh_through(current, oplog, service, owner, mode, fingerprint)
+            .await
+    }
+
+    async fn refresh_through(
+        &mut self,
+        current: OplogIndex,
         oplog: &dyn Oplog,
         service: &dyn WorkerService,
         owner: &OwnedAgentId,
@@ -786,7 +805,6 @@ impl DurableTopologyRecoveryCache {
         if !self.initialized {
             self.reload(service, owner, mode, fingerprint).await?;
         }
-        let current = oplog.current_oplog_index().await;
         'suffix: while self.covered_through < current {
             let count = (current.as_u64() - self.covered_through.as_u64()).min(1024);
             let entries = oplog.read_exact(self.covered_through.next(), count).await;
@@ -903,6 +921,34 @@ impl DurableStreamAttachmentReconciler {
         }
         stored.take();
     }
+}
+
+async fn wait_for_durable_stream_maintenance<F>(
+    shutdown: &CancellationToken,
+    changed: F,
+    interval: Option<Duration>,
+) -> bool
+where
+    F: std::future::Future<Output = ()>,
+{
+    if let Some(interval) = interval {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => false,
+            _ = changed => true,
+            _ = tokio::time::sleep(interval) => true,
+        }
+    } else {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => false,
+            _ = changed => true,
+        }
+    }
+}
+
+async fn wait_for_durable_stream_retry(shutdown: &CancellationToken, interval: Duration) -> bool {
+    wait_for_durable_stream_maintenance(shutdown, std::future::pending(), Some(interval)).await
 }
 
 impl Drop for DurableStreamAttachmentReconciler {
@@ -2048,7 +2094,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .deletion_started()
                 .await
         {
-            self.reconcile_durable_stream_attachments_for(&worker)
+            let _ = self
+                .reconcile_durable_stream_attachments_for(&worker)
                 .await?;
         }
         Ok((worker, reconstructed_ephemeral))
@@ -6455,11 +6502,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let producer = self.durable_stream_producer().await?;
         let session_reference = StreamRegistrationInvocation::Local(prepared.session_key.clone());
         if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS {
-            self.recover_durable_stream_topologies(
-                false,
-                Some(&producer.qualify_session(&session_reference)),
-            )
-            .await?;
+            let _ = self
+                .recover_durable_stream_topologies(
+                    false,
+                    Some(&producer.qualify_session(&session_reference)),
+                )
+                .await?;
         }
         let mappings = producer
             .materialize_bindings(&prepared.stream_mappings)
@@ -6788,24 +6836,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             || self.last_known_status.load().has_durable_stream_history
     }
 
-    async fn reconcile_durable_stream_attachments(&self) -> Result<(), WorkerExecutorError> {
+    async fn reconcile_durable_stream_attachments(&self) -> Result<bool, WorkerExecutorError> {
         self.reconcile_durable_stream_attachments_for(self).await
     }
 
     async fn reconcile_durable_stream_attachments_for(
         &self,
         data: &ResolvedWorkerData<Ctx>,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<bool, WorkerExecutorError> {
         if !data.durable_stream_producer.has_history()
             && !data.last_known_status.load().has_durable_stream_history
         {
-            return Ok(());
+            return Ok(false);
         }
         let probe =
             DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
         let config = &self.deps.config().durable_stream;
-        self.durable_stream_producer_for(data)
-            .await?
+        let producer = self.durable_stream_producer_for(data).await?;
+        if !producer.has_reconcilable_attachments().await {
+            return Ok(false);
+        }
+        producer
             .reconcile_attachments_configured(
                 Timestamp::now_utc().to_millis(),
                 u64::try_from(config.renewal_interval.as_millis()).unwrap_or(u64::MAX),
@@ -6814,16 +6865,56 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-        Ok(())
+        Ok(producer.has_reconcilable_attachments().await)
+    }
+
+    async fn run_durable_stream_maintenance(&self, producer: &DurableStreamStore) -> bool {
+        let mut needs_periodic_maintenance = false;
+        if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS && !producer.deletion_started().await
+        {
+            match self.recover_durable_stream_topologies(true, None).await {
+                Ok(pending) => {
+                    needs_periodic_maintenance |= pending;
+                    if let Err(error) = self.recover_finished_durable_streaming_sessions().await {
+                        needs_periodic_maintenance = true;
+                        warn!(
+                            agent_id = %self.agent_id(),
+                            error = %error,
+                            "Failed to recover finished durable stream sessions"
+                        );
+                    }
+                }
+                Err(error) => {
+                    needs_periodic_maintenance = true;
+                    warn!(
+                        agent_id = %self.agent_id(),
+                        error = %error,
+                        "Failed to recover durable stream sessions"
+                    );
+                }
+            }
+        }
+        match self.reconcile_durable_stream_attachments().await {
+            Ok(active) => needs_periodic_maintenance |= active,
+            Err(error) => {
+                needs_periodic_maintenance = true;
+                warn!(
+                    agent_id = %self.agent_id(),
+                    error = %error,
+                    "Failed to reconcile durable stream attachments"
+                );
+            }
+        }
+        needs_periodic_maintenance
     }
 
     async fn recover_durable_stream_topologies(
         &self,
         retry_remote_cancellations: bool,
         session: Option<&StreamSessionKey>,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<bool, WorkerExecutorError> {
         if !self.has_durable_stream_history() {
-            return Ok(());
+            return Ok(false);
         }
         let cache = self.durable_topology_recovery.clone();
         let oplog = self.oplog.clone();
@@ -6831,11 +6922,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let owner = self.owned_agent_id.clone();
         let mode = self.agent_mode();
         let fingerprint = self.initial_worker_metadata.fingerprint;
+        let current = self.last_known_status.load().oplog_idx;
         let session = session.cloned();
         let refresh = tokio::spawn(async move {
             let mut cache = cache.lock().await;
             cache
-                .refresh(oplog.as_ref(), service.as_ref(), &owner, mode, fingerprint)
+                .refresh_through(
+                    current,
+                    oplog.as_ref(),
+                    service.as_ref(),
+                    &owner,
+                    mode,
+                    fingerprint,
+                )
                 .await?;
             if cache.consumer_deleting {
                 return Ok::<_, String>(Vec::new());
@@ -6964,7 +7063,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         if recoverable.is_empty() {
-            return first_error.map_or(Ok(()), |error| Err(WorkerExecutorError::runtime(error)));
+            if let Some(error) = first_error {
+                return Err(WorkerExecutorError::runtime(error));
+            }
+            return Ok(self.durable_topology_recovery.lock().await.needs_recovery());
         }
         let producer = self.durable_stream_producer().await?;
         let auth_ctx = self.durable_stream_consumer_auth_ctx()?;
@@ -7018,7 +7120,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let Some(error) = first_error {
             return Err(WorkerExecutorError::runtime(error));
         }
-        Ok(())
+        Ok(self.durable_topology_recovery.lock().await.needs_recovery())
     }
 
     pub(crate) async fn control_durable_stream_attachment(
@@ -7337,8 +7439,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) fn start_durable_stream_attachment_reconciler(this: &Arc<Self>) {
         let worker = Arc::downgrade(this);
         let shutdown = this.durable_stream_attachment_reconciler.shutdown.clone();
-        // This periodic task must not pin an idle worker; its active iterations own their
-        // worker separately. The root still belongs to the shared oplog generation.
+        // This maintenance task must not pin an idle worker; its active passes own their worker
+        // separately. The root still belongs to the shared oplog generation.
         let owner = this.oplog.task_owner().cloned().unwrap_or_default();
         let scope = tasks::TaskScope::default();
         if scope.bind(&owner).is_err() {
@@ -7354,13 +7456,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             scope
                 .run(async move {
                     tokio::task::yield_now().await;
-                    let mut interval = tokio::time::interval(interval_duration);
                     loop {
-                        tokio::select! {
-                            biased;
-                            _ = shutdown.cancelled() => break,
-                            _ = interval.tick() => {}
-                        }
                         if shutdown.is_cancelled() {
                             break;
                         }
@@ -7368,37 +7464,54 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             break;
                         };
                         if worker.cache_retirement_in_progress() {
+                            drop(worker);
+                            if !wait_for_durable_stream_retry(&shutdown, interval_duration).await {
+                                break;
+                            }
                             continue;
                         }
+                        if !worker.has_durable_stream_history() {
+                            drop(worker);
+                            if !wait_for_durable_stream_retry(&shutdown, interval_duration).await {
+                                break;
+                            }
+                            continue;
+                        }
+                        let producer = match worker.durable_stream_producer().await {
+                            Ok(producer) => producer,
+                            Err(error) => {
+                                warn!(
+                                    agent_id = %worker.agent_id(),
+                                    error = %error,
+                                    "Failed to load durable stream maintenance state"
+                                );
+                                drop(worker);
+                                if !wait_for_durable_stream_retry(&shutdown, interval_duration)
+                                    .await
+                                {
+                                    break;
+                                }
+                                continue;
+                            }
+                        };
+                        let changed = producer.session_records_changed().notified();
+                        tokio::pin!(changed);
+                        changed.as_mut().enable();
+
                         // Remote attachment control may acquire another cold worker that refers back
                         // to us. Only run this after local construction has published readiness.
-                        let recovery = async {
-                            if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS
-                                && worker.has_durable_stream_history()
-                                && !worker
-                                    .durable_stream_producer()
-                                    .await?
-                                    .deletion_started()
-                                    .await
-                            {
-                                worker.recover_durable_stream_topologies(true, None).await?;
-                                worker.recover_finished_durable_streaming_sessions().await?;
-                            }
-                            Ok::<_, WorkerExecutorError>(())
-                        };
-                        if let Err(error) = recovery.await {
-                            warn!(
-                                agent_id = %worker.agent_id(),
-                                error = %error,
-                                "Failed to recover durable stream sessions"
-                            );
-                        }
-                        if let Err(error) = worker.reconcile_durable_stream_attachments().await {
-                            warn!(
-                                agent_id = %worker.agent_id(),
-                                error = %error,
-                                "Failed to reconcile durable stream attachments"
-                            );
+                        let needs_periodic_maintenance =
+                            worker.run_durable_stream_maintenance(&producer).await;
+                        drop(worker);
+
+                        if !wait_for_durable_stream_maintenance(
+                            &shutdown,
+                            changed,
+                            needs_periodic_maintenance.then_some(interval_duration),
+                        )
+                        .await
+                        {
+                            break;
                         }
                     }
                 })
@@ -11283,6 +11396,51 @@ mod tests {
             .expect("retrying stop did not return after the in-flight pass completed")
             .expect("retrying stop task failed");
         assert!(reconciler.handle.lock().await.is_none());
+    }
+
+    #[test]
+    async fn quiescent_durable_stream_maintenance_waits_for_committed_state_change() {
+        let shutdown = CancellationToken::new();
+        let changed = tokio::sync::Notify::new();
+        let notification = changed.notified();
+        tokio::pin!(notification);
+        notification.as_mut().enable();
+        let mut waiting = Box::pin(wait_for_durable_stream_maintenance(
+            &shutdown,
+            notification,
+            None,
+        ));
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut waiting)
+                .await
+                .is_err(),
+            "quiescent maintenance woke without a committed stream-state change"
+        );
+        changed.notify_waiters();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .expect("maintenance did not observe committed stream-state change")
+        );
+    }
+
+    #[test]
+    async fn active_durable_stream_maintenance_keeps_its_periodic_deadline() {
+        let shutdown = CancellationToken::new();
+
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                wait_for_durable_stream_maintenance(
+                    &shutdown,
+                    std::future::pending(),
+                    Some(Duration::from_millis(10)),
+                ),
+            )
+            .await
+            .expect("active maintenance did not wake at its periodic deadline")
+        );
     }
 
     #[test]

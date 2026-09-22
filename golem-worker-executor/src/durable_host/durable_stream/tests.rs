@@ -2504,7 +2504,9 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     second.consumer_invocation.callee = second.consumer.clone();
     second.consumer_invocation.callee_fingerprint = second.expected_consumer_fingerprint;
 
+    assert!(!live.has_reconcilable_attachments().await);
     live.prepare_attachment(first.clone(), 100).await.unwrap();
+    assert!(live.has_reconcilable_attachments().await);
     assert!(
         !live
             .has_active_attachment(&first.session_key, &handle)
@@ -2526,6 +2528,7 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     )
     .await
     .unwrap();
+    assert!(live.has_reconcilable_attachments().await);
     assert!(
         live.has_active_attachment(&first.session_key, &handle)
             .await
@@ -2538,6 +2541,7 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     )
     .await
     .unwrap();
+    assert!(!live.has_reconcilable_attachments().await);
     assert!(
         !live
             .has_active_attachment(&first.session_key, &handle)
