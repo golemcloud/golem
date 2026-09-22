@@ -1106,15 +1106,21 @@ struct HttpWorkerLogEventStream {
     read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
 }
 
+/// Gives the URL of the WebSocket that streams the events of the agent. The agent name is one
+/// segment of the path, so it is percent-encoded.
+fn worker_connect_url(base_url: &url::Url, agent_id: &AgentId) -> String {
+    format!(
+        "ws://{}:{}/v1/components/{}/workers/{}/connect",
+        base_url.host().unwrap(),
+        base_url.port_or_known_default().unwrap(),
+        agent_id.component_id.0,
+        agent_id.agent_name_encoded(),
+    )
+}
+
 impl HttpWorkerLogEventStream {
     async fn new(client: Arc<WorkerClientLive>, agent_id: &AgentId) -> anyhow::Result<Self> {
-        let url = format!(
-            "ws://{}:{}/v1/components/{}/workers/{}/connect",
-            client.context.base_url.host().unwrap(),
-            client.context.base_url.port_or_known_default().unwrap(),
-            agent_id.component_id.0,
-            agent_id.agent_id,
-        );
+        let url = worker_connect_url(&client.context.base_url, agent_id);
 
         let mut connection_request = url
             .into_client_request()
@@ -1186,5 +1192,33 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
                 None => return Ok(None),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::worker_connect_url;
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    fn the_connect_url_percent_encodes_the_agent_name() {
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::nil()),
+            agent_id: r#"counter("a/b?c#d%e")"#.to_string(),
+        };
+
+        assert_eq!(
+            worker_connect_url(
+                &url::Url::parse("http://localhost:9005").unwrap(),
+                &agent_id
+            ),
+            format!(
+                "ws://localhost:9005/v1/components/{}/workers/counter%28%22a%2Fb%3Fc%23d%25e%22%29/connect",
+                Uuid::nil()
+            )
+        );
     }
 }
