@@ -292,16 +292,17 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             .await
     }
 
-    async fn delete_key_epoch(
+    async fn delete_with_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.storage_by_namespace(&namespace)
             .await?
-            .delete_key_epoch(svc_name, api_name, namespace, key)
+            .delete_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
             .await
     }
 

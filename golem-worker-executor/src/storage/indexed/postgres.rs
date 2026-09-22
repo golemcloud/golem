@@ -446,28 +446,13 @@ impl IndexedStorage for PostgresIndexedStorage {
                                 .bind(key.clone()),
                             )
                             .await?;
-                        let mut actual = None;
-                        let mut writer_matches = false;
-                        if let Some((epoch, writer)) = stored {
-                            let epoch = u64::try_from(epoch).map_err(|_| {
-                                FencedTxError::Corrupt(Self::negative_epoch_message(epoch, &key))
-                            })?;
-                            actual = Some(ShardEpoch(epoch));
-                            writer_matches = writer == writer_id;
-                        }
-                        // Strict equality on the epoch, and the row's own writer on top of it. A
-                        // stored epoch above ours means a newer writer has taken over; below ours
-                        // means the caller skipped `set_key_epoch`; equal but recorded by another
-                        // process means the epoch was issued twice, and neither may write through
-                        // the other. An absent row fences too.
-                        if actual != Some(expected) || !writer_matches {
-                            return Err(FencedTxError::Fenced {
-                                key: key.clone(),
-                                expected,
-                                actual,
-                                writer_conflict: actual == Some(expected) && !writer_matches,
-                            });
-                        }
+                        FencedTxError::check_record(
+                            &key,
+                            expected,
+                            stored,
+                            &writer_id,
+                            Self::negative_epoch_message,
+                        )?;
                     }
 
                     for chunk in pairs.chunks(Self::APPEND_MANY_CHUNK_SIZE) {
@@ -572,24 +557,64 @@ impl IndexedStorage for PostgresIndexedStorage {
         Ok(())
     }
 
-    async fn delete_key_epoch(
+    async fn delete_with_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
-        let query = sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = $1 AND key = $2;")
-            .bind(Self::namespace(namespace))
-            .bind(key);
-
+        let namespace = Self::namespace(namespace);
+        let key = key.to_string();
+        let writer_id = self.writer_id.to_string();
         self.pool
-            .with_rw(svc_name, api_name)
-            .execute(query)
+            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
+                async move {
+                    // Holding the row, as an append does: a writer taking the key over waits for
+                    // this transaction, and then finds nothing left to take over.
+                    if let Some(expected) = expected_epoch {
+                        let stored: Option<(i64, String)> = tx
+                            .fetch_optional_as(
+                                sqlx::query_as(
+                                    "SELECT epoch, writer FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
+                                )
+                                .bind(namespace.clone())
+                                .bind(key.clone()),
+                            )
+                            .await?;
+                        FencedTxError::check_record(
+                            &key,
+                            expected,
+                            stored,
+                            &writer_id,
+                            Self::negative_epoch_message,
+                        )?;
+                    }
+                    tx.execute(
+                        sqlx::query(
+                            "DELETE FROM index_storage WHERE namespace IN ($1, $2) AND key = $3;",
+                        )
+                        .bind(format!("{namespace}-present"))
+                        .bind(namespace.clone())
+                        .bind(key.clone()),
+                    )
+                    .await?;
+                    tx.execute(
+                        sqlx::query(
+                            "DELETE FROM indexed_key_epoch WHERE namespace = $1 AND key = $2;",
+                        )
+                        .bind(namespace)
+                        .bind(key),
+                    )
+                    .await?;
+                    Ok(())
+                }
+                .boxed()
+            })
             .await
-            .map(|_| ())
-            .map_err(Self::classify_repo_error_general)
+            .map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error_general))
     }
 
     async fn move_if_absent(

@@ -2994,6 +2994,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             self.before_deletion_stage(WorkerDeletionStage::DurableStateRemoved)
                 .await?;
+            // A shard that left while the deletion ran took the agent with it, and a given-up
+            // agent writes nothing more - removing its state included.
+            if self.is_given_up() {
+                return Err(self.leave_deletion_to_new_owner(None).await);
+            }
             let mut lifecycle = self
                 .oplog_service()
                 .lock_lifecycle(&self.owned_agent_id.agent_id)
@@ -3011,9 +3016,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await;
                 result.map_err(WorkerExecutorError::runtime)?;
             }
-            self.worker_service()
-                .remove(&mut lifecycle, &self.owned_agent_id)
-                .await?;
+            let removed = self
+                .worker_service()
+                .remove(
+                    &mut lifecycle,
+                    &self.owned_agent_id,
+                    self.oplog.shard_epoch(),
+                )
+                .await;
+            if let Err(error) = removed {
+                drop(lifecycle);
+                return Err(match shard_lost_give_up_reason(&error, None) {
+                    Some(reason) => self.leave_deletion_to_new_owner(Some(reason)).await,
+                    None => error,
+                });
+            }
             self.complete_deletion_stage(WorkerDeletionStage::DurableStateRemoved)
                 .await;
         }
@@ -3033,6 +3050,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await;
         }
         Ok(())
+    }
+
+    /// Ends a deletion whose agent has moved to another executor. Its durable state is the new
+    /// owner's now, so nothing more is removed from storage: this executor drops only its own cached
+    /// generation - which `give_up` left to the deletion - and the caller gets the answer that
+    /// sends the delete to the new owner.
+    async fn leave_deletion_to_new_owner(
+        self: &Arc<Self>,
+        reason: Option<GiveUpReason>,
+    ) -> WorkerExecutorError {
+        if let Some(reason) = reason {
+            self.mark_given_up(reason);
+        }
+        self.active_agents().remove_worker(self, true).await;
+        self.give_up_error()
     }
 
     async fn before_deletion_stage(

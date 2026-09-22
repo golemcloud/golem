@@ -1370,6 +1370,7 @@ mod tests {
             &self,
             _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
+            _expected_epoch: Option<golem_common::model::ShardEpoch>,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }

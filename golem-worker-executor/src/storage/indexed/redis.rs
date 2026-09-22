@@ -109,6 +109,26 @@ end
 return redis.error_reply('FENCED ' .. epoch .. ' 0')
 "#;
 
+    /// `KEYS`: the stream, then its epoch record. `ARGV`: the epoch and the writer the delete
+    /// asserts, compared the way [`Self::FENCED_APPEND_SCRIPT`] does, or nothing for an
+    /// unconditional delete. Both keys go in the one `DEL`, so a refused delete removes neither.
+    const DELETE_WITH_EPOCH_SCRIPT: &'static str = r#"
+if #ARGV > 0 then
+  local stored = redis.call('HMGET', KEYS[2], 'epoch', 'writer')
+  if stored[1] == false then
+    return redis.error_reply('FENCED - 0')
+  end
+  if stored[1] ~= ARGV[1] then
+    return redis.error_reply('FENCED ' .. stored[1] .. ' 0')
+  end
+  if stored[2] ~= ARGV[2] then
+    return redis.error_reply('FENCED ' .. stored[1] .. ' 1')
+  end
+end
+redis.call('DEL', KEYS[1], KEYS[2])
+return redis.status_reply('OK')
+"#;
+
     /// Where a key's epoch lives. Not under the key's own name: `scan` matches `...oplog:*`, and
     /// an `...oplog:<key>:epoch` sibling would come back from it as a key of its own.
     fn epoch_key(namespace: IndexedStorageNamespace, key: &str) -> String {
@@ -569,18 +589,39 @@ impl IndexedStorage for RedisIndexedStorage {
             })
     }
 
-    async fn delete_key_epoch(
+    async fn delete_with_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
+        let args = match expected_epoch {
+            Some(expected) => vec![
+                Value::from(expected.0.to_string()),
+                Value::from(self.writer_id.to_string()),
+            ],
+            None => vec![],
+        };
         self.redis
             .with(svc_name, api_name)
-            .del(Self::epoch_key(namespace, key))
+            .eval(
+                Self::DELETE_WITH_EPOCH_SCRIPT,
+                &[
+                    Self::composite_key(namespace.clone(), key),
+                    Self::epoch_key(namespace, key),
+                ],
+                args,
+                None,
+            )
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))
+            .map(|_| ())
+            .map_err(|error| {
+                expected_epoch
+                    .and_then(|expected| Self::parse_fenced(&error, key, expected))
+                    .unwrap_or_else(|| IndexedStorageError::Other(error.to_string()))
+            })
     }
 
     async fn move_if_absent(

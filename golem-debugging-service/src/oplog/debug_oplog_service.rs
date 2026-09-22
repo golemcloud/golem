@@ -19,12 +19,14 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
-use golem_common::model::{AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor};
+use golem_common::model::{
+    AgentId, AgentMetadata, AgentStatusRecord, OwnedAgentId, ScanCursor, ShardEpoch,
+};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{
-    OpenOplogs, Oplog, OplogLifecycleGuard, OplogService,
+    OpenOplogs, Oplog, OplogError, OplogLifecycleGuard, OplogService,
 };
 use golem_worker_executor::services::stream_session_index::StreamSessionIndexService;
 use std::collections::BTreeMap;
@@ -149,9 +151,10 @@ impl OplogService for DebugOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) {
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
         self.inner
-            .delete(lifecycle, owned_agent_id, agent_mode)
+            .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
             .await
     }
 

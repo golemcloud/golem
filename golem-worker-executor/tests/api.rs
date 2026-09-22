@@ -50,8 +50,9 @@ use golem_worker_executor::worker::{
 };
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, fake_ownership, registry_test_card, start, start_customized,
-    start_with_overrides, start_with_redis_storage, take_agent_oplog_over_at_epoch,
+    WorkerExecutorTestDependencies, agent_oplog_length, fake_ownership, registry_test_card, start,
+    start_customized, start_with_overrides, start_with_redis_storage,
+    take_agent_oplog_over_at_epoch,
 };
 use pretty_assertions::assert_eq;
 use redis::Commands;
@@ -7891,6 +7892,72 @@ async fn an_invocation_enqueued_onto_a_fenced_oplog_is_refused_rather_than_accep
     })
     .await
     .map_err(|_| anyhow!("the fenced agent stayed cached on this executor"))?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_deletion_that_outlived_the_shard_leaves_the_agent_to_its_new_owner(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let name = agent_id!("Clocks", "deleted-after-its-shard-moved");
+    let worker_id = executor.start_agent(&component.id, name.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &name, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    let hook = Arc::new(DeletionStageHook::new(
+        owned.clone(),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }.in_current_span()
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated())
+        .await
+        .map_err(|_| anyhow!("the deletion never reached the removal of the durable state"))?;
+
+    // The deletion was accepted while this executor owned the shard. Before it gets to the agent's
+    // state the shard moves on, and the new owner takes the oplog over.
+    take_agent_oplog_over_at_epoch(deps, &context, &owned, 1).await?;
+    let entries = agent_oplog_length(deps, &context, &owned).await?;
+    assert!(entries > 0);
+    hook.release();
+
+    let result = tokio::time::timeout(Duration::from_secs(30), deleting).await??;
+    let rendered = format!(
+        "{:#}",
+        result.expect_err("the deletion belongs to the shard's new owner now")
+    );
+    assert!(
+        rendered.contains("ShardingNotReady")
+            || rendered.contains("Sharding not ready")
+            || rendered.contains("fenced"),
+        "the caller has to be sent to the new owner; instead it got: {rendered}"
+    );
+    assert_eq!(
+        agent_oplog_length(deps, &context, &owned).await?,
+        entries,
+        "a deletion that lost the shard removes nothing from the new owner's oplog"
+    );
+    assert!(
+        executor.active_agent(&owned).await.is_none(),
+        "this executor still holds an agent it has given up"
+    );
     Ok(())
 }
 

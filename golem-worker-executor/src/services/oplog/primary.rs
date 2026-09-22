@@ -1000,40 +1000,58 @@ impl OplogService for PrimaryOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) {
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
         record_oplog_call("delete");
         lifecycle.assert_agent(&owned_agent_id.agent_id);
 
-        {
-            let is = self.indexed_storage.clone();
-            let agent_id = owned_agent_id.agent_id();
-            let key = Self::oplog_key(&owned_agent_id.agent_id);
-            // The epoch record goes before the entries: a writer still holding this oplog open is
-            // then refused by the absent record, instead of appending entries back into an oplog
-            // that is being removed.
-            retry_storage_op(&self.retry_config, "delete_key_epoch", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
+        let is = self.indexed_storage.clone();
+        let agent_id = owned_agent_id.agent_id();
+        let key = Self::oplog_key(&owned_agent_id.agent_id);
+        // The entries and the epoch record go in one step, and only while the record is still
+        // this executor's: a delete that outlived the agent's shard is refused like a write, and
+        // leaves the new owner's oplog alone.
+        let outcome = retry_storage_op_fenceable(&self.retry_config, "delete", &key, || {
+            let is = is.clone();
+            let ns = IndexedStorageNamespace::OpLog {
+                agent_id: agent_id.clone(),
+                agent_mode,
+            };
+            let key = key.clone();
+            async move {
+                is.delete_with_epoch("oplog", "delete", ns, &key, expected_epoch)
+                    .await
+            }
+        })
+        .await;
+        match outcome {
+            Ok(()) => Ok(()),
+            Err(IndexedStorageError::Fenced {
+                expected,
+                actual,
+                writer_conflict,
+                ..
+            }) => {
+                warn!(
+                    agent_id = %owned_agent_id,
+                    expected_epoch = expected.0,
+                    actual_epoch = ?actual.map(|epoch| epoch.0),
+                    writer_conflict,
+                    "Oplog delete refused: the shard has a new owner"
+                );
+                let fence = OplogFence {
+                    agent_id,
+                    expected_epoch: expected,
+                    actual_epoch: actual,
+                    writer_conflict,
                 };
-                let key = key.clone();
-                async move {
-                    is.delete_key_epoch("oplog", "delete_key_epoch", ns, &key)
-                        .await
+                if let Some(observer) = &self.fence_observer {
+                    observer.fenced(&fence);
                 }
-            })
-            .await;
-            retry_storage_op(&self.retry_config, "delete", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    agent_id: agent_id.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                async move { is.with("oplog", "delete").delete(ns, &key).await }
-            })
-            .await;
+                Err(OplogError::Fenced(fence))
+            }
+            // `retry_storage_op_fenceable` panics on every other permanent failure.
+            Err(other) => unreachable!("unexpected storage error: {other}"),
         }
     }
 

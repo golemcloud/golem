@@ -201,12 +201,17 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
     ) -> OplogIndex;
 
+    /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
+    /// own handle asserts - only while that is still the epoch recorded for the oplog and this
+    /// executor recorded it: otherwise nothing is deleted and the delete is refused with
+    /// [`OplogError::Fenced`], as a write at that epoch would be. `None` deletes unconditionally.
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    );
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError>;
 
     /// Reads exactly `n` contiguous entries starting at `idx`.
     async fn read_exact(

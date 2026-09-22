@@ -1957,6 +1957,32 @@ pub async fn take_agent_oplog_over_at_epoch(
     Ok(())
 }
 
+/// How many entries the agent's durable oplog holds in storage, read without going through any
+/// executor - the same storage [`take_agent_oplog_over_at_epoch`] writes to.
+pub async fn agent_oplog_length(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+) -> anyhow::Result<u64> {
+    let storage = SqliteIndexedStorage::configured(&derive_disjoint_sqlite_config(
+        &sqlite_storage_config(deps, context),
+        "indexed",
+    ))
+    .await
+    .map_err(|err| anyhow!(err))?;
+    Ok(storage
+        .length(
+            "oplog",
+            "test_length",
+            IndexedStorageNamespace::OpLog {
+                agent_id: owned_agent_id.agent_id(),
+                agent_mode: AgentMode::Durable,
+            },
+            &owned_agent_id.agent_id.to_redis_key(),
+        )
+        .await?)
+}
+
 fn apply_sqlite_storage_config(
     config: &mut GolemConfig,
     deps: &WorkerExecutorTestDependencies,

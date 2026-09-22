@@ -69,6 +69,30 @@ impl InMemoryIndexedStorage {
         }
     }
 
+    /// Refuses unless `record` holds exactly `expected`, recorded by this writer; an absent record
+    /// refuses too. The same terms as the SQL backends' check.
+    fn check_record(
+        &self,
+        key: &str,
+        expected: ShardEpoch,
+        record: &scc::hash_map::Entry<'_, String, (ShardEpoch, WriterId)>,
+    ) -> Result<(), IndexedStorageError> {
+        let stored = match record {
+            scc::hash_map::Entry::Occupied(occupied) => Some(*occupied.get()),
+            scc::hash_map::Entry::Vacant(_) => None,
+        };
+        match stored {
+            Some((epoch, writer)) if epoch == expected && writer == self.writer_id => Ok(()),
+            other => Err(IndexedStorageError::Fenced {
+                key: key.to_string(),
+                expected,
+                actual: other.map(|(epoch, _)| epoch),
+                writer_conflict: other
+                    .is_some_and(|(epoch, writer)| epoch == expected && writer != self.writer_id),
+            }),
+        }
+    }
+
     /// Inserts `pairs` under `composite_key`, all or nothing, after checking `expected_epoch`
     /// against the key's record. The record's entry is held until the insert is done.
     async fn append_checked(
@@ -83,23 +107,7 @@ impl InMemoryIndexedStorage {
             None => None,
             Some(expected) => {
                 let record = self.key_epochs.entry_async(composite_key.clone()).await;
-                let stored = match &record {
-                    scc::hash_map::Entry::Occupied(occupied) => Some(*occupied.get()),
-                    scc::hash_map::Entry::Vacant(_) => None,
-                };
-                match stored {
-                    Some((epoch, writer)) if epoch == expected && writer == self.writer_id => {}
-                    other => {
-                        return Err(IndexedStorageError::Fenced {
-                            key: key.to_string(),
-                            expected,
-                            actual: other.map(|(epoch, _)| epoch),
-                            writer_conflict: other.is_some_and(|(epoch, writer)| {
-                                epoch == expected && writer != self.writer_id
-                            }),
-                        });
-                    }
-                }
+                self.check_record(key, expected, &record)?;
                 Some(record)
             }
         };
@@ -351,7 +359,14 @@ impl IndexedStorage for InMemoryIndexedStorage {
         pairs: Arc<[(u64, bytes::Bytes)]>,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let primary_oplog_insert = matches!(namespace, IndexedStorageNamespace::OpLog { .. });
+        // Nothing to write is nothing to fence, as on every other backend.
+        if pairs.is_empty() {
+            return Ok(());
+        }
+        let primary_oplog_insert = matches!(
+            namespace,
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+        );
         let composite_key = Self::composite_key(namespace.clone(), key);
         let pairs: Vec<(u64, Vec<u8>)> = pairs
             .iter()
@@ -398,15 +413,25 @@ impl IndexedStorage for InMemoryIndexedStorage {
         }
     }
 
-    async fn delete_key_epoch(
+    async fn delete_with_epoch(
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
-        self.key_epochs.remove_async(&composite_key).await;
+        // The record's guard first and held across the data removal, in the order an append takes
+        // them, so nobody can record a new generation between the check and the deletes.
+        let record = self.key_epochs.entry_async(composite_key.clone()).await;
+        if let Some(expected) = expected_epoch {
+            self.check_record(key, expected, &record)?;
+        }
+        self.data.remove_async(&composite_key).await;
+        if let scc::hash_map::Entry::Occupied(occupied) = record {
+            let _ = occupied.remove();
+        }
         Ok(())
     }
 

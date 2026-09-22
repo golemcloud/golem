@@ -2946,7 +2946,8 @@ impl OplogService for TestCase {
         _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-    ) {
+        _expected_epoch: Option<golem_common::model::ShardEpoch>,
+    ) -> Result<(), crate::services::oplog::OplogError> {
         unreachable!()
     }
 

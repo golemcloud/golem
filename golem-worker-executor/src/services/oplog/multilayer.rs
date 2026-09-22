@@ -763,15 +763,19 @@ impl OplogService for MultiLayerOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) {
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
         self.abort_transfer(&owned_agent_id.agent_id).await;
+        // The primary decides: the archive layers carry no epoch of their own, and a refused
+        // delete means they now hold the new owner's history.
         self.primary
-            .delete(lifecycle, owned_agent_id, agent_mode)
-            .await;
+            .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+            .await?;
         for layer in &self.lower {
             layer.delete(owned_agent_id, agent_mode).await
         }
+        Ok(())
     }
 
     async fn read_exact(

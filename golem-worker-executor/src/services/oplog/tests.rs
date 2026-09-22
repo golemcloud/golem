@@ -22,6 +22,7 @@ use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
+    WriterId,
 };
 use assert2::check;
 use bytes::Bytes;
@@ -650,15 +651,16 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             .await
     }
 
-    async fn delete_key_epoch(
+    async fn delete_with_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.inner
-            .delete_key_epoch(svc_name, api_name, namespace, key)
+            .delete_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
             .await
     }
 
@@ -2043,7 +2045,10 @@ async fn lifecycle_reader_blocks_delete_and_late_drop_cannot_remove_replacement(
             entered_tx.send(()).unwrap();
             let mut guard = lock.await;
             old.stop_and_wait().await.unwrap();
-            service.delete(&mut guard, &id, AgentMode::Durable).await;
+            service
+                .delete(&mut guard, &id, AgentMode::Durable, None)
+                .await
+                .unwrap();
             let next_lifecycle = service.lock_lifecycle(&id.agent_id);
             tokio::pin!(next_lifecycle);
             assert!(futures::poll!(&mut next_lifecycle).is_pending());
@@ -2751,6 +2756,95 @@ async fn differing_read_back_on_a_moved_shard_is_fenced_instead_of_panicking(_tr
     );
     // The original attempt, then the reconciliation probe once the read-back mismatched.
     assert_eq!(indexed_storage.append_many_attempts(), 2);
+}
+
+#[test]
+async fn a_delete_that_outlived_the_shard_leaves_the_oplog_to_its_new_owner(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage,
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let archive = Arc::new(CompressedOplogArchiveService::new(
+        indexed_storage.clone(),
+        1,
+        RetryConfig::default(),
+    ));
+    let service = MultiLayerOplogService::new(primary.clone(), nev![archive], 100, 1);
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "delete-after-the-shard-moved".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = service
+        .create(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            OplogEntry::no_op(None),
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(5)),
+        )
+        .await;
+    oplog.add_and_commit(OplogEntry::no_op(None)).await.unwrap();
+    let last = oplog.current_oplog_index().await;
+    drop(oplog);
+
+    // The shard moves on and another executor takes the oplog over at the next epoch, while this
+    // one is still working through a deletion it accepted at epoch 5.
+    indexed_storage
+        .for_writer(WriterId(Uuid::new_v4()))
+        .set_key_epoch(
+            "oplog",
+            "set_key_epoch",
+            IndexedStorageNamespace::OpLog {
+                agent_id: agent_id.clone(),
+                agent_mode: AgentMode::Durable,
+            },
+            &agent_id.to_redis_key(),
+            ShardEpoch(6),
+        )
+        .await
+        .unwrap();
+
+    let result = service
+        .delete(
+            &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(ShardEpoch(5)),
+        )
+        .await;
+
+    match result {
+        Err(OplogError::Fenced(fence)) => {
+            assert_eq!(fence.expected_epoch, ShardEpoch(5));
+            assert_eq!(fence.actual_epoch, Some(ShardEpoch(6)));
+        }
+        other => panic!("expected the delete to be fenced, got {other:?}"),
+    }
+    assert!(
+        service.exists(&owned_agent_id, AgentMode::Durable).await,
+        "a refused delete removes nothing"
+    );
+    assert_eq!(
+        primary
+            .get_last_index(&owned_agent_id, AgentMode::Durable)
+            .await,
+        last
+    );
 }
 
 #[test]
@@ -5785,8 +5879,10 @@ async fn open_multilayer_oplog_retains_stale_index_after_service_deletion(_traci
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
+            None,
         )
-        .await;
+        .await
+        .unwrap();
 
     assert_eq!(oplog.current_oplog_index().await, current);
     assert!(!service.exists(&owned_agent_id, AgentMode::Durable).await);
@@ -5966,8 +6062,10 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             agent_mode,
+            None,
         )
-        .await;
+        .await
+        .unwrap();
 
     let append_completed = append_finished.notified();
     release_append.notify_one();
@@ -7386,8 +7484,10 @@ async fn durable_and_ephemeral_oplogs_are_isolated_for_same_agent_id(_tracing: &
             &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
+            None,
         )
-        .await;
+        .await
+        .unwrap();
     assert!(
         !oplog_service
             .exists(&owned_agent_id, AgentMode::Durable)
@@ -8778,8 +8878,10 @@ async fn deleting_an_oplog_fences_a_writer_that_still_holds_it(_tracing: &Tracin
             &mut service.lock_lifecycle(&owned_agent_id.agent_id).await,
             &owned_agent_id,
             AgentMode::Durable,
+            None,
         )
-        .await;
+        .await
+        .unwrap();
 
     // The handle outlives the delete, as a zombie executor's would. Its epoch is still the one
     // the record held, so only the record's absence can refuse it - an entry landing here would

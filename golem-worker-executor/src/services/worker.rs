@@ -18,7 +18,7 @@ use super::{HasComponentService, HasConfig, HasOplogService};
 use crate::durable_host::durable_stream::SessionControlMetadata;
 use crate::durable_host::durable_stream::metadata::{ProducerMetadataKey, ProducerMetadataRow};
 use crate::metrics::workers::record_worker_call;
-use crate::services::oplog::{OplogLifecycleGuard, OplogService};
+use crate::services::oplog::{OplogError, OplogLifecycleGuard, OplogService};
 use crate::services::shard::ShardService;
 use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::keyvalue::{
@@ -34,7 +34,7 @@ use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
     DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
-    OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState, ShardId,
+    OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState, ShardEpoch, ShardId,
     SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize};
@@ -309,10 +309,16 @@ pub trait WorkerService: Send + Sync {
     ///
     /// Returns `Err` when the storage could not be reached. Delete is not retried by the caller:
     /// a retry would re-run the oplog delete, so the error is reported instead.
+    ///
+    /// `expected_epoch` is the epoch the caller's oplog handle asserts. The oplog is deleted only
+    /// while this executor still holds it at that epoch; otherwise nothing at all is removed and
+    /// the result is [`WorkerExecutorError::OplogFenced`], because the agent's state belongs to
+    /// the shard's new owner.
     async fn remove(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
@@ -1314,6 +1320,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), WorkerExecutorError> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
         let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
@@ -1321,9 +1328,18 @@ impl WorkerService for DefaultWorkerService {
         record_worker_call("remove");
 
         if let Some(agent_mode) = self.get_agent_mode(owned_agent_id).await? {
+            // First, so that a refusal leaves every other piece of the agent's state in place too.
             self.oplog_service
-                .delete(lifecycle, owned_agent_id, agent_mode)
-                .await;
+                .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+                .await
+                .map_err(|error| match error {
+                    OplogError::Fenced(fence) => WorkerExecutorError::oplog_fenced(
+                        fence.agent_id,
+                        fence.expected_epoch.0,
+                        fence.actual_epoch.map(|epoch| epoch.0),
+                    ),
+                    other => WorkerExecutorError::runtime(other.to_string()),
+                })?;
         }
         self.remove_cached_status(owned_agent_id).await?;
         self.stream_session_index
@@ -1995,7 +2011,8 @@ mod tests {
             _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) {
+            _expected_epoch: Option<golem_common::model::ShardEpoch>,
+        ) -> Result<(), crate::services::oplog::OplogError> {
             unreachable!()
         }
 
@@ -3111,7 +3128,8 @@ mod tests {
             _lifecycle: &mut OplogLifecycleGuard,
             _owned_agent_id: &OwnedAgentId,
             _agent_mode: AgentMode,
-        ) {
+            _expected_epoch: Option<golem_common::model::ShardEpoch>,
+        ) -> Result<(), crate::services::oplog::OplogError> {
             unreachable!()
         }
 
@@ -3311,7 +3329,8 @@ mod tests {
                     &mut crate::services::oplog::OpenOplogs::new("delete-test")
                         .lock_lifecycle(&owned_agent_id.agent_id)
                         .await,
-                    &owned_agent_id
+                    &owned_agent_id,
+                    None,
                 )
                 .await
                 .is_err(),

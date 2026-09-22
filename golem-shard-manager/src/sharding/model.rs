@@ -574,6 +574,14 @@ impl ShardLeaseState {
     /// refused the assignee at its own generation - so somebody else holds it. Only a manager that
     /// lost its state mints one generation twice, and the repair is to mint past it. Every other
     /// report at or below the record is the ordinary loser of a shard move and moves nothing.
+    /// How far one claim or report may move a shard's recorded epoch.
+    ///
+    /// Epochs climb by one per owner change, so even a store restored from a very old backup is
+    /// nowhere near this far behind the oplogs. A value further ahead is a bad value - a bug, a
+    /// corrupted row, a misbehaving executor - and storing it would leave the shard one or two
+    /// owner changes before its epochs run out, for good.
+    const MAX_EPOCH_JUMP: u64 = 1 << 32;
+
     fn raise_epoch_floor_for(
         &mut self,
         holder: Option<ExecutorId>,
@@ -618,15 +626,26 @@ impl ShardLeaseState {
             // cannot tell apart. One past it is a generation nobody has held. An unassigned shard
             // has no entry to corrupt, and raising its high-water only makes the next mint start
             // above the epoch already in use.
+            let recorded = self.shard_epochs.get(shard_id).map_or(0, |epoch| epoch.0);
+            if claimed_epoch.0 - recorded > Self::MAX_EPOCH_JUMP {
+                warn!(
+                    shard_id = %shard_id,
+                    recorded,
+                    epoch = claimed_epoch.0,
+                    "Ignoring a shard epoch implausibly far above the recorded one"
+                );
+                continue;
+            }
             let mints_past_report = holder.is_none() && assignee.is_some();
             let candidate = if mints_past_report {
                 claimed_epoch.checked_next()
             } else {
                 Some(*claimed_epoch)
             };
-            // The wire carries a raw `u64` with nothing upstream bounding it. The guard is on
-            // what this would store, and it stops one short of the last epoch `next_epoch_for`
-            // mints, so a shard can always change owner after its floor was raised.
+            // The wire carries a raw `u64`, and a record near the top is reachable one bounded
+            // jump at a time. The guard is on what this would store, and it stops one short of the
+            // last epoch `next_epoch_for` mints, so a shard can still change owner once more after
+            // its floor was raised.
             let Some(epoch) = candidate.filter(|epoch| epoch.0 < u64::MAX - 1) else {
                 warn!(
                     shard_id = %shard_id,
@@ -1429,11 +1448,19 @@ mod tests {
     }
 
     #[test]
-    // The wire carries a raw u64 with nothing upstream bounding it. Whatever a floor raise stores,
-    // `next_epoch_for` must still be able to mint past, so neither funnel stores anything above
-    // `u64::MAX - 2`.
+    // A record near the top of the range is reachable one bounded jump at a time. Whatever a floor
+    // raise stores from there, `next_epoch_for` must still be able to mint past, so neither funnel
+    // stores anything above `u64::MAX - 2`.
     fn an_out_of_range_epoch_is_ignored_rather_than_overflowing() {
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0]), (2, 2, &[1])]);
+        let near_the_top = ShardEpoch(u64::MAX - 4);
+        for shard_id in [shard(0), shard(1), shard(2)] {
+            shard_state.shard_epochs.insert(shard_id, near_the_top);
+            if let Some(entry) = shard_state.shard_assignments.get_mut(&shard_id) {
+                entry.epoch = near_the_top;
+            }
+        }
+        assert!(shard_state.check_invariants().is_ok());
 
         // A claim is stored as it is, on the claimant's own shard and on an unassigned one.
         for out_of_range in [u64::MAX, u64::MAX - 1] {
@@ -1458,12 +1485,9 @@ mod tests {
                 "a fenced epoch of {out_of_range} must be ignored, not minted past"
             );
         }
-        assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(0)));
-        assert_eq!(shard_state.epoch_for_shard(shard(1)), Some(ShardEpoch(0)));
-        assert!(
-            !shard_state.shard_epochs.contains_key(&shard(2)),
-            "an out-of-range claim must not even be recorded as a high-water mark"
-        );
+        for shard_id in [shard(0), shard(1), shard(2)] {
+            assert_eq!(shard_state.shard_epochs.get(&shard_id), Some(&near_the_top));
+        }
         assert!(shard_state.check_invariants().is_ok());
 
         // The highest epoch a floor raise does store still leaves the shard one to move at.
@@ -1475,6 +1499,43 @@ mod tests {
         assert_eq!(
             shard_state.assign_shard(executor(2), shard(0)),
             Some(ShardEpoch(u64::MAX - 1))
+        );
+        assert!(shard_state.check_invariants().is_ok());
+    }
+
+    #[test]
+    // One claim or report cannot use up a shard's epochs: anything more than `MAX_EPOCH_JUMP`
+    // above the record is ignored, however it arrives, while a large but plausible jump - a state
+    // restored from an old backup - is still repaired.
+    fn an_epoch_implausibly_far_above_the_record_is_ignored() {
+        let mut shard_state = shard_state_with(4, &[(1, 1, &[0]), (2, 2, &[1])]);
+        let too_far = ShardEpoch(ShardLeaseState::MAX_EPOCH_JUMP + 1);
+
+        let claimed = BTreeMap::from([(shard(0), too_far), (shard(2), too_far)]);
+        assert!(
+            shard_state
+                .raise_epoch_floor(executor(1), &claimed)
+                .is_empty()
+        );
+        let fenced = BTreeMap::from([(shard(1), too_far)]);
+        assert!(
+            shard_state
+                .raise_epoch_floor_past(reporting_executor(), &fenced)
+                .is_empty()
+        );
+        assert_eq!(shard_state.epoch_for_shard(shard(0)), Some(ShardEpoch(0)));
+        assert_eq!(shard_state.epoch_for_shard(shard(1)), Some(ShardEpoch(0)));
+        assert!(!shard_state.shard_epochs.contains_key(&shard(2)));
+
+        let far_but_plausible = ShardEpoch(ShardLeaseState::MAX_EPOCH_JUMP);
+        let fenced = BTreeMap::from([(shard(1), far_but_plausible)]);
+        assert_eq!(
+            shard_state.raise_epoch_floor_past(reporting_executor(), &fenced),
+            vec![shard(1)]
+        );
+        assert_eq!(
+            shard_state.epoch_for_shard(shard(1)),
+            Some(ShardEpoch(ShardLeaseState::MAX_EPOCH_JUMP + 1))
         );
         assert!(shard_state.check_invariants().is_ok());
     }

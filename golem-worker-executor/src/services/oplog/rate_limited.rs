@@ -552,9 +552,10 @@ impl OplogService for RateLimitedOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    ) {
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError> {
         self.inner
-            .delete(lifecycle, owned_agent_id, agent_mode)
+            .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
             .await
     }
 

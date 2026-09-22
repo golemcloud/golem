@@ -166,6 +166,39 @@ impl From<RepoError> for FencedTxError {
 }
 
 impl FencedTxError {
+    /// The check both SQL backends make on the `(epoch, writer)` row they read inside the
+    /// transaction that writes or deletes the key: strict equality on the epoch, and the row's own
+    /// writer on top of it. A stored epoch above `expected` means a newer writer has taken over;
+    /// below it, that the caller skipped `set_key_epoch`; equal but recorded by another process,
+    /// that the epoch was issued twice, and neither may write through the other. An absent row
+    /// fences too. `negative_epoch_message` names the backend in the error for a row the schema
+    /// should have made impossible.
+    pub(crate) fn check_record(
+        key: &str,
+        expected: ShardEpoch,
+        stored: Option<(i64, String)>,
+        writer_id: &str,
+        negative_epoch_message: fn(i64, &str) -> String,
+    ) -> Result<(), FencedTxError> {
+        let mut actual = None;
+        let mut writer_matches = false;
+        if let Some((epoch, writer)) = stored {
+            let epoch = u64::try_from(epoch)
+                .map_err(|_| FencedTxError::Corrupt(negative_epoch_message(epoch, key)))?;
+            actual = Some(ShardEpoch(epoch));
+            writer_matches = writer == writer_id;
+        }
+        if actual != Some(expected) || !writer_matches {
+            return Err(FencedTxError::Fenced {
+                key: key.to_string(),
+                expected,
+                actual,
+                writer_conflict: actual == Some(expected) && !writer_matches,
+            });
+        }
+        Ok(())
+    }
+
     /// `classify` is the backend's own `RepoError` classifier.
     pub(crate) fn into_indexed_storage_error(
         self,
@@ -437,7 +470,7 @@ pub trait IndexedStorage: Debug + Sync {
     /// process presenting the same epoch is refused rather than sharing it.
     ///
     /// That holds only for a key that already has a record. A key with none accepts any epoch,
-    /// whether it was never written or its record was removed by [`Self::delete_key_epoch`].
+    /// whether it was never written or its record was removed by [`Self::delete_with_epoch`].
     async fn set_key_epoch(
         &self,
         svc_name: &'static str,
@@ -447,15 +480,25 @@ pub trait IndexedStorage: Debug + Sync {
         epoch: ShardEpoch,
     ) -> Result<(), IndexedStorageError>;
 
-    /// Forgets the writer generation recorded for the given key, so that an append still asserting
-    /// the old epoch is refused by the absent record. Meant to run before the key's entries are
-    /// deleted. A later [`Self::set_key_epoch`] at any epoch writes a new record. Idempotent.
-    async fn delete_key_epoch(
+    /// Deletes the index of the given key, as [`Self::delete`] does, together with the writer
+    /// generation recorded for it, in one step.
+    ///
+    /// With `expected_epoch`, only while the record still holds that epoch and names this writer:
+    /// otherwise nothing is deleted and the call is refused with [`IndexedStorageError::Fenced`],
+    /// on exactly the terms an append asserting that epoch would be - an absent record refuses
+    /// too. A writer that has lost the key can therefore no more delete it than write to it.
+    /// Without an epoch the delete is unconditional and idempotent.
+    ///
+    /// Both go in one step so that no writer can find the record gone while the entries are still
+    /// there, or record a new generation over entries about to be deleted. A later
+    /// [`Self::set_key_epoch`] at any epoch writes a new record.
+    async fn delete_with_epoch(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageNamespace,
         key: &str,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError>;
 }
 

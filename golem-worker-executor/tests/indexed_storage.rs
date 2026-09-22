@@ -2766,11 +2766,11 @@ async fn deleting_the_recorded_epoch_fences_later_writes(
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(3))
         .await
         .unwrap();
-    is.delete_key_epoch("svc", "api", ns.ns.clone(), key)
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
         .await
         .unwrap();
     // Idempotent: deleting again is not an error.
-    is.delete_key_epoch("svc", "api", ns.ns.clone(), key)
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
         .await
         .unwrap();
 
@@ -2803,7 +2803,7 @@ async fn a_deleted_record_does_not_remember_its_epoch(
     is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
         .await
         .unwrap();
-    is.delete_key_epoch("svc", "api", ns.ns.clone(), key)
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
         .await
         .unwrap();
 
@@ -2830,6 +2830,218 @@ async fn a_deleted_record_does_not_remember_its_epoch(
         is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
         1
     );
+}
+
+async fn append_fenced(
+    is: &Arc<dyn IndexedStorage + Send + Sync>,
+    ns: &IndexedStorageNamespace,
+    key: &str,
+    ids: &[u64],
+    epoch: Option<ShardEpoch>,
+) -> Result<(), IndexedStorageError> {
+    let pairs: Vec<(u64, Bytes)> = ids
+        .iter()
+        .map(|id| (*id, Bytes::from(id.to_string())))
+        .collect();
+    is.append_many("svc", "api", "entity", ns, key, Arc::from(pairs), epoch)
+        .await
+}
+
+#[test]
+#[tracing::instrument]
+async fn the_recorded_writer_deletes_the_key_and_its_record(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-delete-owner";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+    append_fenced(&is, &ns.ns, key, &[1, 2], Some(ShardEpoch(5)))
+        .await
+        .unwrap();
+
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(5)))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        0
+    );
+    // The record went with the entries, so the old epoch writes nothing back.
+    assert_fenced(
+        append_fenced(&is, &ns.ns, key, &[3], Some(ShardEpoch(5))).await,
+        5,
+        None,
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_delete_by_a_writer_that_lost_the_key_deletes_nothing(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // A deletion that outlived its writer's hold on the key: the new holder took it at a higher
+    // epoch and wrote to it. The stale delete must leave both the record and the entries alone.
+    let (stale, owner) = is.get_two_writers().await;
+    let key = "fence-delete-stale";
+
+    stale
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+    append_fenced(&stale, &ns.ns, key, &[1], Some(ShardEpoch(5)))
+        .await
+        .unwrap();
+    owner
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(6))
+        .await
+        .unwrap();
+    append_fenced(&owner, &ns.ns, key, &[2], Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+
+    assert_fenced(
+        stale
+            .delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(5)))
+            .await,
+        5,
+        Some(6),
+    );
+
+    assert_eq!(
+        owner
+            .length("svc", "api", ns.ns.clone(), key)
+            .await
+            .unwrap(),
+        2,
+        "a refused delete removes no entry"
+    );
+    append_fenced(&owner, &ns.ns, key, &[3], Some(ShardEpoch(6)))
+        .await
+        .expect("a refused delete leaves the new holder's record in place");
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_delete_asserting_an_epoch_on_a_key_without_a_record_deletes_nothing(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "fence-delete-unrecorded";
+
+    append_fenced(&is, &ns.ns, key, &[1], None).await.unwrap();
+
+    assert_fenced(
+        is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(1)))
+            .await,
+        1,
+        None,
+    );
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        1
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn an_unfenced_delete_removes_the_key_and_its_record(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let (first, second) = is.get_two_writers().await;
+    let key = "fence-delete-unfenced";
+
+    first
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_fenced(&first, &ns.ns, key, &[1, 2], Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+
+    // Asserting nothing, so it does not matter that another writer holds the record.
+    second
+        .delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        first
+            .length("svc", "api", ns.ns.clone(), key)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_fenced(
+        append_fenced(&first, &ns.ns, key, &[3], Some(ShardEpoch(7))).await,
+        7,
+        None,
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn an_empty_batch_is_accepted_whatever_epoch_it_asserts(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // Nothing to write is nothing to fence: every backend agrees, stale epoch or not.
+    let is = is.get_indexed_storage().await;
+    let key = "fence-empty-batch";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .await
+        .unwrap();
+
+    append_fenced(&is, &ns.ns, key, &[], Some(ShardEpoch(4)))
+        .await
+        .expect("an empty batch writes nothing, so it is not refused");
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        0
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_repeated_id_in_a_staged_batch_is_a_conflict(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    // A stage is an oplog insert like the visible oplog, in a batch as in a single append: a batch
+    // re-sent after an indeterminate write collides on its first id.
+    let is = is.get_indexed_storage().await;
+    let staged = IndexedStorageNamespace::StagedOpLog {
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "staged-conflict".into(),
+        },
+        agent_mode: AgentMode::Durable,
+    };
+    let key = "staged-conflict";
+
+    append_fenced(&is, &staged, key, &[1, 2], None)
+        .await
+        .unwrap();
+
+    // Only the classification is asserted: an unfenced Redis batch is a pipeline, and its callers
+    // reconcile a partial one by reading it back.
+    match append_fenced(&is, &staged, key, &[2, 3], None).await {
+        Err(IndexedStorageError::Conflict(_)) => {}
+        other => panic!("expected a Conflict, got {other:?}"),
+    }
 }
 
 #[test]

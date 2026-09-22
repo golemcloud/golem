@@ -687,11 +687,23 @@ impl GrpcShardManagerService {
                         error!("Cannot re-register: this executor never completed a registration");
                         (self.next_retry_delay(), false)
                     }
-                    Some((port, pod_name)) => match self
-                        .register_with_previous_claim(port, pod_name, previous_claim)
-                        .await
+                    // Bounded like a renewal: the assignment is already cleared, so a manager that
+                    // accepts the call and stalls would otherwise hold this executor with no shards
+                    // and no registration for as long as it stalls.
+                    Some((port, pod_name)) => match tokio::time::timeout(
+                        self.rpc_deadline(),
+                        self.register_with_previous_claim(port, pod_name, previous_claim),
+                    )
+                    .await
                     {
-                        Ok(assignment) => {
+                        Err(_) => {
+                            warn!(
+                                deadline_ms = self.rpc_deadline().as_millis(),
+                                "Re-registration after a lost lease timed out, retrying"
+                            );
+                            (self.next_retry_delay(), false)
+                        }
+                        Ok(Ok(assignment)) => {
                             self.carried_claim.write().unwrap().clear();
                             let outcome = self.shard_service.register(
                                 assignment.number_of_shards,
@@ -720,7 +732,7 @@ impl GrpcShardManagerService {
                             let delay = renewal_interval_for(assignment.expires_at, Instant::now());
                             (delay, true)
                         }
-                        Err(error) => {
+                        Ok(Err(error)) => {
                             warn!(%error, "Re-registration after a lost lease failed");
                             (self.next_retry_delay(), false)
                         }
@@ -963,6 +975,10 @@ mod tests {
         /// The fenced epochs each renewal reported, in the order of `renew_calls`.
         renew_fenced_calls: StdMutex<Vec<BTreeMap<ShardId, ShardEpoch>>>,
         deregister_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
+        /// How many of the next registrations never answer.
+        hanging_registrations: std::sync::atomic::AtomicUsize,
+        /// Holds only the first renewal, until notified.
+        first_renewal_gate: StdMutex<Option<Arc<tokio::sync::Notify>>>,
     }
 
     impl MockShardManager {
@@ -976,7 +992,19 @@ mod tests {
                 renew_calls: StdMutex::new(Vec::new()),
                 renew_fenced_calls: StdMutex::new(Vec::new()),
                 deregister_calls: StdMutex::new(Vec::new()),
+                hanging_registrations: std::sync::atomic::AtomicUsize::new(0),
+                first_renewal_gate: StdMutex::new(None),
             }
+        }
+
+        fn with_first_renewal_gate(self, gate: Arc<tokio::sync::Notify>) -> Self {
+            *self.first_renewal_gate.lock().unwrap() = Some(gate);
+            self
+        }
+
+        fn hang_next_registrations(&self, count: usize) {
+            self.hanging_registrations
+                .store(count, std::sync::atomic::Ordering::SeqCst);
         }
 
         fn with_register(
@@ -1042,6 +1070,17 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((executor_id, previous_shard_epochs));
+            let hangs = self
+                .hanging_registrations
+                .fetch_update(
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                    |left| left.checked_sub(1),
+                )
+                .is_ok();
+            if hangs {
+                std::future::pending::<()>().await;
+            }
             let guard = self.register_fn.lock().unwrap();
             let f = guard.as_ref().expect("register_fn not configured");
             f(executor_id)
@@ -1064,6 +1103,11 @@ mod tests {
             // Cloned out before the await: the guard must not be held across it.
             let gate = self.renew_gate.lock().unwrap().clone();
             if let Some(gate) = gate {
+                gate.notified().await;
+            }
+            let first = self.renew_calls.lock().unwrap().len() == 1;
+            let first_gate = self.first_renewal_gate.lock().unwrap().clone();
+            if let (true, Some(gate)) = (first, first_gate) {
                 gate.notified().await;
             }
             let guard = self.renew_fn.lock().unwrap();
@@ -1329,6 +1373,124 @@ mod tests {
         assert!(
             mock.renew_calls().len() >= 2,
             "a renewal that never answers must time out so the loop can try again"
+        );
+    }
+
+    #[test]
+    // A reply from another shard-manager process is believed because it answers the request this
+    // executor has just made. That rests on the renewal loop having one request out at a time and
+    // giving up on it for good at its deadline: a reply from a manager the executor has since
+    // stopped following, delivered late, would otherwise be adopted and take it back to that
+    // manager's set.
+    async fn a_reply_that_arrives_after_its_renewal_was_given_up_on_is_never_applied() {
+        let expiry = Instant::now() + Duration::from_secs(3);
+        let (old_manager, new_manager) = (Uuid::new_v4(), Uuid::new_v4());
+        let late_reply = Arc::new(tokio::sync::Notify::new());
+        let renewals = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_register(move |_| Ok(registration_from(old_manager, 10, expiry, [(0, 1)])))
+                .with_renew({
+                    let renewals = renewals.clone();
+                    move |_, _| {
+                        let lease =
+                            if renewals.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                                // The old manager's answer to the first renewal, which the loop has
+                                // given up on by the time it is released.
+                                ShardLease {
+                                    shard_epochs: claim([(1, 7)]),
+                                    expires_at: Instant::now() + Duration::from_secs(3),
+                                    revision: revision_of(old_manager, 11),
+                                }
+                            } else {
+                                ShardLease {
+                                    shard_epochs: claim([(0, 2)]),
+                                    expires_at: Instant::now() + Duration::from_secs(3),
+                                    revision: revision_of(new_manager, 1),
+                                }
+                            };
+                        Ok(lease)
+                    }
+                })
+                .with_first_renewal_gate(late_reply.clone()),
+        );
+        let (service, shard_service) = make_service_with_rpc_deadline_floor(
+            mock.clone(),
+            Shutdown::new(),
+            Duration::from_millis(200),
+        );
+        let assignment = service.register(PORT, None).await.unwrap();
+        shard_service.register(
+            assignment.number_of_shards,
+            &assignment.shard_epochs,
+            assignment.expires_at,
+            assignment.revision,
+        );
+
+        let follows = |manager: Uuid| {
+            shard_service
+                .current_assignment()
+                .is_ok_and(|assignment| assignment.revision.incarnation == Some(manager))
+        };
+        for _ in 0..160 {
+            if follows(new_manager) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            follows(new_manager),
+            "the renewal after the abandoned one must be answered by the new manager"
+        );
+
+        // Now the old manager's answer to the abandoned renewal comes back.
+        late_reply.notify_waiters();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let assignment = shard_service.current_assignment().unwrap();
+        assert_eq!(assignment.revision.incarnation, Some(new_manager));
+        assert_eq!(assignment.shard_epochs, epochs([(0, 2)]));
+    }
+
+    #[test]
+    // Re-registering after a lost lease starts with the assignment already cleared, so a manager
+    // that accepts the call and never answers must not hold the executor there: the attempt is
+    // given up on at the per-attempt deadline and the loop tries again.
+    async fn a_re_registration_that_never_answers_times_out_and_is_tried_again() {
+        let expiry = Instant::now() + Duration::from_secs(3);
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_register(move |_| Ok(registration(expiry, [(0, 1)])))
+                .with_renew(|_, _| Err(ShardLeaseError::LeaseNotFound("unknown".to_string()))),
+        );
+        let (service, shard_service) = make_service_with_rpc_deadline_floor(
+            mock.clone(),
+            Shutdown::new(),
+            Duration::from_millis(200),
+        );
+
+        let assignment = service.register(PORT, None).await.unwrap();
+        shard_service.register(
+            assignment.number_of_shards,
+            &assignment.shard_epochs,
+            assignment.expires_at,
+            assignment.revision,
+        );
+        mock.hang_next_registrations(1);
+
+        // The first renewal is refused, the re-registration it triggers never answers, and only a
+        // deadline on it lets the loop reach a second one.
+        for _ in 0..160 {
+            if mock.register_calls().len() >= 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            mock.register_calls().len() >= 3,
+            "a re-registration that never answers must time out so the loop can try again; \
+             registrations made: {}",
+            mock.register_calls().len()
         );
     }
 
