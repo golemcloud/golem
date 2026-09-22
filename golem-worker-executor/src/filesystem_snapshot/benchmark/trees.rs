@@ -310,6 +310,12 @@ fn count(root: &Path) -> io::Result<TreeCounts> {
     })
 }
 
+/// Gives the hash of the tree below `root` and its counts, and reads the tree on a blocking thread.
+pub(super) async fn hash(root: &Path) -> anyhow::Result<(Box<str>, TreeCounts)> {
+    let root = root.to_path_buf();
+    Ok(tokio::task::spawn_blocking(move || tree_hash(&root)).await??)
+}
+
 /// Gives the hash of the tree below `root` and its counts.
 ///
 /// The hash covers the path, the kind, the permission bits and the modification time of each

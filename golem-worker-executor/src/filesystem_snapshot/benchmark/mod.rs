@@ -362,8 +362,13 @@ fn failed(
     }
 }
 
-/// The save phase of the base scenario: a cold save of a new tree, a small change of the tree,
-/// and a warm save.
+/// The save phase of the base scenario: a cold save of a new tree, a small change of the tree, a
+/// warm save, and the hash of the changed tree.
+///
+/// `generate_tree` and `small_change` remove the pages of the tree from the page cache. No step
+/// reads the content of a file between one of them and the save after it, so each save reads the
+/// tree from the volume. The hash of the new tree is read after the cold save, and the hash of the
+/// changed tree after the warm save. A save does not change the tree.
 async fn base_save(context: &PhaseContext) -> PhaseOutcome {
     let spec = context.selection.tree;
     let tree = context.work_dir.join("tree");
@@ -383,14 +388,13 @@ async fn base_save(context: &PhaseContext) -> PhaseOutcome {
             facts,
             steps,
             "generate_tree",
-            &["cold_save", "small_change", "hash_tree", "warm_save"],
+            &["cold_save", "small_change", "warm_save", "hash_tree"],
         );
     };
     let facts = TreeFacts {
         files: Some(counts.files),
         directories: Some(counts.directories),
         bytes: Some(counts.bytes),
-        hash: trees::tree_hash(&tree).ok().map(|(hash, _)| hash),
         ..facts
     };
 
@@ -404,9 +408,13 @@ async fn base_save(context: &PhaseContext) -> PhaseOutcome {
             facts,
             steps,
             "cold_save",
-            &["small_change", "hash_tree", "warm_save"],
+            &["small_change", "warm_save", "hash_tree"],
         );
     }
+    let facts = TreeFacts {
+        hash: trees::hash(&tree).await.ok().map(|(hash, _)| hash),
+        ..facts
+    };
 
     let (record, changed) = measure("small_change", storage, trees::change(spec, &tree)).await;
     steps.push(record.with_details(
@@ -414,17 +422,9 @@ async fn base_save(context: &PhaseContext) -> PhaseOutcome {
         Box::default(),
     ));
     let Ok(change) = changed else {
-        return failed(facts, steps, "small_change", &["hash_tree", "warm_save"]);
-    };
-
-    let (record, hashed) =
-        measure("hash_tree", storage, async { Ok(trees::tree_hash(&tree)?) }).await;
-    steps.push(record);
-    let Ok((hash, _)) = hashed else {
-        return failed(facts, steps, "hash_tree", &["warm_save"]);
+        return failed(facts, steps, "small_change", &["warm_save", "hash_tree"]);
     };
     let facts = TreeFacts {
-        hash_after_change: Some(hash),
         change: Some(change),
         ..facts
     };
@@ -435,10 +435,19 @@ async fn base_save(context: &PhaseContext) -> PhaseOutcome {
     .await;
     steps.push(save_record(record, &warm));
     if warm.is_err() {
-        return failed(facts, steps, "warm_save", &[]);
+        return failed(facts, steps, "warm_save", &["hash_tree"]);
     }
+
+    let (record, hashed) = measure("hash_tree", storage, trees::hash(&tree)).await;
+    steps.push(record);
+    let Ok((hash, _)) = hashed else {
+        return failed(facts, steps, "hash_tree", &[]);
+    };
     PhaseOutcome {
-        tree_facts: facts,
+        tree_facts: TreeFacts {
+            hash_after_change: Some(hash),
+            ..facts
+        },
         steps,
         outcome: Outcome::Ok,
     }
@@ -517,8 +526,7 @@ async fn base_restore(context: &PhaseContext) -> PhaseOutcome {
         return failed(facts, steps, "cold_restore", &["hash_tree"]);
     }
 
-    let (record, hashed) =
-        measure("hash_tree", storage, async { Ok(trees::tree_hash(&into)?) }).await;
+    let (record, hashed) = measure("hash_tree", storage, trees::hash(&into)).await;
     let Ok((hash, counts)) = hashed else {
         steps.push(record);
         return failed(facts, steps, "hash_tree", &[]);
