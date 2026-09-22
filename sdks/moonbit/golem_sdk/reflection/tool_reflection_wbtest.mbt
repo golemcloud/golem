@@ -55,33 +55,35 @@ fn sample_tool() -> ToolType raise {
     errors: [],
     annotations: None,
   }
+  let definition : @toolCommon.Tool = {
+    version: "1",
+    commands: {
+      nodes: [
+        {
+          name: "sample",
+          aliases: [],
+          doc,
+          globals: { options: [], flags: [], },
+          subcommands: [1],
+          body: None,
+        },
+        {
+          name: "run",
+          aliases: ["r"],
+          doc,
+          globals: { options: [], flags: [], },
+          subcommands: [],
+          body: Some(body),
+        },
+      ],
+    },
+    schema: graph,
+  }
   {
     lookup_name: "sample",
-    definition: {
-      version: "1",
-      commands: {
-        nodes: [
-          {
-            name: "sample",
-            aliases: [],
-            doc,
-            globals: { options: [], flags: [], },
-            subcommands: [1],
-            body: None,
-          },
-          {
-            name: "run",
-            aliases: ["r"],
-            doc,
-            globals: { options: [], flags: [], },
-            subcommands: [],
-            body: Some(body),
-          },
-        ],
-      },
-      schema: graph,
-    },
+    definition,
     implemented_by: { uuid: { high_bits: 0UL, low_bits: 0UL, }, },
+    decoded: @model.schema_graph_roots_from_wit(graph),
   }
 }
 
@@ -95,6 +97,61 @@ test "reflected tool resolves aliases and rejects input before RPC" {
     Err(@tool.ToolError::InvalidInput(_)) => ()
     _ => fail("expected local tool input rejection")
   }
+}
+
+///|
+test "reflected input definitions follow canonical argument order" {
+  let root = @model.schema_type(
+    Record([
+      @model.field("a", @model.schema_type(Ref("a"))),
+      @model.field("b", @model.schema_type(Ref("b"))),
+    ]),
+  )
+  let wire = @model.schema_graph_to_wit({
+    defs: [
+      { id: "b", name: None, body: @model.schema_type(String), },
+      { id: "a", name: None, body: @model.schema_type(String), },
+    ],
+    root,
+  })
+  guard wire.type_nodes[wire.root].body is @types.RecordType(fields) else {
+    fail("expected record root")
+  }
+  let base = sample_tool()
+  let nodes = base.definition.commands.nodes
+  let command = nodes[1]
+  let body = command.body.unwrap()
+  let original = body.positionals.fixed[0]
+  let tool : ToolType = {
+    ..base,
+    decoded: @model.schema_graph_roots_from_wit(wire),
+    definition: {
+      ..base.definition,
+      schema: wire,
+      commands: {
+        nodes: [
+          nodes[0],
+          {
+            ..command,
+            body: Some({
+              ..body,
+              positionals: {
+                fixed: [
+                  { ..original, name: "a", type_: fields[0].body, },
+                  { ..original, name: "b", type_: fields[1].body, },
+                ],
+                tail: None,
+              },
+              options: [],
+              result: None,
+            }),
+          },
+        ],
+      },
+    },
+  }
+  let selected = tool.command(["run"])
+  assert_eq(selected.input_schema.graph.defs.map(def => def.id), ["a", "b"])
 }
 
 ///|
@@ -177,6 +234,7 @@ test "reflected input graph excludes definitions owned only by output" {
   let body = nodes[1].body.unwrap()
   let command = ToolType::{
     ..tool,
+    decoded: @model.schema_graph_roots_from_wit({ ..graph, root: input_root, }),
     definition: {
       ..tool.definition,
       schema: { ..graph, root: input_root, },

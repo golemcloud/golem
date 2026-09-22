@@ -281,6 +281,9 @@ fn list_graph(item : @model.SchemaGraph) -> @model.SchemaGraph {
 
 ///|
 fn option_graph(item : @model.SchemaGraph) -> @model.SchemaGraph {
+  if @model.schema_root_is_option(item) {
+    return item
+  }
   {
     defs: item.defs,
     root: @model.schema_type(@model.SchemaTypeBody::Option(item.root)),

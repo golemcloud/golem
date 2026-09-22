@@ -17,6 +17,7 @@ pub(all) struct ToolType {
   lookup_name : String
   definition : @toolCommon.Tool
   implemented_by : @types.ComponentId
+  priv decoded : @model.DecodedSchemaGraph
 } derive(Debug, Eq)
 
 ///|
@@ -126,23 +127,23 @@ pub fn ToolType::from_registered(
   guard registered.definition.commands.nodes.length() > 0 else {
     raise Discovery("tool '" + registered.lookup_name + "' has no root command")
   }
-  let _ = @model.schema_graph_from_wit(registered.definition.schema) catch {
+  let decoded = @model.schema_graph_roots_from_wit(registered.definition.schema) catch {
     error => raise Schema("failed to decode tool schema: \{Repr(error)}")
   }
   {
     lookup_name: registered.lookup_name,
     definition: registered.definition,
     implemented_by: registered.implemented_by,
+    decoded,
   }
 }
 
 ///|
 fn tool_schema_at(tool : ToolType, root : Int) -> SchemaRef raise ReflectError {
-  let graph = @model.schema_graph_from_wit({ ..tool.definition.schema, root, }) catch {
-    error =>
-      raise Schema("failed to decode selected tool schema: \{Repr(error)}")
+  guard tool.decoded.roots.get(root) is Some(selected) else {
+    raise Schema("tool schema root index \{root} is out of range")
   }
-  SchemaRef::new(graph)
+  SchemaRef::new({ defs: tool.decoded.graph.defs, root: selected, })
 }
 
 ///|
@@ -191,13 +192,10 @@ fn tool_option_argument(
 fn tool_flag_argument(
   tool : ToolType,
   spec : @toolCommon.FlagSpec,
-) -> ToolArgument raise ReflectError {
+) -> ToolArgument {
   let root = match spec.shape {
     BoolFlag(_) => @model.schema_type(Bool)
     CountFlag(_) => @model.schema_type(U32(None))
-  }
-  let decoded = @model.schema_graph_from_wit(tool.definition.schema) catch {
-    error => raise Schema("failed to decode tool schema: \{Repr(error)}")
   }
   {
     kind: "flag",
@@ -211,7 +209,7 @@ fn tool_flag_argument(
         CountFlag(_) => @model.SchemaValue::U32(0U)
       },
     ),
-    schema: SchemaRef::new({ defs: decoded.defs, root, }),
+    schema: SchemaRef::new({ defs: tool.decoded.graph.defs, root, }),
     optional_carrier: false,
   }
 }
@@ -340,16 +338,14 @@ pub fn ToolType::command(
   for argument in arguments {
     input_fields.push({
       name: argument.name,
-      body: if argument.optional_carrier {
+      body: if argument.optional_carrier &&
+        !@model.schema_root_is_option(argument.schema.graph) {
         @model.schema_type(Option(argument.schema.root))
       } else {
         argument.schema.root
       },
       metadata: @model.empty_metadata(),
     })
-  }
-  let decoded = @model.schema_graph_from_wit(self.definition.schema) catch {
-    error => raise Schema("failed to decode tool schema: \{Repr(error)}")
   }
   let result = match body {
     Some(body) =>
@@ -360,10 +356,16 @@ pub fn ToolType::command(
     None => None
   }
   let input_root = @model.schema_type(Record(input_fields))
-  let wire_input = @model.schema_graph_closure({
-    defs: decoded.defs,
-    root: input_root,
+  let field_graphs = arguments.map(argument => {
+    @model.schema_graph_closure({
+      defs: argument.schema.graph.defs,
+      root: argument.schema.root,
+    })
   })
+  let defs = @model.merge_graph_defs(field_graphs) catch {
+    error => raise Schema("failed to merge tool input schemas: \{Repr(error)}")
+  }
+  let wire_input : @model.SchemaGraph = { defs, root: input_root, }
   {
     tool: self,
     path: canonical,

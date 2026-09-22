@@ -4,6 +4,246 @@ fn test_schema(body : @model.SchemaTypeBody) -> SchemaRef {
 }
 
 ///|
+test "JSON Schema projects records and recursive definitions" {
+  let metadata = @model.empty_metadata()
+  let schema = SchemaRef::new({
+    defs: [
+      {
+        id: "pkg/node",
+        name: None,
+        body: @model.schema_type(
+          Record([
+            {
+              name: "next",
+              body: @model.schema_type(
+                Option(@model.schema_type(Ref("pkg/node"))),
+              ),
+              metadata,
+            },
+          ]),
+        ),
+      },
+    ],
+    root: @model.schema_type(Ref("pkg/node")),
+  })
+  assert_eq(
+    schema.to_json_schema(),
+    Json::object({
+      "$ref": Json::string("#/$defs/pkg~1node"),
+      "$schema": Json::string("https://json-schema.org/draft/2020-12/schema"),
+      "$defs": Json::object({
+        "pkg/node": Json::object({
+          "type": Json::string("object"),
+          "properties": Json::object({
+            "next": Json::object({
+              "oneOf": Json::array([
+                Json::object({ "type": Json::string("null") }),
+                Json::object({ "$ref": Json::string("#/$defs/pkg~1node") }),
+              ]),
+            }),
+          }),
+          "required": Json::array([Json::string("next")]),
+          "additionalProperties": Json::boolean(false),
+        }),
+      }),
+    }),
+  )
+}
+
+///|
+test "JSON Schema retains text and binary constraints" {
+  let text = test_schema(
+    Text({
+      languages: Some(["en", "de"]),
+      min_length: Some(2U),
+      max_length: Some(8U),
+      regex: Some("^[a-z]+$"),
+    }),
+  )
+  assert_eq(
+    text.to_json_schema(include_draft_marker=false),
+    Json::object({
+      "type": Json::string("object"),
+      "properties": Json::object({
+        "text": Json::object({
+          "type": Json::string("string"),
+          "minLength": Json::number(2.0),
+          "maxLength": Json::number(8.0),
+          "pattern": Json::string("^[a-z]+$"),
+        }),
+        "language": Json::object({
+          "type": Json::string("string"),
+          "enum": Json::array([Json::string("en"), Json::string("de")]),
+        }),
+      }),
+      "required": Json::array([Json::string("text")]),
+      "additionalProperties": Json::boolean(false),
+    }),
+  )
+  let binary = test_schema(
+    Binary({
+      mime_types: Some(["image/png"]),
+      min_bytes: Some(3U),
+      max_bytes: Some(6U),
+    }),
+  )
+  let rendered = binary.to_json_schema(include_draft_marker=false)
+  assert_eq(
+    rendered,
+    Json::object({
+      "type": Json::string("object"),
+      "properties": Json::object({
+        "bytes": Json::object({
+          "type": Json::string("string"),
+          "contentEncoding": Json::string("base64url"),
+          "minLength": Json::number(4.0),
+          "maxLength": Json::number(8.0),
+        }),
+        "mimeType": Json::object({
+          "type": Json::string("string"),
+          "enum": Json::array([Json::string("image/png")]),
+        }),
+      }),
+      "required": Json::array([Json::string("bytes")]),
+      "additionalProperties": Json::boolean(false),
+    }),
+  )
+}
+
+///|
+test "JSON Schema keeps wide numeric bounds exact in metadata" {
+  let schema = test_schema(
+    U64(
+      Some({
+        min: Some(@types.NumericBound::Unsigned(9007199254740993UL)),
+        max: Some(@types.NumericBound::Unsigned(18446744073709551615UL)),
+        unit: None,
+      }),
+    ),
+  )
+  let rendered = schema.to_json_schema(include_draft_marker=false)
+  let fields = match rendered {
+    Object(fields) => fields
+    _ => fail("expected JSON Schema object")
+  }
+  assert_eq(fields.get("x-golem-numeric-width"), Some(Json::string("u64")))
+  assert_eq(
+    fields.get("x-golem-minimum"),
+    Some(Json::string("9007199254740993")),
+  )
+  assert_eq(
+    fields.get("x-golem-maximum"),
+    Some(Json::string("18446744073709551615")),
+  )
+}
+
+///|
+test "JSON Schema projects union discriminators and metadata" {
+  let metadata = {
+    ..@model.empty_metadata(),
+    doc: Some("event payload"),
+    aliases: ["evt"],
+  }
+  let schema = SchemaRef::new({
+    defs: [],
+    root: @model.schema_type(
+      Union([
+        {
+          tag: "event",
+          body: @model.schema_type(String),
+          discriminator: @types.DiscriminatorRule::Prefix("a.b"),
+          metadata: @model.empty_metadata(),
+        },
+      ]),
+      metadata~,
+    ),
+  })
+  assert_eq(
+    schema.to_json_schema(include_draft_marker=false),
+    Json::object({
+      "oneOf": Json::array([
+        Json::object({
+          "allOf": Json::array([
+            Json::object({ "type": Json::string("string") }),
+            Json::object({ "pattern": Json::string("^a\\.b") }),
+          ]),
+        }),
+      ]),
+      "description": Json::string("event payload"),
+      "x-golem-aliases": Json::array([Json::string("evt")]),
+    }),
+  )
+}
+
+///|
+test "JSON Schema exposes path URL and quantity restrictions" {
+  let path = test_schema(
+    Path({
+      direction: @types.PathDirection::INPUT,
+      kind: @types.PathKind::FILE,
+      allowed_mime_types: Some(["image/png"]),
+      allowed_extensions: Some(["png"]),
+    }),
+  )
+  assert_eq(
+    path.to_json_schema(include_draft_marker=false),
+    Json::object({
+      "type": Json::string("string"),
+      "format": Json::string("file-path"),
+      "title": Json::string("input file path"),
+      "description": Json::string(
+        "Allowed extensions: png; Allowed MIME types: image/png",
+      ),
+    }),
+  )
+  let url = test_schema(
+    Url({
+      allowed_schemes: Some(["https"]),
+      allowed_hosts: Some(["example.com"]),
+    }),
+  )
+  assert_eq(
+    url.to_json_schema(include_draft_marker=false),
+    Json::object({
+      "type": Json::string("string"),
+      "format": Json::string("uri"),
+      "title": Json::string("URL"),
+      "description": Json::string(
+        "Allowed schemes: https; Allowed hosts: example.com",
+      ),
+    }),
+  )
+  let quantity = test_schema(
+    Quantity({
+      base_unit: "m",
+      allowed_suffixes: ["cm"],
+      min: Some({ mantissa: 1L, scale: 0, unit: "m", }),
+      max: None,
+    }),
+  )
+  let rendered = quantity.to_json_schema(include_draft_marker=false)
+  let fields = match rendered {
+    Object(fields) => fields
+    _ => fail("expected JSON Schema object")
+  }
+  assert_eq(fields.get("title"), Some(Json::string("Quantity (m)")))
+  assert_eq(
+    fields.get("x-golem-allowed-suffixes"),
+    Some(Json::array([Json::string("cm")])),
+  )
+  assert_eq(
+    fields.get("x-golem-minimum-quantity"),
+    Some(
+      Json::object({
+        "mantissa": Json::string("1"),
+        "scale": Json::number(0.0),
+        "unit": Json::string("m"),
+      }),
+    ),
+  )
+}
+
+///|
 test "record JSON round-trips through reflected SchemaValue" {
   let metadata = @model.empty_metadata()
   let schema = test_schema(

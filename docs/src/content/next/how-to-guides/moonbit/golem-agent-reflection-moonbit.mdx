@@ -29,7 +29,10 @@ Agent type names and reflection identity strings are environment-scoped.
 metadata, plus its lifecycle mode, constructor `SchemaRef`, and method schemas.
 Reflection clients do not pin that component ID. `SchemaRef::pack_json`
 converts canonical JSON into a schema-native value; `unpack_json` performs the
-awaited conversion back. Discovery returns an immutable snapshot; explicitly
+awaited conversion back. `to_json_schema()` projects the canonical JSON carrier
+for introspection, including named definitions and representable restrictions;
+capabilities and streams have no JSON value representation. Discovery returns
+an immutable snapshot; explicitly
 discover again when a newer deployment must be observed.
 
 ## Use discovered clients
@@ -84,24 +87,34 @@ fully dynamic client, handles the raw tool result, and then explicitly validates
 and decodes the output:
 
 ```moonbit
-fn release_dynamic_tool_error(
+fn describe_dynamic_tool_error(
   error : @tool.ToolError[@reflection.ReflectedToolCustomError],
-) -> Unit {
+) -> String {
   match error {
-    Tool(custom) => @model.drop_owned_capabilities(custom.payload.value)
-    UnknownToolError(_, payload) =>
+    Rpc(error) => "rpc:\{Repr(error)}"
+    RemoteTool(error) => "remote:\{Repr(error)}"
+    Tool(custom) => {
+      let message = "tool:\{Repr(custom)}"
+      @model.drop_owned_capabilities(custom.payload.value)
+      message
+    }
+    UnknownToolError(name, payload) => {
       @model.drop_owned_capabilities(payload.value)
-    _ => ()
+      "unknown:\{name}"
+    }
+    InvalidInput(message) => "input:\{message}"
+    MalformedRemoteOutput(message) => "output:\{message}"
   }
 }
 
-pub async fn invoke_discovered_tool_dynamically() -> String {
+async fn invoke_discovered_tool_dynamically() -> String {
   let tool = @reflection.get_tool_type("moonbit-reflection-test")
   let command = tool.command(["echo"])
-  let packed = command.pack_json(
+  let packed = match command.pack_json(
     Json::object({ "label": Json::string("moonbit") }),
-  ) catch {
-    error => return "input:\{Repr(error)}"
+  ) {
+    Ok(value) => value
+    Err(error) => return "input:\{describe_dynamic_tool_error(error)}"
   }
   command.input_schema.validate_value(packed) catch {
     error => return "input:\{Repr(error)}"
@@ -114,9 +127,7 @@ pub async fn invoke_discovered_tool_dynamically() -> String {
   ) {
     Ok(raw) => raw
     Err(error) => {
-      let message = Repr(error)
-      release_dynamic_tool_error(error)
-      return "invoke:\{message}"
+      return "invoke:\{describe_dynamic_tool_error(error)}"
     }
   }
 
@@ -314,5 +325,5 @@ metadata may be discovered later and rebound through a reflected client.
 | Shared source definition available | Normal RPC agent client |
 | Typed client owned by the caller | `MethodOnlyAgentClient` or `FullAgentClient` resolved by environment type name |
 | Runtime-selected method with automatic JSON conversion | `invoke_json` |
-| Explicit runtime-schema packing | `SchemaRef::pack_json`, `invoke_value`, `unpack_json` |
+| Explicit runtime-schema packing and inspection | `SchemaRef::pack_json`, `invoke_value`, `unpack_json`, `to_json_schema` |
 | Fully dynamic infrastructure with Golem values | `DynamicAgentClient` |

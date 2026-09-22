@@ -59,6 +59,76 @@ fn reflected_tool_error(
 }
 
 ///|
+fn describe_dynamic_tool_error(
+  error : @tool.ToolError[@reflection.ReflectedToolCustomError],
+) -> String {
+  match error {
+    Rpc(error) => "rpc:\{Repr(error)}"
+    RemoteTool(error) => "remote:\{Repr(error)}"
+    Tool(custom) => {
+      let message = "tool:\{Repr(custom)}"
+      @model.drop_owned_capabilities(custom.payload.value)
+      message
+    }
+    UnknownToolError(name, payload) => {
+      @model.drop_owned_capabilities(payload.value)
+      "unknown:\{name}"
+    }
+    InvalidInput(message) => "input:\{message}"
+    MalformedRemoteOutput(message) => "output:\{message}"
+  }
+}
+
+///|
+async fn invoke_discovered_tool_dynamically() -> String {
+  let tool = @reflection.get_tool_type("moonbit-reflection-test")
+  let command = tool.command(["echo"])
+  let packed = match
+    command.pack_json(Json::object({ "label": Json::string("moonbit") })) {
+    Ok(value) => value
+    Err(error) => return "input:\{describe_dynamic_tool_error(error)}"
+  }
+  command.input_schema.validate_value(packed) catch {
+    error => return "input:\{Repr(error)}"
+  }
+
+  let dynamic = @reflection.DynamicToolClient::new(tool.lookup_name)
+  let raw = match
+    dynamic.invoke_value(command.path, {
+      graph: command.input_schema.graph,
+      value: packed,
+    }) {
+    Ok(raw) => raw
+    Err(error) => return "invoke:\{describe_dynamic_tool_error(error)}"
+  }
+
+  match (command.result, raw.result) {
+    (None, None) => "ok"
+    (Some(schema), Some(output)) => {
+      schema.validate_value(output.value) catch {
+        error => {
+          @model.drop_owned_capabilities(output.value)
+          return "output:\{Repr(error)}"
+        }
+      }
+      let json = schema.unpack_json(output.value) catch {
+        error => {
+          @model.drop_owned_capabilities(output.value)
+          return "decode:\{Repr(error)}"
+        }
+      }
+      @model.drop_owned_capabilities(output.value)
+      json.stringify()
+    }
+    (_, Some(output)) => {
+      @model.drop_owned_capabilities(output.value)
+      "output:unexpected"
+    }
+    _ => "output:missing"
+  }
+}
+
+///|
 fn no_tool_error(error : @tool.ToolError[@tool.NoToolError]) -> String {
   match error {
     Rpc(error) => "rpc:\{Repr(error)}"

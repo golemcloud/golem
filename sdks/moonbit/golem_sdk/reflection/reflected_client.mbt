@@ -53,19 +53,18 @@ pub(all) struct ReflectedAgentClient {
 
 ///|
 fn decode_root_type(
-  graph : @types.SchemaGraph,
+  decoded : @model.DecodedSchemaGraph,
   root : Int,
 ) -> @model.SchemaType raise ReflectError {
-  let decoded = @model.schema_graph_from_wit({ ..graph, root, }) catch {
-    error => raise Schema("failed to decode reflected schema: \{repr(error)}")
+  guard decoded.roots.get(root) is Some(selected) else {
+    raise Schema("reflected schema root index \{root} is out of range")
   }
-  decoded.root
+  selected
 }
 
 ///|
 fn decode_input(
-  graph : @types.SchemaGraph,
-  decoded : @model.SchemaGraph,
+  decoded : @model.DecodedSchemaGraph,
   input : @common.InputSchema,
 ) -> SchemaRef raise ReflectError {
   let raw_fields = match input {
@@ -77,22 +76,21 @@ fn decode_input(
       UserSupplied =>
         fields.push({
           name: field.name,
-          body: decode_root_type(graph, field.schema),
+          body: decode_root_type(decoded, field.schema),
           metadata: field.metadata,
         })
       AutoInjected(_) => ()
     }
   }
   SchemaRef::new({
-    defs: decoded.defs,
+    defs: decoded.graph.defs,
     root: @model.schema_type(Record(fields)),
   })
 }
 
 ///|
 fn decode_output(
-  graph : @types.SchemaGraph,
-  decoded : @model.SchemaGraph,
+  decoded : @model.DecodedSchemaGraph,
   output : @common.OutputSchema,
 ) -> SchemaRef? raise ReflectError {
   match output {
@@ -100,8 +98,8 @@ fn decode_output(
     Single(root) =>
       Some(
         SchemaRef::new({
-          defs: decoded.defs,
-          root: decode_root_type(graph, root),
+          defs: decoded.graph.defs,
+          root: decode_root_type(decoded, root),
         }),
       )
   }
@@ -112,7 +110,7 @@ fn decode_agent_type(
   registered : @common.RegisteredAgentType,
 ) -> AgentType raise ReflectError {
   let raw = registered.agent_type
-  let decoded = @model.schema_graph_from_wit(raw.schema) catch {
+  let decoded = @model.schema_graph_roots_from_wit(raw.schema) catch {
     error => raise Schema("failed to decode reflected schema: \{repr(error)}")
   }
   let methods : Array[AgentMethod] = []
@@ -121,23 +119,19 @@ fn decode_agent_type(
       name: raw_method.name,
       description: raw_method.description,
       prompt_hint: raw_method.prompt_hint,
-      input: decode_input(raw.schema, decoded, raw_method.input_schema),
-      output: decode_output(raw.schema, decoded, raw_method.output_schema),
+      input: decode_input(decoded, raw_method.input_schema),
+      output: decode_output(decoded, raw_method.output_schema),
     })
   }
   let config : Array[ReflectedConfigDeclaration] = []
   for declaration in raw.config {
-    let rooted = @model.schema_graph_from_wit({
-      ..raw.schema,
-      root: declaration.value_type,
-    }) catch {
-      error =>
-        raise Schema("failed to decode reflected config schema: \{repr(error)}")
-    }
     config.push({
       path: declaration.path,
       source: declaration.source,
-      schema: SchemaRef::new(rooted),
+      schema: SchemaRef::new({
+        defs: decoded.graph.defs,
+        root: decode_root_type(decoded, declaration.value_type),
+      }),
     })
   }
   {
@@ -149,11 +143,7 @@ fn decode_agent_type(
       EPHEMERAL => Ephemeral
     },
     implemented_by: registered.implemented_by,
-    constructor_input: decode_input(
-      raw.schema,
-      decoded,
-      raw.constructor_.input_schema,
-    ),
+    constructor_input: decode_input(decoded, raw.constructor_.input_schema),
     methods,
     config,
   }
