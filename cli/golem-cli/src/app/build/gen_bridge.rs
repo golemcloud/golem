@@ -2,6 +2,9 @@ use crate::app::build::extract_component_metadata::extract_and_store_component_m
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
 use crate::app::context::BuildContext;
+use crate::bridge_gen::effect::effect_external::EffectExternalBridgeGenerator;
+use crate::bridge_gen::effect::effect_guest::EffectGuestBridgeGenerator;
+use crate::bridge_gen::effect::effect_tool::EffectToolBridgeGenerator;
 use crate::bridge_gen::moonbit::tool::MoonBitToolBridgeGenerator;
 use crate::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitBridgeMode};
 use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
@@ -1093,6 +1096,16 @@ async fn gen_bridge_sdk_target(
                                 TypeScriptBridgeMode::GuestWasmRpc,
                             )?)
                         }
+                        (GuestLanguage::Effect, BridgeMode::External) => Box::new(
+                            EffectExternalBridgeGenerator::new(agent_type, &output_dir, false)?,
+                        ),
+                        (GuestLanguage::Effect, BridgeMode::Guest) => {
+                            Box::new(EffectGuestBridgeGenerator::new(
+                                agent_type,
+                                &output_dir,
+                                false,
+                            )?)
+                        }
                         (GuestLanguage::Scala, BridgeMode::External) => {
                             Box::new(ScalaBridgeGenerator::new_with_mode(
                                 agent_type,
@@ -1144,11 +1157,15 @@ async fn gen_bridge_sdk_target(
                             fs::remove(&output_dir)?;
                             TypeScriptToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
                         }
+                        (GuestLanguage::Effect, BridgeMode::Guest) => {
+                            fs::remove(&output_dir)?;
+                            EffectToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                        }
                         (GuestLanguage::MoonBit, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;
                             MoonBitToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
                         }
-                        _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Scala and MoonBit guest bridges"),
+                        _ => bail!("tool guest bridge generation is only implemented for Rust, TypeScript, Effect, Scala and MoonBit guest bridges"),
                     },
                 }
             },

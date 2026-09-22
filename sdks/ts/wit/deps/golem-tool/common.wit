@@ -84,7 +84,7 @@ package golem:tool@0.1.0;
 /// a declarative metadata record.
 interface common {
   use golem:core/types@2.0.0.{schema-graph, type-node-index, schema-value-tree,
-    typed-schema-value};
+    typed-schema-value, tool-error};
 
   // Top level
   record tool {
@@ -100,9 +100,12 @@ interface common {
 
   record tool-middleware {
     name:    string,
+    version: string,
     aliases: list<string>,
     doc:     doc,
     scope:   tool-middleware-scope,
+    /// Schema of the static configuration supplied for each installation.
+    parameter-schema: schema-graph,
   }
 
   variant tool-middleware-scope {
@@ -376,36 +379,8 @@ interface common {
   }
 
   // Invocation contract — shared between guest and host.
-  variant tool-error {
-    invalid-tool-name(string),
-    invalid-command-path(list<string>),
-    invalid-input(string),
-    constraint-violation(string),
-    /// Returned `invocation-result` does not match the body's
-    /// declared `result-spec` (e.g., the returned value's root type
-    /// does not match the body's declared result schema; see §6.1
-    /// transparency invariant).
-    invalid-result(string),
-    /// Tool-defined failure. Mirrors `golem:agent/common`'s
-    /// `agent-error::custom-error`: the payload is a self-contained
-    /// `typed-schema-value` carrying the error value. Producers SHOULD
-    /// shape it so its root type matches one of the body's declared
-    /// `error-case` payload types.
-    custom-error(typed-schema-value),
-  }
-
   record invocation-result {
     %result: option<typed-schema-value>,
     stdout:  option<stream<u8>>,
-  }
-
-  /// Invocation-scoped access to exactly the next inner layer in a tool
-  /// middleware chain. The runtime creates this resource; guests cannot.
-  resource underlying-tool {
-    invoke: async func(
-      command-path: list<string>,
-      input:        typed-schema-value,
-      stdin:        option<stream<u8>>,
-    ) -> result<invocation-result, tool-error>;
   }
 }

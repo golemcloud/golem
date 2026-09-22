@@ -16,7 +16,7 @@ use super::agent::AgentTypeName;
 use super::component_metadata::ComponentMetadata;
 use crate::base_model::render_config_path;
 pub use crate::base_model::worker::*;
-use crate::model::agent::AgentConfigSource;
+use crate::model::agent::{AgentConfigSource, OwnerKind};
 use std::collections::BTreeMap;
 
 impl TypedAgentConfigEntry {
@@ -61,20 +61,24 @@ impl UntypedAgentConfigEntry {
     pub fn enrich_with_type(
         self,
         component_metadata: &ComponentMetadata,
+        owner_kind: OwnerKind,
         agent_type_name: Option<&AgentTypeName>,
     ) -> Result<TypedAgentConfigEntry, String> {
-        let agent_type_name = agent_type_name.ok_or_else(|| {
-            "cannot enrich local agent config for non-agentic workers".to_string()
-        })?;
+        let (declarations, schema) = if owner_kind == OwnerKind::ComponentAgent {
+            let agent_type_name = agent_type_name
+                .ok_or_else(|| "Real agent config requires an agent type".to_string())?;
+            let agent_type = component_metadata
+                .find_agent_type_by_name_ref(agent_type_name)
+                .ok_or_else(|| {
+                    format!("did not find expected agent type {agent_type_name} in the metadata")
+                })?;
+            (&agent_type.config, &agent_type.schema)
+        } else {
+            let config_schema = component_metadata.config_schema();
+            (&config_schema.declarations, &config_schema.schema)
+        };
 
-        let agent_type = component_metadata
-            .find_agent_type_by_name_ref(agent_type_name)
-            .ok_or_else(|| {
-                format!("did not find expected agent type {agent_type_name} in the metadata")
-            })?;
-
-        let declaration = agent_type
-            .config
+        let declaration = declarations
             .iter()
             .find(|c| c.source == AgentConfigSource::Local && c.path == self.path)
             .ok_or_else(|| {
@@ -84,13 +88,13 @@ impl UntypedAgentConfigEntry {
                 )
             })?;
 
-        // Reattach the agent's native config schema graph (so named/ref
+        // Reattach the owner's native config schema graph (so named/ref
         // composites are preserved) to the stored schema value. Refs in
-        // `value_type` resolve against the agent's `SchemaGraph`; the resulting
+        // `value_type` resolve against the owner's `SchemaGraph`; the resulting
         // carrier is single-root, so project the defs to exactly those reachable
         // from `value_type` instead of cloning the whole registry.
         let value = crate::schema::agent::typed_schema_value_with_projected_defs(
-            &agent_type.schema,
+            schema,
             declaration.value_type.clone(),
             self.value,
         );
@@ -111,7 +115,7 @@ mod protobuf {
     use super::{AgentUpdateMode, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
     use crate::base_model::AgentFingerprint;
     use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-    use crate::model::oplog::AgentResourceId;
+    use crate::model::oplog::{AgentResourceId, OplogErrorKind};
     use crate::model::regions::OplogRegion;
     use crate::model::{AgentResourceDescription, OplogIndex};
     use std::collections::HashSet;
@@ -136,6 +140,7 @@ mod protobuf {
             }
             Ok(Self {
                 agent_id: value.agent_id.ok_or("Missing agent_id")?.try_into()?,
+                owner_kind: crate::model::agent::OwnerKind::try_from(value.owner_kind)?,
                 environment_id: value
                     .environment_id
                     .ok_or("Missing environment_id")?
@@ -158,6 +163,21 @@ mod protobuf {
                     .collect::<Result<Vec<_>, _>>()?,
                 created_at: value.created_at.ok_or("Missing created_at")?.into(),
                 last_error: value.last_error,
+                last_error_kind: value
+                    .last_error_kind
+                    .map(|kind| {
+                        golem_api_grpc::proto::golem::worker::OplogErrorKind::try_from(kind)
+                            .map_err(|_| format!("Invalid oplog error kind: {kind}"))
+                            .map(|kind| match kind {
+                                golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation => {
+                                    OplogErrorKind::Invocation
+                                }
+                                golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery => {
+                                    OplogErrorKind::Recovery
+                                }
+                            })
+                    })
+                    .transpose()?,
                 component_size: value.component_size,
                 total_linear_memory_size: value.total_linear_memory_size,
                 exported_resource_instances,
@@ -201,6 +221,7 @@ mod protobuf {
 
             Ok(Self {
                 agent_id: Some(value.agent_id.into()),
+                owner_kind: value.owner_kind.into(),
                 environment_id: Some(value.environment_id.into()),
                 created_by: Some(value.created_by.into()),
                 env: value.env,
@@ -216,6 +237,14 @@ mod protobuf {
                 updates: value.updates.into_iter().map(Into::into).collect(),
                 created_at: Some(value.created_at.into()),
                 last_error: value.last_error,
+                last_error_kind: value.last_error_kind.map(|kind| match kind {
+                    OplogErrorKind::Invocation => {
+                        golem_api_grpc::proto::golem::worker::OplogErrorKind::Invocation as i32
+                    }
+                    OplogErrorKind::Recovery => {
+                        golem_api_grpc::proto::golem::worker::OplogErrorKind::Recovery as i32
+                    }
+                }),
                 component_size: value.component_size,
                 total_linear_memory_size: value.total_linear_memory_size,
                 owned_resources,
@@ -450,5 +479,60 @@ mod protobuf {
                 value: Some(value.value.try_into()?),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::agent::OwnerKind;
+    use crate::model::component_metadata::{ComponentMetadata, KnownExports};
+    use crate::schema::agent::{AgentConfigDeclarationSchema, ComponentConfigSchema};
+    use crate::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
+    use test_r::test;
+
+    #[test]
+    fn enrich_component_baseline_config_uses_component_schema_without_agent_type() {
+        let type_id = TypeId::new("baseline-value");
+        let metadata = ComponentMetadata::from_parts(
+            KnownExports::default(),
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            BTreeMap::new(),
+        )
+        .with_component_config(
+            ComponentConfigSchema {
+                schema: SchemaGraph {
+                    defs: vec![SchemaTypeDef {
+                        id: type_id.clone(),
+                        name: Some("BaselineValue".to_string()),
+                        body: SchemaType::string(),
+                    }],
+                    root: SchemaType::record(Vec::new()),
+                },
+                declarations: vec![AgentConfigDeclarationSchema {
+                    source: AgentConfigSource::Local,
+                    path: vec!["baseline".to_string(), "value".to_string()],
+                    value_type: SchemaType::ref_to(type_id.clone()),
+                }],
+            },
+            Default::default(),
+        );
+
+        let enriched = UntypedAgentConfigEntry {
+            path: vec!["baseline".to_string(), "value".to_string()],
+            value: SchemaValue::String("configured".to_string()),
+        }
+        .enrich_with_type(&metadata, OwnerKind::EphemeralExternalTool, None)
+        .expect("component-baseline config must not require an agent type");
+
+        assert_eq!(enriched.value.root_type(), &SchemaType::ref_to(type_id));
+        assert_eq!(
+            enriched.value.value(),
+            &SchemaValue::String("configured".to_string())
+        );
+        assert_eq!(enriched.value.graph().defs.len(), 1);
     }
 }

@@ -19,7 +19,7 @@ use golem_common::base_model::OplogIndex;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
 use golem_common::model::component::CanonicalFilePath;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::entity::{
@@ -610,7 +610,7 @@ impl WorkerCtx for DebugContext {
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -629,6 +629,7 @@ impl WorkerCtx for DebugContext {
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        _: Arc<golem_worker_executor::native_tool::NativeToolCatalog<Self>>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_filesystem: WorkerFilesystemContext,
@@ -651,14 +652,14 @@ impl WorkerCtx for DebugContext {
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
         filesystem: FilesystemCapability,
-        executable_component: Component,
+        executable: golem_worker_executor::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         let account_resource_limits = owner_resources.resource_limits();
 
         let golem_ctx = DurableWorkerCtx::create(
             owned_agent_id,
-            agent_id,
+            owner_context,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -700,7 +701,7 @@ impl WorkerCtx for DebugContext {
             owner_resources,
             None,
             filesystem,
-            executable_component,
+            executable,
             entity_activation,
         )
         .await?;
@@ -733,6 +734,10 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.owned_agent_id()
     }
 
+    fn owner_context(&self) -> &ResolvedOwnerContext {
+        self.durable_ctx.owner_context()
+    }
+
     fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
         self.durable_ctx.parsed_agent_id()
     }
@@ -755,6 +760,10 @@ impl WorkerCtx for DebugContext {
 
     fn component_metadata(&self) -> &Component {
         self.durable_ctx.component_metadata()
+    }
+
+    fn executable_component_metadata(&self) -> Option<&Component> {
+        self.durable_ctx.executable_component_metadata()
     }
 
     fn is_exit(error: &Error) -> Option<i32> {

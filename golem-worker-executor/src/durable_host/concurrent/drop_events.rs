@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::entity::OwnerRuntime;
 
 /// Call-owned facts available to a cancellation recorder when a live persisted handle is dropped.
 ///
@@ -194,6 +195,29 @@ pub enum DropEvent {
     },
 }
 
+/// Removes synchronously completed marker events while retaining every other event in order.
+/// Returns false if any marker remains unresolved (including a cached receipt failure).
+pub(crate) fn settle_completed_marker_events(events: &mut VecDeque<DropEvent>) -> bool {
+    let mut retained = VecDeque::with_capacity(events.len());
+    let mut unresolved_marker = false;
+    while let Some(mut event) = events.pop_front() {
+        let settled = match &mut event {
+            DropEvent::AwaitCompletionMarker { receipt: None, .. } => true,
+            DropEvent::AwaitCompletionMarker {
+                receipt: Some(receipt),
+                ..
+            } => receipt.try_succeeded(),
+            _ => false,
+        };
+        if !settled {
+            unresolved_marker |= matches!(event, DropEvent::AwaitCompletionMarker { .. });
+            retained.push_back(event);
+        }
+    }
+    *events = retained;
+    !unresolved_marker
+}
+
 struct AccessDropEventDrainGuard {
     sink: UnboundedSender<DropEvent>,
     pending: VecDeque<DropEvent>,
@@ -259,7 +283,7 @@ pub async fn drain_queued_dropped_call_events<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
 ) -> Result<usize, TerminalCallError> {
     let mut recorded = 0;
-    while let Ok(event) = ctx.state.dropped_call_events.1.try_recv() {
+    while let Some(event) = ctx.state.take_next_dropped_call_event() {
         record_dropped_call_event(ctx, event).await?;
         recorded += 1;
     }
@@ -383,17 +407,110 @@ async fn record_dropped_call_event<Ctx: WorkerCtx>(
             }
         }
         DropEvent::CancelDroppedDurableInput { cancellation } => {
-            cancellation.cancel().await.map_err(|error| {
-                TerminalCallError::new(
-                    WorkerExecutorError::runtime(format!(
-                        "failed to cancel dropped durable stream: {error}"
-                    )),
-                    ambient_trap_context(ctx),
-                )
-            })?;
+            let result = async {
+                if !ctx.is_live() {
+                    if cancellation
+                        .is_recorded()
+                        .await
+                        .map_err(WorkerExecutorError::runtime)?
+                    {
+                        return Ok(());
+                    }
+                    if ctx.rejects_live_continuation_at_replay_tail() {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "durable stream guest-drop cancellation",
+                            "no recorded cancellation during completed entity replay",
+                        ));
+                    }
+                    loop {
+                        ctx.state.replay_state.await_natural_tail_end(None).await?;
+                        match ctx
+                            .prepare_live_continuation_at_replay_tail(
+                                true,
+                                "durable stream guest-drop cancellation".to_string(),
+                            )
+                            .await?
+                        {
+                            BeginReplayToLive::ReplayResumed => continue,
+                            BeginReplayToLive::Pending(pending) => {
+                                ctx.finish_switch_to_live(pending).await?.require_live()?;
+                                break;
+                            }
+                        }
+                    }
+                }
+                cancellation
+                    .cancel()
+                    .await
+                    .map_err(WorkerExecutorError::runtime)
+            }
+            .await;
+            result.map_err(|error| TerminalCallError::new(error, ambient_trap_context(ctx)))?;
         }
     }
     Ok(())
+}
+
+pub(crate) async fn cancel_dropped_durable_input_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+    cancellation: &DroppedDurableInput,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    let (live, rejected, replay, activity) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.is_live(),
+            ctx.rejects_live_continuation_at_replay_tail(),
+            ctx.state.replay_state.clone(),
+            ctx.tail_work_tracker().activity(),
+        )
+    });
+    if !live {
+        if cancellation
+            .is_recorded()
+            .await
+            .map_err(WorkerExecutorError::runtime)?
+        {
+            return Ok(());
+        }
+        if rejected {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
+                "durable stream guest-drop cancellation",
+                "no recorded cancellation during completed entity replay",
+            ));
+        }
+        loop {
+            replay.await_natural_tail_end(Some(&activity)).await?;
+            let (transition, primary) = store.with(|mut access| {
+                let ctx = get_ctx(access.data_mut());
+                (
+                    ctx.prepare_live_continuation_at_replay_tail(
+                        true,
+                        "durable stream guest-drop cancellation".to_string(),
+                    ),
+                    ctx.runtime == OwnerRuntime::Agent,
+                )
+            });
+            match transition.await? {
+                BeginReplayToLive::ReplayResumed => continue,
+                BeginReplayToLive::Pending(pending) => {
+                    finish_prepared_access_to_live(pending, primary, store, get_ctx)
+                        .await?
+                        .require_live()?;
+                    break;
+                }
+            }
+        }
+    }
+    cancellation
+        .cancel()
+        .await
+        .map_err(WorkerExecutorError::runtime)
 }
 
 /// Accessor-window variant of [`drain_queued_dropped_call_events`]. It drains the queue from a short
@@ -670,12 +787,12 @@ where
                 }
             }
             DropEvent::CancelDroppedDurableInput { cancellation } => {
-                if let Err(error) = cancellation.cancel().await {
+                if let Err(error) =
+                    cancel_dropped_durable_input_access(store, get_ctx, cancellation).await
+                {
                     if first_error.is_none() {
                         first_error = Some(TerminalCallError::new(
-                            WorkerExecutorError::runtime(format!(
-                                "failed to cancel dropped durable stream: {error}"
-                            )),
+                            error,
                             store.with(|mut access| {
                                 let ctx = get_ctx(access.data_mut());
                                 ambient_trap_context(ctx)
@@ -694,4 +811,118 @@ where
     }
     drain.disarm();
     Ok(recorded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    fn marker(receipt: MarkerReceipt) -> DropEvent {
+        DropEvent::AwaitCompletionMarker {
+            receipt: Some(receipt),
+            trap_context: DurableCallTrapContext {
+                retry_from: OplogIndex::INITIAL,
+                in_atomic_region: false,
+            },
+            live_call_permit: None,
+        }
+    }
+
+    #[test]
+    fn successful_markers_release_only_their_own_live_permits() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let _rpc = LiveCallPermit::new(counter.clone());
+        let unsafe_call = LiveCallPermit::new(counter.clone());
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mut event = marker(MarkerReceipt::pending(receiver));
+        if let DropEvent::AwaitCompletionMarker {
+            live_call_permit, ..
+        } = &mut event
+        {
+            *live_call_permit = Some(LiveCallPermit::new(counter.clone()));
+        }
+        let mut events = VecDeque::from([event]);
+        assert!(!settle_completed_marker_events(&mut events));
+        assert_eq!(counter.load(Ordering::Acquire), 3);
+        sender.send(Ok(())).unwrap();
+        assert!(settle_completed_marker_events(&mut events));
+        assert_eq!(counter.load(Ordering::Acquire), 2);
+        assert!(
+            !crate::durable_host::PrivateDurableWorkerState::suspend_admissible(
+                counter.load(Ordering::Acquire),
+                1,
+                false,
+                false,
+            )
+        );
+        drop(unsafe_call);
+        assert!(
+            crate::durable_host::PrivateDurableWorkerState::suspend_admissible(
+                counter.load(Ordering::Acquire),
+                1,
+                false,
+                false,
+            )
+        );
+
+        events.push_back(DropEvent::AwaitCompletionMarker {
+            receipt: None,
+            trap_context: DurableCallTrapContext {
+                retry_from: OplogIndex::INITIAL,
+                in_atomic_region: false,
+            },
+            live_call_permit: Some(LiveCallPermit::new(counter.clone())),
+        });
+        assert!(settle_completed_marker_events(&mut events));
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn settlement_scans_past_other_events_and_preserves_retained_order() {
+        let span1 = SpanId::generate();
+        let span2 = SpanId::generate();
+        let span3 = SpanId::generate();
+        let (success_sender, success_receiver) = tokio::sync::oneshot::channel();
+        success_sender.send(Ok(())).unwrap();
+        let (failure_sender, failure_receiver) = tokio::sync::oneshot::channel();
+        failure_sender
+            .send(Err(WorkerExecutorError::runtime("failed marker")))
+            .unwrap();
+        let mut events = VecDeque::from([
+            DropEvent::FinishSpan {
+                span_id: span1.clone(),
+                durable: false,
+            },
+            marker(MarkerReceipt::pending(success_receiver)),
+            DropEvent::FinishSpan {
+                span_id: span2.clone(),
+                durable: false,
+            },
+            marker(MarkerReceipt::pending(failure_receiver)),
+            DropEvent::FinishSpan {
+                span_id: span3.clone(),
+                durable: false,
+            },
+        ]);
+
+        assert!(!settle_completed_marker_events(&mut events));
+        assert_eq!(events.len(), 4);
+        assert!(
+            matches!(events.pop_front(), Some(DropEvent::FinishSpan { span_id, .. }) if span_id == span1)
+        );
+        assert!(
+            matches!(events.pop_front(), Some(DropEvent::FinishSpan { span_id, .. }) if span_id == span2)
+        );
+        assert!(matches!(
+            events.pop_front(),
+            Some(DropEvent::AwaitCompletionMarker {
+                live_call_permit: None,
+                ..
+            })
+        ));
+        assert!(
+            matches!(events.pop_front(), Some(DropEvent::FinishSpan { span_id, .. }) if span_id == span3)
+        );
+    }
 }

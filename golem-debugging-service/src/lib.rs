@@ -44,6 +44,7 @@ use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::direct_invocation_auth::DirectInvocationAuthService;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::events::Events;
+use golem_worker_executor::services::external_durable_stream::DefaultExternalDurableStreamService;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::GolemConfig;
 use golem_worker_executor::services::key_value::KeyValueService;
@@ -92,6 +93,8 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
     fn create_shard_manager_service(
         &self,
         _shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        _shard_service: Arc<dyn golem_worker_executor::services::shard::ShardService>,
+        _shutdown: golem_worker_executor::services::shutdown::Shutdown,
     ) -> Arc<dyn ShardManagerService> {
         Arc::new(golem_worker_executor::services::shard_manager::ShardManagerServiceSingleShard)
     }
@@ -193,6 +196,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             agent_webhooks_service,
             resource_limits,
             quota_service,
+            self.create_native_tool_catalog()?,
             additional_deps,
             shutdown_token,
             http_connection_pool,
@@ -238,6 +242,7 @@ pub async fn create_debugging_service_services(
     agent_webhooks_service: Arc<AgentWebhooksService>,
     resource_limits: Arc<dyn ResourceLimits>,
     quota_service: Arc<dyn QuotaService>,
+    native_tool_catalog: Arc<golem_worker_executor::native_tool::NativeToolCatalog<DebugContext>>,
     additional_deps: AdditionalDeps,
     shutdown_token: tokio_util::sync::CancellationToken,
     http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
@@ -248,6 +253,7 @@ pub async fn create_debugging_service_services(
         Arc::clone(&oplog_service),
         additional_deps.debug_session(),
     ));
+    let external_durable_streams = Arc::new(DefaultExternalDurableStreamService::new()?);
 
     // When it comes to fork, we need the original oplog service
     let worker_fork = Arc::new(DefaultWorkerFork::new(
@@ -283,8 +289,10 @@ pub async fn create_debugging_service_services(
         oplog_processor_plugin.clone(),
         resource_limits.clone(),
         environment_state_service.clone(),
+        native_tool_catalog.clone(),
         agent_types_service.clone(),
         agent_webhooks_service.clone(),
+        external_durable_streams.clone(),
         shutdown_token.clone(),
         http_connection_pool.clone(),
         websocket_connection_pool.clone(),
@@ -325,8 +333,10 @@ pub async fn create_debugging_service_services(
         resource_limits.clone(),
         shutdown_token.clone(),
         environment_state_service.clone(),
+        native_tool_catalog.clone(),
         agent_types_service.clone(),
         agent_webhooks_service.clone(),
+        external_durable_streams.clone(),
         http_connection_pool.clone(),
         websocket_connection_pool.clone(),
         additional_deps.clone(),
@@ -337,6 +347,7 @@ pub async fn create_debugging_service_services(
         active_agents,
         agent_types_service,
         agent_webhooks_service,
+        external_durable_streams,
         card_service,
         engine,
         linker,
@@ -367,6 +378,7 @@ pub async fn create_debugging_service_services(
         http_connection_pool,
         websocket_connection_pool,
         environment_state_service,
+        native_tool_catalog,
         additional_deps,
         leak_sentinel,
     ))
@@ -407,7 +419,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized + Sen
             bootstrap,
             runtime.clone(),
             &lazy_worker_activator,
-            shutdown.token(),
+            shutdown.clone(),
             join_set,
         )
         .await?;
@@ -481,6 +493,10 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
         get_durable_ctx,
     )?;
     golem_worker_executor::preview2::golem::agent::host::add_to_linker::<
+        _,
+        HasSelf<DurableWorkerCtx<DebugContext>>,
+    >(&mut linker, get_durable_ctx)?;
+    golem_worker_executor::preview2::golem::agent::durable_streams::add_to_linker::<
         _,
         HasSelf<DurableWorkerCtx<DebugContext>>,
     >(&mut linker, get_durable_ctx)?;

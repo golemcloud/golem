@@ -24,6 +24,7 @@ test "tool emitters generate root, leaf, registration, and typed clients" {
     @lib.generate_tool_client_code(tools),
   )
   assert_true(clients.contains("pub(all) struct GrepClient"))
+  assert_true(clients.contains("GrepClient::new_for"))
   assert_true(clients.contains("GrepClient::count"))
   assert_true(clients.contains("[\"count\"]"))
   assert_true(clients.contains("@tool.NoToolError"))
@@ -251,6 +252,38 @@ test "generated missing attachment failures release decoded invocation inputs" {
   assert_true(helper_calls >= 3)
   assert_true(generated.contains("\"required stdin stream is missing\""))
   assert_true(generated.contains("\"required stdout stream is missing\""))
+}
+
+///|
+test "generated invokers reject unexpected stdout attachments" {
+  let source =
+    #|#derive.tool
+    #|struct NoStreams {}
+    #|pub fn NoStreams::run() -> Unit {}
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(
+      @lib.parse_tools([("no-streams.mbt", source)]),
+    ),
+  )
+  assert_true(generated.contains("command does not accept a stdout stream"))
+  let compact = generated
+    .replace_all(old=" ", new="")
+    .replace_all(old="\n", new="")
+  assert_true(
+    compact.contains(
+      "if__golem_stdoutisSome(_){return@tool.reject_decoded_invocation(__golem_decoded,__golem_stdin,",
+    ),
+  )
+  let accepts_stdout =
+    #|#derive.tool
+    #|struct Output {}
+    #|pub fn Output::run(stdout : @tool.ProviderStdout) -> Unit {}
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(
+      @lib.parse_tools([("output.mbt", accepts_stdout)]),
+    ),
+  )
+  assert_false(generated.contains("command does not accept a stdout stream"))
 }
 
 ///|
@@ -599,8 +632,7 @@ test "custom tool errors encode the declared case payload" {
     generated.split("@asyncCore.Cancelled::Cancelled as error").count() - 1 >= 2,
   )
   assert_true(
-    generated.split("@toolCommon.ToolError::InvalidResult(message)").count() - 1 >=
-    2,
+    generated.split("@types.ToolError::InvalidResult(message)").count() - 1 >= 2,
   )
 }
 
@@ -1408,7 +1440,15 @@ test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
     rel_path: "golem_moonbit_examples",
     dir: "../golem_sdk_example1/golem_moonbit_examples",
   }
-  let tools = @lib.parse_tools(@lib.scan_package(package_info).files)
+  let fixture_names = [
+    "canonical-grep", "canonical-git", "remote", "stash", "canonical-big-bound",
+    "moonbit-streaming",
+  ]
+  let tools = @lib.parse_tools(@lib.scan_package(package_info).files).filter(fn(
+    tool,
+  ) {
+    fixture_names.contains(tool.name)
+  })
   assert_eq(tools.length(), 6)
   let grep = canonical_tool(tools, "canonical-grep")
   assert_eq(grep.version, Some("2.0.0"))

@@ -29,7 +29,9 @@
 //! durable/cross-executor representation is the snapshot embedded in the
 //! surrounding value, never the live handle.
 
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::permissions::derive as permissions_derive;
 use crate::preview2::golem::permissions::inspect as permissions_inspect;
@@ -47,7 +49,7 @@ use golem_common::base_model::oplog::QueuedCardEventTransfer;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::owner::AccountOwnerPattern;
-use golem_common::model::card::recipient::RecipientPattern;
+use golem_common::model::card::recipient::{RecipientOwnerContext, RecipientPattern};
 use golem_common::model::card::{
     AgentCardHolder, AgentPermissionMonomorphizationContext, Card, CardAlgebraError, CardClass,
     CardHolder, CardId, CardManagedBy, CardManagedByRuntimeDerived, CardParseError,
@@ -764,15 +766,10 @@ async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
     handles: &[Resource<PermissionCardHandleRep>],
     invocation_key: &IdempotencyKey,
 ) -> Result<Vec<ScopeDerivationParent>, permissions_types::PermissionError> {
-    let Some(agent_id) = ctx.state.agent_id.as_ref() else {
-        return Err(permissions_types::PermissionError::NotPermitted(
-            "derive-scope is only available to an agent".to_string(),
-        ));
-    };
-    let context = super::agent_monomorphization_context(
+    let context = super::owner_monomorphization_context(
         &ctx.state.component_metadata,
         &ctx.owned_agent_id,
-        agent_id,
+        &ctx.state.owner_context,
     );
 
     let mut parents = Vec::with_capacity(handles.len());
@@ -924,18 +921,19 @@ where
         oplog_index,
     };
     let card = build_card(card_id);
-    let request = HostRequestPermissionCardDerive {
-        card: serialize(&card).map_err(|err| {
-            anyhow!("failed to serialize runtime permission card {card_id}: {err}")
-        })?,
-        provenance: serialize(&provenance).map_err(|err| {
-            anyhow!("failed to serialize provenance for permission card {card_id}: {err}")
-        })?,
-    };
-    let handle = if begun.is_live() {
-        begun.start_live(ctx, request).await?
-    } else {
-        begun.start_replay(ctx).await?
+    let handle = match begun.resolve(ctx).await? {
+        ResolvedCall::Live(begun) => {
+            let request = HostRequestPermissionCardDerive {
+                card: serialize(&card).map_err(|err| {
+                    anyhow!("failed to serialize runtime permission card {card_id}: {err}")
+                })?,
+                provenance: serialize(&provenance).map_err(|err| {
+                    anyhow!("failed to serialize provenance for permission card {card_id}: {err}")
+                })?,
+            };
+            begun.start_live(ctx, request).await?
+        }
+        ResolvedCall::Replay(handle) => handle,
     };
 
     let response = if handle.is_live() {
@@ -959,7 +957,7 @@ where
     }
 
     if !ctx.state.snapshotting_mode {
-        let wallet_generation = Some(ctx.state.wallet_generation);
+        let wallet_generation = ctx.state.wallet_generation;
         if let Some((replayed_card, replayed_generation)) = ctx
             .state
             .replay_state
@@ -980,7 +978,7 @@ where
                 .add_and_commit_oplog(OplogEntry::CardDerived {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: ctx.entity_parent_start_index(),
-                    card: created.clone(),
+                    card: Box::new(created.clone()),
                     wallet_generation,
                 })
                 .await;
@@ -1194,12 +1192,22 @@ fn ensure_install_permission_in_surface(
 }
 
 fn agent_recipient_pattern(context: &AgentPermissionMonomorphizationContext) -> RecipientPattern {
-    RecipientPattern::Agent {
-        account: context.account.clone(),
-        application: context.application.clone(),
-        environment: context.environment.clone(),
-        component: context.component.clone(),
-        agent_type: context.agent_type.clone(),
+    match &context.owner {
+        RecipientOwnerContext::AgentType(agent_type) => RecipientPattern::Agent {
+            account: context.account.clone(),
+            application: context.application.clone(),
+            environment: context.environment.clone(),
+            component: context.component.clone(),
+            agent_type: agent_type.clone(),
+        },
+        RecipientOwnerContext::ComponentExternalToolOwner => {
+            RecipientPattern::ComponentExternalToolOwner {
+                account: context.account.clone(),
+                application: context.application.clone(),
+                environment: context.environment.clone(),
+                component: context.component.clone(),
+            }
+        }
     }
 }
 
@@ -1274,7 +1282,7 @@ async fn resolve_install_target_context<Ctx: WorkerCtx>(
             environment: component.environment_name,
             component: component.component_name,
             agent_name: target.agent_id,
-            agent_type,
+            owner: RecipientOwnerContext::AgentType(agent_type),
         },
     })
 }
@@ -1480,7 +1488,7 @@ async fn source_transfer_progress<Ctx: WorkerCtx>(
                     && transfer.installed_card_provenance.is_some() =>
             {
                 if !installed_card_matches_request(
-                    card,
+                    card.as_ref(),
                     &transfer.installed_card,
                     transfer.installed_card_provenance.as_ref(),
                 ) {
@@ -1492,19 +1500,22 @@ async fn source_transfer_progress<Ctx: WorkerCtx>(
                 if progress
                     .derived_card
                     .as_ref()
-                    .is_some_and(|existing| existing != card)
+                    .is_some_and(|existing| existing != card.as_ref())
                 {
                     return Err(transfer_progress_mismatch(format!(
                         "transfer {} has multiple distinct derived card payloads",
                         transfer.transfer_id
                     )));
                 }
-                progress.derived_card = Some(card.clone());
+                progress.derived_card = Some(card.as_ref().clone());
             }
-            OplogEntry::CardEventQueued {
-                event: QueuedCardEvent::TransferStarted(event),
-                ..
-            } if event.transfer_id == transfer.transfer_id => {
+            OplogEntry::CardEventQueued { event, .. } => {
+                let QueuedCardEvent::TransferStarted(event) = event.as_ref() else {
+                    continue;
+                };
+                if event.transfer_id != transfer.transfer_id {
+                    continue;
+                }
                 let Some(queued_card) = event.card.as_ref() else {
                     return Err(transfer_progress_mismatch(format!(
                         "queued transfer {} is missing its installed card payload",
@@ -1545,7 +1556,7 @@ async fn source_transfer_progress<Ctx: WorkerCtx>(
                 ..
             } if *transfer_id == transfer.transfer_id => {
                 if *card_id != source_card_id
-                    || recorded_source_holder.as_ref() != Some(&source_holder)
+                    || recorded_source_holder != &source_holder
                     || *recorded_target_holder != target_holder
                 {
                     return Err(transfer_progress_mismatch(format!(
@@ -1734,11 +1745,11 @@ async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
             entity_parent_start_index,
             transfer_id,
             source_card_id,
-            Some(CardHolder::Agent(AgentCardHolder {
+            CardHolder::Agent(AgentCardHolder {
                 agent_id: ctx.owned_agent_id.agent_id.clone(),
-            })),
+            }),
             target_holder.clone(),
-            Some(ctx.state.wallet_generation),
+            ctx.state.wallet_generation,
         ))
         .await;
 
@@ -1789,8 +1800,8 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
                 .add_and_commit_oplog(OplogEntry::CardDerived {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: ctx.entity_parent_start_index(),
-                    card: installed_card.clone(),
-                    wallet_generation: Some(ctx.state.wallet_generation),
+                    card: Box::new(installed_card.clone()),
+                    wallet_generation: ctx.state.wallet_generation,
                 })
                 .await;
         }
@@ -1799,12 +1810,12 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
             .worker()
             .add_and_commit_oplog(OplogEntry::card_event_queued(
                 ctx.entity_parent_start_index(),
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     transfer.transfer_id,
                     transfer.source_card.card_id(),
                     installed_card.clone(),
                     transfer.target_holder(),
-                ),
+                )),
             ))
             .await;
     }
@@ -1863,10 +1874,13 @@ async fn pending_source_transfer_progress(
 
         for entry in entries.values() {
             match entry {
-                OplogEntry::CardEventQueued {
-                    event: QueuedCardEvent::TransferStarted(recorded),
-                    ..
-                } if recorded.transfer_id == transfer.transfer_id => {
+                OplogEntry::CardEventQueued { event, .. } => {
+                    let QueuedCardEvent::TransferStarted(recorded) = event.as_ref() else {
+                        continue;
+                    };
+                    if recorded.transfer_id != transfer.transfer_id {
+                        continue;
+                    }
                     if recorded.card_id != transfer.card_id
                         || recorded.card.as_ref() != Some(installed_card)
                         || recorded.target_holder != target_holder
@@ -1886,9 +1900,7 @@ async fn pending_source_transfer_progress(
                     ..
                 } if *transfer_id == transfer.transfer_id => {
                     if *card_id != transfer.card_id
-                        || !recorded_source_holder
-                            .as_ref()
-                            .is_none_or(|holder| holder == &source_holder)
+                        || recorded_source_holder != &source_holder
                         || *recorded_target_holder != target_holder
                     {
                         return Err(transfer_progress_mismatch(format!(
@@ -2551,15 +2563,10 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                 .with_agent_authority_at_boundary(|ctx| {
                     ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
                     let wallet = ctx.agent_wallet_cards_snapshot();
-                    let Some(agent_id) = ctx.state.agent_id.as_ref() else {
-                        return Err(permissions_types::PermissionError::NotPermitted(
-                            "derive-from-wallet is only available to an agent".to_string(),
-                        ));
-                    };
-                    let context = super::agent_monomorphization_context(
+                    let context = super::owner_monomorphization_context(
                         &ctx.state.component_metadata,
                         &ctx.owned_agent_id,
-                        agent_id,
+                        &ctx.state.owner_context,
                     );
                     Ok::<_, permissions_types::PermissionError>((wallet, context))
                 })
@@ -2780,11 +2787,12 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 installed_card_provenance,
                 target_agent_id: target.agent_id,
             };
-            let request = transfer.request()?;
-            let mut handle = if begun.is_live() {
-                begun.start_live(self, request).await?
-            } else {
-                begun.start_replay(self).await?
+            let mut handle = match begun.resolve(self).await? {
+                ResolvedCall::Live(begun) => {
+                    let request = transfer.request()?;
+                    begun.start_live(self, request).await?
+                }
+                ResolvedCall::Replay(handle) => handle,
             };
             if handle.is_live() {
                 self.public_state
@@ -3462,7 +3470,7 @@ mod tests {
             environment: EnvironmentName::try_from("prod").unwrap(),
             component: ComponentName("cart-svc".to_string()),
             agent_name: "cart-1".to_string(),
-            agent_type: AgentTypeName("CartAgent".to_string()),
+            owner: RecipientOwnerContext::AgentType(AgentTypeName("CartAgent".to_string())),
         }
     }
 

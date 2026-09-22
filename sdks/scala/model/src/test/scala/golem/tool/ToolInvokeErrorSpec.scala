@@ -32,7 +32,7 @@ object ToolInvokeErrorSpec extends ZIOSpecDefault {
         ToolInvokeError.InvalidInput("bad input"),
         ToolInvokeError.ConstraintViolation("denied"),
         ToolInvokeError.InvalidResult("bad result"),
-        ToolInvokeError.Tool(payload)
+        ToolInvokeError.UnknownToolError("failure", payload)
       )
 
       assertTrue(errors.forall(error => ToolInvokeError.fromWire(ToolInvokeError.toWire(error)) == error))
@@ -52,12 +52,9 @@ object ToolInvokeErrorSpec extends ZIOSpecDefault {
       )
     },
     test("underlying misuse remains outside the wire error algebra") {
-      val overlapping = new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.OverlappingInvocation)
-      val revoked     = new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.Revoked)
+      val revoked = new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.Revoked)
 
       assertTrue(
-        overlapping.reason == ToolUnderlyingMisuse.OverlappingInvocation,
-        overlapping.getMessage.contains("already in flight"),
         revoked.reason == ToolUnderlyingMisuse.Revoked,
         revoked.getMessage.contains("no longer available")
       )

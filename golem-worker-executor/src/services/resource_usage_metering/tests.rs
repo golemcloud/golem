@@ -820,11 +820,11 @@ async fn closed_window_queued_baseline_is_discarded_before_observer_call() {
     let now = Instant::now();
     let clock = TestClock::new(now);
     let first_baseline = ObservationGate::pending(authoritative(100));
-    let current_baseline = ObservationGate::ready(authoritative(200));
+    let current_baseline = ObservationGate::pending(authoritative(200));
     let current_final = ObservationGate::ready(authoritative(200));
     let reader = ScriptedUsageReader::new(vec![
         Arc::clone(&first_baseline),
-        current_baseline,
+        Arc::clone(&current_baseline),
         current_final,
     ]);
     let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
@@ -868,6 +868,8 @@ async fn closed_window_queued_baseline_is_discarded_before_observer_call() {
     let third = open_window(&meter, third_permit).await.unwrap();
     wait_for_active_observation(&third).await;
     wait_for_calls(&reader, 2).await;
+    current_baseline.wait_started().await;
+    current_baseline.release();
     wait_for_observations_to_finish(&reader).await;
     wait_for_observation_state(&third).await;
     assert_eq!(reader.calls.load(Ordering::Acquire), 2);

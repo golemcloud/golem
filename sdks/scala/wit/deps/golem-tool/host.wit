@@ -8,8 +8,9 @@ package golem:tool@0.1.0;
 /// (rather than agent-id), and without the agent-instance constructor
 /// step (tools are stateless invocables).
 interface host {
-  use common.{tool, tool-error, invocation-result};
-  use golem:core/types@2.0.0.{typed-schema-value, component-id};
+  use common.{tool, invocation-result};
+  use streams.{byte-stream-failure, byte-stream-item, byte-stream-close-cause, stream-write-error};
+  use golem:core/types@2.0.0.{typed-schema-value, component-id, tool-rpc-error};
 
   /// A tool registered in the environment, addressable by name from
   /// any agent or other tool. `definition` carries the full metadata;
@@ -20,6 +21,8 @@ interface host {
   /// `mcp.imports` (§5.7.2), or the runtime itself (a synthesized
   /// component-id) for host-implemented privileged tools (§4.6).
   record registered-tool {
+    /// Stable leaf name used to construct tool-rpc, independent of adapters.
+    lookup-name:    string,
     definition:     tool,
     implemented-by: component-id,
   }
@@ -34,7 +37,7 @@ interface host {
   /// addition of per-caller access filtering. Order is
   /// unspecified; callers that
   /// want a stable ordering should sort by
-  /// `definition.commands.nodes[0].name`.
+  /// `lookup-name`.
   get-all-tools: func() -> list<registered-tool>;
 
   /// Returns the registered tool with the given name iff the
@@ -43,43 +46,6 @@ interface host {
   /// either if the tool is not registered or if the calling agent
   /// has no binding for it; the two cases are not distinguished.
   get-tool: func(name: string) -> option<registered-tool>;
-
-  variant rpc-error {
-    protocol-error(string),
-    denied(string),
-    not-found(string),
-    remote-internal-error(string),
-    remote-tool-error(tool-error),
-    /// The operation's explicit cancellation won terminal arbitration.
-    cancelled,
-    /// A filesystem-capable input or output attachment exceeded the
-    /// configured per-direction retained-byte limit.
-    resource-exhausted(string),
-  }
-
-  /// Recoverable attachment failures are stream values rather than Component
-  /// Model stream errors. A producer emits one final failure item and then
-  /// closes the underlying stream. Clean EOF is represented only by closure.
-  variant byte-stream-failure {
-    cancelled,
-    abandoned,
-    resource-exhausted,
-    failed(string),
-  }
-
-  /// Every successful item contains a non-empty byte chunk.
-  type byte-stream-item = result<list<u8>, byte-stream-failure>;
-
-  variant byte-stream-close-cause {
-    finished,
-    failed(byte-stream-failure),
-    consumer-cancelled,
-  }
-
-  variant stream-write-error {
-    closed(byte-stream-close-cause),
-    concurrent-operation,
-  }
 
   /// Producer endpoint for caller-provided stdin. Exactly one write, finish,
   /// or fail operation may be outstanding. The first terminal is immutable;
@@ -127,17 +93,12 @@ interface host {
   /// Dropping the reader cancels only this attachment's consumer role.
   create-stdout: func() -> tuple<own<tool-stdout>, stream<byte-stream-item>>;
 
-  /// Host-owned writer supplied to the tool implementation. Exactly one
-  /// write, finish, or fail operation may be outstanding. The first terminal
-  /// is immutable; dropping an open writer selects `abandoned`.
-  resource tool-stdout-writer {
-    write: async func(bytes: list<u8>) -> result<_, stream-write-error>;
-    finish: async func() -> result<_, stream-write-error>;
-    fail: async func(reason: byte-stream-failure) -> result<_, stream-write-error>;
-  }
-
   resource tool-rpc {
+    /// Binds an ordinary tool client to its configured tool name.
     constructor(tool-name: string);
+
+    /// Creates a tool RPC resource without trapping on invalid caller input.
+    create: static func(tool-name: string) -> result<tool-rpc, tool-rpc-error>;
 
     /// Waits for the structured terminal. Callers that supplied stdout must
     /// drive this wait and the already-created reader concurrently. Callers
@@ -148,7 +109,7 @@ interface host {
       input:        typed-schema-value,
       stdin:        option<own<tool-stdin>>,
       stdout:       option<own<tool-stdout>>,
-    ) -> result<invocation-result, rpc-error>;
+    ) -> result<invocation-result, tool-rpc-error>;
 
     /// Durably admits fire-and-forget work. Declared output is discarded by
     /// the host so an absent caller reader cannot apply backpressure.
@@ -156,7 +117,7 @@ interface host {
       command-path: list<string>,
       input:        typed-schema-value,
       stdin:        option<own<tool-stdin>>,
-    ) -> result<_, rpc-error>;
+    ) -> result<_, tool-rpc-error>;
 
     /// Durably admits work and returns an independently owned structured
     /// result observer. Stdout, when declared, was created by the caller and
@@ -172,7 +133,7 @@ interface host {
   resource future-invoke-result {
     /// Sequential calls return the same immutable terminal. Only one call may
     /// be outstanding at a time.
-    get: async func() -> result<invocation-result, rpc-error>;
+    get: async func() -> result<invocation-result, tool-rpc-error>;
     /// Explicitly cancels the operation. Dropping this resource only detaches
     /// result observation and does not cancel accepted work.
     cancel: func();
@@ -183,7 +144,7 @@ interface host {
   /// eligible together and execute in durable Start order.
   get-invoke-results: async func(
     futures: list<borrow<future-invoke-result>>,
-  ) -> list<result<invocation-result, rpc-error>>;
+  ) -> list<result<invocation-result, tool-rpc-error>>;
 }
 
 world tool-host {

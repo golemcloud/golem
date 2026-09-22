@@ -33,6 +33,8 @@ pub mod compatibility;
 pub mod concurrent_delivery_order;
 pub mod concurrent_runtime_events;
 pub mod durability;
+pub mod external_durable_stream;
+pub mod fork;
 pub mod fuel;
 pub mod hot_update;
 pub mod http;
@@ -44,8 +46,10 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod namespace_routed_key_value_storage;
 pub mod observability;
+pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
 pub mod oplog_metrics;
+pub mod oplog_sweep;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod readonly;
@@ -62,6 +66,7 @@ pub mod tool_streaming;
 pub mod transactions;
 pub mod wasi;
 pub mod websocket;
+pub mod worker_initialization;
 
 test_r::enable!();
 
@@ -93,10 +98,12 @@ pub fn raw_params(
 
 tag_suite!(api, group1);
 tag_suite!(retry_lifecycle, group1);
+tag_suite!(worker_initialization, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 tag_suite!(in_function_retry, in_function_retry);
 tag_suite!(http, group1);
+tag_suite!(external_durable_stream, group1);
 tag_suite!(rdbms, group1);
 
 tag_suite!(hot_update, group2);
@@ -200,6 +207,12 @@ test_component!(
     "agent_rpc_rust",
     "golem_it_agent_rpc_rust_release",
     "golem-it:agent-rpc-rust"
+);
+test_component!(
+    external_durable_streams,
+    "external_durable_streams",
+    "golem_it_external_durable_streams_release",
+    "golem-it:external-durable-streams"
 );
 test_component!(
     agent_rpc_rust_as_resolve_target,

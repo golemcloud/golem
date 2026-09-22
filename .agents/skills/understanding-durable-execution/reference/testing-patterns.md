@@ -26,7 +26,8 @@ golem-worker-executor --test <file> -- <filter>`); build the required WASM fixtu
   - `executor.oplog_service_call_count(&worker_id, "read_exact")` — prove a path did not scan
     the oplog.
 - `golem-test-framework/src/dsl/mod.rs`
-  - `simulated_crash(&agent_id)` — `InterruptKind::Restart`; the worker reconstructs immediately.
+  - `simulated_crash(&agent_id)` — `InterruptKind::Restart`; the resident worker reconstructs
+    immediately, or on its next wakeup if already unloaded.
   - `interrupt(&agent_id)` / `resume(&agent_id, force)` — stop and later reconstruct.
   - `get_oplog(&agent_id, from)` / `search_oplog(&agent_id, query)` — assert oplog shape.
   - `wait_for_status(..)`, `check_oplog_is_queryable(..)`.

@@ -164,6 +164,63 @@ impl ComponentRevisionRecord {
     }
 
     pub fn to_diffable(&self) -> Result<diff::Component, diff::DiffError> {
+        let metadata = self.metadata.value();
+        let provision = metadata.component_provision_config();
+        let component_config = diff::ComponentConfig {
+            schema: metadata.config_schema().clone(),
+            initial_permissions: diff::AgentTypeInitialPermission {
+                lower_positive: provision.initial_permissions.lower_positive.clone(),
+                lower_negative: provision.initial_permissions.lower_negative.clone(),
+                upper_positive: provision.initial_permissions.upper_positive.clone(),
+                upper_negative: provision.initial_permissions.upper_negative.clone(),
+            },
+            config: provision
+                .config
+                .iter()
+                .map(|entry| {
+                    Ok((entry.path.join("."), NormalizedJsonValue::new(
+                    golem_schema::schema::render::to_json_value(
+                        entry.value.graph(), entry.value.root_type(), entry.value.value()
+                    ).map_err(|reason| diff::DiffError::TypedConfigJsonConversion {
+                        operation: "component revision to_diffable component config conversion",
+                        path: entry.path.join("."), reason: reason.to_string(),
+                    })?
+                )))
+                })
+                .collect::<Result<_, _>>()?,
+            env: provision.env.clone(),
+            files_by_path: provision
+                .files
+                .iter()
+                .map(|file| {
+                    (
+                        file.path.to_abs_string(),
+                        diff::AgentFile {
+                            hash: file.content_hash.0,
+                            permissions: file.permissions,
+                        }
+                        .into(),
+                    )
+                })
+                .collect(),
+            plugins_by_grant_id: provision
+                .plugins
+                .iter()
+                .map(|plugin| {
+                    (
+                        plugin.environment_plugin_grant_id.0,
+                        diff::PluginInstallation {
+                            priority: plugin.priority.0,
+                            name: plugin.plugin_name.clone(),
+                            version: plugin.plugin_version.clone(),
+                            grant_id: plugin.environment_plugin_grant_id.0,
+                            parameters: plugin.parameters.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        }
+        .into();
         let agent_type_provision_configs =
             self.metadata
                 .value()
@@ -293,6 +350,13 @@ impl ComponentRevisionRecord {
                             })
                             .collect(),
                         environment_binding: metadata.environment_binding.clone(),
+                        component_bindings: metadata
+                            .component_bindings
+                            .iter()
+                            .map(|(component_name, binding)| {
+                                (component_name.0.clone(), binding.clone())
+                            })
+                            .collect(),
                         agent_bindings: metadata
                             .agent_bindings
                             .iter()
@@ -306,8 +370,58 @@ impl ComponentRevisionRecord {
 
         Ok(diff::Component {
             wasm_hash: self.binary_hash.into(),
+            component_config,
             agent_type_provision_configs,
             tool_deployment_configs,
+            tool_middleware_deployment_configs: self
+                .metadata
+                .value()
+                .tool_middlewares()
+                .iter()
+                .map(|(name, metadata)| {
+                    (
+                        name.to_string(),
+                        diff::ToolMiddlewareDeploymentConfig {
+                            definition: metadata.definition.clone(),
+                            config: metadata.provision.config.clone(),
+                            env: metadata.provision.env.clone(),
+                            files_by_path: metadata
+                                .provision
+                                .files
+                                .iter()
+                                .map(|file| {
+                                    (
+                                        file.path.to_abs_string(),
+                                        diff::AgentFile {
+                                            hash: file.content_hash.0,
+                                            permissions: file.permissions,
+                                        }
+                                        .into(),
+                                    )
+                                })
+                                .collect(),
+                            plugins_by_grant_id: metadata
+                                .provision
+                                .plugins
+                                .iter()
+                                .map(|plugin| {
+                                    (
+                                        plugin.environment_plugin_grant_id.0,
+                                        diff::PluginInstallation {
+                                            priority: plugin.priority.0,
+                                            name: plugin.plugin_name.clone(),
+                                            version: plugin.plugin_version.clone(),
+                                            grant_id: plugin.environment_plugin_grant_id.0,
+                                            parameters: plugin.parameters.clone(),
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        }
+                        .into(),
+                    )
+                })
+                .collect(),
         })
     }
 
@@ -347,6 +461,7 @@ pub struct ComponentAuthExtRevisionRecord {
     pub environment_name: String,
     pub environment_revision_id: i64,
     pub environment_compatibility_check: bool,
+    pub environment_tool_compatibility_mode: String,
     pub environment_version_check: bool,
     pub environment_security_overrides: bool,
 }

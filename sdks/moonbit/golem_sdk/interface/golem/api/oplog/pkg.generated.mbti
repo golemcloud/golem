@@ -14,6 +14,13 @@ import {
 pub fn enrich_oplog_entries(@host.EnvironmentId, @types.AgentId, Array[(UInt64, OplogEntry)], UInt64) -> Result[Array[PublicOplogEntry], String]
 
 // Errors
+pub(all) suberror OplogErrorKind {
+  INVOCATION
+  RECOVERY
+} derive(Eq, @debug.Debug)
+pub fn OplogErrorKind::from(Int) -> Self
+pub fn OplogErrorKind::ordinal(Self) -> Int
+
 pub(all) suberror OplogReadError {
   PermissionDenied
   InternalError(String)
@@ -56,6 +63,7 @@ pub(all) struct AgentInitializationParameters {
 pub(all) enum AgentInvocation {
   AgentInitialization(AgentInitializationParameters)
   AgentMethodInvocation(AgentMethodInvocationParameters)
+  ExternalTool(ExternalToolInvocationParameters)
   SaveSnapshot
   LoadSnapshot(LoadSnapshotParameters)
   ProcessOplogEntries(ProcessOplogEntriesParameters)
@@ -77,6 +85,7 @@ pub(all) struct AgentInvocationOutputParameters {
 pub(all) enum AgentInvocationResult {
   AgentInitialization(AgentInvocationOutputParameters)
   AgentMethod(AgentInvocationOutputParameters)
+  ExternalTool(ExternalToolResultParameters)
   ManualUpdate
   LoadSnapshot(FallibleResultParameters)
   SaveSnapshot(SaveSnapshotResultParameters)
@@ -86,6 +95,7 @@ pub(all) enum AgentInvocationResult {
 pub(all) struct AgentInvocationStartedParameters {
   timestamp : @system-clock.Instant
   invocation : AgentInvocation
+  wallet_pin : PublicInvocationWalletPin
 } derive(Eq, @debug.Debug)
 
 pub(all) struct AgentMethodInvocationParameters {
@@ -139,6 +149,7 @@ pub(all) struct CardEventQueuedParameters {
 pub(all) struct CardExpiredParameters {
   timestamp : @system-clock.Instant
   card_id : @types.CardId
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CardInstallFailedParameters {
@@ -161,12 +172,14 @@ pub(all) struct CardInstalledParameters {
   timestamp : @system-clock.Instant
   queued_event_index : UInt64?
   card_id : @types.CardId
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CardRevokedParameters {
   timestamp : @system-clock.Instant
   queued_event_index : UInt64
   card_id : @types.CardId
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CompletionDeliveredParameters {
@@ -192,6 +205,7 @@ pub(all) struct CountBoxState {
 pub(all) struct CreateParameters {
   timestamp : @system-clock.Instant
   agent_id : @types.AgentId
+  owner_kind : OwnerKind
   agent_mode : AgentMode
   component_revision : UInt64
   env : Array[(String, String)]
@@ -261,6 +275,7 @@ pub(all) struct EphemeralSleepTooLong {
 
 pub(all) struct ErrorParameters {
   timestamp : @system-clock.Instant
+  kind : OplogErrorKind
   error : String
   retry_from : UInt64
   inside_atomic_region : Bool
@@ -269,6 +284,20 @@ pub(all) struct ErrorParameters {
 
 pub(all) struct ExternalSpanData {
   span_id : String
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ExternalToolInvocationParameters {
+  idempotency_key : String
+  tool_name : String
+  command_path : Array[String]
+  input : @types.TypedSchemaValue
+  trace_id : String
+  trace_states : Array[String]
+  invocation_context : Array[Array[SpanData]]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ExternalToolResultParameters {
+  result : Result[ToolInvocationResult, @types.ToolRpcError]
 } derive(Eq, @debug.Debug)
 
 pub(all) struct FailedUpdateParameters {
@@ -365,6 +394,7 @@ pub(all) enum OplogEntry {
   AgentInvocationFinished(RawAgentInvocationFinishedParameters)
   Suspend(Timestamp)
   Error(RawErrorParameters)
+  RecoverySucceeded(Timestamp)
   NoOp(Timestamp)
   Jump(JumpParameters)
   Interrupted(Timestamp)
@@ -380,6 +410,7 @@ pub(all) enum OplogEntry {
   DropResource(RawDropResourceParameters)
   Log(LogParameters)
   Restart(Timestamp)
+  Resumed(Timestamp)
   ActivatePlugin(RawActivatePluginParameters)
   DeactivatePlugin(RawDeactivatePluginParameters)
   Revert(RevertParameters)
@@ -435,6 +466,13 @@ pub(all) struct OplogRegion {
   end : UInt64
 } derive(Eq, @debug.Debug)
 
+pub(all) enum OwnerKind {
+  COMPONENT_AGENT
+  EPHEMERAL_EXTERNAL_TOOL
+} derive(Eq, @debug.Debug)
+pub fn OwnerKind::from(Int) -> Self
+pub fn OwnerKind::ordinal(Self) -> Int
+
 pub(all) struct PairState {
   left : Int
   right : Int
@@ -463,6 +501,11 @@ pub(all) struct ProcessOplogEntriesParameters {
   idempotency_key : String
 } derive(Eq, @debug.Debug)
 
+pub(all) struct PublicInvocationWalletPin {
+  wallet_token : WalletVersionToken
+  scope_card_id : @types.CardId?
+} derive(Eq, @debug.Debug)
+
 pub(all) enum PublicOplogEntry {
   Create(CreateParameters)
   Start(StartParameters)
@@ -472,6 +515,7 @@ pub(all) enum PublicOplogEntry {
   AgentInvocationFinished(AgentInvocationFinishedParameters)
   Suspend(Timestamp)
   Error(ErrorParameters)
+  RecoverySucceeded(Timestamp)
   NoOp(Timestamp)
   Jump(JumpParameters)
   Interrupted(Timestamp)
@@ -487,6 +531,7 @@ pub(all) enum PublicOplogEntry {
   DropResource(DropResourceParameters)
   Log(LogParameters)
   Restart(Timestamp)
+  Resumed(Timestamp)
   ActivatePlugin(ActivatePluginParameters)
   DeactivatePlugin(DeactivatePluginParameters)
   Revert(RevertParameters)
@@ -551,6 +596,7 @@ pub(all) struct RawAgentInvocationStartedParameters {
   trace_id : String
   trace_states : Array[String]
   invocation_context : Array[SpanData]
+  wallet_pin : RawInvocationWalletPin
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawBeginRemoteTransactionParameters {
@@ -569,6 +615,7 @@ pub(all) struct RawCardInstalledParameters {
   timestamp : @system-clock.Instant
   queued_event_index : UInt64?
   card : FixedArray[Byte]
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawCompletionDeliveredParameters {
@@ -584,6 +631,7 @@ pub(all) struct RawCompletionDiscardedParameters {
 pub(all) struct RawCreateParameters {
   timestamp : @system-clock.Instant
   agent_id : @types.AgentId
+  owner_kind : OwnerKind
   agent_mode : AgentMode
   component_revision : UInt64
   env : Array[(String, String)]
@@ -629,6 +677,7 @@ pub(all) struct RawEndParameters {
 
 pub(all) struct RawErrorParameters {
   timestamp : @system-clock.Instant
+  kind : OplogErrorKind
   error : WorkerError
   retry_from : UInt64
   inside_atomic_region : Bool
@@ -640,6 +689,12 @@ pub(all) struct RawHostStreamFrameParameters {
   parent_start_index : UInt64
   kind : HostStreamKind
   payload : OplogPayload
+} derive(Eq, @debug.Debug)
+
+pub(all) struct RawInvocationWalletPin {
+  wallet_token : WalletVersionToken
+  pinned_card_ids : Array[@types.CardId]
+  scope_card_id : @types.CardId?
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawLocalAgentConfigEntry {
@@ -680,6 +735,8 @@ pub(all) struct RawSnapshotParameters {
   timestamp : @system-clock.Instant
   data : OplogPayload
   mime_type : String
+  active_cards : Array[FixedArray[Byte]]
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawStartParameters {
@@ -807,9 +864,18 @@ pub(all) struct Timestamp {
   timestamp : @system-clock.Instant
 } derive(Eq, @debug.Debug)
 
+pub(all) struct ToolInvocationResult {
+  result : @types.TypedSchemaValue?
+} derive(Eq, @debug.Debug)
+
 pub(all) enum UpdateDescription {
   AutoUpdate
   SnapshotBased(@host.Snapshot)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct WalletVersionToken {
+  wallet_id_hash : FixedArray[Byte]
+  generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) enum WrappedFunctionType {

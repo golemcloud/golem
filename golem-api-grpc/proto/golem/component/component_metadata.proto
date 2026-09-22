@@ -10,6 +10,7 @@ import "golem/component/linear_memory.proto";
 import "golem/common/empty.proto";
 import "golem/schema/agent.proto";
 import "golem/tool/tool.proto";
+import "golem/worker/agent_config.proto";
 
 message KnownExports {
   optional string agent_guest_interface = 1;
@@ -17,6 +18,7 @@ message KnownExports {
   optional string load_snapshot_interface = 3;
   optional string oplog_processor_interface = 4;
   optional string tool_guest_interface = 5;
+  optional string tool_middleware_guest_interface = 6;
 }
 
 message ComponentMetadata {
@@ -29,6 +31,22 @@ message ComponentMetadata {
   map<string, golem.component.AgentTypeProvisionConfig> agent_type_provision_configs = 9;
   map<string, ToolDeploymentMetadata> tools = 11;
   map<string, AgentMethodStreams> agent_method_streams = 12;
+  golem.schema.ComponentConfigSchema config_schema = 13;
+  ComponentProvisionConfig component_provision_config = 14;
+  map<string, ToolMiddlewareDeploymentMetadata> tool_middlewares = 15;
+}
+
+message ComponentProvisionConfig {
+  map<string, string> env = 1;
+  repeated golem.worker.TypedAgentConfigEntry config = 2;
+  repeated PluginInstallation plugins = 3;
+  repeated InitialAgentFile files = 4;
+  bytes initial_permissions = 5;
+}
+
+message ToolMiddlewareDeploymentMetadata {
+  golem.tool.ToolMiddleware definition = 1;
+  ToolProvisionConfig provision = 2;
 }
 
 message AgentMethodStreams {
@@ -45,6 +63,7 @@ message ToolDeploymentMetadata {
   ToolProvisionConfig provision = 2;
   optional ToolBindingInput environment_binding = 3;
   map<string, ToolBindingInput> agent_bindings = 4;
+  map<string, ToolBindingInput> component_bindings = 5;
 }
 
 message ToolProvisionConfig {
@@ -60,6 +79,49 @@ message ToolBindingInput {
   optional string account = 3;
   SecretKeyScope secret_keys_readable = 4;
   SecretKeyScope secret_keys_revealable = 5;
+  ConfigKeyScope config_keys_readable = 6;
+  optional ToolMiddlewareInstallations middleware = 7;
+  optional ToolMiddlewareMergeMode middleware_merge_mode = 8;
+  ToolFilesystemAccess filesystem_access = 9;
+}
+
+message ToolMiddlewareInstallations {
+  repeated ToolMiddlewareInstallation values = 1;
+}
+
+message ToolMiddlewareInstallation {
+  string name = 1;
+  optional string version = 2;
+  string parameters_json = 3;
+  optional string account = 4;
+  ToolFilesystemAccess filesystem_access = 5;
+}
+
+enum ToolFilesystemAccess {
+  TOOL_FILESYSTEM_ACCESS_UNSET = 0;
+  TOOL_FILESYSTEM_ACCESS_ALLOWED = 1;
+  TOOL_FILESYSTEM_ACCESS_DENIED = 2;
+}
+
+enum ToolMiddlewareMergeMode {
+  TOOL_MIDDLEWARE_MERGE_MODE_PREPEND = 0;
+  TOOL_MIDDLEWARE_MERGE_MODE_APPEND = 1;
+  TOOL_MIDDLEWARE_MERGE_MODE_REPLACE = 2;
+}
+
+message ConfigKeyScope {
+  oneof value {
+    golem.common.Empty all = 1;
+    ConfigKeyPaths keys = 2;
+  }
+}
+
+message ConfigKeyPaths {
+  repeated ConfigKeyPath paths = 1;
+}
+
+message ConfigKeyPath {
+  repeated string segments = 1;
 }
 
 message SecretKeyScope {

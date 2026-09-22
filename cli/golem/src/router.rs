@@ -68,6 +68,8 @@ pub async fn start_router(
         // Worker endpoints
         .at("/v1/agents/create-agent", worker_service_api.clone())
         .at("/v1/agents/invoke-agent", worker_service_api.clone())
+        .at("/v1/agents/invoke-tool", worker_service_api.clone())
+        .at("/v1/agents/describe-tool", worker_service_api.clone())
         .at(
             "/v1/agents/invoke-agent-session",
             worker_service_api.clone(),

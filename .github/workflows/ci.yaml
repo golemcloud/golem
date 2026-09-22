@@ -32,7 +32,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.3"
+  WASM_RQUICKJS_VERSION: "0.4.4"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -50,6 +50,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-save-if: 'true'
+          install-protoc: 'true'
       # Test the build tooling (dev-tools/) first so a broken tool fails fast
       - name: Test build tools (dev-tools)
         run: cargo make --profile ci dev-tools-tests
@@ -60,7 +61,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
-        timeout-minutes: 15
+        timeout-minutes: 20
       - name: Packaging all binaries with cargo-nextest
         run: |
           mkdir -pv tmp
@@ -71,7 +72,7 @@ jobs:
         run: |
           mkdir tmp/golem-binaries
           tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
-        timeout-minutes: 2
+        timeout-minutes: 5
       - name: Save packaged binaries to cache
         uses: actions/cache/save@v5
         with:
@@ -87,6 +88,8 @@ jobs:
         with:
           fetch-depth: 1
       - uses: ./.github/actions/setup-rust
+        with:
+          install-protoc: 'true'
 
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
@@ -105,6 +108,7 @@ jobs:
         with:
           use-cache: 'false'
           install-cargo-binstall: 'true'
+          install-protoc: 'true'
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
@@ -260,6 +264,7 @@ jobs:
         with:
           cache-shared-key: 'cli-dev-release-ci'
           cache-save-if: 'true'
+          install-protoc: 'true'
       - name: Build CLI test binaries
         env:
           QUIET: true
@@ -322,6 +327,10 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
+      - uses: actions/setup-node@v5
+        if: ${{ matrix.group.name == 'integration-tests-group10' || matrix.group.name == 'integration-tests-group11' }}
+        with:
+          node-version: 'lts/*'
       - uses: ./.github/actions/setup-rust
         with:
           use-cache: 'false'
@@ -360,9 +369,11 @@ jobs:
     runs-on: blacksmith-32vcpu-ubuntu-2204
     needs:
       - build-and-store
+      - build-golem-effect
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
+      - merge-test-components
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -481,6 +492,20 @@ jobs:
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
 
+      - name: Restore built Effect SDK
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            sdks/effect/dist
+            sdks/effect/wasm
+            sdks/effect/golem-types
+          key: golem-effect-sdk-${{ github.run_id }}
+          fail-on-cache-miss: true
+
+      - name: Install Effect SDK dependencies
+        working-directory: sdks/effect
+        run: npm ci
+
       - uses: ./.github/actions/restore-binaries
         with:
           run-id: ${{ github.run_id }}
@@ -497,6 +522,12 @@ jobs:
           mkdir -pv target/dev-release-ci
           cp tmp/golem-cli-test-binaries/* target/dev-release-ci/
           chmod +x target/dev-release-ci/*
+
+      - name: Restore streaming test components
+        if: matrix.group.shard == 'agents_streaming'
+        uses: ./.github/actions/restore-test-components
+        with:
+          run-id: ${{ github.run_id }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
@@ -788,7 +819,7 @@ jobs:
       matrix:
         part:
           - name: check
-            test-args: --lib --bins --test agent --test tool_canonical --test schema_reexport
+            test-args: --lib --bins --test agent --test tool_canonical --test schema_reexport --test reflection_recipe_compile
           - name: tool
             test-args: --test tool
           - name: tool-middleware-component
@@ -818,6 +849,7 @@ jobs:
         working-directory: sdks/rust
         run: |
           expected='agent
+          reflection_recipe_compile
           schema_reexport
           tool
           tool_canonical
@@ -975,6 +1007,100 @@ jobs:
             sdks/ts/packages/golem-ts-bridge/dist
             sdks/ts/packages/golem-ts-repl/dist
           key: golem-ts-sdk-${{ github.run_id }}
+
+  build-golem-effect:
+    runs-on: blacksmith
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          rust-targets: 'wasm32-wasip2'
+          install-cargo-make: 'false'
+          install-cargo-binstall: 'true'
+
+      - uses: ./.github/actions/setup-js-wasm-tools
+        with:
+          wasi-sdk-version: ${{ env.WASI_SDK_VERSION }}
+          wasi-sdk-path: ${{ env.WASI_SDK_PATH }}
+          wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
+
+      - name: Install dependencies
+        working-directory: sdks/effect
+        run: npm ci
+
+      - name: Check code quality
+        working-directory: sdks/effect
+        run: npm run lint
+
+      - name: Check code formatting
+        working-directory: sdks/effect
+        run: npm run format:check
+
+      - name: Typecheck
+        working-directory: sdks/effect
+        run: npm run typecheck
+
+      - name: Build the package and agent template
+        working-directory: sdks/effect
+        run: |
+          npm test
+          npm run build
+          npm run build-agent-template
+          npm run check:dts
+          npm run check:contracts
+          npm run check:artifacts
+          npm run check:package
+
+      - name: Save built Effect SDK for CLI integration tests
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            sdks/effect/dist
+            sdks/effect/wasm
+            sdks/effect/golem-types
+          key: golem-effect-sdk-${{ github.run_id }}
+
+      - name: Upload Effect SDK for Windows package checks
+        uses: actions/upload-artifact@v4
+        with:
+          name: golem-effect-sdk-windows
+          path: |
+            sdks/effect/dist
+            sdks/effect/wasm
+            sdks/effect/golem-types
+          if-no-files-found: error
+
+  check-golem-effect-package-windows:
+    runs-on: windows-latest
+    needs: build-golem-effect
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: sdks/effect/package-lock.json
+      - name: Install dependencies
+        working-directory: sdks/effect
+        run: npm ci
+      - name: Download built Effect SDK
+        uses: actions/download-artifact@v4
+        with:
+          name: golem-effect-sdk-windows
+          path: sdks/effect
+      - name: Build package declarations
+        working-directory: sdks/effect
+        run: npm run build
+      - name: Smoke-test cross-platform package tooling
+        working-directory: sdks/effect
+        run: npm run check:package
 
   list-test-component-groups:
     runs-on: blacksmith
@@ -1258,6 +1384,7 @@ jobs:
         with:
           fetch-tag: 'true'
           rust-targets: ${{ matrix.platform.target }}
+          install-protoc: 'true'
 
       - name: Prepare
         run: |
@@ -1370,6 +1497,7 @@ jobs:
           fetch-tag: 'true'
           cache-shared-key: 'release'
           cache-save-if: 'true'
+          install-protoc: 'true'
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Publish all packages
@@ -1414,6 +1542,7 @@ jobs:
           rust-targets: ${{ matrix.cfg.rust-target }}
           cache-shared-key: 'release-${{ matrix.cfg.rust-target }}'
           cache-save-if: 'true'
+          install-protoc: 'true'
       - id: get_version
         uses: battila7/get-version-action@v2
       - name: Set version for all packages

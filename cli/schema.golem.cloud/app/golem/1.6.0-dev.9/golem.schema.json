@@ -44,7 +44,13 @@
     },
     "tools": {
       "type": "object",
-      "description": "Canonical tool declarations by logical tool name. A declaration may select a local implementing component or an exact published release; all consumers refer to the logical name.",
+      "description": "Canonical tool declarations by logical tool name. A declaration may select a local implementing component or an exact published release; all consumers refer to the logical name. The name 'middleware' is reserved for tool middleware declarations and cannot be used as a tool name.",
+      "properties": {
+        "middleware": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/toolMiddlewareDeclaration" }
+        }
+      },
       "propertyNames": {
         "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
       },
@@ -133,6 +139,15 @@
           "maxProperties": 0
         }
       }
+    },
+    "toolMiddlewareReleases": {
+      "type": "object",
+      "description": "Local tool middlewares to publish as immutable grantable releases by environment name.",
+      "additionalProperties": {
+        "type": "object",
+        "propertyNames": { "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
+        "additionalProperties": { "type": "object", "maxProperties": 0 }
+      }
     }
   },
   "definitions": {
@@ -216,6 +231,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "templates": {
           "$ref": "#/definitions/lenientTokenList"
         },
@@ -257,6 +278,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
         },
         "config": {},
         "initialCard": {
@@ -315,6 +339,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "templates": {
           "$ref": "#/definitions/lenientTokenList"
         },
@@ -360,6 +390,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
         },
         "config": {},
         "initialCard": {
@@ -417,6 +450,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
+        },
         "config": {},
         "initialCard": {
           "$ref": "#/definitions/initialCard"
@@ -519,6 +561,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "configSchema": {
+          "$ref": "#/definitions/componentConfigSchema"
+        },
+        "toolsMergeMode": {
+          "$ref": "#/definitions/mapMergeMode"
+        },
+        "tools": {
+          "$ref": "#/definitions/toolBindings"
+        },
         "config": {},
         "initialCard": {
           "$ref": "#/definitions/initialCard"
@@ -910,6 +961,12 @@
         "account": {
           "type": "string"
         },
+        "configKeysReadableMergeMode": {
+          "$ref": "#/definitions/secretKeyMergeMode"
+        },
+        "configKeysReadable": {
+          "$ref": "#/definitions/configKeyScope"
+        },
         "secretKeysReadableMergeMode": {
           "$ref": "#/definitions/secretKeyMergeMode"
         },
@@ -921,13 +978,67 @@
         },
         "secretKeysRevealable": {
           "$ref": "#/definitions/secretKeyScope"
+        },
+        "filesystemAccess": {
+          "$ref": "#/definitions/toolFilesystemAccess"
+        },
+        "middleware": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/toolMiddlewareInstallation" }
+        },
+        "middlewareMergeMode": {
+          "$ref": "#/definitions/toolMiddlewareMergeMode"
         }
       }
+    },
+    "environmentToolBinding": {
+      "allOf": [
+        { "$ref": "#/definitions/toolBinding" },
+        {
+          "not": { "required": ["middlewareMergeMode"] }
+        }
+      ]
+    },
+    "toolMiddlewareInstallation": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object", "additionalProperties": false, "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
+            "version": { "type": "string" }, "parameters": {}, "account": { "type": "string" },
+            "filesystemAccess": { "$ref": "#/definitions/toolFilesystemAccess" }
+          }
+        }
+      ]
+    },
+    "toolMiddlewareMergeMode": { "enum": ["prepend", "append", "replace"] },
+    "toolFilesystemAccess": { "enum": ["unset", "allowed", "denied"] },
+    "environmentTools": {
+      "type": "object",
+      "properties": { "middleware": { "type": "array", "items": { "$ref": "#/definitions/toolMiddlewareInstallation" } } },
+      "additionalProperties": { "$ref": "#/definitions/environmentToolBinding" }
     },
     "secretKeyMergeMode": {
       "type": "string",
       "enum": [
         "intersect"
+      ]
+    },
+    "configKeyScope": {
+      "oneOf": [
+        {
+          "const": "*"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "not": {
+              "const": "*"
+            }
+          }
+        }
       ]
     },
     "secretKeyScope": {
@@ -1051,6 +1162,12 @@
           "additionalProperties": {
             "$ref": "#/definitions/mcpDeploymentAgentOptions"
           }
+        },
+        "tools": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/mcpDeploymentToolOptions"
+          }
         }
       },
       "oneOf": [
@@ -1064,6 +1181,10 @@
             "subdomain"
           ]
         }
+      ],
+      "anyOf": [
+        { "required": ["agents"], "properties": { "agents": { "minProperties": 1 } } },
+        { "required": ["tools"], "properties": { "tools": { "minProperties": 1 } } }
       ]
     },
     "mcpDeploymentAgentOptions": {
@@ -1074,6 +1195,18 @@
           "type": "string"
         }
       }
+    },
+    "mcpDeploymentToolOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownerComponent"],
+      "properties": {
+        "ownerComponent": { "type": "string" },
+        "securityScheme": { "type": "string" },
+        "include": { "type": "array", "items": { "type": "string" } },
+        "exclude": { "type": "array", "items": { "type": "string" } }
+      },
+      "not": { "required": ["include", "exclude"] }
     },
     "localServer": {
       "type": "object",
@@ -1148,6 +1281,9 @@
         "version": {
           "$ref": "#/definitions/appVersionSourceOverride",
           "description": "Per-environment override, layered over the application-wide version source."
+        },
+        "tools": {
+          "$ref": "#/definitions/environmentTools"
         }
       }
     },
@@ -1254,6 +1390,9 @@
       "properties": {
         "compatibilityCheck": {
           "type": "boolean"
+        },
+        "toolCompatibilityMode": {
+          "enum": ["strict-equality", "structural-subtype", "nominal"]
         },
         "versionCheck": {
           "type": "boolean"
@@ -1654,6 +1793,26 @@
         "version"
       ]
     },
+    "toolMiddlewareDeclaration": {
+      "description": "Canonical declaration and provision properties for a tool middleware.",
+      "type": "object", "additionalProperties": false,
+      "not": { "required": ["component", "release"] },
+      "properties": {
+        "component": { "type": "string" },
+        "release": { "$ref": "#/definitions/toolMiddlewareRegistrySubject" },
+        "templates": { "$ref": "#/definitions/lenientTokenList" },
+        "config": {}, "envMergeMode": { "$ref": "#/definitions/mapMergeMode" },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "pluginsMergeMode": { "$ref": "#/definitions/vecMergeMode" },
+        "plugins": { "type": "array", "items": { "$ref": "#/definitions/pluginInstallation" } },
+        "filesMergeMode": { "$ref": "#/definitions/vecMergeMode" },
+        "files": { "type": "array", "items": { "$ref": "#/definitions/initialComponentFile" } },
+        "presets": { "type": "object", "additionalProperties": { "$ref": "#/definitions/toolPreset" } }
+      }
+    },
+    "toolMiddlewareRegistrySubject": {
+      "$ref": "#/definitions/registrySubject"
+    },
     "bridgeSdks": {
       "description": "Bridge SDK generator configuration",
       "type": "object",
@@ -1661,6 +1820,10 @@
       "properties": {
         "ts": {
           "description": "TypeScript SDK configuration",
+          "$ref": "#/definitions/bridgeSdkLanguageTargets"
+        },
+        "effect": {
+          "description": "Effect SDK configuration",
           "$ref": "#/definitions/bridgeSdkLanguageTargets"
         },
         "rust": {
@@ -2541,6 +2704,26 @@
         },
         "name": {
           "type": "string"
+        }
+      }
+    },
+    "componentConfigSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "type": "object" },
+        "declarations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "path", "value_type"],
+            "properties": {
+              "source": { "enum": ["Local", "Secret"] },
+              "path": { "type": "array", "items": { "type": "string" } },
+              "value_type": { "type": "object" }
+            }
+          }
         }
       }
     },

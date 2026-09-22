@@ -15,6 +15,7 @@
 pub mod sdk {
     pub const RUST: &str = "2.1.0";
     pub const TS: &str = "1.1.1";
+    pub const EFFECT_GOLEM: &str = "1.6.0";
     pub const SCALA: &str = "1.5.1";
     pub const MOONBIT: &str = "0.5.2";
     pub const GO: &str = "0.1.0";
@@ -64,6 +65,10 @@ pub mod go_toolchain {
 // silently ignores the pin.
 pub mod go_dep {
     pub const COMPONENTIZE_GO: &str = "v0.4.3";
+}
+
+pub mod effect_dep {
+    pub const EFFECT: &str = env!("GOLEM_EFFECT_VERSION");
 }
 
 // Keep this aligned with the TS component template

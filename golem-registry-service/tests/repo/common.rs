@@ -15,6 +15,7 @@
 use crate::repo::{Deps, TestDb, test_environment_default_card_record};
 use assert2::{assert, check, let_assert};
 use chrono::{Datelike, Utc};
+use futures::FutureExt;
 use futures::future::join_all;
 use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
@@ -41,15 +42,29 @@ use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::plan::PlanId;
 use golem_common::model::tool::{
     CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, TOOL_METADATA_WIT_VERSION,
-    ToolDeploymentMetadata, ToolName, ToolProvisionConfig, ToolSource,
+    ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
+};
+use golem_common::model::tool_middleware::{
+    CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
+    ToolMiddlewareInstallation, ToolMiddlewareMergeMode, ToolMiddlewareName, ToolMiddlewareSource,
+};
+use golem_common::model::tool_middleware_release::{
+    ToolMiddlewareReleaseId, tool_middleware_metadata_digest,
 };
 use golem_common::model::tool_release::{
     SystemToolAvailability, SystemToolReleaseProvision, ToolPublication, ToolPublicationPlanAction,
     ToolReleaseId,
 };
 use golem_common::model::{AgentId, IdempotencyKey, OplogIndex};
-use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
-use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph};
+use golem_common::schema::tool::compatibility::ToolCompatibilityMode;
+use golem_common::schema::tool::{
+    CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
+};
+use golem_common::schema::{
+    AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph, SchemaValue,
+    TypedSchemaValue,
+};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
@@ -61,6 +76,7 @@ use golem_registry_service::repo::environment::{
     EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
 };
 use golem_registry_service::repo::environment_tool_grant::EnvironmentToolGrantRepoError;
+use golem_registry_service::repo::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantRepoError;
 use golem_registry_service::repo::model::account::{
     AccountExtRevisionRecord, AccountRepoError, AccountRevisionRecord,
 };
@@ -86,6 +102,7 @@ use golem_registry_service::repo::model::deployment::{
 };
 use golem_registry_service::repo::model::environment::EnvironmentRepoError;
 use golem_registry_service::repo::model::environment_tool_grant::EnvironmentToolGrantRecord;
+use golem_registry_service::repo::model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantRecord;
 use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::http_api_deployment::{
     HttpApiDeploymentData, HttpApiDeploymentRepoError, HttpApiDeploymentRevisionRecord,
@@ -96,15 +113,25 @@ use golem_registry_service::repo::model::mcp_deployment::{
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::model::plugin::PluginRecord;
+use golem_registry_service::repo::model::tool_middleware_release::{
+    TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED as MIDDLEWARE_RELEASE_LIFECYCLE_DE_PUBLISHED,
+    TOOL_RELEASE_LIFECYCLE_PUBLISHED as MIDDLEWARE_RELEASE_LIFECYCLE_PUBLISHED,
+    TOOL_RELEASE_LIFECYCLE_SUPERSEDED as MIDDLEWARE_RELEASE_LIFECYCLE_SUPERSEDED,
+    ToolMiddlewareReleaseRecord,
+};
 use golem_registry_service::repo::model::tool_release::{
-    TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_PUBLISHED,
-    TOOL_RELEASE_LIFECYCLE_SUPERSEDED, TOOL_RELEASE_SOURCE_COMPONENT, ToolReleaseRecord,
+    SYSTEM_TOOL_AVAILABILITY_GRANTABLE, TOOL_RELEASE_LIFECYCLE_DE_PUBLISHED,
+    TOOL_RELEASE_LIFECYCLE_PUBLISHED, TOOL_RELEASE_LIFECYCLE_SUPERSEDED,
+    TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM, TOOL_RELEASE_SOURCE_COMPONENT, ToolReleaseRecord,
 };
 use golem_registry_service::repo::permission_share::DbPermissionShareRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent,
+};
+use golem_registry_service::repo::tool_middleware_release::{
+    DbToolMiddlewareReleaseRepo, ToolMiddlewareReleaseRepoError,
 };
 use golem_registry_service::repo::tool_release::{DbToolReleaseRepo, ToolReleaseRepoError};
 use golem_registry_service::services::component_object_store::ComponentObjectStore;
@@ -1100,6 +1127,7 @@ pub async fn test_environment_deletion_racing_runtime_derivation_from_descendant
             EnvironmentCreation {
                 name: EnvironmentName("environment-runtime-delete-race".to_string()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -1473,6 +1501,7 @@ pub async fn test_environment_create(deps: &Deps) {
         revision_id: 0,
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: false,
+        tool_compatibility_mode: "structural-subtype".to_string(),
         version_check: false,
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
@@ -1510,6 +1539,125 @@ pub async fn test_environment_create(deps: &Deps) {
     let_assert!(Some(env_by_id) = env_by_id);
     check!(env.application_id == env_by_id.application_id);
     check!(env.revision == env_by_id.revision);
+}
+
+pub async fn test_environment_service_persists_and_updates_tool_compatibility_mode(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let services = environment_service_deps(deps);
+    let application_id = ApplicationId(app.revision.application_id);
+
+    let nominal = services
+        .environment_service
+        .create(
+            application_id,
+            EnvironmentCreation {
+                name: EnvironmentName("nominal-policy".to_string()),
+                compatibility_check: false,
+                tool_compatibility_mode: ToolCompatibilityMode::Nominal,
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let default_mode = services
+        .environment_service
+        .create(
+            application_id,
+            EnvironmentCreation {
+                name: EnvironmentName("default-policy".to_string()),
+                compatibility_check: false,
+                tool_compatibility_mode: ToolCompatibilityMode::default(),
+                version_check: false,
+                security_overrides: false,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    check!(nominal.tool_compatibility_mode == ToolCompatibilityMode::Nominal);
+    check!(default_mode.tool_compatibility_mode == ToolCompatibilityMode::StructuralSubtype);
+
+    let nominal_record = deps
+        .environment_repo
+        .get_by_id(nominal.id.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    let strict = services
+        .environment_service
+        .update(
+            nominal.id,
+            EnvironmentUpdate {
+                current_revision: nominal.revision,
+                name: None,
+                compatibility_check: None,
+                tool_compatibility_mode: Some(ToolCompatibilityMode::StrictEquality),
+                version_check: None,
+                security_overrides: None,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    check!(strict.tool_compatibility_mode == ToolCompatibilityMode::StrictEquality);
+
+    let strict_record = deps
+        .environment_repo
+        .get_by_id(nominal.id.0, false)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(nominal_record.revision.hash != strict_record.revision.hash);
+    check!(strict_record.revision.tool_compatibility_mode == "strict-equality");
+
+    let after_unrelated_update = services
+        .environment_service
+        .update(
+            nominal.id,
+            EnvironmentUpdate {
+                current_revision: strict.revision,
+                name: None,
+                compatibility_check: Some(true),
+                tool_compatibility_mode: None,
+                version_check: None,
+                security_overrides: None,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    check!(after_unrelated_update.tool_compatibility_mode == ToolCompatibilityMode::StrictEquality);
+
+    let fetched = services
+        .environment_service
+        .get(nominal.id, false, &AuthCtx::System)
+        .await
+        .unwrap();
+    check!(fetched.tool_compatibility_mode == ToolCompatibilityMode::StrictEquality);
+    let listed = services
+        .environment_service
+        .list_in_application(application_id, &AuthCtx::System)
+        .await
+        .unwrap();
+    check!(
+        listed
+            .iter()
+            .find(|environment| environment.id == nominal.id)
+            .unwrap()
+            .tool_compatibility_mode
+            == ToolCompatibilityMode::StrictEquality
+    );
+    check!(
+        listed
+            .iter()
+            .find(|environment| environment.id == default_mode.id)
+            .unwrap()
+            .tool_compatibility_mode
+            == ToolCompatibilityMode::StructuralSubtype
+    );
 }
 
 pub async fn test_environment_list_visible_to_account_uses_visibility_filter(deps: &Deps) {
@@ -1890,6 +2038,7 @@ pub async fn test_environment_create_concurrently(deps: &Deps) {
                     name: "local".to_string(),
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     compatibility_check: false,
+                    tool_compatibility_mode: "structural-subtype".to_string(),
                     version_check: false,
                     security_overrides: false,
                     hash: SqlBlake3Hash::empty(),
@@ -1932,6 +2081,7 @@ pub async fn test_environment_update(deps: &Deps) {
         name: env_rev_0.revision.name.clone(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: true,
+        tool_compatibility_mode: "structural-subtype".to_string(),
         version_check: true,
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
@@ -1979,6 +2129,7 @@ pub async fn test_environment_update(deps: &Deps) {
         name: env_rev_1.name.clone(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         compatibility_check: true,
+        tool_compatibility_mode: "structural-subtype".to_string(),
         version_check: true,
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
@@ -2038,6 +2189,7 @@ pub async fn test_environment_update_concurrently(deps: &Deps) {
                     name: env_rev_0.revision.name.clone(),
                     audit: DeletableRevisionAuditFields::new(user.revision.account_id),
                     compatibility_check: false,
+                    tool_compatibility_mode: "structural-subtype".to_string(),
                     version_check: false,
                     security_overrides: false,
                     hash: SqlBlake3Hash::empty(),
@@ -2099,6 +2251,7 @@ pub async fn test_deleted_environment_default_card_revoke_returns_not_found(deps
             EnvironmentCreation {
                 name: EnvironmentName("env".to_string()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -2153,6 +2306,7 @@ pub async fn test_deleted_environment_default_card_is_not_reported_existing(deps
             EnvironmentCreation {
                 name: EnvironmentName("env".to_string()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -2217,6 +2371,7 @@ pub async fn test_runtime_descendants_of_deleted_environment_default_card_are_no
             EnvironmentCreation {
                 name: EnvironmentName("env".to_string()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -2286,6 +2441,7 @@ pub async fn test_environment_deletion_revokes_component_card_runtime_descendant
             EnvironmentCreation {
                 name: EnvironmentName("env-with-component-card".to_string()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -2403,6 +2559,7 @@ pub async fn test_environment_default_card_tracks_environment_rename(deps: &Deps
             EnvironmentCreation {
                 name: EnvironmentName("old-env".to_string()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -2419,6 +2576,7 @@ pub async fn test_environment_default_card_tracks_environment_rename(deps: &Deps
                 current_revision: env.revision,
                 name: Some(EnvironmentName("new-env".to_string())),
                 compatibility_check: None,
+                tool_compatibility_mode: None,
                 version_check: None,
                 security_overrides: None,
             },
@@ -2461,6 +2619,7 @@ pub async fn test_environment_default_card_tracks_application_rename(deps: &Deps
             EnvironmentCreation {
                 name: EnvironmentName("env".to_string()),
                 compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
                 version_check: false,
                 security_overrides: false,
             },
@@ -2504,6 +2663,7 @@ pub async fn test_environment_default_card_tracks_application_rename(deps: &Deps
 
 struct EnvironmentServiceDeps {
     environment_service: Arc<EnvironmentService>,
+    component_service: Arc<ComponentService>,
     card_service: CardService,
 }
 
@@ -2546,6 +2706,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 environment_service.clone(),
                 application_service,
                 Arc::new(DbDeploymentRepo::new(pool.clone())),
+                Arc::new(
+                    golem_registry_service::services::native_tool_catalog::NativeToolCatalog::default(),
+                ),
             ));
             let component_service = Arc::new(ComponentService::new(
                 Arc::new(DbComponentRepo::new(pool.clone())),
@@ -2559,13 +2722,14 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbCardRepo::new(pool.clone())),
                 account_service,
                 permission_share_service,
-                component_service,
+                component_service.clone(),
                 environment_service.clone(),
                 notifier,
             );
 
             EnvironmentServiceDeps {
                 environment_service,
+                component_service,
                 card_service,
             }
         }
@@ -2606,6 +2770,9 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 environment_service.clone(),
                 application_service,
                 Arc::new(DbDeploymentRepo::new(pool.clone())),
+                Arc::new(
+                    golem_registry_service::services::native_tool_catalog::NativeToolCatalog::default(),
+                ),
             ));
             let component_service = Arc::new(ComponentService::new(
                 Arc::new(DbComponentRepo::new(pool.clone())),
@@ -2619,13 +2786,14 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 Arc::new(DbCardRepo::new(pool.clone())),
                 account_service,
                 permission_share_service,
-                component_service,
+                component_service.clone(),
                 environment_service.clone(),
                 notifier,
             );
 
             EnvironmentServiceDeps {
                 environment_service,
+                component_service,
                 card_service,
             }
         }
@@ -2792,6 +2960,7 @@ pub async fn test_component_stage(deps: &Deps) {
                     },
                     provision: ToolProvisionConfig::default(),
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 },
             )]),
@@ -3005,7 +3174,8 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3030,6 +3200,13 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     deps.component_repo
         .update(
@@ -3053,7 +3230,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         .list_initial_permission_card_ids_by_account(owner.revision.account_id)
         .await
         .unwrap();
-    assert_eq!(ids, vec![initial_card.card_id]);
+    assert_eq!(ids, vec![component_card_id, initial_card.card_id]);
 }
 
 pub async fn test_agent_initial_card_from_older_component_revision_remains_live(deps: &Deps) {
@@ -3132,7 +3309,8 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         .await
         .unwrap();
 
-    deps.component_repo
+    let updated = deps
+        .component_repo
         .update(
             ComponentRevisionRecord {
                 component_id: component_id.0,
@@ -3148,6 +3326,13 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         )
         .await
         .unwrap();
+    let current_component_card_id = updated
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     assert!(
         deps.component_repo
@@ -3170,8 +3355,8 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         .unwrap();
     assert_eq!(
         ids,
-        Vec::<CardId>::new(),
-        "the staged-card listing follows the current component revision"
+        vec![current_component_card_id],
+        "the staged-card listing contains the current component card but not the older agent card"
     );
 
     assert_eq!(
@@ -3290,7 +3475,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3315,13 +3501,20 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     let ids = deps
         .component_repo
         .list_initial_permission_card_ids_by_account(owner.revision.account_id)
         .await
         .unwrap();
-    assert_eq!(ids, vec![initial_card.card_id]);
+    assert_eq!(ids, vec![component_card_id, initial_card.card_id]);
 
     deps.component_repo
         .delete(owner.revision.account_id, component_id.0, 1)
@@ -3374,7 +3567,8 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
         )]),
     );
 
-    deps.component_repo
+    let created = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3399,13 +3593,20 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
         )
         .await
         .unwrap();
+    let component_card_id = created
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     assert_eq!(
         deps.component_repo
             .list_initial_permission_card_ids_by_account(owner.revision.account_id)
             .await
             .unwrap(),
-        vec![initial_card.card_id]
+        vec![component_card_id, initial_card.card_id]
     );
 
     deps.component_repo
@@ -3639,7 +3840,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         .unwrap()
         .signal_new_events_available(deps.test_registry_change_notifier().as_ref());
 
-    deps.component_repo
+    let recreated = deps
+        .component_repo
         .create(
             env.revision.environment_id,
             "component",
@@ -3657,6 +3859,13 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         )
         .await
         .unwrap();
+    let recreated_component_card_id = recreated
+        .revision
+        .metadata
+        .value()
+        .component_provision_config()
+        .initial_permissions
+        .card_id;
 
     let ids = deps
         .component_repo
@@ -3665,8 +3874,8 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         .unwrap();
     assert_eq!(
         ids,
-        Vec::<CardId>::new(),
-        "agent-initial cards from a deleted component incarnation must not reappear after same-name recreation"
+        vec![recreated_component_card_id],
+        "the recreated component card must appear without agent cards from the deleted incarnation"
     );
     assert!(
         services
@@ -4365,6 +4574,7 @@ pub async fn test_account_usage(deps: &Deps) {
             hash: SqlBlake3Hash::empty(),
             audit: DeletableRevisionAuditFields::new(user.revision.account_id),
             compatibility_check: false,
+            tool_compatibility_mode: "structural-subtype".to_string(),
             version_check: false,
             security_overrides: false,
         };
@@ -4610,6 +4820,7 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
                     .unwrap(),
                     definition: release_tool,
                     provision: ToolProvisionConfig::default(),
+                    component_bindings: BTreeMap::new(),
                     source: release_source,
                     owner_account_id: AccountId(owner_account_id),
                     owner_account_email: golem_common::model::account::AccountEmail::new(
@@ -4634,6 +4845,74 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
         )
         .await;
     let_assert!(Err(ComponentRepoError::ComponentSourceInUse) = release_source_deletion);
+
+    let middleware_component_name = format!("middleware-release-source-{}", new_repo_uuid());
+    let middleware_component = deps
+        .component_repo
+        .create(
+            environment_id,
+            &middleware_component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                ..release_component.revision.clone()
+            }
+            .with_updated_hash()
+            .unwrap(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let middleware_release = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &RegisteredToolMiddleware {
+            deployment_revision: DeploymentRevision::INITIAL,
+            release_id: None,
+            definition: ToolMiddleware {
+                name: "retained-middleware-release".to_string(),
+                version: "1.0.0".to_string(),
+                aliases: Vec::new(),
+                doc: Doc::default(),
+                parameter_schema: SchemaGraph::empty(),
+                scope: ToolMiddlewareScope::Universal,
+            },
+            provision: ToolProvisionConfig::default(),
+            source: ToolMiddlewareSource::Component {
+                component_id: ComponentId(middleware_component.revision.component_id),
+                component_revision: ComponentRevision::try_from(
+                    middleware_component.revision.revision_id,
+                )
+                .unwrap(),
+                component_name: golem_common::model::component::ComponentName(
+                    middleware_component_name,
+                ),
+            },
+            owner_account_id: AccountId(owner_account_id),
+            owner_account_email: AccountEmail::new(owner.revision.email.clone()),
+            metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            metadata_digest: Default::default(),
+        },
+        false,
+        AccountId(owner_account_id),
+    )
+    .unwrap();
+    let middleware_release_id = middleware_release.tool_middleware_release_id;
+    deps.tool_middleware_release_repo
+        .create(middleware_release)
+        .await
+        .unwrap();
+    deps.tool_middleware_release_repo
+        .de_publish(middleware_release_id, owner_account_id)
+        .await
+        .unwrap();
+
+    let middleware_source_deletion = deps
+        .component_repo
+        .delete(
+            owner_account_id,
+            middleware_component.revision.component_id,
+            middleware_component.revision.revision_id + 1,
+        )
+        .await;
+    let_assert!(Err(ComponentRepoError::ComponentSourceInUse) = middleware_source_deletion);
 
     let snapshot_component_name = format!("snapshot-source-{}", new_repo_uuid());
     let snapshot_component = deps
@@ -4672,6 +4951,15 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
                 tool_releases: Vec::new(),
                 registered_tools: Vec::new(),
                 agent_tool_bindings: Vec::new(),
+                registered_tool_middlewares: Vec::new(),
+                tool_middleware_chains: Vec::new(),
+                tool_middleware_releases: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
+                tool_compatibility_mode: Default::default(),
+                published_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                environment_tool_middleware_bindings: Default::default(),
+                agent_tool_middleware_bindings: Default::default(),
                 created_agent_secrets: Vec::new(),
                 updated_agent_secrets: Vec::new(),
                 replaced_agent_secrets: Vec::new(),
@@ -4742,6 +5030,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         release_id: None,
         definition: definition.clone(),
         provision: ToolProvisionConfig::default(),
+        component_bindings: BTreeMap::new(),
         source: component_source.clone(),
         owner_account_id: actor,
         owner_account_email: golem_common::model::account::AccountEmail::new(
@@ -4779,6 +5068,34 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
     );
     assert_eq!(read.release.source_kind, TOOL_RELEASE_SOURCE_COMPONENT);
 
+    let protected_component_record = ToolReleaseRecord::from_system_provision(
+        actor,
+        SystemToolReleaseProvision {
+            name: ToolName::try_from("protected-component-tool").unwrap(),
+            version: "1.0.0".to_string(),
+            source: component_source,
+            definition: make_test_tool("protected-component-tool", "1.0.0"),
+            metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            availability: SystemToolAvailability::Grantable,
+        },
+        actor,
+    )
+    .unwrap();
+    let protected_component = deps
+        .tool_release_repo
+        .create(protected_component_record.clone())
+        .await
+        .unwrap();
+    assert_eq!(protected_component.release, protected_component_record);
+    assert_eq!(
+        protected_component.release.origin,
+        TOOL_RELEASE_ORIGIN_PROTECTED_SYSTEM
+    );
+    assert_eq!(
+        protected_component.release.system_availability,
+        Some(SYSTEM_TOOL_AVAILABILITY_GRANTABLE)
+    );
+
     let mut invalid_component = component_record.clone();
     invalid_component.tool_release_id = new_repo_uuid();
     invalid_component.tool_version = "invalid-component-fk".to_string();
@@ -4787,7 +5104,7 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
         deps.tool_release_repo
             .create(invalid_component.clone())
             .await,
-        Err(ToolReleaseRepoError::InternalError(_))
+        Err(ToolReleaseRepoError::SourceOwnerMismatch)
     ));
     assert!(
         deps.tool_release_repo
@@ -4796,6 +5113,49 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
             .unwrap()
             .is_none()
     );
+
+    let foreign = deps.create_account().await;
+    let foreign_app = deps.create_application(foreign.revision.account_id).await;
+    let foreign_env = deps.create_env(foreign_app.revision.application_id).await;
+    let foreign_component_name = format!("foreign-tool-source-{}", new_repo_uuid());
+    let foreign_component = deps
+        .component_repo
+        .create(
+            foreign_env.revision.environment_id,
+            &foreign_component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: ComponentRevision::INITIAL.into(),
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(foreign.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    Vec::new(),
+                    None,
+                    None,
+                    Vec::new(),
+                    BTreeMap::new(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let mut wrong_owner = component_record.clone();
+    wrong_owner.tool_release_id = new_repo_uuid();
+    wrong_owner.tool_version = "foreign-source".to_string();
+    wrong_owner.component_id = Some(foreign_component.revision.component_id);
+    assert!(matches!(
+        deps.tool_release_repo.create(wrong_owner.clone()).await,
+        Err(ToolReleaseRepoError::SourceOwnerMismatch)
+    ));
+    assert!(matches!(
+        publish_tool(deps, &wrong_owner).await,
+        Err(ToolReleaseRepoError::SourceOwnerMismatch)
+    ));
 
     let host_record = ToolReleaseRecord::from_system_provision(
         actor,
@@ -5237,6 +5597,502 @@ pub async fn test_tool_release_and_grant_repository_contracts(deps: &Deps) {
     );
 }
 
+async fn publish_tool_middleware(
+    deps: &Deps,
+    record: &ToolMiddlewareReleaseRecord,
+) -> Result<
+    golem_registry_service::repo::model::tool_middleware_release::ToolMiddlewareReleaseWithOwnerRecord,
+    ToolMiddlewareReleaseRepoError,
+>{
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            pool.with_tx_err("test", "publish_tool_middleware", |tx| {
+                let record = record.clone();
+                async move {
+                    DbToolMiddlewareReleaseRepo::<PostgresPool>::create_or_restore_within_transaction(
+                        tx, &record,
+                    ).await
+                }
+                .boxed()
+            })
+            .await
+        }
+        TestDb::Sqlite(pool) => {
+            pool.with_tx_err("test", "publish_tool_middleware", |tx| {
+                let record = record.clone();
+                async move {
+                    DbToolMiddlewareReleaseRepo::<SqlitePool>::create_or_restore_within_transaction(
+                        tx, &record,
+                    ).await
+                }
+                .boxed()
+            })
+            .await
+        }
+    }
+}
+
+async fn publish_tool(
+    deps: &Deps,
+    record: &ToolReleaseRecord,
+) -> Result<
+    golem_registry_service::repo::model::tool_release::ToolReleaseWithOwnerRecord,
+    ToolReleaseRepoError,
+> {
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            pool.with_tx_err("test", "publish_tool", |tx| {
+                let record = record.clone();
+                async move {
+                    DbToolReleaseRepo::<PostgresPool>::create_or_restore_within_transaction(
+                        tx, &record,
+                    )
+                    .await
+                }
+                .boxed()
+            })
+            .await
+        }
+        TestDb::Sqlite(pool) => {
+            pool.with_tx_err("test", "publish_tool", |tx| {
+                let record = record.clone();
+                async move {
+                    DbToolReleaseRepo::<SqlitePool>::create_or_restore_within_transaction(
+                        tx, &record,
+                    )
+                    .await
+                }
+                .boxed()
+            })
+            .await
+        }
+    }
+}
+
+pub async fn test_tool_middleware_release_and_grant_repository_contracts(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let actor = AccountId(owner.revision.account_id);
+    let app = deps.create_application(actor.0).await;
+    let environment = deps.create_env(app.revision.application_id).await;
+    let strict_environment = deps.create_env(app.revision.application_id).await;
+    let protected_environment = deps.create_env(app.revision.application_id).await;
+    let environment = {
+        let mut revision = environment.revision;
+        revision.revision_id += 1;
+        revision.version_check = false;
+        revision.audit = DeletableRevisionAuditFields::new(actor.0);
+        deps.environment_repo.update(revision).await.unwrap()
+    };
+    let strict_environment = {
+        let mut revision = strict_environment.revision;
+        revision.revision_id += 1;
+        revision.version_check = false;
+        revision.audit = DeletableRevisionAuditFields::new(actor.0);
+        deps.environment_repo.update(revision).await.unwrap()
+    };
+    let protected_environment = {
+        let mut revision = protected_environment.revision;
+        revision.revision_id += 1;
+        revision.version_check = false;
+        revision.audit = DeletableRevisionAuditFields::new(actor.0);
+        deps.environment_repo.update(revision).await.unwrap()
+    };
+    let component_name = format!("middleware-component-{}", new_repo_uuid());
+    let component_id = new_repo_uuid();
+    let component = deps
+        .component_repo
+        .create(
+            environment.revision.environment_id,
+            &component_name,
+            ComponentRevisionRecord {
+                component_id,
+                revision_id: 0,
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(actor.0),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    Vec::new(),
+                    None,
+                    None,
+                    Vec::new(),
+                    BTreeMap::new(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    deps.component_repo
+        .update(
+            ComponentRevisionRecord {
+                revision_id: 1,
+                ..component.revision.clone()
+            }
+            .with_updated_hash()
+            .unwrap(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+    let definition = ToolMiddleware {
+        name: "audit-middleware".to_string(),
+        version: "1.0.0".to_string(),
+        aliases: vec!["audit".to_string()],
+        doc: Doc::default(),
+        parameter_schema: SchemaGraph::empty(),
+        scope: ToolMiddlewareScope::Universal,
+    };
+    let registered = |revision: i64, definition: ToolMiddleware| RegisteredToolMiddleware {
+        deployment_revision: DeploymentRevision::INITIAL,
+        release_id: None,
+        definition,
+        provision: ToolProvisionConfig::default(),
+        source: ToolMiddlewareSource::Component {
+            component_id: ComponentId(component_id),
+            component_revision: ComponentRevision::try_from(revision).unwrap(),
+            component_name: golem_common::model::component::ComponentName(component_name.clone()),
+        },
+        owner_account_id: actor,
+        owner_account_email: AccountEmail::new(owner.revision.email.clone()),
+        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+        metadata_digest: Default::default(),
+    };
+    let original = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(0, definition.clone()),
+        false,
+        actor,
+    )
+    .unwrap();
+    let original_id = original.tool_middleware_release_id;
+    let created = deps
+        .tool_middleware_release_repo
+        .create(original.clone())
+        .await
+        .unwrap();
+    assert_eq!(created.release, original);
+    assert_eq!(
+        created.release.metadata_digest,
+        tool_middleware_metadata_digest(TOOL_METADATA_WIT_VERSION, &definition)
+            .unwrap()
+            .into()
+    );
+
+    // Identical publication metadata is a no-op even when deployment code moved.
+    let code_only = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(1, definition.clone()),
+        false,
+        actor,
+    )
+    .unwrap();
+    let no_op = publish_tool_middleware(deps, &code_only).await.unwrap();
+    assert_eq!(no_op.release.tool_middleware_release_id, original_id);
+    assert_eq!(no_op.release.component_revision, Some(0));
+    assert_eq!(code_only.component_revision, Some(1));
+
+    let following = EnvironmentToolMiddlewareGrantRecord::creation(
+        EnvironmentId(environment.revision.environment_id),
+        ToolMiddlewareReleaseId(original_id),
+        false,
+        true,
+        true,
+        actor,
+    );
+    let following_id = following.environment_tool_middleware_grant_id;
+    deps.environment_tool_middleware_grant_repo
+        .create(following)
+        .await
+        .unwrap();
+    let pinned = EnvironmentToolMiddlewareGrantRecord::creation(
+        EnvironmentId(strict_environment.revision.environment_id),
+        ToolMiddlewareReleaseId(original_id),
+        false,
+        false,
+        false,
+        actor,
+    );
+    let pinned_id = pinned.environment_tool_middleware_grant_id;
+    deps.environment_tool_middleware_grant_repo
+        .create(pinned)
+        .await
+        .unwrap();
+
+    let mut changed_definition = definition.clone();
+    changed_definition.aliases.push("trace".to_string());
+    let changed = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(1, changed_definition.clone()),
+        false,
+        actor,
+    )
+    .unwrap();
+    let changed_id = changed.tool_middleware_release_id;
+    let superseding = publish_tool_middleware(deps, &changed).await.unwrap();
+    assert_eq!(superseding.release.tool_middleware_release_id, changed_id);
+    assert_eq!(
+        deps.tool_middleware_release_repo
+            .get_by_id(original_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .lifecycle,
+        MIDDLEWARE_RELEASE_LIFECYCLE_SUPERSEDED
+    );
+    assert_eq!(
+        deps.environment_tool_middleware_grant_repo
+            .get_by_id(following_id, false)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .release
+            .tool_middleware_release_id,
+        changed_id
+    );
+    assert_eq!(
+        deps.environment_tool_middleware_grant_repo
+            .get_by_id(pinned_id, false)
+            .await
+            .unwrap()
+            .unwrap()
+            .release
+            .release
+            .tool_middleware_release_id,
+        original_id
+    );
+    assert!(
+        deps.environment_tool_middleware_grant_repo
+            .delete(pinned_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+
+    let mut strict_revision = strict_environment.revision.clone();
+    strict_revision.revision_id += 1;
+    strict_revision.version_check = true;
+    strict_revision.audit = DeletableRevisionAuditFields::new(actor.0);
+    deps.environment_repo.update(strict_revision).await.unwrap();
+
+    let strict_release = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(
+            1,
+            ToolMiddleware {
+                version: "strict-follow".to_string(),
+                ..definition.clone()
+            },
+        ),
+        true,
+        actor,
+    )
+    .unwrap();
+    deps.tool_middleware_release_repo
+        .create(strict_release.clone())
+        .await
+        .unwrap();
+    deps.environment_tool_middleware_grant_repo
+        .create(EnvironmentToolMiddlewareGrantRecord::creation(
+            EnvironmentId(strict_environment.revision.environment_id),
+            ToolMiddlewareReleaseId(strict_release.tool_middleware_release_id),
+            false,
+            true,
+            true,
+            actor,
+        ))
+        .await
+        .unwrap();
+    let strict_changed = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(
+            1,
+            ToolMiddleware {
+                aliases: vec!["strict-changed".to_string()],
+                version: "strict-follow".to_string(),
+                ..definition.clone()
+            },
+        ),
+        false,
+        actor,
+    )
+    .unwrap();
+    assert!(matches!(
+        publish_tool_middleware(deps, &strict_changed).await,
+        Err(ToolMiddlewareReleaseRepoError::ImmutableConflict)
+    ));
+
+    let mutable = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+        &registered(
+            1,
+            ToolMiddleware {
+                version: "mutable".to_string(),
+                ..definition.clone()
+            },
+        ),
+        false,
+        actor,
+    )
+    .unwrap();
+    deps.tool_middleware_release_repo
+        .create(mutable.clone())
+        .await
+        .unwrap();
+    assert!(matches!(
+        deps.environment_tool_middleware_grant_repo
+            .create(EnvironmentToolMiddlewareGrantRecord::creation(
+                EnvironmentId(strict_environment.revision.environment_id),
+                ToolMiddlewareReleaseId(mutable.tool_middleware_release_id),
+                false,
+                false,
+                false,
+                actor,
+            ))
+            .await,
+        Err(EnvironmentToolMiddlewareGrantRepoError::ConcurrentModification)
+    ));
+
+    assert!(
+        deps.environment_tool_middleware_grant_repo
+            .delete(following_id, actor.0, true)
+            .await
+            .unwrap()
+    );
+    let restored = deps
+        .environment_tool_middleware_grant_repo
+        .restore(
+            following_id,
+            environment.revision.environment_id,
+            changed_id,
+            actor.0,
+            true,
+            Some(false),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(restored.automatic);
+    assert!(!restored.follow_coordinates);
+    let manual = deps
+        .environment_tool_middleware_grant_repo
+        .set_management(
+            following_id,
+            environment.revision.environment_id,
+            changed_id,
+            actor.0,
+            false,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!manual.automatic);
+    assert!(
+        !deps
+            .environment_tool_middleware_grant_repo
+            .delete(following_id, actor.0, true)
+            .await
+            .unwrap()
+    );
+
+    let mut protected = EnvironmentToolMiddlewareGrantRecord::creation(
+        EnvironmentId(protected_environment.revision.environment_id),
+        ToolMiddlewareReleaseId(changed_id),
+        true,
+        true,
+        false,
+        actor,
+    );
+    protected.environment_tool_middleware_grant_id = new_repo_uuid();
+    protected.audit = protected.audit.into_deletion(actor.0);
+    let protected_id = protected.environment_tool_middleware_grant_id;
+    deps.environment_tool_middleware_grant_repo
+        .create(protected)
+        .await
+        .unwrap();
+    assert!(
+        deps.environment_tool_middleware_grant_repo
+            .restore_protected(
+                protected_id,
+                protected_environment.revision.environment_id,
+                changed_id,
+                AccountId::SYSTEM.0,
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        !deps
+            .environment_tool_middleware_grant_repo
+            .delete(protected_id, actor.0, false)
+            .await
+            .unwrap()
+    );
+
+    let de_published = deps
+        .tool_middleware_release_repo
+        .de_publish(changed_id, actor.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        de_published.release.lifecycle,
+        MIDDLEWARE_RELEASE_LIFECYCLE_DE_PUBLISHED
+    );
+    assert!(
+        deps.environment_tool_middleware_grant_repo
+            .get_by_id(following_id, false)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        publish_tool_middleware(deps, &changed).await,
+        Err(ToolMiddlewareReleaseRepoError::DePublishedConflict)
+    ));
+    let republished = deps
+        .tool_middleware_release_repo
+        .restore(changed_id, actor.0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        republished.release.lifecycle,
+        MIDDLEWARE_RELEASE_LIFECYCLE_PUBLISHED
+    );
+
+    let foreign = deps.create_account().await;
+    let foreign_app = deps.create_application(foreign.revision.account_id).await;
+    let foreign_env = deps.create_env(foreign_app.revision.application_id).await;
+    let foreign_component = deps
+        .component_repo
+        .create(
+            foreign_env.revision.environment_id,
+            &format!("foreign-{}", new_repo_uuid()),
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                ..component.revision.clone()
+            },
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+    let mut wrong_owner = changed.clone();
+    wrong_owner.tool_middleware_release_id = new_repo_uuid();
+    wrong_owner.middleware_version = "foreign-source".to_string();
+    wrong_owner.component_id = Some(foreign_component.revision.component_id);
+    assert!(matches!(
+        deps.tool_middleware_release_repo
+            .create(wrong_owner.clone())
+            .await,
+        Err(ToolMiddlewareReleaseRepoError::SourceOwnerMismatch)
+    ));
+    assert!(matches!(
+        publish_tool_middleware(deps, &wrong_owner).await,
+        Err(ToolMiddlewareReleaseRepoError::SourceOwnerMismatch)
+    ));
+}
+
 pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let owner = deps.create_account().await;
     let owner_account_id = owner.revision.account_id;
@@ -5300,6 +6156,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 .unwrap(),
                 definition,
                 provision: ToolProvisionConfig::default(),
+                component_bindings: BTreeMap::new(),
                 source: source.clone(),
                 owner_account_id: AccountId(owner_account_id),
                 owner_account_email: golem_common::model::account::AccountEmail::new(
@@ -5335,7 +6192,9 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                     CompiledToolBinding {
                         deployment_revision,
                         release_id: tool.release_id,
-                        agent_type_name: AgentTypeName(agent_type_name.clone()),
+                        owner: ToolBindingOwner::AgentType {
+                            agent_type_name: AgentTypeName(agent_type_name.clone()),
+                        },
                         tool_name: alpha_name,
                         version: tool.definition.version.clone(),
                         metadata_version: tool.metadata_version.clone(),
@@ -5347,6 +6206,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                         parameters: NormalizedJsonValue::new(serde_json::json!({
                             "revision": deployment_revision_id
                         })),
+                        config_keys_readable: Default::default(),
                         secret_keys_readable: SecretKeyScope::All,
                         secret_keys_revealable: SecretKeyScope::All,
                         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
@@ -5368,6 +6228,181 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 )
             })
             .collect();
+
+        let middleware_definition = |name: &str| ToolMiddleware {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            aliases: vec![format!("{name}-alias")],
+            doc: Doc::default(),
+            parameter_schema: SchemaGraph::empty(),
+            scope: ToolMiddlewareScope::Universal,
+        };
+        let registered_middleware = |name: &str| {
+            let definition = middleware_definition(name);
+            RegisteredToolMiddleware {
+                deployment_revision,
+                release_id: None,
+                metadata_digest: tool_middleware_metadata_digest(
+                    TOOL_METADATA_WIT_VERSION,
+                    &definition,
+                )
+                .unwrap(),
+                definition,
+                provision: ToolProvisionConfig::default(),
+                source: ToolMiddlewareSource::Component {
+                    component_id: ComponentId(component_id),
+                    component_revision: ComponentRevision::try_from(component_revision_id).unwrap(),
+                    component_name: golem_common::model::component::ComponentName(
+                        component_name.clone(),
+                    ),
+                },
+                owner_account_id: AccountId(owner_account_id),
+                owner_account_email: AccountEmail::new(owner_account_email.clone()),
+                metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+            }
+        };
+        let installation =
+            |name: &str, sequence: i64, filesystem_access| ToolMiddlewareInstallation {
+                name: ToolMiddlewareName::try_from(name).unwrap(),
+                version: Some("1.0.0".to_string()),
+                parameters: NormalizedJsonValue::new(serde_json::json!({ "sequence": sequence })),
+                account: Some(AccountEmail::new(owner_account_email.clone())),
+                filesystem_access,
+            };
+        let (
+            registered_tool_middlewares,
+            tool_middleware_chains,
+            tool_middleware_releases,
+            universal_tool_middlewares,
+            published_tool_middlewares,
+            remote_tool_middlewares,
+            environment_tool_middleware_bindings,
+            agent_tool_middleware_bindings,
+            tool_compatibility_mode,
+        ) = if deployment_revision_id == 1 {
+            let mut published = registered_middleware("audit-u");
+            let mut remote = registered_middleware("remote-r");
+            let published_release = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+                &published,
+                true,
+                AccountId(owner_account_id),
+            )
+            .unwrap();
+            let remote_release = ToolMiddlewareReleaseRecord::from_registered_tool_middleware(
+                &remote,
+                true,
+                AccountId(owner_account_id),
+            )
+            .unwrap();
+            published.release_id = Some(ToolMiddlewareReleaseId(
+                published_release.tool_middleware_release_id,
+            ));
+            remote.release_id = Some(ToolMiddlewareReleaseId(
+                remote_release.tool_middleware_release_id,
+            ));
+            let universal = vec![
+                installation("audit-u", 1, ToolFilesystemAccess::Allowed),
+                installation("audit-u", 2, ToolFilesystemAccess::Denied),
+            ];
+            let alpha = ToolName::try_from("alpha").unwrap();
+            let environment_bindings = BTreeMap::from([(
+                alpha.clone(),
+                ToolBindingInput {
+                    middleware: Some(vec![installation(
+                        "remote-r",
+                        3,
+                        ToolFilesystemAccess::Unset,
+                    )]),
+                    middleware_merge_mode: None,
+                    ..Default::default()
+                },
+            )]);
+            let agent_bindings = BTreeMap::from([(
+                AgentTypeName(agent_type_name.clone()),
+                BTreeMap::from([
+                    (
+                        alpha.clone(),
+                        ToolBindingInput {
+                            middleware: Some(vec![installation(
+                                "audit-u",
+                                4,
+                                ToolFilesystemAccess::Allowed,
+                            )]),
+                            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        ToolName::try_from("list-omitted").unwrap(),
+                        ToolBindingInput {
+                            middleware: None,
+                            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Append),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        ToolName::try_from("list-empty").unwrap(),
+                        ToolBindingInput {
+                            middleware: Some(Vec::new()),
+                            middleware_merge_mode: None,
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        ToolName::try_from("unrelated-default").unwrap(),
+                        ToolBindingInput::default(),
+                    ),
+                ]),
+            )]);
+            let effective_definition = make_test_tool("alpha", "1.0.0");
+            let chain = CompiledToolMiddlewareChain {
+                deployment_revision,
+                owner: ToolBindingOwner::AgentType {
+                    agent_type_name: AgentTypeName(agent_type_name.clone()),
+                },
+                tool_name: alpha,
+                effective_definition: effective_definition.clone(),
+                occurrences: vec![CompiledToolMiddlewareOccurrence {
+                    middleware: published.clone(),
+                    parameters: TypedSchemaValue::new(
+                        published.definition.parameter_schema.clone(),
+                        SchemaValue::Record { fields: Vec::new() },
+                    ),
+                    provision: ToolProvisionConfig::default(),
+                    config_keys_readable: Default::default(),
+                    secret_keys_readable: SecretKeyScope::All,
+                    secret_keys_revealable: SecretKeyScope::All,
+                    filesystem_access: ToolFilesystemAccess::Allowed,
+                    expected_definition: None,
+                    presented_definition: None,
+                    next_effective_definition: effective_definition,
+                    compatibility: None,
+                }],
+            };
+            (
+                vec![published, remote],
+                vec![chain],
+                vec![published_release, remote_release],
+                universal,
+                vec![ToolMiddlewareName::try_from("audit-u").unwrap()],
+                vec![ToolMiddlewareName::try_from("remote-r").unwrap()],
+                environment_bindings,
+                agent_bindings,
+                golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal,
+            )
+        } else {
+            (
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )
+        };
 
         DeploymentRevisionCreationRecord {
             environment_id,
@@ -5400,6 +6435,15 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             tool_releases,
             registered_tools,
             agent_tool_bindings,
+            registered_tool_middlewares,
+            tool_middleware_chains,
+            tool_middleware_releases,
+            universal_tool_middlewares,
+            tool_compatibility_mode,
+            published_tool_middlewares,
+            remote_tool_middlewares,
+            environment_tool_middleware_bindings,
+            agent_tool_middleware_bindings,
             created_agent_secrets: Vec::new(),
             updated_agent_secrets: Vec::new(),
             replaced_agent_secrets: Vec::new(),
@@ -5409,21 +6453,23 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         }
     };
 
+    let first_creation = deployment_creation(
+        1,
+        component_revision_id,
+        "1.0.0",
+        vec![
+            make_test_tool("zeta", "1.0.0"),
+            make_test_tool("alpha", "1.0.0"),
+        ],
+        Some("zeta"),
+        true,
+    );
+    let expected_universal_middlewares = first_creation.universal_tool_middlewares.clone();
+    let expected_environment_middleware_bindings =
+        first_creation.environment_tool_middleware_bindings.clone();
+    let expected_agent_middleware_bindings = first_creation.agent_tool_middleware_bindings.clone();
     deps.full_deployment_repo
-        .deploy(
-            deployment_creation(
-                1,
-                component_revision_id,
-                "1.0.0",
-                vec![
-                    make_test_tool("zeta", "1.0.0"),
-                    make_test_tool("alpha", "1.0.0"),
-                ],
-                Some("zeta"),
-                true,
-            ),
-            false,
-        )
+        .deploy(first_creation, false)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -5497,6 +6543,116 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         vec![ToolName::try_from("zeta").unwrap()]
     );
     assert!(first_summary.remote_tools.is_empty());
+    let first_identity = deps
+        .full_deployment_repo
+        .get_deployment_identity(environment_id, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first_identity.identity.middleware.environment_bindings,
+        expected_environment_middleware_bindings
+    );
+    let mut expected_persisted_agent_bindings = expected_agent_middleware_bindings.clone();
+    expected_persisted_agent_bindings
+        .get_mut(&AgentTypeName(agent_type_name.clone()))
+        .unwrap()
+        .remove(&ToolName::try_from("unrelated-default").unwrap());
+    assert_eq!(
+        first_identity.identity.middleware.agent_bindings,
+        expected_persisted_agent_bindings
+    );
+    let first_plan = first_identity.identity.into_plan(None).unwrap();
+    let (expected_environment_binding_inputs, expected_agent_binding_inputs) =
+        diff::tool_middleware_binding_inputs(
+            &expected_environment_middleware_bindings,
+            &expected_agent_middleware_bindings,
+        );
+    let expected_middleware = (
+        ["audit-u".to_string()].into_iter().collect::<BTreeSet<_>>(),
+        expected_universal_middlewares.clone(),
+        golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal,
+        expected_environment_binding_inputs,
+        expected_agent_binding_inputs,
+    );
+    let assert_middleware_roundtrip = |actual: &diff::Deployment| {
+        assert_eq!(actual.published_tool_middlewares, expected_middleware.0);
+        assert_eq!(actual.remote_tool_middleware_deployments.len(), 1);
+        assert_eq!(
+            actual
+                .remote_tool_middleware_deployments
+                .keys()
+                .next()
+                .unwrap(),
+            "remote-r"
+        );
+        assert_eq!(actual.universal_tool_middlewares, expected_middleware.1);
+        assert_eq!(actual.tool_compatibility_mode, expected_middleware.2);
+        assert_eq!(
+            actual.environment_tool_middleware_bindings,
+            expected_middleware.3
+        );
+        assert_eq!(actual.agent_tool_middleware_bindings, expected_middleware.4);
+    };
+    let first_plan_diffable = first_plan.to_diffable();
+    let first_summary_diffable = first_summary.to_diffable();
+    assert_middleware_roundtrip(&first_plan_diffable);
+    assert_middleware_roundtrip(&first_summary_diffable);
+
+    let services = environment_service_deps(deps);
+    let environment = services
+        .environment_service
+        .get(EnvironmentId(environment_id), false, &AuthCtx::System)
+        .await
+        .unwrap();
+    services
+        .environment_service
+        .update(
+            environment.id,
+            EnvironmentUpdate {
+                current_revision: environment.revision,
+                name: None,
+                compatibility_check: None,
+                tool_compatibility_mode: Some(
+                    golem_common::schema::tool::compatibility::ToolCompatibilityMode::StrictEquality,
+                ),
+                version_check: None,
+                security_overrides: None,
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let retained_snapshot = deps
+        .full_deployment_repo
+        .get_deployment_identity(environment_id, 1)
+        .await
+        .unwrap()
+        .unwrap()
+        .identity
+        .into_plan(None)
+        .unwrap();
+    assert_eq!(
+        retained_snapshot.deployment_hash,
+        first_plan_diffable.hash().unwrap()
+    );
+    assert_middleware_roundtrip(&retained_snapshot.to_diffable());
+
+    let mut expected_snapshot_projection = first_plan_diffable.clone();
+    expected_snapshot_projection.environment_tool_middleware_bindings =
+        expected_middleware.3.clone();
+    expected_snapshot_projection.agent_tool_middleware_bindings = expected_middleware.4.clone();
+    assert_eq!(
+        expected_snapshot_projection.hash().unwrap(),
+        first_summary_diffable.hash().unwrap()
+    );
+    let mut changed_middleware = first_plan_diffable.clone();
+    changed_middleware.universal_tool_middlewares[1].parameters =
+        NormalizedJsonValue::new(serde_json::json!({ "sequence": 99 }));
+    assert_ne!(
+        changed_middleware.hash().unwrap(),
+        first_plan_diffable.hash().unwrap()
+    );
 
     let current: golem_common::model::tool::ToolDeploymentState = deps
         .full_deployment_repo
@@ -5514,14 +6670,16 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         "2.0.0"
     );
     assert_eq!(
-        current.agent_tool_bindings[&AgentTypeName(agent_type_name.clone())]
-            [&ToolName::try_from("alpha").unwrap()]
+        current.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone())
+        }][&ToolName::try_from("alpha").unwrap()]
             .metadata_version,
         TOOL_METADATA_WIT_VERSION
     );
     assert_eq!(
-        current.agent_tool_bindings[&AgentTypeName(agent_type_name.clone())]
-            [&ToolName::try_from("alpha").unwrap()]
+        current.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone())
+        }][&ToolName::try_from("alpha").unwrap()]
             .parameters
             .0,
         serde_json::json!({ "revision": 2 })
@@ -5545,6 +6703,25 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
+    let rolled_back: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_active_tool_deployment_state_by_component_revision(
+            &environment_id,
+            &component_id,
+            component_revision_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(rolled_back.deployment_revision.get(), 1);
+    assert_eq!(
+        rolled_back.registered_tools[&ToolName::try_from("alpha").unwrap()]
+            .definition
+            .version,
+        "1.0.0"
+    );
     let staged_after_component_update = deps
         .full_deployment_repo
         .get_staged_identity(environment_id)
@@ -5552,6 +6729,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .unwrap()
         .to_diffable()
         .unwrap();
+    assert_middleware_roundtrip(&staged_after_component_update);
     assert_eq!(
         staged_after_component_update.published_tools,
         ["zeta".to_string()].into_iter().collect()
@@ -5579,7 +6757,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
 
     let latest_for_component: golem_common::model::tool::ToolDeploymentState = deps
         .full_deployment_repo
-        .get_latest_tool_deployment_state_by_component_revision(
+        .get_active_tool_deployment_state_by_component_revision(
             &environment_id,
             &component_id,
             component_revision_id,
@@ -5592,7 +6770,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     assert_eq!(latest_for_component.deployment_revision.get(), 2);
     let latest_for_updated_component: golem_common::model::tool::ToolDeploymentState = deps
         .full_deployment_repo
-        .get_latest_tool_deployment_state_by_component_revision(
+        .get_active_tool_deployment_state_by_component_revision(
             &environment_id,
             &component_id,
             updated_component_revision_id,
@@ -5630,6 +6808,13 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             config: NormalizedJsonValue::new(serde_json::json!({ "consumer": true })),
             ..ToolProvisionConfig::default()
         },
+        component_bindings: BTreeMap::from([(
+            golem_common::model::component::ComponentName("consumer".to_string()),
+            ToolBindingInput {
+                parameters: NormalizedJsonValue::new(serde_json::json!({ "baseline": "remote" })),
+                ..ToolBindingInput::default()
+            },
+        )]),
         source: remote_source.clone(),
         owner_account_id: AccountId(owner_account_id),
         owner_account_email: golem_common::model::account::AccountEmail::new(
@@ -5654,7 +6839,9 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let remote_binding = CompiledToolBinding {
         deployment_revision: DeploymentRevision::try_from(4_i64).unwrap(),
         release_id: Some(remote_release_id),
-        agent_type_name: AgentTypeName(agent_type_name.clone()),
+        owner: ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName(agent_type_name.clone()),
+        },
         tool_name: ToolName::try_from("remote-search").unwrap(),
         version: "1.0.0".to_string(),
         metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
@@ -5662,6 +6849,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         account_id: AccountId(owner_account_id),
         account_email: remote_registered_tool.owner_account_email.clone(),
         parameters: NormalizedJsonValue::new(serde_json::json!({ "limit": 10 })),
+        config_keys_readable: Default::default(),
         secret_keys_readable: SecretKeyScope::All,
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Unset,
@@ -5678,6 +6866,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let remote_hash = diff::remote_tool_deployments(
         [remote_registered_tool.clone()],
         [remote_binding.clone()],
+        &BTreeMap::new(),
         &BTreeSet::new(),
     )
     .unwrap()["remote-search"]
@@ -5739,15 +6928,18 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     assert_eq!(staged.remote_tools.len(), 1);
     assert!(staged.published_tools.is_empty());
 
+    let component_service = environment_service_deps(deps).component_service;
     let tool_release_service = match &deps.test_db {
         TestDb::Postgres(pool) => ToolReleaseService::new(
             Arc::new(DbToolReleaseRepo::new(pool.clone())),
             deps.account_service(),
+            component_service.clone(),
             AccountId(owner_account_id),
         ),
         TestDb::Sqlite(pool) => ToolReleaseService::new(
             Arc::new(DbToolReleaseRepo::new(pool.clone())),
             deps.account_service(),
+            component_service,
             AccountId(owner_account_id),
         ),
     };
@@ -5897,6 +7089,12 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             .await,
         Err(DeployRepoError::ToolReleaseImmutableConflict)
     ));
+    let env = deps
+        .environment_repo
+        .get_by_id(environment_id, false)
+        .await
+        .unwrap()
+        .unwrap();
     let loose_publisher = deps
         .environment_repo
         .update({
@@ -6187,6 +7385,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         name: env_name.clone(),
         audit: DeletableRevisionAuditFields::new(owner_account_id),
         compatibility_check: false,
+        tool_compatibility_mode: "structural-subtype".to_string(),
         version_check: false,
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
@@ -6267,6 +7466,15 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         tool_releases: vec![],
         registered_tools: vec![],
         agent_tool_bindings: vec![],
+        registered_tool_middlewares: Vec::new(),
+        tool_middleware_chains: Vec::new(),
+        tool_middleware_releases: Vec::new(),
+        universal_tool_middlewares: Vec::new(),
+        tool_compatibility_mode: Default::default(),
+        published_tool_middlewares: Vec::new(),
+        remote_tool_middlewares: Vec::new(),
+        environment_tool_middleware_bindings: Default::default(),
+        agent_tool_middleware_bindings: Default::default(),
         created_agent_secrets: vec![],
         updated_agent_secrets: vec![],
         replaced_agent_secrets: vec![],
@@ -6343,6 +7551,7 @@ pub async fn test_resolve_agent_type_no_deployment_returns_none(deps: &Deps) {
         name: env_name.clone(),
         audit: DeletableRevisionAuditFields::new(owner_account_id),
         compatibility_check: false,
+        tool_compatibility_mode: "structural-subtype".to_string(),
         version_check: false,
         security_overrides: false,
         hash: SqlBlake3Hash::empty(),
@@ -6428,6 +7637,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -6463,6 +7673,7 @@ pub async fn test_mcp_deployment_create_and_update(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -6500,6 +7711,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -6525,6 +7737,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };
@@ -6552,6 +7765,7 @@ pub async fn test_mcp_deployment_list_and_delete(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         data: Blob::new(McpDeploymentData {
             agents: Default::default(),
+            tools: Default::default(),
         }),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
     };

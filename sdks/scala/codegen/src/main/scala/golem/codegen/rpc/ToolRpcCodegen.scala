@@ -189,7 +189,7 @@ object ToolRpcCodegen {
     private def valueEntry(tool: Tool, method: Method, param: Param): String =
       ToolProjectionRendering.valueEntry(projected(tool, method, param), AmbientClient)
 
-    private def prefixEntry(tool: Tool, m: Method, p: Param): String = {
+    private def prefixEntry(tool: Tool, m: Method, p: Param, model: String): String = {
       val name        = canonicalValueName(tool, m, p)
       val aliases     = canonicalAliases(tool, m, p)
       val aliasesExpr =
@@ -198,7 +198,7 @@ object ToolRpcCodegen {
       if (isCountFlag(p))
         s"""_root_.golem.tool.ToolClientRuntime.countFlagPrefixValue("$name", $aliasesExpr, ${p.ident})"""
       else
-        s"""_root_.golem.tool.ToolClientRuntime.prefixValue("$name", $aliasesExpr, ${p.ident}, _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[${p.typeExpr}]])"""
+        s"""_root_.golem.tool.ToolClientRuntime.prefixValue("$name", $aliasesExpr, ${p.ident}, _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[${p.typeExpr}]], $model)"""
     }
 
     private def listExpr(entries: List[String], indent: String): String =
@@ -263,11 +263,11 @@ $indent      _root_.golem.tool.ToolClientRuntime.buildDynamicInput($desc, ${Tool
 
       val decodeExpr = (shape.okType, shape.hasStdout) match {
         case (Some(ok), true) =>
-          s"_root_.golem.tool.ToolClientRuntime.decodeValueResult(__r, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
+          s"_root_.golem.tool.ToolClientRuntime.decodeValueResult(__r, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]], _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[$ok]].graph)"
         case (None, true) =>
           "_root_.golem.tool.ToolClientRuntime.decodeUnitResult(__r)"
         case (Some(ok), false) =>
-          s"_root_.golem.tool.ToolClientRuntime.decodeValueResult(__r, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
+          s"_root_.golem.tool.ToolClientRuntime.decodeValueResult(__r, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]], _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[$ok]].graph)"
         case (None, false) =>
           "_root_.golem.tool.ToolClientRuntime.decodeUnitResult(__r)"
       }
@@ -277,7 +277,7 @@ $indent      _root_.golem.tool.ToolClientRuntime.buildDynamicInput($desc, ${Tool
       val invocationExpr =
         if (shape.hasStdout) {
           val decodeError = shape.errType match {
-            case Some(err) => s"${errorSchemaVal(err)}.fromErrorPayloadValue(_)"
+            case Some(err) => s"${errorSchemaVal(err)}.fromErrorValue(_)"
             case None      => "_ => _root_.scala.Left(\"unexpected remote tool error\")"
           }
           s"_root_.golem.tool.ToolClientRuntime.start(__transport, $commandPathExpr, __input, $stdinExpr, $decodeError)(__r => $decodeExpr)"
@@ -326,7 +326,7 @@ $indent}"""
           !p.isPrincipal && !isStreamParam(p) && !omittedMatches(tool, m, p, omitted)
         }
       }
-      val prefixEntries = prefixParams.map(prefixEntry(tool, m, _))
+      val prefixEntries = prefixParams.map(prefixEntry(tool, m, _, "__prefixModel"))
 
       val basePrefix = if (isWrapper) "__inheritedPrefix ++ " else ""
       val prefixExpr =
@@ -345,9 +345,12 @@ $indent}"""
 
       Some(
         s"""${indent}def ${m.name}($paramDecls): $clientName.$wrapperName = {
+$indent  val __prefixModel = _root_.golem.tool.ToolClientRuntime.prefixInputModel($clientName.${descriptorVal(
+            tool
+          )}, ${ToolProjectionRendering.stringList(m.localCommandPath)})
 $indent  val __prefix = $prefixExpr
 $indent  new $clientName.$wrapperName(
-$indent    _root_.golem.runtime.tool.client.ToolRpcClient.transport($clientName.toolName),
+$indent    __transport,
 $indent    $commandPathExpr,
 $indent    __prefix
 $indent  )
@@ -459,7 +462,8 @@ ${methods.mkString("\n\n")}
 
       sb.append(s"object $clientName {\n\n")
       sb.append(s"""  val toolName: _root_.scala.Predef.String = "${root.toolName}"\n\n""")
-      sb.append(s"  def apply(): $clientName = new Root()\n\n")
+      sb.append(s"  def apply(): $clientName = apply(toolName)\n\n")
+      sb.append(s"  def apply(lookupName: _root_.scala.Predef.String): $clientName = new Root(lookupName)\n\n")
 
       descriptorVals.foreach { case (valName, traitRef) =>
         sb.append(
@@ -482,10 +486,10 @@ ${methods.mkString("\n\n")}
         sb.append(s"    _root_.golem.runtime.macros.ToolErrorSchemaDerivation.derive[$errType]\n\n")
       }
 
-      sb.append(s"  private final class Root extends $clientName {\n")
+      sb.append(s"  private final class Root(lookupName: _root_.scala.Predef.String) extends $clientName {\n")
       sb.append(
         "    private val __transport: _root_.golem.tool.ToolRpcTransport =\n" +
-          "      _root_.golem.runtime.tool.client.ToolRpcClient.transport(toolName)\n\n"
+          "      _root_.golem.runtime.tool.client.ToolRpcClient.transport(lookupName)\n\n"
       )
       sb.append(rootImpls.mkString("\n\n"))
       sb.append("\n  }\n")

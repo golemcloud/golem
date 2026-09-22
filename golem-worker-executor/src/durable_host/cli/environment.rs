@@ -14,7 +14,7 @@
 
 use crate::durable_host::authorization::targets::{agent_owner, env_target};
 use crate::durable_host::concurrent::{
-    BegunCallReplayOutcome, CallReplayOutcome, DurableCallSession, NotCancellable,
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::model::AgentConfig;
@@ -42,10 +42,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// `cli::environment` host implementations. This only reconstructs the existing worker
     /// environment; the filtered guest-visible result is recorded separately by the host call.
     fn build_unfiltered_environment(&self) -> wasmtime::Result<Vec<(String, String)>> {
-        let default_agent_env = self
-            .agent_type_provision_config()
-            .map(|c| c.env.clone())
-            .unwrap_or_default();
+        let default_agent_env = match self.owner_context() {
+            golem_common::model::agent::ResolvedOwnerContext::Agent(_) => self
+                .agent_type_provision_config()
+                .map(|c| c.env.clone())
+                .unwrap_or_default(),
+            golem_common::model::agent::ResolvedOwnerContext::ComponentWorker
+            | golem_common::model::agent::ResolvedOwnerContext::ComponentBaseline => self
+                .owner_component_metadata()
+                .metadata
+                .component_provision_config()
+                .env
+                .clone(),
+        };
 
         let worker_metadata = self.public_state.worker().get_initial_worker_metadata();
         let mut env =
@@ -66,8 +75,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 component_id: self.owned_agent_id.component_id(),
                 agent_id: current_agent_name,
             },
-            &self.state.agent_id.as_ref().map(|id| id.agent_type.clone()),
-            self.state.component_metadata.revision,
+            &self
+                .state
+                .owner_context
+                .agent()
+                .map(|id| id.agent_type.clone()),
+            self.owner_component_metadata().revision,
         );
 
         Ok(env)
@@ -151,49 +164,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             |ctx| ctx.build_filtered_environment(),
         )
         .await?;
-        let (mut call, live_environment) = if begun.is_live() {
-            let (environment, decisions) = captured.ok_or_else(|| {
-                wasmtime::Error::msg("live environment call has no authority view")
-            })??;
-            for (target, allowed) in decisions {
-                crate::durable_host::record_permission_decisions(
-                    std::slice::from_ref(&target),
-                    allowed,
-                );
-            }
-            // The request carries the admitted view so an incomplete call can finish after
-            // recovery without rebuilding the environment or consulting current authority.
-            let call = begun
-                .start_live(
-                    self,
-                    HostRequestCliEnvironmentGetEnvironment {
-                        environment: environment.clone(),
-                    },
-                )
-                .await?;
-            (call, Some(environment))
-        } else {
-            match begun.start_replay_or_continue_live(self).await? {
-                BegunCallReplayOutcome::Claimed(call) => (call, None),
-                BegunCallReplayOutcome::ContinueLive(begun) => {
-                    let (environment, decisions) = self.build_filtered_environment()?;
-                    for (target, allowed) in decisions {
-                        crate::durable_host::record_permission_decisions(
-                            std::slice::from_ref(&target),
-                            allowed,
-                        );
-                    }
-                    let call = begun
-                        .start_live(
-                            self,
-                            HostRequestCliEnvironmentGetEnvironment {
-                                environment: environment.clone(),
-                            },
-                        )
-                        .await?;
-                    (call, Some(environment))
+        let (mut call, live_environment) = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                let (environment, decisions) = match captured {
+                    Some(captured) => captured?,
+                    None => self.build_filtered_environment()?,
+                };
+                for (target, allowed) in decisions {
+                    crate::durable_host::record_permission_decisions(
+                        std::slice::from_ref(&target),
+                        allowed,
+                    );
                 }
+                // The request carries the admitted view so an incomplete call can finish after
+                // recovery without rebuilding the environment or consulting current authority.
+                let call = begun
+                    .start_live(
+                        self,
+                        HostRequestCliEnvironmentGetEnvironment {
+                            environment: environment.clone(),
+                        },
+                    )
+                    .await?;
+                (call, Some(environment))
             }
+            ResolvedCall::Replay(call) => (call, None),
         };
         if !call.is_live() {
             match call.replay(self).await? {

@@ -30,6 +30,9 @@ pub const NEW: &str = "Examples:
   # Scaffold a new TypeScript application in the current directory
   golem-cli new --template ts --yes .
 
+  # Scaffold a new Effect application in ./my-effect-app
+  golem-cli new --template effect --yes my-effect-app
+
   # Add a new component to an existing application (run from app root)
   golem-cli new --template rust --component-name myapp:billing-service --yes .
 
@@ -251,7 +254,7 @@ pub const AGENT_LIST: &str = "Examples:
 
   # Pagination
   golem-cli agent list --max-count 10
-  golem-cli agent list --max-count 10 --scan-cursor 0/10
+  golem-cli agent list --max-count 10 --scan-cursor '<cursor-from-previous-output>'
 
   # Force fresh status for each agent
   golem-cli agent list --precise
@@ -352,6 +355,9 @@ pub const AGENT_FILE_CONTENTS: &str = "Examples:
 
   # Save the contents to a local file
   golem-cli agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output ./log.txt
+
+  # Stream the raw file bytes to stdout
+  golem-cli agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output -
 
   # Machine-readable metadata about the saved file
   golem-cli --format json agent file-contents 'CounterAgent(\"c1\")' /data/log.txt --output ./log.txt";
@@ -880,6 +886,11 @@ pub const TOOL_LIST: &str = "Examples:
 pub const TOOL_GET: &str = "Examples:
   # Get a deployed tool by name
   golem-cli tool get search";
+
+pub const TOOL_MIDDLEWARE_LIST: &str = "Examples:\n  golem-cli tool middleware list";
+pub const TOOL_MIDDLEWARE_GET: &str = "Examples:\n  golem-cli tool middleware get audit";
+pub const TOOL_MIDDLEWARE_GRANT_CREATE: &str = "Examples:\n  golem-cli tool middleware grant create --release-id 00000000-0000-0000-0000-000000000001\n\n  golem-cli tool middleware grant create --account publisher@example.com --name audit --version 1.2.0";
+pub const TOOL_MIDDLEWARE_GRANT_LIST: &str = "Examples:\n  golem-cli tool middleware grant list";
 
 pub const TOOL_GRANT_CREATE: &str = "Examples:
   # Grant a release by ID to the selected environment

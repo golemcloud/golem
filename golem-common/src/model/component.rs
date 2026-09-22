@@ -147,6 +147,13 @@ impl ComponentDto {
                             })
                             .collect(),
                         environment_binding: metadata.environment_binding.clone(),
+                        component_bindings: metadata
+                            .component_bindings
+                            .iter()
+                            .map(|(component_name, binding)| {
+                                (component_name.0.clone(), binding.clone())
+                            })
+                            .collect(),
                         agent_bindings: metadata
                             .agent_bindings
                             .iter()
@@ -160,8 +167,126 @@ impl ComponentDto {
 
         Ok(diff::Component {
             wasm_hash: self.wasm_hash,
+            component_config: diff::ComponentConfig {
+                schema: self.metadata.config_schema().clone(),
+                initial_permissions: {
+                    let card = &self
+                        .metadata
+                        .component_provision_config()
+                        .initial_permissions;
+                    diff::AgentTypeInitialPermission {
+                        lower_positive: card.lower_positive.clone(),
+                        lower_negative: card.lower_negative.clone(),
+                        upper_positive: card.upper_positive.clone(),
+                        upper_negative: card.upper_negative.clone(),
+                    }
+                },
+                config: self
+                    .metadata
+                    .component_provision_config()
+                    .config
+                    .iter()
+                    .map(|entry| {
+                        (
+                            entry.path.join("."),
+                            crate::model::json::NormalizedJsonValue::new(
+                                golem_schema::schema::render::to_json_value(
+                                    entry.value.graph(),
+                                    entry.value.root_type(),
+                                    entry.value.value(),
+                                )
+                                .unwrap_or_default(),
+                            ),
+                        )
+                    })
+                    .collect(),
+                env: self.metadata.component_provision_config().env.clone(),
+                files_by_path: self
+                    .metadata
+                    .component_provision_config()
+                    .files
+                    .iter()
+                    .map(|file| {
+                        (
+                            file.path.to_abs_string(),
+                            diff::AgentFile {
+                                hash: file.content_hash.0,
+                                permissions: file.permissions,
+                            }
+                            .into(),
+                        )
+                    })
+                    .collect(),
+                plugins_by_grant_id: self
+                    .metadata
+                    .component_provision_config()
+                    .plugins
+                    .iter()
+                    .map(|plugin| {
+                        (
+                            plugin.environment_plugin_grant_id.0,
+                            diff::PluginInstallation {
+                                priority: plugin.priority.0,
+                                name: plugin.plugin_name.clone(),
+                                version: plugin.plugin_version.clone(),
+                                grant_id: plugin.environment_plugin_grant_id.0,
+                                parameters: plugin.parameters.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+            }
+            .into(),
             agent_type_provision_configs,
             tool_deployment_configs,
+            tool_middleware_deployment_configs: self
+                .metadata
+                .tool_middlewares()
+                .iter()
+                .map(|(name, metadata)| {
+                    (
+                        name.to_string(),
+                        diff::ToolMiddlewareDeploymentConfig {
+                            definition: metadata.definition.clone(),
+                            config: metadata.provision.config.clone(),
+                            env: metadata.provision.env.clone(),
+                            files_by_path: metadata
+                                .provision
+                                .files
+                                .iter()
+                                .map(|file| {
+                                    (
+                                        file.path.to_abs_string(),
+                                        diff::AgentFile {
+                                            hash: file.content_hash.0,
+                                            permissions: file.permissions,
+                                        }
+                                        .into(),
+                                    )
+                                })
+                                .collect(),
+                            plugins_by_grant_id: metadata
+                                .provision
+                                .plugins
+                                .iter()
+                                .map(|plugin| {
+                                    (
+                                        plugin.environment_plugin_grant_id.0,
+                                        diff::PluginInstallation {
+                                            priority: plugin.priority.0,
+                                            name: plugin.plugin_name.clone(),
+                                            version: plugin.plugin_version.clone(),
+                                            grant_id: plugin.environment_plugin_grant_id.0,
+                                            parameters: plugin.parameters.clone(),
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        }
+                        .into(),
+                    )
+                })
+                .collect(),
         })
     }
 }
@@ -215,6 +340,7 @@ mod tests {
                         files: Vec::new(),
                     },
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 },
             )]),
@@ -235,6 +361,7 @@ mod tests {
         };
         let expected = diff::Component {
             wasm_hash,
+            component_config: diff::ComponentConfig::default().into(),
             agent_type_provision_configs: BTreeMap::new(),
             tool_deployment_configs: BTreeMap::from([(
                 tool_name.as_str().to_string(),
@@ -245,10 +372,12 @@ mod tests {
                     files_by_path: BTreeMap::new(),
                     plugins_by_grant_id: BTreeMap::new(),
                     environment_binding: None,
+                    component_bindings: BTreeMap::new(),
                     agent_bindings: BTreeMap::new(),
                 }
                 .into(),
             )]),
+            tool_middleware_deployment_configs: BTreeMap::new(),
         };
 
         assert_eq!(

@@ -24,29 +24,41 @@ import golem.tool.wire.WitToolError
 import scala.concurrent.{ExecutionContext, Future}
 
 /**
- * Platform-neutral mirror of the wire `tool-error`, used by macro-generated
- * tool invokers. The platform layer converts it to the wire representation at
- * the guest-export boundary.
+ * Platform-neutral tool and underlying-invocation errors, used by
+ * macro-generated tool invokers. The platform layer converts them to the wire
+ * representation at the guest-export boundary.
  */
 sealed trait ToolInvokeError[+E] extends Product with Serializable {
   def mapTool[E2](f: E => E2): ToolInvokeError[E2] =
     this match {
       case ToolInvokeError.Tool(error)                => ToolInvokeError.Tool(f(error))
+      case error: ToolInvokeError.UnknownToolError    => error
       case error: ToolInvokeError.InvalidToolName     => error
       case error: ToolInvokeError.InvalidCommandPath  => error
       case error: ToolInvokeError.InvalidInput        => error
       case error: ToolInvokeError.ConstraintViolation => error
       case error: ToolInvokeError.InvalidResult       => error
+      case error: ToolInvokeError.ProtocolError       => error
+      case error: ToolInvokeError.Denied              => error
+      case error: ToolInvokeError.InternalError       => error
+      case ToolInvokeError.Cancelled                  => ToolInvokeError.Cancelled
+      case error: ToolInvokeError.ResourceExhausted   => error
     }
 }
 
 object ToolInvokeError {
-  final case class InvalidToolName(name: String)          extends ToolInvokeError[Nothing]
-  final case class InvalidCommandPath(path: List[String]) extends ToolInvokeError[Nothing]
-  final case class InvalidInput(message: String)          extends ToolInvokeError[Nothing]
-  final case class ConstraintViolation(message: String)   extends ToolInvokeError[Nothing]
-  final case class InvalidResult(message: String)         extends ToolInvokeError[Nothing]
-  final case class Tool[E](error: E)                      extends ToolInvokeError[E]
+  final case class InvalidToolName(name: String)                             extends ToolInvokeError[Nothing]
+  final case class InvalidCommandPath(path: List[String])                    extends ToolInvokeError[Nothing]
+  final case class InvalidInput(message: String)                             extends ToolInvokeError[Nothing]
+  final case class ConstraintViolation(message: String)                      extends ToolInvokeError[Nothing]
+  final case class InvalidResult(message: String)                            extends ToolInvokeError[Nothing]
+  final case class ProtocolError(message: String)                            extends ToolInvokeError[Nothing]
+  final case class Denied(message: String)                                   extends ToolInvokeError[Nothing]
+  final case class InternalError(message: String)                            extends ToolInvokeError[Nothing]
+  case object Cancelled                                                      extends ToolInvokeError[Nothing]
+  final case class ResourceExhausted(message: String)                        extends ToolInvokeError[Nothing]
+  final case class Tool[E](error: E)                                         extends ToolInvokeError[E]
+  final case class UnknownToolError(name: String, payload: TypedSchemaValue) extends ToolInvokeError[Nothing]
 
   def toWire(error: ToolInvokeError[TypedSchemaValue]): WitToolError =
     error match {
@@ -55,8 +67,18 @@ object ToolInvokeError {
       case InvalidInput(message)        => WitToolError.InvalidInput(message)
       case ConstraintViolation(message) => WitToolError.ConstraintViolation(message)
       case InvalidResult(message)       => WitToolError.InvalidResult(message)
-      case Tool(payload)                =>
-        WitToolError.CustomError(SchemaWire.typedSchemaValueToWit(payload))
+      case ProtocolError(message)       => WitToolError.InvalidResult(s"protocol error: $message")
+      case Denied(message)              => WitToolError.ConstraintViolation(message)
+      case InternalError(message)       => WitToolError.InvalidResult(s"internal error: $message")
+      case Cancelled                    => WitToolError.ConstraintViolation("underlying invocation was cancelled")
+      case ResourceExhausted(message)   =>
+        WitToolError.ConstraintViolation(s"underlying invocation exhausted resources: $message")
+      case Tool(_) =>
+        throw new IllegalArgumentException("named tool errors must be encoded through ToolErrorSchema")
+      case UnknownToolError(name, payload) =>
+        WitToolError.CustomError(
+          golem.tool.wire.WitCustomToolError(name, SchemaWire.typedSchemaValueToWit(payload))
+        )
     }
 
   def fromWire(error: WitToolError): ToolInvokeError[TypedSchemaValue] =
@@ -66,8 +88,8 @@ object ToolInvokeError {
       case WitToolError.InvalidInput(message)    => InvalidInput(message)
       case WitToolError.ConstraintViolation(m)   => ConstraintViolation(m)
       case WitToolError.InvalidResult(message)   => InvalidResult(message)
-      case WitToolError.CustomError(payload)     =>
-        Tool(SchemaWire.typedSchemaValueFromWit(payload))
+      case WitToolError.CustomError(error)       =>
+        UnknownToolError(error.name, SchemaWire.typedSchemaValueFromWit(error.payload))
     }
 }
 
@@ -153,7 +175,7 @@ object ToolParamDecoder {
   /** Auto-injected from the invocation stdin stream. */
   case object StdinParam extends ToolParamDecoder
 
-  /** Auto-injected process stdout handle (also returned in the result). */
+  /** Auto-injected invocation-scoped stdout writer. */
   case object StdoutParam extends ToolParamDecoder
 }
 
@@ -370,9 +392,9 @@ object ToolInvokerRuntime {
    * result) into the custom-error payload carrier.
    */
   def customError[E](error: E, schema: ToolErrorSchema[E]): ToolInvokeError[TypedSchemaValue] =
-    schema.toErrorPayloadValue(error) match {
-      case Right(payload) => ToolInvokeError.Tool(payload)
-      case Left(message)  => ToolInvokeError.InvalidResult(message)
+    schema.toErrorValue(error) match {
+      case Right(value)  => ToolInvokeError.UnknownToolError(value.name, value.payload)
+      case Left(message) => ToolInvokeError.InvalidResult(message)
     }
 
   private def failed[T](

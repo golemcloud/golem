@@ -141,6 +141,13 @@ final class GraphEncoder(defs: ListMap[String, SchemaTypeDef]) {
 
 object SchemaWire {
 
+  final case class DecodedSchemaGraph(graph: SchemaGraph, roots: Vector[SchemaType]) {
+    def at(index: Int): SchemaType =
+      roots
+        .lift(index)
+        .getOrElse(throw SchemaDecodeError(s"type node index out of range: $index (nodes: ${roots.length})"))
+  }
+
   // ----------------------------------------------------------------
   // Schema type / graph
   // ----------------------------------------------------------------
@@ -148,10 +155,13 @@ object SchemaWire {
   def schemaGraphToWit(graph: SchemaGraph): WitSchemaGraph =
     new GraphEncoder(graph.defs).encodeGraphRoot(graph.root)
 
-  def schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph = {
+  def schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph = schemaGraphRootsFromWit(wit).graph
+
+  def schemaGraphRootsFromWit(wit: WitSchemaGraph): DecodedSchemaGraph = {
     val nodes   = wit.typeNodes
     val witDefs = wit.defs
     val onPath  = Array.fill(nodes.length)(false)
+    val decoded = Array.fill[Option[SchemaType]](nodes.length)(None)
 
     def idByDefIndex(di: Int): String =
       if (di < 0 || di >= witDefs.length)
@@ -161,11 +171,16 @@ object SchemaWire {
     def fromType(idx: Int): SchemaType = {
       if (idx < 0 || idx >= nodes.length)
         throw SchemaDecodeError(s"type node index out of range: $idx (nodes: ${nodes.length})")
+      decoded(idx) match {
+        case Some(value) => return value
+        case None        => ()
+      }
       if (onPath(idx)) throw SchemaDecodeError(s"cyclic type node reference at index $idx")
       onPath(idx) = true
       val node   = nodes(idx)
       val result = SchemaType(fromBody(node.body), node.metadata)
       onPath(idx) = false
+      decoded(idx) = Some(result)
       result
     }
 
@@ -224,8 +239,9 @@ object SchemaWire {
       seen += d.id
       defsBuilder += (d.id -> SchemaTypeDef(fromType(d.body), d.name))
     }
-    val root = fromType(wit.root)
-    SchemaGraph(defsBuilder.result(), root)
+    val root  = fromType(wit.root)
+    val roots = nodes.indices.map(fromType).toVector
+    DecodedSchemaGraph(SchemaGraph(defsBuilder.result(), root), roots)
   }
 
   // ----------------------------------------------------------------

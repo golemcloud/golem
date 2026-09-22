@@ -69,7 +69,13 @@ final case class ExtendedToolType(
    * index, returning `None` when the path does not resolve or the resolved
    * command has no body.
    */
-  def commandIndexByPath(commandPath: List[String]): Option[Int] = {
+  def commandIndexByPath(commandPath: List[String]): Option[Int] =
+    commandNodeIndexByPath(commandPath).filter(index => commands(index).body.nonEmpty)
+
+  /**
+   * Resolve a command path even when its target is a subtree without a body.
+   */
+  def commandNodeIndexByPath(commandPath: List[String]): Option[Int] = {
     if (commands.isEmpty) return None
     var current = 0
     val it      = commandPath.iterator
@@ -83,7 +89,7 @@ final case class ExtendedToolType(
         case None      => return None
       }
     }
-    commands(current).body.map(_ => current)
+    Some(current)
   }
 
   /**
@@ -116,7 +122,7 @@ final case class ExtendedToolType(
     val globalFields = effectiveGlobals(commandIndex).flatMap {
       case EffectiveCommandField.OptionField(o) =>
         if (bodyNames.contains(o.long) || o.aliases.exists(bodyNames.contains)) None
-        else Some(CanonicalInputField(o.long, o.aliases, ToolGraphs.optionCollectedGraph(o.shape)))
+        else Some(CanonicalInputField(o.long, o.aliases, ToolGraphs.canonicalOptionGraph(o)))
       case EffectiveCommandField.FlagField(f) =>
         if (bodyNames.contains(f.long) || f.aliases.exists(bodyNames.contains)) None
         else Some(CanonicalInputField(f.long, f.aliases, ToolGraphs.flagGraph(f)))
@@ -125,9 +131,9 @@ final case class ExtendedToolType(
     val bodyFields = body match {
       case None    => Nil
       case Some(b) =>
-        b.positionals.fixed.map(p => CanonicalInputField(p.name, Nil, p.tpe)) ++
+        b.positionals.fixed.map(p => CanonicalInputField(p.name, Nil, ToolGraphs.canonicalPositionalGraph(p))) ++
           b.positionals.tail.map(t => CanonicalInputField(t.name, Nil, ToolGraphs.listWrapperGraph(t.itemType))) ++
-          b.options.map(o => CanonicalInputField(o.long, o.aliases, ToolGraphs.optionCollectedGraph(o.shape))) ++
+          b.options.map(o => CanonicalInputField(o.long, o.aliases, ToolGraphs.canonicalOptionGraph(o))) ++
           b.flags.map(f => CanonicalInputField(f.long, f.aliases, ToolGraphs.flagGraph(f)))
     }
 
@@ -368,9 +374,9 @@ final case class ExtendedErrorCase(
 trait ToolErrorSchema[E] {
   def errorCases: Either[ToolBuildError, List[ExtendedErrorCase]]
 
-  def toErrorPayloadValue(error: E): Either[String, TypedSchemaValue]
+  def toErrorValue(error: E): Either[String, NamedToolError]
 
-  def fromErrorPayloadValue(value: TypedSchemaValue): Either[String, E]
+  def fromErrorValue(value: NamedToolError): Either[String, E]
 }
 
 object ToolErrorSchema {

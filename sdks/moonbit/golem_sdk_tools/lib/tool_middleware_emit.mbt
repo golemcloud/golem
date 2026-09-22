@@ -25,8 +25,19 @@ fn emit_universal_tool_middleware_invoker(
     "///|\nasync fn " +
     universal_invoker_name(middleware) +
     "(\n  invocation : @toolMiddleware.RawToolInvocation,\n  underlying : @toolMiddleware.UnderlyingTool,\n) -> Result[\n  @toolMiddleware.RawInvocationResult,\n  @toolMiddleware.ToolInvokeError[@toolMiddleware.RawTypedSchemaValue],\n] {\n  " +
+    (match middleware.parameter_type {
+      Some(parameter_type) =>
+        "let parameters : " +
+        emit_type(parameter_type) +
+        " = match invocation.decode_parameters() { Ok(value) => value; Err(message) => return Err(@toolMiddleware.ToolInvokeError::InvalidInput(message)) }\n  "
+      None => ""
+    }) +
     universal.handler_name +
-    "(invocation, underlying)\n}\n\n",
+    (if middleware.parameter_type is Some(_) {
+      "(parameters, invocation, underlying)\n}\n\n"
+    } else {
+      "(invocation, underlying)\n}\n\n"
+    }),
   )
 }
 
@@ -38,11 +49,21 @@ fn emit_universal_tool_middleware_registration(
   buf.write_string(
     "    @toolMiddleware.register_tool_middleware(\n      {\n        name: \"" +
     escape_string_lit(middleware.name) +
+    "\",\n        version: \"" +
+    escape_string_lit(middleware.version) +
     "\",\n        aliases: " +
     emit_strings(middleware.aliases) +
     ",\n        doc: " +
     emit_doc(middleware.description, []) +
-    ",\n        scope: @toolMiddleware.ToolMiddlewareScope::Universal,\n      },\n      " +
+    ",\n        scope: @toolMiddleware.ToolMiddlewareScope::Universal,\n        parameter_schema: " +
+    (match middleware.parameter_type {
+      Some(parameter_type) =>
+        "@schema.schema_graph_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[" +
+        emit_type(parameter_type) +
+        "]))"
+      None => "@toolMiddleware.empty_parameter_schema()"
+    }) +
+    "\n      },\n      " +
     universal_invoker_name(middleware) +
     ",\n    )\n",
   )
@@ -130,13 +151,13 @@ fn emit_middleware_protocol_helpers(buf : StringBuilder) -> Unit {
       #|  context : String,
       #|) -> Result[T, @toolMiddleware.ToolInvokeError[E]] {
       #|  try @tool.decode_canonical_field(fields, name, context) catch {
-      #|    @toolCommon.ToolError::InvalidToolName(name) => Err(@toolMiddleware.ToolInvokeError::InvalidToolName(name))
-      #|    @toolCommon.ToolError::InvalidCommandPath(path) => Err(@toolMiddleware.ToolInvokeError::InvalidCommandPath(path))
-      #|    @toolCommon.ToolError::InvalidInput(message) => Err(@toolMiddleware.ToolInvokeError::InvalidInput(message))
-      #|    @toolCommon.ToolError::ConstraintViolation(message) => Err(@toolMiddleware.ToolInvokeError::ConstraintViolation(message))
-      #|    @toolCommon.ToolError::InvalidResult(message) => Err(@toolMiddleware.ToolInvokeError::InvalidResult(message))
-      #|    @toolCommon.ToolError::CustomError(value) => {
-      #|      @model.drop_wit_capabilities(value.value)
+      #|    @types.ToolError::InvalidToolName(name) => Err(@toolMiddleware.ToolInvokeError::InvalidToolName(name))
+      #|    @types.ToolError::InvalidCommandPath(path) => Err(@toolMiddleware.ToolInvokeError::InvalidCommandPath(path))
+      #|    @types.ToolError::InvalidInput(message) => Err(@toolMiddleware.ToolInvokeError::InvalidInput(message))
+      #|    @types.ToolError::ConstraintViolation(message) => Err(@toolMiddleware.ToolInvokeError::ConstraintViolation(message))
+      #|    @types.ToolError::InvalidResult(message) => Err(@toolMiddleware.ToolInvokeError::InvalidResult(message))
+      #|    @types.ToolError::CustomError(value) => {
+      #|      @model.drop_wit_capabilities(value.payload.value)
       #|      Err(@toolMiddleware.ToolInvokeError::InvalidResult("canonical field decoding returned a custom tool error"))
       #|    }
       #|  } noraise {
@@ -154,6 +175,7 @@ fn emit_expected_underlying_method(
   buf : StringBuilder,
   expected : ToolInfo,
   surface : ToolMiddlewareCommandInfo,
+  start : Bool,
 ) -> Unit {
   let wrapper = expected.source_name + "Underlying"
   let params = surface.params
@@ -163,12 +185,23 @@ fn emit_expected_underlying_method(
     "///|\npub async fn " +
     wrapper +
     "::" +
-    surface.handler_name +
+    (if start { "start_" + surface.handler_name } else { surface.handler_name }) +
     "(self : " +
     wrapper +
     (if params.is_empty() { "" } else { ", " + params }) +
     ") -> Result[" +
-    emit_type(surface.success_type) +
+    (if start {
+      "@toolMiddleware.UnderlyingInvocation[" +
+      (match middleware_value_type(surface) {
+        Some(type_) => emit_type(type_)
+        None => "Unit"
+      }) +
+      ", " +
+      emit_type(surface.error_type) +
+      "]"
+    } else {
+      emit_type(surface.success_type)
+    }) +
     ", @toolMiddleware.ToolInvokeError[" +
     emit_type(surface.error_type) +
     "]] {\n  let __golem_command_path = " +
@@ -193,13 +226,17 @@ fn emit_expected_underlying_method(
     }
   }
   let decode_custom_error = if middleware_is_infallible(surface) {
-    "fn(_) { Err(\"underlying returned a custom error for an infallible command\") }"
+    "fn(_, _) { None }"
   } else {
-    "fn(__golem_error) { " +
-    emit_type(surface.error_type) +
-    "::from_error_payload_value(__golem_error) }"
+    "fn(__golem_name, __golem_error) { @tool.decode_named_tool_error(__golem_name, __golem_error) }"
   }
-  let decode_result = if surface.has_stdout {
+  let decode_result = if start {
+    if middleware_value_type(surface) is Some(_) {
+      "decode_result_value"
+    } else {
+      "decode_result_empty"
+    }
+  } else if surface.has_stdout {
     if middleware_value_type(surface) is Some(_) {
       "decode_result_with_stdout"
     } else {
@@ -211,13 +248,21 @@ fn emit_expected_underlying_method(
     "decode_result_empty"
   }
   buf.write_string(
-    "  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch { __golem_error => return Err(@toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error))) }\n  let __golem_result = match self.underlying.invoke_with(\n    __golem_command_path,\n    __golem_input,\n    " +
+    "  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch { __golem_error => return Err(@toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error))) }\n  let __golem_result = match self.underlying." +
+    (if start { "start_with" } else { "invoke_with" }) +
+    "(\n    __golem_command_path,\n    __golem_input,\n    " +
     stdin +
     ",\n    " +
     decode_custom_error +
-    ",\n  ) {\n    Ok(__golem_result) => __golem_result\n    Err(__golem_error) => return Err(__golem_error)\n  }\n  @toolMiddleware." +
-    decode_result +
-    "(__golem_result)\n}\n\n",
+    ",\n    " +
+    (if start { "@toolMiddleware." + decode_result + ",\n" } else { "" }) +
+    "  ) {\n    Ok(__golem_result) => __golem_result\n    Err(__golem_error) => return Err(__golem_error)\n  }\n" +
+    (if start {
+      "  Ok(__golem_result)\n"
+    } else {
+      "  @toolMiddleware." + decode_result + "(__golem_result)\n"
+    }) +
+    "}\n\n",
   )
 }
 
@@ -234,7 +279,8 @@ fn emit_expected_underlying(
     " { priv underlying : @toolMiddleware.UnderlyingTool }\n\n",
   )
   for surface in surfaces {
-    emit_expected_underlying_method(buf, expected, surface)
+    emit_expected_underlying_method(buf, expected, surface, false)
+    emit_expected_underlying_method(buf, expected, surface, true)
   }
 }
 
@@ -332,7 +378,15 @@ fn emit_monomorphic_tool_middleware_invoker(
   buf.write_string(
     "///|\nasync fn " +
     monomorphic_invoker_name(middleware) +
-    "(\n  __golem_invocation : @toolMiddleware.RawToolInvocation,\n  __golem_underlying : @toolMiddleware.UnderlyingTool,\n) -> Result[\n  @toolMiddleware.RawInvocationResult,\n  @toolMiddleware.ToolInvokeError[@toolMiddleware.RawTypedSchemaValue],\n] {\n  let __golem_command_path = __golem_invocation.command_path()\n  let __golem_def = " +
+    "(\n  __golem_invocation : @toolMiddleware.RawToolInvocation,\n  __golem_underlying : @toolMiddleware.UnderlyingTool,\n) -> Result[\n  @toolMiddleware.RawInvocationResult,\n  @toolMiddleware.ToolInvokeError[@toolMiddleware.RawTypedSchemaValue],\n] {\n" +
+    (match middleware.parameter_type {
+      Some(parameter_type) =>
+        "  let parameters : " +
+        emit_type(parameter_type) +
+        " = match __golem_invocation.decode_parameters() { Ok(value) => value; Err(message) => return Err(@toolMiddleware.ToolInvokeError::InvalidInput(message)) }\n"
+      None => ""
+    }) +
+    "  let __golem_command_path = __golem_invocation.command_path()\n  let __golem_def = " +
     descriptor_name(monomorphic.presented, "middleware") +
     "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return Err(@toolMiddleware.ToolInvokeError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = match __golem_invocation.decode_input(__golem_def, __golem_index, \"tool middleware " +
     escape_string_lit(middleware.name) +
@@ -354,6 +408,11 @@ fn emit_monomorphic_tool_middleware_invoker(
       "__golem_expected"
     } else {
       "__golem_expected, " + args.join(", ")
+    }
+    let call_args = if middleware.parameter_type is Some(_) {
+      "parameters, " + call_args
+    } else {
+      call_args
     }
     buf.write_string(
       "    let __golem_expected = " +
@@ -385,15 +444,25 @@ fn emit_monomorphic_tool_middleware_registration(
   buf.write_string(
     "    @toolMiddleware.register_tool_middleware(\n      {\n        name: \"" +
     escape_string_lit(middleware.name) +
+    "\",\n        version: \"" +
+    escape_string_lit(middleware.version) +
     "\",\n        aliases: " +
     emit_strings(middleware.aliases) +
     ",\n        doc: " +
     emit_doc(middleware.description, []) +
     ",\n        scope: @toolMiddleware.ToolMiddlewareScope::Monomorphic({\n          presented: " +
     descriptor_name(monomorphic.presented, "middleware") +
-    "().to_tool(),\n          expected: " +
+    "().to_tool(),\n          expected: Some(" +
     descriptor_name(monomorphic.expected, "middleware") +
-    "().to_tool(),\n        }),\n      },\n      " +
+    "().to_tool()),\n        }),\n        parameter_schema: " +
+    (match middleware.parameter_type {
+      Some(parameter_type) =>
+        "@schema.schema_graph_of_tag((@schema.TypeTag::{  } : @schema.TypeTag[" +
+        emit_type(parameter_type) +
+        "]))"
+      None => "@toolMiddleware.empty_parameter_schema()"
+    }) +
+    ",\n      },\n      " +
     monomorphic_invoker_name(middleware) +
     ",\n    )\n",
   )

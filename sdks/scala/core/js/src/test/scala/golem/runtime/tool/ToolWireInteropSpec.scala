@@ -19,8 +19,8 @@ package golem.runtime.tool
 import golem.host.ToolWireInterop
 import golem.schema.{SchemaValue, TypedSchemaValue}
 import golem.schema.wire.SchemaWire
-import golem.tool.{Doc, ToolMiddlewareDescriptor, ToolMiddlewareScope}
-import golem.tool.wire.{WitTool, WitToolError}
+import golem.tool.{Doc, ToolMiddleware, ToolMiddlewareDescriptor, ToolMiddlewareScope}
+import golem.tool.wire.{WitCustomToolError, WitTool, WitToolError}
 import zio.test._
 
 import scala.scalajs.js
@@ -76,13 +76,15 @@ object ToolWireInteropSpec extends ZIOSpecDefault {
           "interop-monomorphic",
           List("mono"),
           Doc("summary", "description"),
-          ToolMiddlewareScope.Monomorphic(tool, Some(tool))
+          ToolMiddlewareScope.Monomorphic(tool, Some(tool)),
+          ToolMiddleware.noParametersSchema
         ),
         ToolMiddlewareDescriptor(
           "interop-universal",
           Nil,
           Doc.empty,
-          ToolMiddlewareScope.Universal
+          ToolMiddlewareScope.Universal,
+          ToolMiddleware.noParametersSchema
         )
       )
       val roundtripped =
@@ -97,13 +99,20 @@ object ToolWireInteropSpec extends ZIOSpecDefault {
             "interop-monomorphic-shape",
             List("shape"),
             Doc.empty,
-            ToolMiddlewareScope.Monomorphic(tool, None)
+            ToolMiddlewareScope.Monomorphic(tool, None),
+            ToolMiddleware.noParametersSchema
           )
         )
       )
       val universal = dyn(
         ToolWireInterop.toolMiddlewareToJs(
-          ToolMiddlewareDescriptor("interop-universal-shape", Nil, Doc.empty, ToolMiddlewareScope.Universal)
+          ToolMiddlewareDescriptor(
+            "interop-universal-shape",
+            Nil,
+            Doc.empty,
+            ToolMiddlewareScope.Universal,
+            ToolMiddleware.noParametersSchema
+          )
         )
       )
       val monomorphicScope = dyn(monomorphic.scope)
@@ -201,7 +210,7 @@ object ToolWireInteropSpec extends ZIOSpecDefault {
         WitToolError.InvalidInput("bad input"),
         WitToolError.ConstraintViolation("mutex violated"),
         WitToolError.InvalidResult("wrong type"),
-        WitToolError.CustomError(typed("boom"))
+        WitToolError.CustomError(WitCustomToolError("failure", typed("boom")))
       )
       val roundtripped = errors.map(e => ToolWireInterop.toolErrorFromJs(ToolWireInterop.toolErrorToJs(e)))
       assertTrue(roundtripped == errors)
@@ -231,7 +240,7 @@ object ToolWireInteropSpec extends ZIOSpecDefault {
         WitToolError.InvalidInput("x"),
         WitToolError.ConstraintViolation("x"),
         WitToolError.InvalidResult("x"),
-        WitToolError.CustomError(typed("x"))
+        WitToolError.CustomError(WitCustomToolError("failure", typed("x")))
       ).map(e => dyn(ToolWireInterop.toolErrorToJs(e)).tag.asInstanceOf[String])
       assertTrue(
         tags == List(

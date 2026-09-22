@@ -3,7 +3,7 @@ pub fn decode_invocation_input(
   input : @types.TypedSchemaValue,
   arity : Int,
   context : String,
-) -> Array[@model.SchemaValue] raise @toolCommon.ToolError {
+) -> Array[@model.SchemaValue] raise @types.ToolError {
   decode_invocation_input_with_resource_drops(
     input,
     arity,
@@ -18,28 +18,28 @@ fn decode_invocation_input_with_resource_drops(
   arity : Int,
   context : String,
   drops : @model.SchemaValueResourceDrops,
-) -> Array[@model.SchemaValue] raise @toolCommon.ToolError {
+) -> Array[@model.SchemaValue] raise @types.ToolError {
   let typed = @model.typed_schema_value_from_wit(input, drops) catch {
     e =>
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "\{context}: invalid typed schema value input: \{Repr(e)}",
       )
   }
   errdefer typed.value.release_resources(drops)
   validate_invocation_input_graph(typed.graph, arity, context)
   if !value_matches_type(typed.graph, typed.graph.root, typed.value) {
-    raise @toolCommon.ToolError::InvalidInput(
+    raise @types.ToolError::InvalidInput(
       "\{context}: input value does not match input schema graph",
     )
   }
   let fields = @schema.expect_record(typed.value, context) catch {
     e =>
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "\{context}: expected a record input: \{Repr(e)}",
       )
   }
   guard fields.length() == arity else {
-    raise @toolCommon.ToolError::InvalidInput(
+    raise @types.ToolError::InvalidInput(
       "\{context}: expected \{arity} parameter(s), got \{fields.length()}",
     )
   }
@@ -51,21 +51,21 @@ fn validate_invocation_input_graph(
   graph : @model.SchemaGraph,
   arity : Int,
   context : String,
-) -> Unit raise @toolCommon.ToolError {
+) -> Unit raise @types.ToolError {
   if @model.validate_graph(graph).length() > 0 {
-    raise @toolCommon.ToolError::InvalidInput(
+    raise @types.ToolError::InvalidInput(
       "\{context}: invalid input schema graph",
     )
   }
   match resolved_record_field_count(graph, graph.root, {}) {
     Some(field_count) =>
       if field_count != arity {
-        raise @toolCommon.ToolError::InvalidInput(
+        raise @types.ToolError::InvalidInput(
           "\{context}: input schema record has \{field_count} field(s), expected \{arity}",
         )
       }
     None =>
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "\{context}: input schema root must be a record",
       )
   }
@@ -189,8 +189,9 @@ fn value_matches_type(
       }
     @model.SchemaTypeBody::Option(inner) =>
       match value {
-        @model.SchemaValue::Option(payload) =>
-          optional_payload_matches(graph, Some(inner), payload)
+        @model.SchemaValue::Option(None) => true
+        @model.SchemaValue::Option(Some(payload)) =>
+          value_matches_type(graph, inner, payload)
         _ => false
       }
     @model.SchemaTypeBody::Result(ok_type, err_type) =>
@@ -223,6 +224,14 @@ fn value_matches_type(
     @model.SchemaTypeBody::Future(_) => false
     @model.SchemaTypeBody::Stream(_) => value is @model.SchemaValue::Stream(_)
   }
+}
+
+///|
+pub fn schema_value_matches_graph(
+  graph : @model.SchemaGraph,
+  value : @model.SchemaValue,
+) -> Bool {
+  value_matches_type(graph, graph.root, value)
 }
 
 ///|
@@ -435,7 +444,7 @@ pub fn[T : @schema.FromSchema] decode_param(
   fields : Array[@model.SchemaValue],
   index : Int,
   context : String,
-) -> T raise @toolCommon.ToolError {
+) -> T raise @types.ToolError {
   decode_param_with_resource_drops(
     fields,
     index,
@@ -450,11 +459,11 @@ fn[T : @schema.FromSchema] decode_param_with_resource_drops(
   index : Int,
   context : String,
   drops : @model.SchemaValueResourceDrops,
-) -> T raise @toolCommon.ToolError {
+) -> T raise @types.ToolError {
   let field = @schema.record_field(fields, index, context) catch {
     e => {
       @model.SchemaValue::Record(fields).release_resources(drops)
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "\{context}: missing parameter \{index}: \{Repr(e)}",
       )
     }
@@ -462,7 +471,7 @@ fn[T : @schema.FromSchema] decode_param_with_resource_drops(
   @schema.from_value_as(field) catch {
     e => {
       @model.SchemaValue::Record(fields).release_resources(drops)
-      raise @toolCommon.ToolError::InvalidInput(
+      raise @types.ToolError::InvalidInput(
         "\{context}: failed decoding parameter \{index}: \{Repr(e)}",
       )
     }
@@ -483,7 +492,7 @@ pub async fn[T : @schema.IntoSchema] encode_result_value(
 ) -> @types.TypedSchemaValue {
   let typed = @schema.try_into_typed_schema_value(value) catch {
     error =>
-      raise @toolCommon.ToolError::InvalidResult(
+      raise @types.ToolError::InvalidResult(
         "failed building tool result schema: \{error}",
       )
   }
@@ -494,7 +503,7 @@ pub async fn[T : @schema.IntoSchema] encode_result_value(
     }
     e => {
       typed.value.release_resources(@model_host.resource_drops())
-      raise @toolCommon.ToolError::InvalidResult(
+      raise @types.ToolError::InvalidResult(
         "failed serializing tool result: \{Repr(e)}",
       )
     }
@@ -540,7 +549,7 @@ pub async fn encode_error_payload(
     }
     error => {
       payload.value.release_resources(@model_host.resource_drops())
-      raise @toolCommon.ToolError::InvalidResult(
+      raise @types.ToolError::InvalidResult(
         "failed serializing custom tool error: \{Repr(error)}",
       )
     }

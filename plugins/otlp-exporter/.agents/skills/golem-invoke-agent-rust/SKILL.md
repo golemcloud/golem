@@ -37,7 +37,7 @@ golem agent invoke 'MyAgent()' produce_values --stdout-format value
 golem agent invoke 'MyAgent()' produce_bytes --stdout-format raw > output.bin
 ```
 
-In structured CLI formats, invocation output is a sequence of lifecycle documents rather than one object or array. Streaming invocation is provisionally live-only: disconnecting or pressing Ctrl-C cancels it, and the CLI does not retry or resume the session.
+In structured CLI formats, invocation output is a sequence of lifecycle documents rather than one object or array. Streaming invocation is durable: disconnecting or pressing Ctrl-C detaches the current transport without cancelling the invocation. The CLI does not retry automatically. Use `--save-session <PATH>` on the initial invocation, then `--resume-session <PATH>` after a detach or `--takeover-session <PATH>` to fence an attached transport explicitly.
 
 ## Agent ID Format
 

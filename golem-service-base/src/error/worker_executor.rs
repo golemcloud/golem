@@ -21,6 +21,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::AgentError;
 use golem_common::model::quota::ResourceName;
 use golem_common::model::{AgentId, PromiseId, ShardId, Timestamp};
+use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
@@ -507,6 +508,11 @@ impl From<std::io::Error> for WorkerExecutorError {
 impl From<WorkerExecutorError> for Status {
     fn from(value: WorkerExecutorError) -> Self {
         match value {
+            error @ WorkerExecutorError::PreviousInvocationFailed { .. } => {
+                let message = error.to_string();
+                let details = golem::worker::v1::WorkerExecutionError::from(error).encode_to_vec();
+                Self::with_details(tonic::Code::FailedPrecondition, message, details.into())
+            }
             WorkerExecutorError::InvalidRequest { details } => Self::invalid_argument(details),
             WorkerExecutorError::PromiseNotFound { promise_id } => {
                 Self::not_found(format!("Promise not found: {promise_id}"))
@@ -524,12 +530,18 @@ impl From<WorkerExecutorError> for Status {
                 Self::invalid_argument(format!("Value mismatch: {details}"))
             }
             WorkerExecutorError::Unknown { details } => Self::unknown(details),
-            WorkerExecutorError::PreviousInvocationFailed { .. } => {
-                Self::failed_precondition(format!("{value}"))
-            }
             WorkerExecutorError::PermissionDenied { details } => Self::permission_denied(details),
             _ => Self::internal(format!("{value}")),
         }
+    }
+}
+
+impl WorkerExecutorError {
+    pub fn from_status_details(status: &Status) -> Option<Self> {
+        golem::worker::v1::WorkerExecutionError::decode(status.details())
+            .ok()?
+            .try_into()
+            .ok()
     }
 }
 
@@ -1132,6 +1144,25 @@ mod service {
 mod read_only_violation_trap_tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn previous_invocation_failure_round_trips_through_grpc_status_details() {
+        let expected = WorkerExecutorError::PreviousInvocationFailed {
+            error: AgentError::Unknown("guest failure".to_string()),
+            stderr: "guest stderr".to_string(),
+        };
+
+        let status: Status = expected.clone().into();
+
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert_eq!(
+            WorkerExecutorError::from_status_details(&status),
+            Some(expected)
+        );
+        assert!(
+            WorkerExecutorError::from_status_details(&Status::internal("plain error")).is_none()
+        );
+    }
 
     #[test]
     fn trap_display_includes_method_and_host_function() {

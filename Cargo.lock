@@ -3751,6 +3751,7 @@ dependencies = [
  "dirs",
  "dotenvy",
  "expectrl",
+ "fd-lock",
  "fs_extra",
  "futures-util",
  "fuzzy-matcher",
@@ -3761,7 +3762,6 @@ dependencies = [
  "golem-schema",
  "heck",
  "http 1.5.0",
- "humanize-rs",
  "humansize",
  "include_dir",
  "indexmap 2.14.0",
@@ -3893,6 +3893,7 @@ dependencies = [
  "golem-schema-derive",
  "heck",
  "http 1.5.0",
+ "humanize-rs",
  "humantime",
  "humantime-serde",
  "ident-mash",
@@ -4026,6 +4027,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-native-tool"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "golem-common",
+ "golem-rust-macro",
+ "golem-schema",
+ "golem-tool-metadata",
+ "test-r",
+]
+
+[[package]]
 name = "golem-openapi-client-generator"
 version = "0.0.0"
 dependencies = [
@@ -4061,6 +4074,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
  "golem-schema",
  "golem-service-base",
  "heck",
@@ -4114,6 +4128,19 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "golem-rust-macro"
+version = "0.0.0"
+dependencies = [
+ "heck",
+ "humantime",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "test-r",
 ]
 
 [[package]]
@@ -4198,6 +4225,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-schema",
  "h2 0.4.19",
  "headers",
  "hex",
@@ -4346,6 +4374,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-tool-metadata"
+version = "0.0.0"
+dependencies = [
+ "golem-schema",
+ "test-r",
+]
+
+[[package]]
 name = "golem-worker-executor"
 version = "0.0.0"
 dependencies = [
@@ -4361,6 +4397,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-s3",
  "axum",
+ "base64 0.22.1",
  "bigdecimal",
  "bit-vec 0.6.3",
  "blake3",
@@ -4382,6 +4419,7 @@ dependencies = [
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
@@ -4407,6 +4445,7 @@ dependencies = [
  "md5",
  "metrohash",
  "mimalloc",
+ "mime",
  "nonempty-collections",
  "nonzero_ext",
  "pgvector",
@@ -4418,6 +4457,7 @@ dependencies = [
  "rand 0.9.5",
  "redis",
  "regex",
+ "reqwest 0.13.4",
  "ringbuf",
  "rustix 1.1.4",
  "rustls 0.23.43",
@@ -4467,6 +4507,7 @@ dependencies = [
  "chrono",
  "golem-api-grpc",
  "golem-common",
+ "golem-native-tool",
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
@@ -4501,6 +4542,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bigdecimal",
+ "blake3",
  "bytes",
  "chrono",
  "cookie",
@@ -4523,6 +4565,7 @@ dependencies = [
  "http-body-util",
  "humantime-serde",
  "hyper 1.11.0",
+ "hyper-util",
  "include_dir",
  "indexmap 2.14.0",
  "mime",
@@ -11619,9 +11662,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.3"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b15c48fc33c7a6ec5b87ea703ff8f19cc17eafc0929cc2caea8805dbc8ecb7"
+checksum = "b7b7f29a189990cbe819e7b44c9af6d2f06d0e16e0c56eeccf63feb85d21b4d6"
 dependencies = [
  "anyhow",
  "camino",
@@ -12616,6 +12659,7 @@ version = "0.59.0"
 source = "git+https://github.com/golemcloud/wit-bindgen?branch=golem-outline-lift-v0.58.0#4407232ead86d9bcbd06cbebd790a52120a4087a"
 dependencies = [
  "bitflags 2.13.1",
+ "futures",
  "wit-bindgen-rust-macro",
 ]
 

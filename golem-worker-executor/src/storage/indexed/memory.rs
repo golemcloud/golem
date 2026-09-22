@@ -14,12 +14,12 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    ScanResume,
 };
 use async_trait::async_trait;
 use golem_common::model::AgentId;
 use regex::Regex;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BinaryHeap};
 use std::ops::Bound::Included;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -64,6 +64,17 @@ impl InMemoryIndexedStorage {
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}/oplog/{component_id}/{agent_name}/{key}")
+            }
+            IndexedStorageNamespace::StagedOpLog {
+                agent_id:
+                    AgentId {
+                        component_id,
+                        agent_id: agent_name,
+                    },
+                agent_mode,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}/staged-oplog/{component_id}/{agent_name}/{key}")
             }
             IndexedStorageNamespace::CompressedOpLog {
                 agent_id:
@@ -150,47 +161,44 @@ impl IndexedStorage for InMemoryIndexedStorage {
         Ok(self.data.contains_async(&composite_key).await)
     }
 
-    async fn scan(
+    async fn scan_stable(
         &self,
         _svc_name: &'static str,
         _api_name: &'static str,
         namespace: IndexedStorageMetaNamespace,
         prefix: Option<&str>,
-        cursor: ScanCursor,
+        resume: Option<ScanResume>,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        let mut result = Vec::new();
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        let after = resume
+            .map(|resume| resume.into_marker("In-memory"))
+            .transpose()?;
         let matcher = Self::match_key(namespace, prefix);
-        let mut idx = 0;
-        let mut has_more = false;
 
+        // The map is unordered, so keep the `count` smallest matching keys in a capped max-heap
+        // rather than sorting every key in the namespace.
+        let limit = count as usize;
+        let mut page: BinaryHeap<String> = BinaryHeap::new();
         self.data
             .iter_async(|key, _| {
-                idx += 1;
-                if idx > cursor {
-                    if let Some(matched) = matcher(key) {
-                        result.push(matched);
-
-                        if (result.len() as u64) == count {
-                            has_more = true;
-                            false
-                        } else {
-                            true
-                        }
-                    } else {
-                        true
+                if let Some(key) = matcher(key)
+                    && after.as_deref().is_none_or(|after| key.as_str() > after)
+                {
+                    if page.len() < limit {
+                        page.push(key);
+                    } else if let Some(highest) = page.peek()
+                        && key < *highest
+                    {
+                        page.pop();
+                        page.push(key);
                     }
-                } else {
-                    true
                 }
+                true
             })
             .await;
+        let matched = page.into_sorted_vec();
 
-        if has_more {
-            Ok((idx, result))
-        } else {
-            Ok((0, result))
-        }
+        Ok((super::last_key_resume(&matched, count), matched))
     }
 
     async fn append(
@@ -203,7 +211,10 @@ impl IndexedStorage for InMemoryIndexedStorage {
         id: u64,
         value: Vec<u8>,
     ) -> Result<(), IndexedStorageError> {
-        let primary_oplog_insert = matches!(&namespace, IndexedStorageNamespace::OpLog { .. });
+        let primary_oplog_insert = matches!(
+            &namespace,
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+        );
         let composite_key = Self::composite_key(namespace, key);
         let mut entry = self
             .data
@@ -220,6 +231,46 @@ impl IndexedStorage for InMemoryIndexedStorage {
         } else {
             Err(IndexedStorageError::Other("Key already exists".to_string()))
         }
+    }
+
+    async fn move_if_absent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        let source = Self::composite_key(source_namespace, source_key);
+        let target = Self::composite_key(target_namespace, target_key);
+        if self.data.contains_async(&target).await {
+            return Ok(false);
+        }
+        let source_entries = self
+            .data
+            .read_async(&source, |_, entries| entries.clone())
+            .await
+            .ok_or_else(|| IndexedStorageError::Other("source index is missing".to_string()))?;
+        if expected_last_id == 0
+            || source_entries.len() as u64 != expected_last_id
+            || source_entries.keys().copied().ne(1..=expected_last_id)
+        {
+            return Err(IndexedStorageError::Other(
+                "source index is empty, gapped, or has an unexpected tip".to_string(),
+            ));
+        }
+        if self
+            .data
+            .insert_async(target, source_entries)
+            .await
+            .is_err()
+        {
+            return Ok(false);
+        }
+        self.data.remove_async(&source).await;
+        Ok(true)
     }
 
     async fn length(
@@ -314,6 +365,24 @@ impl IndexedStorage for InMemoryIndexedStorage {
             .flatten())
     }
 
+    async fn last_id(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _entity_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<Option<u64>, IndexedStorageError> {
+        let composite_key = Self::composite_key(namespace, key);
+        Ok(self
+            .data
+            .read_async(&composite_key, |_, entry| {
+                entry.last_key_value().map(|(id, _)| *id)
+            })
+            .await
+            .flatten())
+    }
+
     async fn closest(
         &self,
         _svc_name: &'static str,
@@ -358,7 +427,10 @@ impl IndexedStorage for InMemoryIndexedStorage {
 mod tests {
     use test_r::test;
 
-    use crate::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
+    use crate::storage::indexed::{
+        IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi,
+        IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanResume,
+    };
     use assert2::check;
     use golem_common::model::AgentId;
     use golem_common::model::component::ComponentId;
@@ -373,6 +445,367 @@ mod tests {
                 agent_id: "worker".to_string(),
             })
             .clone()
+    }
+
+    fn staged_namespace() -> IndexedStorageNamespace {
+        IndexedStorageNamespace::StagedOpLog {
+            agent_id: test_agent_id(),
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
+        }
+    }
+
+    fn primary_namespace() -> IndexedStorageNamespace {
+        IndexedStorageNamespace::OpLog {
+            agent_id: test_agent_id(),
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
+        }
+    }
+
+    #[test]
+    async fn staged_publication_is_atomic_validated_and_hidden() {
+        let storage = super::InMemoryIndexedStorage::new();
+        for (id, value) in [(1, b"one"), (2, b"two")] {
+            storage
+                .append(
+                    "test",
+                    "append",
+                    "entry",
+                    staged_namespace(),
+                    "stage",
+                    id,
+                    value.to_vec(),
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            storage
+                .scan_stable(
+                    "test",
+                    "scan",
+                    IndexedStorageMetaNamespace::Oplog {
+                        agent_mode: golem_common::model::agent::AgentMode::Durable,
+                    },
+                    None,
+                    None,
+                    100,
+                )
+                .await
+                .unwrap()
+                .1,
+            Vec::<String>::new()
+        );
+        assert!(
+            storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged_namespace(),
+                    "stage",
+                    primary_namespace(),
+                    "target",
+                    2
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .read(
+                    "test",
+                    "read",
+                    "entry",
+                    IndexedStorageNamespace::OpLog {
+                        agent_id: test_agent_id(),
+                        agent_mode: golem_common::model::agent::AgentMode::Durable
+                    },
+                    "target",
+                    1,
+                    2
+                )
+                .await
+                .unwrap(),
+            vec![(1, b"one".to_vec()), (2, b"two".to_vec())]
+        );
+        assert!(
+            !storage
+                .exists("test", "exists", staged_namespace(), "stage")
+                .await
+                .unwrap()
+        );
+
+        for (key, pairs, tip) in [
+            ("empty", vec![], 1),
+            ("gap", vec![(1, b"one".to_vec()), (3, b"three".to_vec())], 3),
+            ("tip", vec![(1, b"one".to_vec())], 2),
+        ] {
+            for (id, value) in pairs {
+                storage
+                    .append(
+                        "test",
+                        "append",
+                        "entry",
+                        staged_namespace(),
+                        key,
+                        id,
+                        value,
+                    )
+                    .await
+                    .unwrap();
+            }
+            assert!(
+                storage
+                    .move_if_absent(
+                        "test",
+                        "publish",
+                        staged_namespace(),
+                        key,
+                        primary_namespace(),
+                        key,
+                        tip
+                    )
+                    .await
+                    .is_err()
+            );
+            assert!(
+                !storage
+                    .exists(
+                        "test",
+                        "exists",
+                        IndexedStorageNamespace::OpLog {
+                            agent_id: test_agent_id(),
+                            agent_mode: golem_common::model::agent::AgentMode::Durable
+                        },
+                        key
+                    )
+                    .await
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    async fn staged_publication_never_overwrites_and_has_one_concurrent_winner() {
+        let storage = std::sync::Arc::new(super::InMemoryIndexedStorage::new());
+        for stage in ["first", "second"] {
+            storage
+                .append(
+                    "test",
+                    "append",
+                    "entry",
+                    staged_namespace(),
+                    stage,
+                    1,
+                    stage.as_bytes().to_vec(),
+                )
+                .await
+                .unwrap();
+        }
+        let a = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .move_if_absent(
+                        "test",
+                        "publish",
+                        staged_namespace(),
+                        "first",
+                        primary_namespace(),
+                        "target",
+                        1,
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        let b = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .move_if_absent(
+                        "test",
+                        "publish",
+                        staged_namespace(),
+                        "second",
+                        primary_namespace(),
+                        "target",
+                        1,
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        assert_ne!(a.await.unwrap(), b.await.unwrap());
+        let before = storage
+            .read(
+                "test",
+                "read",
+                "entry",
+                IndexedStorageNamespace::OpLog {
+                    agent_id: test_agent_id(),
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
+                },
+                "target",
+                1,
+                1,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged_namespace(),
+                    if before[0].1 == b"first" {
+                        "second"
+                    } else {
+                        "first"
+                    },
+                    primary_namespace(),
+                    "target",
+                    1
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .read(
+                    "test",
+                    "read",
+                    "entry",
+                    IndexedStorageNamespace::OpLog {
+                        agent_id: test_agent_id(),
+                        agent_mode: golem_common::model::agent::AgentMode::Durable
+                    },
+                    "target",
+                    1,
+                    1
+                )
+                .await
+                .unwrap(),
+            before
+        );
+
+        storage
+            .append(
+                "test",
+                "append",
+                "entry",
+                staged_namespace(),
+                "third",
+                1,
+                b"staged".to_vec(),
+            )
+            .await
+            .unwrap();
+        let publish = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .move_if_absent(
+                        "test",
+                        "publish",
+                        staged_namespace(),
+                        "third",
+                        primary_namespace(),
+                        "ordinary-race",
+                        1,
+                    )
+                    .await
+                    .unwrap()
+            })
+        };
+        let append = {
+            let storage = storage.clone();
+            tokio::spawn(async move {
+                storage
+                    .append(
+                        "test",
+                        "append",
+                        "entry",
+                        IndexedStorageNamespace::OpLog {
+                            agent_id: test_agent_id(),
+                            agent_mode: golem_common::model::agent::AgentMode::Durable,
+                        },
+                        "ordinary-race",
+                        1,
+                        b"ordinary".to_vec(),
+                    )
+                    .await
+                    .is_ok()
+            })
+        };
+        assert_ne!(publish.await.unwrap(), append.await.unwrap());
+    }
+
+    #[test]
+    async fn scan_stable_pages_in_order_and_hands_a_key_back_once() {
+        let storage = super::InMemoryIndexedStorage::new();
+        let api = storage.with_entity("test", "test", "test");
+        let agent_mode = golem_common::model::agent::AgentMode::Durable;
+
+        for key in ["k1", "k2", "k3", "k4", "k5"] {
+            api.append(
+                IndexedStorageNamespace::OpLog {
+                    agent_id: test_agent_id(),
+                    agent_mode,
+                },
+                key,
+                1,
+                &100,
+            )
+            .await
+            .unwrap();
+        }
+
+        let mut pages: Vec<Vec<String>> = Vec::new();
+        let mut resume = None;
+        for _ in 0..8 {
+            let (next, page) = storage
+                .with("test", "test")
+                .scan_stable(
+                    IndexedStorageMetaNamespace::Oplog { agent_mode },
+                    None,
+                    resume,
+                    2,
+                )
+                .await
+                .unwrap();
+            pages.push(page);
+            match next {
+                Some(next) => resume = Some(next),
+                None => break,
+            }
+        }
+
+        // The short page is what ends the walk, so five keys cost three pages and not a fourth,
+        // and no key appears in two of them.
+        let expected: Vec<Vec<String>> = vec![
+            vec!["k1".to_string(), "k2".to_string()],
+            vec!["k3".to_string(), "k4".to_string()],
+            vec!["k5".to_string()],
+        ];
+        check!(pages == expected);
+    }
+
+    #[test]
+    async fn scan_stable_rejects_marker_containing_nul() {
+        let storage = super::InMemoryIndexedStorage::new();
+        let result = storage
+            .with("test", "test")
+            .scan_stable(
+                IndexedStorageMetaNamespace::Oplog {
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
+                },
+                None,
+                Some(ScanResume::Marker("invalid\0marker".to_string())),
+                2,
+            )
+            .await;
+
+        assert!(matches!(result, Err(IndexedStorageError::InvalidResume(_))));
     }
 
     #[test]

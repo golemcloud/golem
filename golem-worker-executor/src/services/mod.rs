@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod active_agents;
+pub(crate) mod activity;
 pub mod agent_filesystem;
 pub mod agent_memory_meter;
 pub mod agent_types;
@@ -26,11 +27,13 @@ pub mod component;
 pub mod direct_invocation_auth;
 pub mod environment_state;
 pub mod events;
+pub mod external_durable_stream;
 pub mod file_loader;
 pub mod golem_config;
 pub mod key_value;
 pub mod linear_memory;
 pub mod oplog;
+pub mod oplog_sweep;
 pub mod promise;
 pub mod quota;
 pub mod rdbms;
@@ -89,6 +92,12 @@ pub trait HasAgentTypesService {
 
 pub trait HasAgentWebhooksService {
     fn agent_webhooks(&self) -> Arc<AgentWebhooksService>;
+}
+
+pub trait HasExternalDurableStreamService {
+    fn external_durable_streams(
+        &self,
+    ) -> Arc<dyn external_durable_stream::ExternalDurableStreamService>;
 }
 
 pub trait HasComponentService {
@@ -223,11 +232,17 @@ pub trait HasEnvironmentStateService {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService>;
 }
 
+pub trait HasNativeToolCatalog<Ctx: WorkerCtx> {
+    fn native_tool_catalog(&self) -> Arc<crate::native_tool::NativeToolCatalog<Ctx>>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveAgents<Ctx>
     + HasAgentTypesService
     + HasAgentWebhooksService
+    + HasExternalDurableStreamService
+    + HasNativeToolCatalog<Ctx>
     + HasCardService
     + HasComponentService
     + HasConfig
@@ -268,6 +283,8 @@ impl<
     T: HasActiveAgents<Ctx>
         + HasAgentTypesService
         + HasAgentWebhooksService
+        + HasExternalDurableStreamService
+        + HasNativeToolCatalog<Ctx>
         + HasCardService
         + HasComponentService
         + HasConfig
@@ -310,6 +327,7 @@ pub struct All<Ctx: WorkerCtx> {
     active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
     agent_types: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks: Arc<AgentWebhooksService>,
+    external_durable_streams: Arc<dyn external_durable_stream::ExternalDurableStreamService>,
     card_service: Arc<dyn card::CardService>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -341,6 +359,7 @@ pub struct All<Ctx: WorkerCtx> {
     http_connection_pool: Option<HttpConnectionPool>,
     websocket_connection_pool: WebSocketConnectionPool,
     environment_state_service: Arc<dyn EnvironmentStateService>,
+    native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     extra_deps: Ctx::ExtraDeps,
     /// A no-op sentinel that participates in the `All` lifecycle.
     /// Tests can hold a `Weak<()>` to it and verify that `All` (and all
@@ -354,6 +373,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             active_agents: self.active_agents.clone(),
             agent_types: self.agent_types.clone(),
             agent_webhooks: self.agent_webhooks.clone(),
+            external_durable_streams: self.external_durable_streams.clone(),
             card_service: self.card_service.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
@@ -384,6 +404,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             http_connection_pool: self.http_connection_pool.clone(),
             websocket_connection_pool: self.websocket_connection_pool.clone(),
             environment_state_service: self.environment_state_service.clone(),
+            native_tool_catalog: self.native_tool_catalog.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
         }
@@ -396,6 +417,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         active_agents: Arc<active_agents::ActiveAgents<Ctx>>,
         agent_types: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks: Arc<AgentWebhooksService>,
+        external_durable_streams: Arc<dyn external_durable_stream::ExternalDurableStreamService>,
         card_service: Arc<dyn card::CardService>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
@@ -428,6 +450,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
     ) -> Self {
@@ -435,6 +458,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             active_agents,
             agent_types,
             agent_webhooks,
+            external_durable_streams,
             card_service,
             engine,
             linker,
@@ -465,6 +489,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             http_connection_pool,
             websocket_connection_pool,
             environment_state_service,
+            native_tool_catalog,
             extra_deps,
             leak_sentinel,
         }
@@ -482,6 +507,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.active_agents(),
             this.agent_types(),
             this.agent_webhooks(),
+            this.external_durable_streams(),
             this.card_service(),
             this.engine(),
             this.linker(),
@@ -512,6 +538,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.http_connection_pool(),
             this.websocket_connection_pool(),
             this.environment_state_service(),
+            this.native_tool_catalog(),
             this.extra_deps(),
             this.leak_sentinel(),
         )
@@ -547,6 +574,14 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentTypesService for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentWebhooksService for T {
     fn agent_webhooks(&self) -> Arc<AgentWebhooksService> {
         self.all().agent_webhooks.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasExternalDurableStreamService for T {
+    fn external_durable_streams(
+        &self,
+    ) -> Arc<dyn external_durable_stream::ExternalDurableStreamService> {
+        self.all().external_durable_streams.clone()
     }
 }
 
@@ -725,6 +760,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWebSocketConnectionPool for T
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasEnvironmentStateService for T {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService> {
         self.all().environment_state_service.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasNativeToolCatalog<Ctx> for T {
+    fn native_tool_catalog(&self) -> Arc<crate::native_tool::NativeToolCatalog<Ctx>> {
+        self.all().native_tool_catalog.clone()
     }
 }
 

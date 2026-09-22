@@ -12,12 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type {
-  InvocationResult,
-  Tool,
-  TypedSchemaValue,
-  UnderlyingTool,
-} from 'golem:tool/common@0.1.0';
+import type { InvocationResult, Tool, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
 import {
@@ -38,8 +33,12 @@ import {
   universalToolMiddleware,
   type ToolImplementation,
 } from '../src/tool';
+import {
+  adaptLegacyRawUnderlying,
+  type LegacyRawUnderlyingTool,
+} from './tool-middleware-test-support';
 
-type RawUnderlyingTool = Pick<UnderlyingTool, 'invoke'>;
+type RawUnderlyingTool = LegacyRawUnderlyingTool;
 
 beforeEach(() => {
   ToolMiddlewareRegistry.clearForTests();
@@ -77,6 +76,33 @@ function rawTool(): Tool {
 const anonymous = { tag: 'anonymous' } as const;
 
 describe('tool middleware registry and guest boundary', () => {
+  it('closes untouched stdin once when middleware short-circuits', async () => {
+    const close = vi.fn(async () => ({ done: true, value: undefined }) as IteratorResult<never>);
+    const stdin = {
+      [Symbol.asyncIterator]: vi.fn(() => ({
+        next: vi.fn(async () => ({ done: false, value: { tag: 'ok', val: Uint8Array.of(1) } })),
+        return: close,
+      })),
+    };
+    universalToolMiddleware({ name: 'short-circuit', invoke: async () => ({}) });
+
+    await combinedGuest.invokeToolMiddleware(
+      'short-circuit',
+      'runtime-tool',
+      rawTool(),
+      wireValue(z.object({}), {}),
+      [],
+      wireValue(z.object({}), {}),
+      stdin,
+      undefined,
+      anonymous,
+      adaptLegacyRawUnderlying({ invoke: vi.fn(async () => ({})) } as RawUnderlyingTool),
+    );
+
+    expect(stdin[Symbol.asyncIterator]).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it('exports one guest object through the pure and combined runtime entries', () => {
     expect(pureGuest).toBe(combinedGuest);
   });
@@ -87,6 +113,7 @@ describe('tool middleware registry and guest boundary', () => {
       .body((body) => body.returns(z.string()));
     transparent.middleware({
       name: 'z-policy',
+      version: '7.1.0',
       aliases: ['z-alias'],
       doc: 'Transparent policy',
       implementation: { presented: async () => 'value' },
@@ -102,12 +129,14 @@ describe('tool middleware registry and guest boundary', () => {
     expect(discovered.map(({ name }) => name)).toEqual(['a-policy', 'z-policy']);
     expect(discovered[0]).toMatchObject({
       name: 'a-policy',
+      version: '0.0.0',
       aliases: ['a-alias'],
       scope: { tag: 'universal' },
     });
     expect(discovered[0].scope).not.toHaveProperty('val');
     expect(discovered[1]).toMatchObject({
       name: 'z-policy',
+      version: '7.1.0',
       aliases: ['z-alias'],
       doc: { summary: 'Transparent policy' },
       scope: {
@@ -152,7 +181,7 @@ describe('tool middleware registry and guest boundary', () => {
       name: 'universal-boundary',
       invoke: async (request, { underlying }) => {
         observed(request.toolName, request.toolMetadata, request.principal);
-        return underlying.invoke(request.commandPath, request.input, request.stdin);
+        return underlying.invokeAndAwait(request.commandPath, request.input, undefined);
       },
     });
     const raw = { invoke: vi.fn(async () => ({ result: input })) } as RawUnderlyingTool;
@@ -161,11 +190,13 @@ describe('tool middleware registry and guest boundary', () => {
       'universal-boundary',
       'runtime-tool',
       rawTool(),
+      wireValue(z.object({}), {}),
       ['run'],
       input,
       undefined,
+      undefined,
       anonymous,
-      raw,
+      adaptLegacyRawUnderlying(raw),
     );
 
     expect(universalResult.result).toBe(input);
@@ -180,18 +211,24 @@ describe('tool middleware registry and guest boundary', () => {
       'monomorphic-boundary',
       'ignored-runtime-name',
       rawTool(),
+      wireValue(z.object({}), {}),
       [],
       wireValue(z.object({}), {}),
       undefined,
+      undefined,
       anonymous,
-      { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool,
+      adaptLegacyRawUnderlying({ invoke: vi.fn(async () => ({})) } as RawUnderlyingTool),
     );
     expect(decodeValue(z.string(), monomorphicResult.result!)).toBe('short-circuit');
 
     universalToolMiddleware({
       name: 'wire-custom-error',
       invoke: async (request) => {
-        throw ToolInvokeError.tool(request.input);
+        throw new ToolInvokeError({
+          tag: 'unknown-error',
+          name: 'forwarded',
+          payload: request.input,
+        });
       },
     });
     await expect(
@@ -199,13 +236,15 @@ describe('tool middleware registry and guest boundary', () => {
         'wire-custom-error',
         'runtime-tool',
         rawTool(),
+        wireValue(z.object({}), {}),
         [],
         input,
         undefined,
+        undefined,
         anonymous,
-        raw,
+        adaptLegacyRawUnderlying(raw),
       ),
-    ).rejects.toEqual({ tag: 'custom-error', val: input });
+    ).rejects.toEqual({ tag: 'custom-error', val: { name: 'forwarded', payload: input } });
 
     universalToolMiddleware({
       name: 'wire-protocol-error',
@@ -218,11 +257,13 @@ describe('tool middleware registry and guest boundary', () => {
         'wire-protocol-error',
         'runtime-tool',
         rawTool(),
+        wireValue(z.object({}), {}),
         [],
         input,
         undefined,
+        undefined,
         anonymous,
-        raw,
+        adaptLegacyRawUnderlying(raw),
       ),
     ).rejects.toEqual({ tag: 'constraint-violation', val: 'denied' });
   });
@@ -239,6 +280,7 @@ describe('tool middleware registry and guest boundary', () => {
       combinedGuest.invokeToolMiddleware(
         'missing',
         'runtime-tool',
+        null as never,
         null as never,
         [],
         null as never,
@@ -307,6 +349,7 @@ describe('tool middleware registry and guest boundary', () => {
         'valid-policy',
         'runtime-tool',
         rawTool(),
+        wireValue(z.object({}), {}),
         [],
         wireValue(z.string(), 'input'),
         undefined,
@@ -337,11 +380,13 @@ describe('tool middleware registry and guest boundary', () => {
       'stable-selection',
       'runtime-tool',
       rawTool(),
+      wireValue(z.object({}), {}),
       [],
       wireValue(z.string(), 'input'),
       undefined,
+      undefined,
       anonymous,
-      { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool,
+      adaptLegacyRawUnderlying({ invoke: vi.fn(async () => ({})) } as RawUnderlyingTool),
     );
     await vi.waitFor(() => expect(started).toHaveBeenCalledOnce());
     ToolMiddlewareRegistry.clearForTests();

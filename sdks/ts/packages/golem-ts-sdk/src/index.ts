@@ -17,7 +17,7 @@ import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
-import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/host@0.1.0';
+import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
 import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
 import {
   schemaValueFromWit,
@@ -61,6 +61,7 @@ export { Principal } from './principal';
 export { AgentClassName } from './agentClassName';
 export { CancellationToken } from 'golem:agent/host@2.0.0';
 export { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
+export * from './durableStreams';
 export * from './webhook';
 export * from './host/hostapi';
 export * as oplog from './host/oplog';
@@ -76,8 +77,8 @@ export * from './host/durable';
 export { defineAgent } from './defineAgent';
 export type {
   AgentDefinition,
-  AgentClientBindingDefinition,
-  AgentClientDefinition,
+  MethodOnlyAgentClientDefinition,
+  FullAgentClientDefinition,
   AgentImpl,
   AgentImplementation,
   AgentSpec,
@@ -118,7 +119,8 @@ export {
   toolDefinition,
   universalToolMiddleware,
 } from './tool';
-export { client, ToolCallError } from './toolClient';
+export { toolClientDefinition, ToolCallError } from './toolClient';
+export type { ToolClientDefinition } from './toolClient';
 export type {
   CamelCase,
   ConstraintRef,
@@ -175,8 +177,11 @@ export type {
 export { defineAgentClient, isRemoteCallError, RemoteCallError, RemoteOutputError } from './client';
 export type { ToolCallErrorCause, ToolClientOptions } from './toolClient';
 export type {
-  AgentClientFactory,
-  AgentClientSpec,
+  FullAgentClientFactory,
+  MethodOnlyAgentClientSpec,
+  AgentConfigEntry,
+  FullAgentClientSpec,
+  ConfigOverrides,
   EphemeralInvocationResult,
   EphemeralRemoteClientFactory,
   PhantomClientDetails,
@@ -208,6 +213,7 @@ export {
   getAgentTypeByAgentId,
   getAllAgentTypes,
   getAgentType as getReflectedAgentType,
+  getToolType as getReflectedToolType,
 } from './reflection';
 export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
 export type { StartedToolInvocation } from './bridge/tool';
@@ -420,7 +426,10 @@ function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): Invoca
       outcome,
       `tool error "${outcome.name}"`,
     );
-    throw { tag: 'custom-error', val: payload } satisfies ToolError;
+    throw {
+      tag: 'custom-error',
+      val: { name: outcome.name, payload },
+    } satisfies ToolError;
   }
 
   throw invalidToolResult(`tool handler returned unknown outcome tag "${outcome.tag}"`);

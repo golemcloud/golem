@@ -15,7 +15,9 @@
 pub mod types;
 
 use crate::durable_host::authorization::targets::secret_target;
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{
+    CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
+};
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::secrets::types::SecretEntry;
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
@@ -50,7 +52,7 @@ use wasmtime::component::{Accessor, Resource};
 
 use crate::durable_host::schema_value_stream::CoreTypesHost;
 
-fn secret_entry<'a, Ctx: WorkerCtx>(
+pub(super) fn secret_entry<'a, Ctx: WorkerCtx>(
     ctx: &'a mut DurableWorkerCtx<Ctx>,
     secret: &Resource<SecretHandleRep>,
 ) -> anyhow::Result<&'a SecretEntry> {
@@ -121,7 +123,7 @@ fn validate_expected_type(
     }
 }
 
-fn validate_secret_value(
+pub(super) fn validate_secret_value(
     secret: &AgentSecret,
     value: &SchemaValue,
 ) -> Result<(), SecretRevealError> {
@@ -131,7 +133,7 @@ fn validate_secret_value(
         .map_err(|_| SecretRevealError::Internal("stored secret value is invalid".to_string()))
 }
 
-fn canonical_config_key(
+pub(super) fn canonical_config_key(
     entry: &SecretEntry,
 ) -> Result<CanonicalAgentSecretPath, SecretRevealError> {
     entry
@@ -165,15 +167,18 @@ fn canonical_secret_resource_segments(
     Ok(segments.join("."))
 }
 
-fn canonical_secret_resource(entry: &SecretEntry) -> Result<String, SecretRevealError> {
+pub(super) fn canonical_secret_resource(entry: &SecretEntry) -> Result<String, SecretRevealError> {
     canonical_secret_resource_segments(entry.config_key.as_deref())
 }
 
-fn environment_owner<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> EnvironmentOwnerPattern {
+pub(super) fn environment_owner<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+) -> EnvironmentOwnerPattern {
+    let component = ctx.owner_component_metadata();
     EnvironmentOwnerPattern::Environment {
-        account: ctx.state.component_metadata.account_email.clone(),
-        application: ctx.state.component_metadata.application_name.clone(),
-        environment: ctx.state.component_metadata.environment_name.clone(),
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
     }
 }
 
@@ -374,69 +379,63 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
         expected: golem_schema::schema::wit::wire::SchemaGraph,
     ) -> anyhow::Result<Result<SchemaValueTree, SecretError>> {
         let entry = secret_entry(self, &s)?.clone();
-        let config_key = match canonical_config_key(&entry) {
-            Ok(config_key) => config_key,
-            Err(error) => return Ok(Err(reveal_error_to_wit(error))),
-        };
-        if self.entity_invocation_scope().is_some_and(|scope| {
-            !scope
-                .activation()
-                .policy()
-                .secret_keys_revealable()
-                .contains(&config_key)
-        }) {
-            return Ok(Err(SecretError::Unavailable(format!(
-                "Entity invocation is not allowed to reveal secret config key {config_key}"
-            ))));
-        }
-
-        let (denied, mut expected_graph) = if self.state.is_live() {
-            let denied = match canonical_secret_resource(&entry) {
-                Ok(resource) => {
-                    match secret_target(environment_owner(self), SecretVerb::Reveal, &resource) {
-                        Ok(target) => self
-                            .authorize_live_permission(&target)
-                            .await?
-                            .err()
-                            .map(|_| permission_denied()),
-                        Err(_) => Some(permission_denied()),
-                    }
-                }
-                Err(_) => Some(permission_denied()),
-            };
-            let expected_graph = match decode_graph(&expected) {
-                Ok(graph) => graph,
-                Err(error) => {
-                    return Ok(Err(SecretError::Internal(format!(
-                        "invalid expected schema graph: {error}"
-                    ))));
-                }
-            };
-            (denied, Some(expected_graph))
-        } else {
-            (None, None)
-        };
         let begun = DurableCallSession::<GolemSecretsReveal, NotCancellable>::begin(
             self,
             DurableFunctionType::ReadRemote,
         )
         .await?;
 
-        let mut handle = if begun.is_live() {
-            begun
-                .start_live(
-                    self,
-                    HostRequestSecretReveal {
-                        secret_id: entry.secret_id.0,
-                        expected_type: expected_graph
-                            .as_ref()
-                            .expect("live secret reveal has a decoded expected graph")
-                            .clone(),
-                    },
-                )
-                .await?
-        } else {
-            begun.start_replay(self).await?
+        let (mut handle, denied, mut expected_graph) = match begun.resolve(self).await? {
+            ResolvedCall::Live(begun) => {
+                let config_key = match canonical_config_key(&entry) {
+                    Ok(config_key) => config_key,
+                    Err(error) => return Ok(Err(reveal_error_to_wit(error))),
+                };
+                if self.entity_invocation_scope().is_some_and(|scope| {
+                    !scope
+                        .activation()
+                        .policy()
+                        .secret_keys_revealable()
+                        .contains(&config_key)
+                }) {
+                    return Ok(Err(SecretError::Unavailable(format!(
+                        "Entity invocation is not allowed to reveal secret config key {config_key}"
+                    ))));
+                }
+                let denied = match canonical_secret_resource(&entry) {
+                    Ok(resource) => {
+                        match secret_target(environment_owner(self), SecretVerb::Reveal, &resource)
+                        {
+                            Ok(target) => self
+                                .authorize_live_permission(&target)
+                                .await?
+                                .err()
+                                .map(|_| permission_denied()),
+                            Err(_) => Some(permission_denied()),
+                        }
+                    }
+                    Err(_) => Some(permission_denied()),
+                };
+                let expected_graph = match decode_graph(&expected) {
+                    Ok(graph) => graph,
+                    Err(error) => {
+                        return Ok(Err(SecretError::Internal(format!(
+                            "invalid expected schema graph: {error}"
+                        ))));
+                    }
+                };
+                let handle = begun
+                    .start_live(
+                        self,
+                        HostRequestSecretReveal {
+                            secret_id: entry.secret_id.0,
+                            expected_type: expected_graph.clone(),
+                        },
+                    )
+                    .await?;
+                (handle, denied, Some(expected_graph))
+            }
+            ResolvedCall::Replay(handle) => (handle, None, None),
         };
 
         let mut live_secret = None;
@@ -504,7 +503,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                     .state
                     .environment_state_service
                     .get_agent_secret_revision(
-                        self.state.component_metadata.environment_id,
+                        self.owner_component_metadata().environment_id,
                         entry.secret_id,
                         config_key.clone(),
                         entry.pinned_revision,
@@ -588,7 +587,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                 .state
                 .environment_state_service
                 .get_agent_secret_revision(
-                    self.state.component_metadata.environment_id,
+                    self.owner_component_metadata().environment_id,
                     entry.secret_id,
                     match canonical_config_key(&entry) {
                         Ok(path) => path,

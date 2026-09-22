@@ -37,12 +37,14 @@ final class toolImplementation() extends StaticAnnotation
 /** Marks a concrete class as a monomorphic tool middleware implementation. */
 final class toolMiddleware(
   val name: String,
+  val version: String = "0.0.0",
   val aliases: Array[String] = Array()
 ) extends StaticAnnotation
 
 /** Marks a concrete class as a universal tool middleware implementation. */
 final class universalToolMiddleware(
   val name: String,
+  val version: String = "0.0.0",
   val aliases: Array[String] = Array()
 ) extends StaticAnnotation
 
@@ -54,6 +56,9 @@ final class internalToolMiddlewareField(
   val canonicalName: String,
   val countFlag: Boolean = false
 ) extends StaticAnnotation
+
+/** Marks the generated invocation-local installation parameters argument. */
+final class internalToolMiddlewareParameters() extends StaticAnnotation
 
 /**
  * Overrides a tool method's command name and declares command aliases. On a

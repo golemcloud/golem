@@ -20,6 +20,7 @@ pub mod grpc;
 pub mod identity;
 pub mod metrics;
 pub mod model;
+pub mod native_tool;
 pub mod preview2;
 pub(crate) mod sandbox_filesystem;
 pub mod services;
@@ -70,6 +71,7 @@ use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
+use crate::services::oplog_sweep::OplogSweeper;
 use crate::services::promise::{DefaultPromiseService, DefaultPromiseWorkerAccess, PromiseService};
 use crate::services::quota::QuotaService;
 use crate::services::registry_event_subscriber::WorkerExecutorRegistryInvalidationHandler;
@@ -174,6 +176,16 @@ impl Drop for RunDetails {
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
+    /// Called after the complete service graph has been assembled and before it is moved into the
+    /// servers. In-process harnesses can retain a clone to exercise internal admission paths.
+    fn capture_services(&self, _services: &All<Ctx>) {}
+
+    fn create_native_tool_catalog(
+        &self,
+    ) -> anyhow::Result<Arc<crate::native_tool::NativeToolCatalog<Ctx>>> {
+        Ok(Arc::new(crate::native_tool::NativeToolCatalog::default()))
+    }
+
     /// Creates the [`ActiveAgents`] service, including the measured-headroom
     /// admission gate. The default builds the memory probe from the config
     /// (cgroup/process/override). The in-process test harness overrides this to
@@ -193,11 +205,20 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         )?))
     }
 
+    /// Takes the whole [`services::shutdown::Shutdown`] rather than just its
+    /// token: the lease renewal loop has work to finish after the token trips
+    /// (it deregisters), so it spawns through the tracker that `main` waits on.
     fn create_shard_manager_service(
         &self,
         shard_manager_client: Arc<dyn golem_service_base::clients::shard_manager::ShardManager>,
+        shard_service: Arc<dyn ShardService>,
+        shutdown: services::shutdown::Shutdown,
     ) -> Arc<dyn ShardManagerService> {
-        Arc::new(crate::services::shard_manager::GrpcShardManagerService::new(shard_manager_client))
+        crate::services::shard_manager::GrpcShardManagerService::new(
+            shard_manager_client,
+            shard_service,
+            shutdown,
+        )
     }
 
     /// Overridable so a test can watch or fake shard ownership. Everything that
@@ -331,6 +352,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         rpc
     }
 
+    fn wrap_worker_enumeration_service(
+        &self,
+        service: Arc<dyn WorkerEnumerationService>,
+    ) -> Arc<dyn WorkerEnumerationService> {
+        service
+    }
+
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
@@ -368,6 +396,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         websocket_connection_pool: crate::durable_host::websocket::WebSocketConnectionPool,
         leak_sentinel: Arc<()>,
     ) -> anyhow::Result<All<Ctx>> {
+        let native_tool_catalog = self.create_native_tool_catalog()?;
+        let external_durable_streams = Arc::new(
+            services::external_durable_stream::DefaultExternalDurableStreamService::new()?,
+        );
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),
@@ -399,8 +431,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             environment_state_service.clone(),
+            native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            external_durable_streams.clone(),
             shutdown_token.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
@@ -441,8 +475,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             resource_limits.clone(),
             shutdown_token.clone(),
             environment_state_service.clone(),
+            native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
+            external_durable_streams.clone(),
             http_connection_pool.clone(),
             websocket_connection_pool.clone(),
             additional_deps.clone(),
@@ -454,6 +490,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             active_agents,
             agent_types_service,
             agent_webhooks_service,
+            external_durable_streams,
             card_service,
             engine,
             linker,
@@ -484,6 +521,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             http_connection_pool,
             websocket_connection_pool.clone(),
             environment_state_service.clone(),
+            native_tool_catalog,
             additional_deps,
             leak_sentinel,
         ))
@@ -517,6 +555,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
         )?;
+        crate::preview2::golem::agent::durable_streams::add_to_linker::<
+            _,
+            HasSelf<DurableWorkerCtx<Ctx>>,
+        >(&mut linker, DurableWorkerCtxView::durable_ctx_mut)?;
         crate::preview2::golem::tool::host::add_to_linker::<_, HasSelf<DurableWorkerCtx<Ctx>>>(
             &mut linker,
             DurableWorkerCtxView::durable_ctx_mut,
@@ -565,7 +607,7 @@ pub async fn create_worker_executor_impl<
     bootstrap: &BootstrapImpl,
     runtime: Handle,
     lazy_worker_activator: &Arc<LazyWorkerActivator<Ctx>>,
-    shutdown_token: tokio_util::sync::CancellationToken,
+    shutdown: services::shutdown::Shutdown,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<
     (
@@ -576,6 +618,7 @@ pub async fn create_worker_executor_impl<
     ),
     anyhow::Error,
 > {
+    let shutdown_token = shutdown.token();
     let (redis, sqlite, key_value_storage): (
         Option<RedisPool>,
         Option<SqlitePool>,
@@ -815,6 +858,8 @@ pub async fn create_worker_executor_impl<
             Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), idx));
         oplog_archives.push(svc);
     }
+    // The sweeper is built further down, once the worker activator exists.
+    let sweep_archives = oplog_archives.clone();
     let oplog_archives = NEVec::try_from_vec(oplog_archives);
 
     let base_oplog_service: Arc<dyn OplogService> = match oplog_archives {
@@ -873,8 +918,11 @@ pub async fn create_worker_executor_impl<
             ),
         );
 
-    let shard_manager_service =
-        bootstrap.create_shard_manager_service(shard_manager_client.clone());
+    let shard_manager_service = bootstrap.create_shard_manager_service(
+        shard_manager_client.clone(),
+        shard_service.clone(),
+        shutdown.clone(),
+    );
 
     let quota_service = bootstrap.create_quota_service(
         shard_manager_client,
@@ -948,12 +996,13 @@ pub async fn create_worker_executor_impl<
         component_service.clone(),
         golem_config.clone(),
     ));
-    let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
-        worker_service.clone(),
-        oplog_service.clone(),
-        component_service.clone(),
-        golem_config.clone(),
-    ));
+    let worker_enumeration_service =
+        bootstrap.wrap_worker_enumeration_service(Arc::new(DefaultWorkerEnumerationService::new(
+            worker_service.clone(),
+            oplog_service.clone(),
+            component_service.clone(),
+            golem_config.clone(),
+        )));
 
     let promise_service = Arc::new(LazyPromiseService::new());
 
@@ -972,6 +1021,23 @@ pub async fn create_worker_executor_impl<
         golem_config.scheduler.max_concurrent_action_processing,
         shutdown_token.clone(),
     );
+
+    // Tracked by `shutdown` rather than the join set, so on termination the sweeper gets
+    // `SHUTDOWN_GRACE` to finish the archive step it is in before the join set is aborted.
+    let oplog_sweeper = OplogSweeper::over_layers(
+        golem_config.oplog.sweep.clone(),
+        indexed_storage.clone(),
+        &sweep_archives,
+        shard_service.clone(),
+        component_service.clone(),
+        Arc::new(lazy_worker_activator.clone() as Arc<dyn WorkerActivator<Ctx>>),
+    );
+    shutdown.spawn({
+        let shutdown_token = shutdown_token.clone();
+        async move {
+            oplog_sweeper.run(shutdown_token).await;
+        }
+    });
 
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
 
@@ -1111,7 +1177,7 @@ pub async fn bootstrap_and_run_worker_executor<
             bootstrap,
             runtime.clone(),
             &lazy_worker_activator,
-            shutdown.token(),
+            shutdown.clone(),
             join_set,
         )
         .await?;
@@ -1141,6 +1207,7 @@ pub async fn bootstrap_and_run_worker_executor<
 
     let leak_detector = worker_executor_impl.leak_detector();
     let invocation_loops = worker_executor_impl.active_agents().invocation_loops();
+    bootstrap.capture_services(&worker_executor_impl);
 
     crate::metrics::runtime::install_runtime_metrics(
         runtime.clone(),

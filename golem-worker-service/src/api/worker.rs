@@ -39,7 +39,6 @@ use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
 use poem_openapi::*;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
@@ -413,15 +412,7 @@ impl WorkerApi {
             _ => None,
         };
 
-        let cursor = match cursor {
-            Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
-                ApiEndpointError::bad_request(
-                    api::error_code::INVALID_SCAN_CURSOR,
-                    golem_common::safe(e),
-                )
-            })?),
-            None => None,
-        };
+        let cursor = cursor.map(ScanCursor::from);
 
         let (cursor, mut workers) = self
             .worker_service

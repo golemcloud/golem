@@ -44,6 +44,37 @@ steps:
         4. Prints the result of the last increment to stdout
 
         Build and run the application to verify it works.
+      effect: >
+        In the Effect-based test-app project, call the counter agent from a regular standalone
+        Effect v4 CLI application running in Node.js outside Golem. Use the generated external
+        TypeScript bridge client because Effect components and their bridge values use TypeScript
+        names and syntax. Do not try to use the guest-side `Agent.client` or Golem host layers from
+        the external process.
+
+        Make the Effect agent's exported binding and `defineAgent` runtime name exactly
+        `CounterAgent` (the generated template starts with `Counter`), and update the matching
+        agent key in `golem.yaml`. Preserve its existing `name` constructor parameter and unsigned
+        64-bit `increment` result. Also add a `roundTrip64` method whose single parameter and result
+        use the same nested `Schema.Struct`: an `unsignedValues` array of `WitTypes.Uint64` and a
+        `signedValues` array of `WitTypes.Int64`. It must return the record unchanged. Configure
+        manifest-driven `bridge.ts` generation for this agent, then write a standalone Effect CLI
+        application in `test-app/external-client` that:
+        1. Connects the generated client to the local Golem server
+        2. Creates or gets the CounterAgent instance named "ext-test"
+        3. Calls `increment` three times sequentially, awaiting each generated Promise through
+           deferred Effect v4 operations
+        4. Calls the generated `roundTrip64` client with unsigned values 9007199254740991n,
+           9007199254740992n, and 18446744073709551615n, plus signed values
+           -9223372036854775808n and 9223372036854775807n. Compare every returned bigint exactly
+           and fail the process on any mismatch.
+        5. Prints the result of the last increment and the marker `int64-roundtrip-ok` to stdout.
+
+        Build and deploy the component, build the generated bridge package, then build and run the
+        standalone Effect application to verify it works. Give `external-client/package.json` a
+        `verify` script that performs the three increments plus the 64-bit round trip, and run it
+        once. Also provide a `start` script that repeats only the 64-bit round trip and marker
+        without incrementing the counter; the harness will run that script again, and it must not
+        rely on state created only by the initial run.
       scala: >
         I want to call my CounterAgent from an external Scala application that runs outside
         of Golem — not from another agent, but from a regular standalone Scala program.
@@ -74,6 +105,8 @@ steps:
         - "golem-call-from-external-rust"
       ts:
         - "golem-call-from-external-ts"
+      effect:
+        - "golem-call-from-external-effect"
       scala:
         - "golem-call-from-external-scala"
       moonbit:
@@ -84,6 +117,17 @@ steps:
       - "golem-deploy"
     verify:
       build: true
+
+  - id: "verify-effect-int64-roundtrip"
+    only_if:
+      language: "effect"
+    shell:
+      command: "npm"
+      args: ["--prefix", "external-client", "run", "start"]
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+      stdout_contains: "int64-roundtrip-ok"
 
   - id: "verify-counter-state"
     invoke_json:

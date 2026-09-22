@@ -19,8 +19,8 @@ use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
 use golem_common::model::component::{ComponentDto, ComponentRevision};
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
-use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId};
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
+use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId, ScanCursor};
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 
@@ -901,11 +901,18 @@ async fn manual_periodic_snapshot_failed_manual_baseline_returns_error_without_l
     let mut manual_failures = 0;
     let mut periodic_failures = 0;
     let outcome = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut outcome = None;
         loop {
+            // Invocation responses and captured events use independent transports.
+            if periodic_failures > 0 && manual_failures > 0
+                && let Some(result) = outcome.take()
+            {
+                break result;
+            }
             tokio::select! {
                 biased;
                 event = events.recv() => {
-                    let event = event.expect("Recovery event stream ended before invocation returned");
+                    let event = event.expect("Recovery event stream ended before both failures arrived");
                     if let Ok(AgentEvent::SnapshotRecoveryFailed { snapshot_index, error, .. }) = AgentEvent::try_from(event) {
                         if snapshot_index == periodic_index {
                             periodic_failures += 1;
@@ -916,7 +923,7 @@ async fn manual_periodic_snapshot_failed_manual_baseline_returns_error_without_l
                         }
                     }
                 }
-                result = &mut invocation => break result,
+                result = &mut invocation, if outcome.is_none() => outcome = Some(result),
             }
         }
     }).await.expect("Recovery must return the manual snapshot load failure rather than retry forever");
@@ -978,11 +985,25 @@ async fn manual_periodic_snapshot_temporary_download_failure_is_retryable_on_cac
     assert_snapshot_recovery_failed(&mut events, "load-snapshot returned error").await;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert!(
+    assert_eq!(
         oplog
             .iter()
-            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
-        "Snapshot replay infrastructure failure must not append an oplog Error"
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Error(params)
+                    if params.kind == OplogErrorKind::Recovery
+            ))
+            .count(),
+        1,
+        "The failed startup must append one durable recovery error"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::RecoverySucceeded(_)))
+            .count(),
+        0,
+        "Recovery must remain unresolved until a startup succeeds"
     );
     assert!(
         executor.worker_is_cached(&owned).await,
@@ -995,7 +1016,9 @@ async fn manual_periodic_snapshot_temporary_download_failure_is_retryable_on_cac
         }
     })
     .await?;
-    executor.resume(&worker_id, false).await?;
+    // The unavailable periodic snapshot is retryable, but this startup ultimately failed on the
+    // invalid manual baseline, so explicitly force the next attempt after fixing that baseline.
+    executor.resume(&worker_id, true).await?;
 
     let result = executor
         .invoke_and_await_agent(
@@ -1024,11 +1047,25 @@ async fn manual_periodic_snapshot_temporary_download_failure_is_retryable_on_cac
     assert_eq!(loaded_index, periodic_index);
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    assert!(
+    assert_eq!(
         oplog
             .iter()
-            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
-        "Successful retry must not require a durable oplog rejection/error"
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Error(params)
+                    if params.kind == OplogErrorKind::Recovery
+            ))
+            .count(),
+        1,
+        "Successful recovery must retain the failure history"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::RecoverySucceeded(_)))
+            .count(),
+        1,
+        "Successful startup must resolve the durable recovery error"
     );
     Ok(())
 }
@@ -2230,12 +2267,19 @@ async fn agent_can_be_invoked_after_manual_snapshot_update_and_restart(
         .await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert_eq!(result.into_typed::<u64>()?, 0);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::RecoverySucceeded(_))),
+        "routine recovery must not append a recovery-success marker"
+    );
 
     Ok(())
 }
@@ -2344,9 +2388,68 @@ async fn assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_basel
     );
     assert_snapshot_recovery_failed(&mut events, expected_error).await;
 
+    let failed_metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(failed_metadata.status, AgentStatus::Failed);
+    assert_eq!(
+        failed_metadata.last_error_kind,
+        Some(OplogErrorKind::Recovery)
+    );
+    assert!(
+        failed_metadata
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains(expected_error)),
+        "recovery failure metadata must retain the actionable cause: {failed_metadata:?}"
+    );
+
+    let (_, listed) = executor
+        .get_workers_metadata(&component.id, None, ScanCursor::default(), 100, true)
+        .await?;
+    let listed = listed
+        .iter()
+        .find(|metadata| metadata.agent_id == failed_metadata.agent_id)
+        .expect("failed agent must be present in list metadata");
+    assert_eq!(listed.status, AgentStatus::Failed);
+    assert_eq!(listed.last_error_kind, failed_metadata.last_error_kind);
+    assert_eq!(listed.last_error, failed_metadata.last_error);
+
+    let repeated_failure = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await
+        .expect_err("an unresolved recovery failure must reject invocation");
+    let repeated_failure = repeated_failure.to_string();
+    assert!(repeated_failure.contains("Failed to resume"));
+    assert!(repeated_failure.contains(expected_error));
+
     // A failed start stays on the worker until it is resumed or unloaded, like any other
     // instance-creation failure; the resume is the next start attempt.
-    executor.resume(&worker_id, false).await?;
+    executor.resume(&worker_id, true).await?;
+    // Loading can still expose the cached idle status before recovery completes.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            if oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::RecoverySucceeded(_)))
+            {
+                break anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    let recovered_metadata = executor
+        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
+        .await?;
+    assert_eq!(recovered_metadata.status, AgentStatus::Idle);
+    assert_eq!(recovered_metadata.last_error_kind, None);
+    assert_eq!(recovered_metadata.last_error, None);
+
     let after_retry = executor
         .invoke_and_await_agent(
             &component,
@@ -2356,12 +2459,23 @@ async fn assert_manual_snapshot_load_failure_fails_the_start_and_keeps_the_basel
         )
         .await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert_eq!(after_retry.into_typed::<u32>()?, 1);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
+    assert_eq!(metadata.last_error_kind, None);
+    assert_eq!(metadata.last_error, None);
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::RecoverySucceeded(_)))
+            .count(),
+        1,
+        "successful recovery must append exactly one clearing marker"
+    );
 
     Ok(())
 }

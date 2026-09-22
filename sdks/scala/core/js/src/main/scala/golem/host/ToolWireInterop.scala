@@ -43,6 +43,7 @@ object ToolWireInterop {
   def toolMiddlewareToJs(middleware: ToolMiddlewareDescriptor): JsToolMiddleware =
     JsToolMiddleware(
       middleware.name,
+      middleware.version,
       middleware.aliases.toJSArray,
       docToJs(middleware.doc),
       middleware.scope match {
@@ -51,7 +52,8 @@ object ToolWireInterop {
             JsMonomorphicToolMiddlewareScope(toolToJs(presented), expected.map(toolToJs).orUndefined)
           )
         case ToolMiddlewareScope.Universal => JsToolMiddlewareScope.universal
-      }
+      },
+      SchemaWireInterop.graphToJs(golem.schema.wire.SchemaWire.schemaGraphToWit(middleware.parameterSchema))
     )
 
   def toolMiddlewareFromJs(middleware: JsToolMiddleware): ToolMiddlewareDescriptor =
@@ -68,7 +70,9 @@ object ToolWireInterop {
           )
         case "universal" => ToolMiddlewareScope.Universal
         case other       => throw new IllegalArgumentException(s"unknown tool middleware scope tag: $other")
-      }
+      },
+      golem.schema.wire.SchemaWire.schemaGraphFromWit(SchemaWireInterop.graphFromJs(middleware.parameterSchema)),
+      middleware.version
     )
 
   def toolToJs(t: WitTool): JsTool =
@@ -92,7 +96,8 @@ object ToolWireInterop {
       case WitToolError.InvalidInput(message)    => JsToolError.invalidInput(message)
       case WitToolError.ConstraintViolation(msg) => JsToolError.constraintViolation(msg)
       case WitToolError.InvalidResult(message)   => JsToolError.invalidResult(message)
-      case WitToolError.CustomError(payload)     => JsToolError.customError(SchemaWireInterop.typedToJs(payload))
+      case WitToolError.CustomError(error)       =>
+        JsToolError.customError(error.name, SchemaWireInterop.typedToJs(error.payload))
     }
 
   def toolErrorFromJs(j: JsToolError): WitToolError =
@@ -104,8 +109,14 @@ object ToolWireInterop {
       case "constraint-violation" => WitToolError.ConstraintViolation(valOf(j).asInstanceOf[String])
       case "invalid-result"       => WitToolError.InvalidResult(valOf(j).asInstanceOf[String])
       case "custom-error"         =>
+        val error = valOf(j)
         WitToolError.CustomError(
-          SchemaWireInterop.typedFromJs(valOf(j).asInstanceOf[golem.host.js.schema.JsTypedSchemaValue])
+          WitCustomToolError(
+            error.selectDynamic("name").asInstanceOf[String],
+            SchemaWireInterop.typedFromJs(
+              error.selectDynamic("payload").asInstanceOf[golem.host.js.schema.JsTypedSchemaValue]
+            )
+          )
         )
       case other => throw new IllegalArgumentException(s"Unknown tool-error tag: $other")
     }

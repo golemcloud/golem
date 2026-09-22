@@ -29,6 +29,7 @@ pub mod entity;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_tool_grant;
+pub mod environment_tool_middleware_grant;
 pub mod error;
 pub mod http_api_deployment;
 pub mod invocation_context;
@@ -50,6 +51,8 @@ pub mod retry_policy;
 pub mod security_scheme;
 #[cfg(test)]
 mod tests;
+pub mod tool_middleware;
+pub mod tool_middleware_release;
 pub mod tool_release;
 pub mod worker;
 
@@ -72,10 +75,14 @@ use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::{AgentTypeSchemaResolver, ParsedAgentId};
 use crate::model::card::{CardId, ScopeCard, StoredCard};
 use crate::model::invocation_context::InvocationContextStack;
+use crate::model::oplog::payload::types::{
+    SerializableToolError, SerializableToolInvocationResult, SerializableToolRpcError,
+};
 use crate::model::oplog::types::AgentMetadataForGuests;
 use crate::model::oplog::{AgentResourceId, OplogEntry, RawSnapshotData};
 use crate::model::regions::DeletedRegions;
-use crate::schema::{ResultValuePayload, SchemaValue};
+use crate::model::tool::{ToolActivationSnapshot, ToolName};
+use crate::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
 use crate::{SafeDisplay, grpc_uri};
 use desert_rust::{
     BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
@@ -86,18 +93,20 @@ use im::{OrdMap, Vector};
 use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter, Write};
 use std::net::{IpAddr, SocketAddr};
 use std::ops::Add;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tonic::transport::Endpoint;
 use url::Url;
 use uuid::Uuid;
 
 /// Status of an idempotency key lookup on a worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Enum)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub enum InvocationStatus {
     /// The idempotency key is not known (never seen or expired).
     Unknown,
@@ -518,48 +527,267 @@ pub struct RoutingTableEntry {
     pod: Pod,
 }
 
+/// Ownership generation of a single shard, granted by the shard manager.
+///
+/// The epoch advances only when a shard changes owner, never on a lease
+/// renewal, so an executor can assert the set it believes it holds without the
+/// assertion racing the manager. A newtype of this crate's own: the shard
+/// manager keeps a twin in `sharding::model`, and the wire's `u64` is the only
+/// bridge between them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ShardEpoch(pub u64);
+
+impl Display for ShardEpoch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// The revision of the shard manager's persisted state that a delivered shard
+/// set was read from. Every delivery carries one - a registration, a push, a
+/// renewal - and an executor applies a delivery only if its revision is at
+/// least the last one it applied, so two deliveries that cross on the network
+/// cannot leave the older set in place. `0` is "nothing applied yet". The
+/// executor's own newtype; it never imports the shard manager's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ShardLeaseRevision(pub u64);
+
+impl Display for ShardLeaseRevision {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// What applying a delivered shard set did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShardDeliveryOutcome {
+    /// Applied. `set_changed` is whether the owned set moved, which decides
+    /// whether agents on dropped shards are swept and agents on gained shards
+    /// recovered.
+    Applied { set_changed: bool },
+    /// Older than a delivery already applied, so ignored whole.
+    Stale {
+        delivered: ShardLeaseRevision,
+        applied: ShardLeaseRevision,
+    },
+}
+
+/// The shards this executor currently holds, with the epoch each was granted
+/// at, and when the lease over them lapses on this executor's own clock, if
+/// it lapses at all.
 #[derive(Clone, Debug, Default)]
 pub struct ShardAssignment {
     pub number_of_shards: usize,
-    pub shard_ids: HashSet<ShardId>,
+    /// Exactly the shards this executor holds. The shard manager pushes the
+    /// complete set; anything absent from it has been dropped.
+    pub shard_epochs: HashMap<ShardId, ShardEpoch>,
+    /// When the shard lease lapses, on this executor's own monotonic clock.
+    /// Only a grant moves it - the answer to this executor's own registration
+    /// or renewal - and the grant is anchored where that request was sent, so
+    /// the shard manager's copy of the lease is never earlier than this one.
+    /// A push carries no lease. `None` means the lease never expires
+    /// (single-shard mode, the debugging service, and the pre-registration
+    /// placeholder).
+    pub expires_at: Option<Instant>,
+    /// The revision of the delivery this set came from. A delivery older than
+    /// this is ignored; see [`ShardLeaseRevision`].
+    pub revision: ShardLeaseRevision,
 }
 
 impl ShardAssignment {
-    pub fn assign_shards(&mut self, shard_ids: &HashSet<ShardId>) {
-        for shard_id in shard_ids {
-            self.shard_ids.insert(*shard_id);
+    /// An assignment that never expires, with every shard at epoch 0. Used by
+    /// the single-shard implementations and by tests, which have no shard
+    /// manager to grant epochs.
+    pub fn unexpiring(
+        number_of_shards: usize,
+        shard_ids: impl IntoIterator<Item = ShardId>,
+    ) -> Self {
+        Self {
+            number_of_shards,
+            shard_epochs: shard_ids
+                .into_iter()
+                .map(|shard_id| (shard_id, ShardEpoch::default()))
+                .collect(),
+            expires_at: None,
+            revision: ShardLeaseRevision::default(),
         }
     }
 
-    pub fn register(&mut self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
-        self.number_of_shards = number_of_shards;
-        self.shard_ids = shard_ids.clone();
+    pub fn contains(&self, shard_id: &ShardId) -> bool {
+        self.shard_epochs.contains_key(shard_id)
     }
 
-    pub fn set_shards(&mut self, number_of_shards: usize, shard_ids: &HashSet<ShardId>) {
-        self.number_of_shards = number_of_shards;
-        self.shard_ids = shard_ids.clone();
+    pub fn is_empty(&self) -> bool {
+        self.shard_epochs.is_empty()
     }
 
-    pub fn revoke_shards(&mut self, shard_ids: &HashSet<ShardId>) {
-        for shard_id in shard_ids {
-            self.shard_ids.remove(shard_id);
+    pub fn len(&self) -> usize {
+        self.shard_epochs.len()
+    }
+
+    pub fn shard_ids(&self) -> impl Iterator<Item = ShardId> + '_ {
+        self.shard_epochs.keys().copied()
+    }
+
+    pub fn shard_id_set(&self) -> HashSet<ShardId> {
+        self.shard_epochs.keys().copied().collect()
+    }
+
+    pub fn epoch_of(&self, shard_id: &ShardId) -> Option<ShardEpoch> {
+        self.shard_epochs.get(shard_id).copied()
+    }
+
+    /// The claim sent on a lease renewal: exactly the set last received, in a
+    /// deterministic order.
+    pub fn claim(&self) -> BTreeMap<ShardId, ShardEpoch> {
+        self.shard_epochs
+            .iter()
+            .map(|(shard_id, epoch)| (*shard_id, *epoch))
+            .collect()
+    }
+
+    /// Full replace from a push: hold exactly these shards, drop everything
+    /// else. One of the three doors a delivery comes through, with
+    /// [`Self::adopt_grant`] and [`Self::revoke_shards`]; all three gate the
+    /// set on the revision the same way in [`Self::apply`]. The lease is
+    /// untouched: a push has no request of this executor's to anchor a lease
+    /// to, so it carries none.
+    pub fn set_shards(
+        &mut self,
+        number_of_shards: usize,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+        revision: ShardLeaseRevision,
+    ) -> ShardDeliveryOutcome {
+        self.apply(Some(number_of_shards), shard_epochs, revision)
+    }
+
+    /// A grant: the answer to this executor's own registration
+    /// (`number_of_shards` is `Some`) or renewal, carrying the shard manager's
+    /// set for it and a lease anchored where the request was sent.
+    ///
+    /// The lease clock always moves, whatever becomes of the set. A grant
+    /// answers a request this executor made, anchored before the request went
+    /// out, so its expiry is never later than the manager's; and since a push
+    /// carries no lease, refusing a grant's would cost this executor a renewal
+    /// every time a rebalance push crossed a renewal reply - which is how an
+    /// executor the manager keeps renewing would end up fencing itself. The
+    /// set goes through [`Self::apply`]'s revision gate like every other
+    /// delivery: the revision orders sets and the request time orders leases,
+    /// and the two are independent. Normally the set is exactly what was
+    /// claimed, because a renewal never advances an epoch; when it is not, the
+    /// manager is correcting a push this executor never received, and the
+    /// caller sweeps and recovers agents exactly as it would for a push.
+    ///
+    /// The expiry is written as is, not maxed against the current one: each
+    /// grant is the manager's current word, and the manager's own deadline for
+    /// this executor never moves earlier, so a later grant is never the shorter
+    /// one. Grants arrive in the order they were asked for (the renewal loop
+    /// awaits each one), so a later grant is always anchored later.
+    pub fn adopt_grant(
+        &mut self,
+        number_of_shards: Option<usize>,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+        expires_at: Instant,
+        revision: ShardLeaseRevision,
+    ) -> ShardDeliveryOutcome {
+        self.expires_at = Some(expires_at);
+        self.apply(number_of_shards, shard_epochs, revision)
+    }
+
+    /// The one place any delivery's set is applied, including
+    /// [`Self::revoke_shards`], which turns its delta into the set it leaves
+    /// behind and comes through here.
+    ///
+    /// Two deliveries can cross on the network - a renewal reply computed
+    /// before a push, arriving after it - and both say "hold exactly this", so
+    /// without an order the older set would win. The revision is that order: a
+    /// set older than the last one applied is ignored. Equal revisions come
+    /// from the same persisted state and carry the same set, so they apply
+    /// harmlessly. The lease is not this function's business: only
+    /// [`Self::adopt_grant`] moves it, and it does so before coming here.
+    fn apply(
+        &mut self,
+        number_of_shards: Option<usize>,
+        shard_epochs: &HashMap<ShardId, ShardEpoch>,
+        revision: ShardLeaseRevision,
+    ) -> ShardDeliveryOutcome {
+        if revision < self.revision {
+            return ShardDeliveryOutcome::Stale {
+                delivered: revision,
+                applied: self.revision,
+            };
+        }
+        let set_changed = self.shard_epochs != *shard_epochs;
+        if let Some(number_of_shards) = number_of_shards {
+            self.number_of_shards = number_of_shards;
+        }
+        self.shard_epochs = shard_epochs.clone();
+        self.revision = revision;
+        ShardDeliveryOutcome::Applied { set_changed }
+    }
+
+    /// A revoke: `shard_ids` are dropped and everything else is kept.
+    ///
+    /// The one delta among the deliveries, but applied as the set it leaves behind, so it goes
+    /// through the same gate as the rest: a grant read before the shards moved and arriving after
+    /// this is older, and cannot put them back. Like any push it carries no lease and touches none.
+    ///
+    /// Adopting the revoke's revision is safe even though this is a delta, because the shard
+    /// manager sends the full set at that same revision in the same pass: nothing older than it is
+    /// still needed.
+    pub fn revoke_shards(
+        &mut self,
+        shard_ids: &HashSet<ShardId>,
+        revision: ShardLeaseRevision,
+    ) -> ShardDeliveryOutcome {
+        let mut remaining = self.shard_epochs.clone();
+        remaining.retain(|shard_id, _| !shard_ids.contains(shard_id));
+        self.apply(None, &remaining, revision)
+    }
+
+    /// Drops every shard, keeping `number_of_shards`, and leaves the lease
+    /// **lapsed** as of `now`. Used when the shard manager no longer knows this
+    /// executor's lease.
+    ///
+    /// The expiry is not reset to `None`, because `None` means
+    /// "never expires". A cleared assignment must read as not ready, so
+    /// admission keeps refusing until a re-registration installs a fresh grant.
+    pub fn clear(&mut self, now: Instant) {
+        self.shard_epochs.clear();
+        self.expires_at = Some(now);
+    }
+
+    /// The single place the never-expires rule is spelled: a `None` expiry is
+    /// always live.
+    pub fn lease_is_live(&self, now: Instant) -> bool {
+        match self.expires_at {
+            None => true,
+            Some(expires_at) => now < expires_at,
         }
     }
 }
 
 impl Display for ShardAssignment {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let shard_ids = self
-            .shard_ids
-            .iter()
-            .map(|shard_id| shard_id.to_string())
+        let mut entries = self.shard_epochs.iter().collect::<Vec<_>>();
+        entries.sort_by_key(|(shard_id, _)| shard_id.value);
+        let shard_epochs = entries
+            .into_iter()
+            .map(|(shard_id, epoch)| format!("{shard_id}@{epoch}"))
             .collect::<Vec<_>>()
             .join(",");
         write!(
             f,
-            "{{ number_of_shards: {}, shard_ids: {} }}",
-            self.number_of_shards, shard_ids
+            "{{ number_of_shards: {}, shard_epochs: {}, lease: {} }}",
+            self.number_of_shards,
+            shard_epochs,
+            match self.expires_at {
+                Some(expires_at) => match expires_at.checked_duration_since(Instant::now()) {
+                    Some(left) if !left.is_zero() => format!("{}ms left", left.as_millis()),
+                    _ => "lapsed".to_string(),
+                },
+                None => "never expires".to_string(),
+            }
         )
     }
 }
@@ -567,6 +795,7 @@ impl Display for ShardAssignment {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentMetadata {
     pub agent_id: AgentId,
+    pub owner_kind: crate::model::agent::OwnerKind,
     pub env: Vec<(String, String)>,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
@@ -1016,6 +1245,7 @@ impl Default for InvocationResultMembership {
 #[desert(evolution())]
 pub struct AgentStatusRecord {
     pub status: AgentStatus,
+    pub last_error_kind: Option<crate::base_model::oplog::OplogErrorKind>,
     pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<PendingInvocationRef>,
@@ -1026,7 +1256,10 @@ pub struct AgentStatusRecord {
     pub invocation_results: InvocationResultMembership,
     pub received_card_transfers: ReceivedCardTransferIndex,
     pub durable_stream_sessions: DurableStreamSessionIndex,
+    pub export_fork_admissions: ExportForkAdmissions,
     pub has_durable_stream_history: bool,
+    pub pending_durable_stream_cancellations:
+        HashSet<crate::model::durable_stream::StreamConsumerCancelIntentRecord>,
     pub current_idempotency_key: Option<IdempotencyKey>,
     pub cancelled_idempotency_key: Option<IdempotencyKey>,
     pub component_revision: ComponentRevision,
@@ -1067,6 +1300,7 @@ impl Default for AgentStatusRecord {
     fn default() -> Self {
         AgentStatusRecord {
             status: AgentStatus::Idle,
+            last_error_kind: None,
             skipped_regions: DeletedRegions::new(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),
@@ -1077,7 +1311,9 @@ impl Default for AgentStatusRecord {
             invocation_results: InvocationResultMembership::default(),
             received_card_transfers: ReceivedCardTransferIndex::default(),
             durable_stream_sessions: DurableStreamSessionIndex::default(),
+            export_fork_admissions: ExportForkAdmissions::default(),
             has_durable_stream_history: false,
+            pending_durable_stream_cancellations: HashSet::new(),
             current_idempotency_key: None,
             cancelled_idempotency_key: None,
             component_revision: ComponentRevision::INITIAL,
@@ -1100,6 +1336,22 @@ impl Default for AgentStatusRecord {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, BinaryCodec)]
+pub struct ExportForkAdmissions {
+    pub owner_fingerprint: Option<AgentFingerprint>,
+    pub reservations: HashMap<AgentId, ExportForkReservation>,
+    pub session_counts: HashMap<String, u32>,
+    pub updated_millis: u64,
+    pub credit_millis: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub struct ExportForkReservation {
+    pub oplog_index: OplogIndex,
+    pub request_hash: Vec<u8>,
+    pub session: String,
+}
+
 /// The durable target-side identity associated with a permission-card transfer ID.
 ///
 /// This is stored behind an `Arc` in [`ReceivedCardTransferIndex`]. Boxing the common `Received`
@@ -1108,7 +1360,7 @@ impl Default for AgentStatusRecord {
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 pub enum ReceivedCardTransferState {
     Received {
-        source_card_id: Option<CardId>,
+        source_card_id: CardId,
         card: StoredCard,
     },
     Conflict,
@@ -1181,7 +1433,7 @@ pub struct DurableStreamSessionStatus {
     pub prepared: Option<OplogIndex>,
     pub invocation_result: Option<OplogIndex>,
     pub finished: Option<OplogIndex>,
-    pub session_key: Option<crate::model::durable_stream::StreamSessionKeyV1>,
+    pub session_key: Option<IdempotencyKey>,
     pub prepared_attempt_id: Option<crate::model::durable_stream::AttemptId>,
     pub initial_attachment_epoch: Option<u64>,
     pub initial_attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
@@ -1192,6 +1444,8 @@ pub struct DurableStreamSessionStatus {
     pub attachment_attempt_id: Option<crate::model::durable_stream::AttemptId>,
     pub attachment_attached: Option<bool>,
     pub lifecycle_error: Option<String>,
+    pub tombstoned_slots: HashSet<String>,
+    pub cancellation_requested: bool,
 }
 
 impl DurableStreamSessionStatus {
@@ -1205,7 +1459,7 @@ impl DurableStreamSessionStatus {
     pub fn validate_initial_attachment_reference(
         &mut self,
         attached_idx: OplogIndex,
-        attached: &crate::model::durable_stream::StreamSessionAttachedRecordV1,
+        attached: &crate::model::durable_stream::StreamSessionAttachedRecord,
     ) -> bool {
         if self.lifecycle_error.is_some() {
             return false;
@@ -1232,7 +1486,7 @@ impl DurableStreamSessionStatus {
             || self
                 .session_key
                 .as_ref()
-                .is_none_or(|key| &key.idempotency_key != idempotency_key)
+                .is_none_or(|key| key != idempotency_key)
             || self
                 .prepared
                 .is_none_or(|prepared_idx| oplog_idx <= prepared_idx)
@@ -1249,28 +1503,53 @@ impl DurableStreamSessionStatus {
     pub fn apply_record(
         &mut self,
         oplog_idx: OplogIndex,
-        record: &crate::model::durable_stream::StreamSessionRecordV1,
+        record: &crate::model::durable_stream::StreamSessionRecord,
     ) {
-        use crate::model::durable_stream::StreamSessionRecordV1;
+        use crate::model::durable_stream::StreamSessionRecord;
 
-        let record_key = match record {
-            StreamSessionRecordV1::Prepared(v) => Some(&v.attempt.session_key),
-            StreamSessionRecordV1::Attached(v) => Some(&v.session_key),
-            StreamSessionRecordV1::ResumeAttempt(v) => Some(&v.attempt.session_key),
-            StreamSessionRecordV1::Detached(v) => Some(&v.session_key),
-            StreamSessionRecordV1::InvocationResult(v) => Some(&v.session_key),
-            StreamSessionRecordV1::Finished(v) => Some(&v.session_key),
-            _ => None,
-        };
-        let Some(record_key) = record_key else { return };
-        if self
-            .session_key
-            .as_ref()
-            .is_some_and(|key| key != record_key)
-        {
+        if let StreamSessionRecord::ForkCut(cut) = record {
+            self.attachment_epoch = Some(cut.epoch_floor);
+            self.attachment_attached = Some(false);
             return;
         }
-        self.session_key.get_or_insert_with(|| record_key.clone());
+
+        let local_record_key = match record {
+            StreamSessionRecord::Prepared(v) => Some(&v.session_key),
+            StreamSessionRecord::Attached(v) => Some(&v.session_key),
+            StreamSessionRecord::ResumeAttempt(v) => Some(&v.session_key),
+            StreamSessionRecord::Detached(v) => Some(&v.session_key),
+            _ => None,
+        };
+        let relative_record_key = match record {
+            StreamSessionRecord::InvocationResult(v) => Some(&v.session_key),
+            StreamSessionRecord::Finished(v) => Some(&v.session_key),
+            StreamSessionRecord::Tombstoned(v) => Some(&v.session_key),
+            StreamSessionRecord::CancelRequested(v) => Some(&v.session_key),
+            StreamSessionRecord::ConsumerCancelApplied(v) => Some(&v.intent.session_key),
+            _ => None,
+        };
+        if let Some(record_key) = local_record_key {
+            if self
+                .session_key
+                .as_ref()
+                .is_some_and(|key| key != record_key)
+            {
+                return;
+            }
+            self.session_key.get_or_insert_with(|| record_key.clone());
+        } else if let Some(record_key) = relative_record_key {
+            let Some(key) = self.session_key.as_ref() else {
+                return;
+            };
+            if !matches!(record_key,
+                crate::model::durable_stream::StreamRegistrationInvocation::Local(local)
+                    if local == key)
+            {
+                return;
+            }
+        } else {
+            return;
+        }
         if self.lifecycle_error.is_some() {
             return;
         }
@@ -1280,7 +1559,7 @@ impl DurableStreamSessionStatus {
             return;
         }
         match record {
-            StreamSessionRecordV1::Prepared(v) => {
+            StreamSessionRecord::Prepared(v) => {
                 if self.prepared.is_some() {
                     self.lifecycle_error =
                         Some("durable Stream Session contains multiple Prepared records".into());
@@ -1290,7 +1569,7 @@ impl DurableStreamSessionStatus {
                     self.prepared_attempt_id = Some(v.attempt.attempt_id);
                 }
             }
-            StreamSessionRecordV1::Attached(v) => {
+            StreamSessionRecord::Attached(v) => {
                 if self.initial_attachment_epoch.is_some() {
                     self.lifecycle_error =
                         Some("durable session contains a repeated initial attachment".into());
@@ -1310,7 +1589,7 @@ impl DurableStreamSessionStatus {
                     }
                 }
             }
-            StreamSessionRecordV1::ResumeAttempt(v) => {
+            StreamSessionRecord::ResumeAttempt(v) => {
                 let Some(epoch) = self.attachment_epoch else {
                     self.lifecycle_error =
                         Some("durable resume precedes initial attachment".into());
@@ -1327,7 +1606,7 @@ impl DurableStreamSessionStatus {
                     self.attachment_attached = Some(true);
                 }
             }
-            StreamSessionRecordV1::Detached(v) => {
+            StreamSessionRecord::Detached(v) => {
                 match (self.attachment_epoch, self.attachment_attempt_id) {
                     (None, _) => {
                         self.lifecycle_error =
@@ -1344,10 +1623,14 @@ impl DurableStreamSessionStatus {
                     }
                 }
             }
-            StreamSessionRecordV1::InvocationResult(_) => self.invocation_result = Some(oplog_idx),
-            StreamSessionRecordV1::Finished(_) => {
+            StreamSessionRecord::InvocationResult(_) => self.invocation_result = Some(oplog_idx),
+            StreamSessionRecord::Finished(_) => {
                 self.finished.get_or_insert(oplog_idx);
             }
+            StreamSessionRecord::Tombstoned(v) => {
+                self.tombstoned_slots.insert(v.slot.clone());
+            }
+            StreamSessionRecord::CancelRequested(_) => self.cancellation_requested = true,
             _ => {}
         };
     }
@@ -1427,22 +1710,28 @@ impl DurableStreamSessionIndex {
     pub fn apply_record(
         &mut self,
         index: OplogIndex,
-        record: &crate::model::durable_stream::StreamSessionRecordV1,
+        record: &crate::model::durable_stream::StreamSessionRecord,
     ) {
-        use crate::model::durable_stream::StreamSessionRecordV1;
+        use crate::model::durable_stream::StreamSessionRecord;
 
-        let key = match record {
-            StreamSessionRecordV1::Prepared(v) => &v.attempt.session_key.idempotency_key,
-            StreamSessionRecordV1::Attached(v) => &v.session_key.idempotency_key,
-            StreamSessionRecordV1::ResumeAttempt(v) => &v.attempt.session_key.idempotency_key,
-            StreamSessionRecordV1::Detached(v) => &v.session_key.idempotency_key,
-            StreamSessionRecordV1::InvocationResult(v) => &v.session_key.idempotency_key,
-            StreamSessionRecordV1::Finished(v) => &v.session_key.idempotency_key,
-            _ => return,
+        if matches!(record, StreamSessionRecord::ForkCut(_)) {
+            let retained: Vec<_> = self
+                .iter()
+                .map(|(key, status)| (key, status.clone()))
+                .collect();
+            for (key, mut status) in retained {
+                status.apply_record(index, record);
+                self.insert(key, status);
+            }
+            return;
+        }
+
+        let Some(key) = record.local_session_key() else {
+            return;
         };
         let mut status = match self.get(key) {
             Some(status) => status.clone(),
-            None if matches!(record, StreamSessionRecordV1::Prepared(_)) => Default::default(),
+            None if matches!(record, StreamSessionRecord::Prepared(_)) => Default::default(),
             // Caller-side results have no local Prepared/Finished lifecycle.
             None => return,
         };
@@ -1547,6 +1836,7 @@ pub enum AgentInvocationKind {
     LoadSnapshot,
     SaveSnapshot,
     ProcessOplogEntries,
+    ExternalTool,
 }
 
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
@@ -1565,6 +1855,18 @@ pub enum AgentInvocation {
         idempotency_key: IdempotencyKey,
         method_name: String,
         input: SchemaValue,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+        scope_card: Option<ScopeCard>,
+    },
+    ExternalTool {
+        idempotency_key: IdempotencyKey,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        activation: Box<ToolActivationSnapshot>,
         invocation_context: InvocationContextStack,
         principal: Principal,
         scope_card: Option<ScopeCard>,
@@ -1603,6 +1905,16 @@ pub enum AgentInvocationPayload {
         principal: Principal,
         scope_card: Option<ScopeCard>,
     },
+    ExternalTool {
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        activation: Box<ToolActivationSnapshot>,
+        principal: Principal,
+        scope_card: Option<ScopeCard>,
+    },
     LoadSnapshot {
         snapshot: RawSnapshotData,
     },
@@ -1620,11 +1932,22 @@ pub enum AgentInvocationPayload {
 #[desert(evolution())]
 pub enum AgentInvocationResult {
     AgentInitialization,
-    AgentMethod { output: SchemaValue },
+    AgentMethod {
+        output: SchemaValue,
+    },
     ManualUpdate,
-    LoadSnapshot { error: Option<String> },
-    SaveSnapshot { snapshot: RawSnapshotData },
-    ProcessOplogEntries { error: Option<String> },
+    LoadSnapshot {
+        error: Option<String>,
+    },
+    SaveSnapshot {
+        snapshot: RawSnapshotData,
+    },
+    ProcessOplogEntries {
+        error: Option<String>,
+    },
+    ExternalTool {
+        result: Result<SerializableToolInvocationResult, SerializableToolRpcError>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1729,6 +2052,35 @@ impl AgentInvocationResult {
                 AgentInvocationResult::ProcessOplogEntries { error: a },
                 AgentInvocationResult::ProcessOplogEntries { error: b },
             ) => a == b,
+            (
+                AgentInvocationResult::ExternalTool { result: a },
+                AgentInvocationResult::ExternalTool { result: b },
+            ) => match (a, b) {
+                (Ok(a), Ok(b)) => match (&a.result, &b.result) {
+                    (Some(a), Some(b)) => {
+                        a.graph() == b.graph()
+                            && schema_value_replay_equivalent(a.value(), b.value())
+                    }
+                    (None, None) => true,
+                    _ => false,
+                },
+                (
+                    Err(SerializableToolRpcError::RemoteToolError(a)),
+                    Err(SerializableToolRpcError::RemoteToolError(b)),
+                ) => match (a.as_ref(), b.as_ref()) {
+                    (
+                        SerializableToolError::CustomError(a),
+                        SerializableToolError::CustomError(b),
+                    ) => {
+                        a.name == b.name
+                            && a.payload.graph() == b.payload.graph()
+                            && schema_value_replay_equivalent(a.payload.value(), b.payload.value())
+                    }
+                    _ => a == b,
+                },
+                (Err(a), Err(b)) => a == b,
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -1755,6 +2107,37 @@ impl std::fmt::Debug for RedactedAgentInvocationResult<'_> {
                     &crate::schema::redacted_schema_value_debug(output),
                 )
                 .finish(),
+            AgentInvocationResult::ExternalTool { result } => {
+                let mut debug = f.debug_struct("ExternalTool");
+                match result {
+                    Ok(result) => match &result.result {
+                        Some(value) => debug.field(
+                            "result",
+                            &format_args!(
+                                "Ok({:?})",
+                                crate::schema::redact_host_managed_typed_value((**value).clone())
+                            ),
+                        ),
+                        None => debug.field("result", &"Ok(None)"),
+                    },
+                    Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
+                        crate::base_model::tool::SerializableToolError::CustomError(value) => debug
+                            .field(
+                                "result",
+                                &format_args!(
+                                    "Err(RemoteToolError(CustomError {{ name: {:?}, payload: {:?} }}))",
+                                    value.name,
+                                    crate::schema::redact_host_managed_typed_value(value.payload.clone())
+                                ),
+                            ),
+                        error => {
+                            debug.field("result", &format_args!("Err(RemoteToolError({error:?}))"))
+                        }
+                    },
+                    Err(error) => debug.field("result", &format_args!("Err({error:?})")),
+                };
+                debug.finish()
+            }
             other => std::fmt::Debug::fmt(other, f),
         }
     }
@@ -1787,6 +2170,27 @@ impl AgentInvocation {
                 idempotency_key,
                 method_name,
                 input,
+                invocation_context,
+                principal,
+                scope_card,
+            },
+            AgentInvocationPayload::ExternalTool {
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                activation,
+                principal,
+                scope_card,
+            } => Self::ExternalTool {
+                idempotency_key,
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                activation,
                 invocation_context,
                 principal,
                 scope_card,
@@ -1853,6 +2257,32 @@ impl AgentInvocation {
                 },
                 invocation_context,
             ),
+            Self::ExternalTool {
+                idempotency_key,
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                activation,
+                invocation_context,
+                principal,
+                scope_card,
+                ..
+            } => (
+                idempotency_key,
+                AgentInvocationPayload::ExternalTool {
+                    tool_name,
+                    command_path,
+                    input,
+                    stdin,
+                    stdout,
+                    activation,
+                    principal,
+                    scope_card,
+                },
+                invocation_context,
+            ),
             Self::LoadSnapshot {
                 idempotency_key,
                 snapshot,
@@ -1896,6 +2326,9 @@ impl AgentInvocation {
             Self::AgentMethod {
                 idempotency_key, ..
             } => Some(idempotency_key),
+            Self::ExternalTool {
+                idempotency_key, ..
+            } => Some(idempotency_key),
             Self::AgentInitialization {
                 idempotency_key, ..
             } => Some(idempotency_key),
@@ -1918,6 +2351,9 @@ impl AgentInvocation {
             Self::AgentMethod {
                 invocation_context, ..
             } => invocation_context.clone(),
+            Self::ExternalTool {
+                invocation_context, ..
+            } => invocation_context.clone(),
             _ => InvocationContextStack::fresh(),
         }
     }
@@ -1927,6 +2363,7 @@ impl AgentInvocation {
             Self::ManualUpdate { .. } => AgentInvocationKind::ManualUpdate,
             Self::AgentInitialization { .. } => AgentInvocationKind::AgentInitialization,
             Self::AgentMethod { .. } => AgentInvocationKind::AgentMethod,
+            Self::ExternalTool { .. } => AgentInvocationKind::ExternalTool,
             Self::LoadSnapshot { .. } => AgentInvocationKind::LoadSnapshot,
             Self::SaveSnapshot { .. } => AgentInvocationKind::SaveSnapshot,
             Self::ProcessOplogEntries { .. } => AgentInvocationKind::ProcessOplogEntries,
@@ -1938,9 +2375,32 @@ impl AgentInvocation {
             Self::ManualUpdate { .. } => String::new(),
             Self::AgentInitialization { .. } => "initialize".to_string(),
             Self::AgentMethod { method_name, .. } => method_name.clone(),
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+                ..
+            } => format!("{tool_name}:{}", command_path.join("/")),
             Self::LoadSnapshot { .. } => "load-snapshot".to_string(),
             Self::SaveSnapshot { .. } => "save-snapshot".to_string(),
             Self::ProcessOplogEntries { .. } => "process-oplog-entries".to_string(),
+        }
+    }
+
+    pub fn principal(&self) -> Option<&Principal> {
+        match self {
+            Self::AgentInitialization { principal, .. }
+            | Self::AgentMethod { principal, .. }
+            | Self::ExternalTool { principal, .. } => Some(principal),
+            _ => None,
+        }
+    }
+
+    pub fn scope_card(&self) -> Option<&ScopeCard> {
+        match self {
+            Self::AgentMethod { scope_card, .. } | Self::ExternalTool { scope_card, .. } => {
+                scope_card.as_ref()
+            }
+            _ => None,
         }
     }
 }
@@ -2300,5 +2760,257 @@ impl RdbmsPoolKey {
 impl Display for RdbmsPoolKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.masked_address())
+    }
+}
+
+#[cfg(test)]
+mod shard_assignment_tests {
+    use super::{ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision};
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+    use std::time::{Duration, Instant};
+    use test_r::test;
+
+    test_r::enable!();
+
+    fn epochs(entries: impl IntoIterator<Item = (i64, u64)>) -> HashMap<ShardId, ShardEpoch> {
+        entries
+            .into_iter()
+            .map(|(shard_id, epoch)| (ShardId::new(shard_id), ShardEpoch(epoch)))
+            .collect()
+    }
+
+    fn in_secs(seconds: u64) -> Instant {
+        Instant::now() + Duration::from_secs(seconds)
+    }
+
+    /// The push says "exactly these"; anything absent is dropped.
+    #[test]
+    fn set_shards_replaces_the_set_rather_than_merging_into_it() {
+        let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
+
+        let outcome = assignment.set_shards(8, &epochs([(1, 4)]), ShardLeaseRevision(1));
+
+        assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
+        assert!(!assignment.contains(&ShardId::new(0)));
+        assert_eq!(assignment.epoch_of(&ShardId::new(1)), Some(ShardEpoch(4)));
+        assert_eq!(assignment.len(), 1);
+        assert_eq!(assignment.revision, ShardLeaseRevision(1));
+    }
+
+    /// Two deliveries can cross on the network. A renewal reply read from an
+    /// older state than a push must not undo the push when it arrives second:
+    /// ordering by revision is what keeps both delivery paths safe. The lease
+    /// clock still moves, because the grant answers this executor's own
+    /// request, anchored before that request went out, and a push carries no
+    /// lease that could have made this one redundant.
+    #[test]
+    fn a_stale_grant_keeps_the_set_but_still_moves_the_lease_clock() {
+        let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
+        assignment.set_shards(8, &epochs([(0, 1), (5, 2)]), ShardLeaseRevision(7));
+
+        let granted = in_secs(60);
+        let outcome =
+            assignment.adopt_grant(None, &epochs([(0, 1)]), granted, ShardLeaseRevision(6));
+
+        assert_eq!(
+            outcome,
+            ShardDeliveryOutcome::Stale {
+                delivered: ShardLeaseRevision(6),
+                applied: ShardLeaseRevision(7),
+            }
+        );
+        assert_eq!(
+            assignment.shard_epochs,
+            epochs([(0, 1), (5, 2)]),
+            "the older delivery narrowed the set the newer one had just widened"
+        );
+        assert_eq!(assignment.revision, ShardLeaseRevision(7));
+        assert_eq!(
+            assignment.expires_at,
+            Some(granted),
+            "a grant's lease is about time, not about the set; a stale set must not cost the lease"
+        );
+    }
+
+    /// Equal revisions come from the same persisted state and carry the same
+    /// set, so a renewal at the revision of the last push applies rather than
+    /// being dropped.
+    #[test]
+    fn a_delivery_at_the_same_revision_is_applied() {
+        let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
+        assignment.set_shards(8, &epochs([(0, 1)]), ShardLeaseRevision(7));
+
+        let refreshed = in_secs(60);
+        let outcome =
+            assignment.adopt_grant(None, &epochs([(0, 1)]), refreshed, ShardLeaseRevision(7));
+
+        assert_eq!(
+            outcome,
+            ShardDeliveryOutcome::Applied { set_changed: false }
+        );
+        assert_eq!(assignment.expires_at, Some(refreshed));
+    }
+
+    /// A push has no request of this executor's to anchor a lease to, so it
+    /// carries none: neither a full replace nor a revoke moves the lease clock,
+    /// whatever revision they carry.
+    #[test]
+    fn a_push_never_moves_the_lease_clock() {
+        let mut assignment = ShardAssignment::default();
+        let granted = in_secs(60);
+        assignment.adopt_grant(
+            Some(8),
+            &epochs([(0, 1), (1, 1)]),
+            granted,
+            ShardLeaseRevision(1),
+        );
+
+        assignment.set_shards(8, &epochs([(0, 1), (1, 1), (2, 1)]), ShardLeaseRevision(2));
+        assert_eq!(
+            assignment.expires_at,
+            Some(granted),
+            "a full-replace push must leave the lease where the grant put it"
+        );
+
+        assignment.revoke_shards(&HashSet::from([ShardId::new(2)]), ShardLeaseRevision(3));
+        assert_eq!(
+            assignment.expires_at,
+            Some(granted),
+            "a revoke must leave the lease where the grant put it"
+        );
+    }
+
+    /// The executor takes each grant as the manager's current word and keeps
+    /// no older, longer deadline of its own. The manager never issues a
+    /// shorter one, so this pins which side would ever be the one extending a
+    /// lease: neither.
+    #[test]
+    fn a_grant_with_a_shorter_lease_shortens_it() {
+        let mut assignment = ShardAssignment::default();
+        let now = Instant::now();
+        assignment.adopt_grant(
+            Some(8),
+            &epochs([(0, 1)]),
+            now + Duration::from_secs(60),
+            ShardLeaseRevision(1),
+        );
+
+        assignment.adopt_grant(
+            None,
+            &epochs([(0, 1)]),
+            now + Duration::from_secs(30),
+            ShardLeaseRevision(2),
+        );
+
+        assert_eq!(assignment.expires_at, Some(now + Duration::from_secs(30)));
+    }
+
+    /// A revoke is a delta rather than a full set, but it is gated the same
+    /// way: once it has applied, a grant read before the shard moved is older
+    /// than it and cannot put the shard back.
+    #[test]
+    fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
+        let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
+        let expiry = in_secs(60);
+        assignment.adopt_grant(
+            Some(8),
+            &epochs([(0, 1), (1, 1)]),
+            expiry,
+            ShardLeaseRevision(3),
+        );
+        let revoked = HashSet::from([ShardId::new(0)]);
+
+        let stale = assignment.revoke_shards(&revoked, ShardLeaseRevision(2));
+        assert_eq!(
+            stale,
+            ShardDeliveryOutcome::Stale {
+                delivered: ShardLeaseRevision(2),
+                applied: ShardLeaseRevision(3),
+            }
+        );
+        assert!(
+            assignment.contains(&ShardId::new(0)),
+            "a revoke older than the last delivery applied must be ignored"
+        );
+
+        let applied = assignment.revoke_shards(&revoked, ShardLeaseRevision(5));
+        assert_eq!(applied, ShardDeliveryOutcome::Applied { set_changed: true });
+        assert!(!assignment.contains(&ShardId::new(0)));
+        assert_eq!(
+            assignment.revision,
+            ShardLeaseRevision(5),
+            "the revoke's revision is recorded like any other delivery's"
+        );
+        assert_eq!(
+            assignment.expires_at,
+            Some(expiry),
+            "a revoke drops shards; it does not touch the lease"
+        );
+
+        let late_grant = assignment.adopt_grant(
+            None,
+            &epochs([(0, 1), (1, 1)]),
+            in_secs(60),
+            ShardLeaseRevision(4),
+        );
+        assert!(matches!(late_grant, ShardDeliveryOutcome::Stale { .. }));
+        assert!(
+            !assignment.contains(&ShardId::new(0)),
+            "a grant read before the shard moved, arriving after the revoke, must not restore it"
+        );
+    }
+
+    /// The corrective delivery: a renewal that answers with a different set
+    /// than was claimed is applied like a push, and reports the set moved so
+    /// the caller sweeps and recovers.
+    #[test]
+    fn a_renewal_that_changes_the_set_reports_it() {
+        let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
+        assignment.set_shards(8, &epochs([(0, 1), (1, 1)]), ShardLeaseRevision(3));
+
+        let outcome = assignment.adopt_grant(
+            None,
+            &epochs([(1, 1), (2, 5)]),
+            in_secs(60),
+            ShardLeaseRevision(4),
+        );
+
+        assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
+        assert!(
+            !assignment.contains(&ShardId::new(0)),
+            "the dropped shard is gone"
+        );
+        assert_eq!(assignment.epoch_of(&ShardId::new(2)), Some(ShardEpoch(5)));
+        assert_eq!(assignment.revision, ShardLeaseRevision(4));
+    }
+
+    /// `clear()` lapses the lease as of `now`. `None` would mean
+    /// "never expires", which would leave a fenced executor reading as ready.
+    #[test]
+    fn clear_lapses_the_lease_instead_of_making_it_unexpiring() {
+        let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
+        let now = Instant::now();
+        assert!(assignment.lease_is_live(now));
+
+        assignment.clear(now);
+
+        assert!(assignment.is_empty());
+        assert_eq!(assignment.expires_at, Some(now));
+        assert!(
+            !assignment.lease_is_live(now),
+            "a cleared assignment is lapsed, not never-expiring"
+        );
+        assert!(!assignment.lease_is_live(now + Duration::from_secs(1)));
+    }
+
+    /// The single-shard implementations and the debugging service run with no
+    /// expiry at all and must never fence themselves.
+    #[test]
+    fn a_lease_without_an_expiry_is_always_live() {
+        let assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
+
+        assert!(assignment.lease_is_live(Instant::now()));
+        assert!(assignment.lease_is_live(in_secs(365 * 24 * 3600)));
     }
 }

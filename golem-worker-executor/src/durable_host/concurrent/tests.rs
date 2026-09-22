@@ -202,6 +202,7 @@ fn live_unfinished_handle_with_atomic_region<P: DropPolicy>(
             "test:monotonic_clock::now",
         ),
         executor_shutdown: tokio_util::sync::CancellationToken::new(),
+        runtime_teardown: Arc::new(|| false),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: Some(sink),
@@ -245,6 +246,7 @@ fn synthetic_finished_handle_with_scope<P: DropPolicy>(
             "test:monotonic_clock::now",
         ),
         executor_shutdown: tokio_util::sync::CancellationToken::new(),
+        runtime_teardown: Arc::new(|| false),
         requires_agent_authority: false,
         agent_auth_ctx: None,
         drop_sink: None,
@@ -1440,6 +1442,24 @@ fn executor_shutdown_leaves_unfinished_call_incomplete_for_replay() {
 }
 
 #[test]
+fn owner_teardown_leaves_unfinished_call_incomplete_without_cancellation() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut handle = live_unfinished_handle::<Cancellable>(idx(9), tx);
+    handle.runtime_teardown = Arc::new(|| true);
+    drop(handle);
+    assert!(matches!(
+        rx.try_recv(),
+        Err(mpsc::error::TryRecvError::Disconnected)
+    ));
+
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut handle = live_unfinished_handle::<NotCancellable>(idx(10), tx);
+    handle.drop_sink = None;
+    handle.runtime_teardown = Arc::new(|| true);
+    drop(handle);
+}
+
+#[test]
 fn drop_after_finish_is_noop() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     {
@@ -1756,10 +1776,8 @@ fn classify_with_hostile_ambient(error: &anyhow::Error) -> crate::model::TrapTyp
 
 #[test]
 fn seam2_terminal_failure_carries_call_owned_trap_context() {
-    // A failure escaping a *terminal* durable-call step (`complete` / `complete_access` /
-    // `cancel` / the dropped-call drain) is wrapped in a `TerminalCallError` built from the
-    // call's own execution scope. Classifying it must group the retry against the call's own
-    // scope and use the call's own atomic-region membership, never the ambient worker state.
+    // Both terminal-step errors and explicit host traps retain the call's scope and atomic
+    // region membership, rather than an overlapping call's ambient state.
     let scope = CallExecutionScope {
         retry_from: idx(42),
         durable_scope: Some(idx(40)),
@@ -1767,26 +1785,47 @@ fn seam2_terminal_failure_carries_call_owned_trap_context() {
         entity_parent_start_index: None,
         atomic_lease: None,
     };
-    let handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
-
-    let error: anyhow::Error = TerminalCallError::new(
+    let mut handle = synthetic_finished_handle_with_scope::<Cancellable>(scope);
+    let terminal_error: anyhow::Error = TerminalCallError::new(
         WorkerExecutorError::runtime("terminal step failure"),
         handle.trap_context(),
     )
     .into();
+    let trap_error = handle.trap(WorkerExecutorError::runtime("wakeup scheduling failed"));
 
-    match classify_with_hostile_ambient(&error) {
-        crate::model::TrapType::Error {
-            retry_from,
-            in_atomic_region,
-            ..
-        } => {
-            // Call-owned (idx 42, non-atomic) wins over hostile ambient (idx 99, atomic).
-            assert_eq!(retry_from, idx(42));
-            assert!(!in_atomic_region);
+    for error in [terminal_error, trap_error] {
+        match classify_with_hostile_ambient(&error) {
+            crate::model::TrapType::Error {
+                retry_from,
+                in_atomic_region,
+                ..
+            } => {
+                // Call-owned (idx 42, non-atomic) wins over hostile ambient (idx 99, atomic).
+                assert_eq!(retry_from, idx(42));
+                assert!(!in_atomic_region);
+            }
+            other => panic!("expected TrapType::Error, got {other:?}"),
         }
-        other => panic!("expected TrapType::Error, got {other:?}"),
     }
+}
+
+#[test]
+fn seam2_suspend_trap_remains_interrupt_without_cancellation() {
+    let (drop_tx, mut drop_rx) = mpsc::unbounded_channel();
+    let mut handle = live_unfinished_handle::<Cancellable>(idx(42), drop_tx);
+    let suspend = InterruptKind::Suspend(Timestamp::now_utc());
+
+    let error = handle.trap(suspend);
+
+    assert!(matches!(
+        classify_with_hostile_ambient(&error),
+        crate::model::TrapType::Interrupt(kind) if kind == suspend
+    ));
+    drop(handle);
+    assert!(
+        drop_rx.try_recv().is_err(),
+        "abandoning for Suspend must not enqueue a Cancelled event"
+    );
 }
 
 #[test]

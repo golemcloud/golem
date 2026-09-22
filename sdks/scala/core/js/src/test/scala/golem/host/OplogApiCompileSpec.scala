@@ -32,6 +32,10 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
 
   private val pluginDesc  = PluginInstallationDescription("plug", "1.0", Map("key" -> "val"))
   private val oplogRegion = OplogRegion(BigInt(0), BigInt(10))
+  private val walletPin   = PublicInvocationWalletPin(
+    WalletVersionToken(Array[Byte](1, 2, 3), BigInt(7)),
+    Some(golem.Uuid(BigInt(10), BigInt(20)))
+  )
 
   private val localSpan                 = LocalSpanData("span1", ts, Some("parent"), Some(BigInt(1)), List(attr), inherited = false)
   private val externalSpan              = ExternalSpanData("span2")
@@ -90,7 +94,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.AgentInvocationStarted(p)       => s"export(${p.functionName})"
     case OplogEntry.AgentInvocationFinished(p)      => s"completed(${p.consumedFuel})"
     case OplogEntry.Suspend(t)                      => s"suspend(${t.seconds})"
-    case OplogEntry.Error(p)                        => s"error(${p.error})"
+    case OplogEntry.Error(p)                        => s"error(${p.kind},${p.error})"
+    case OplogEntry.RecoverySucceeded(t)            => s"recovery-succeeded(${t.seconds})"
     case OplogEntry.NoOp(t)                         => s"noop(${t.seconds})"
     case OplogEntry.Jump(p)                         => s"jump(${p.jump.start})"
     case OplogEntry.Interrupted(t)                  => s"interrupted(${t.seconds})"
@@ -110,6 +115,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     case OplogEntry.DropResource(p)                 => s"drop-res(${p.name})"
     case OplogEntry.Log(p)                          => s"log(${p.level},${p.message})"
     case OplogEntry.Restart(t)                      => s"restart(${t.seconds})"
+    case OplogEntry.Resumed(t)                      => s"resumed(${t.seconds})"
     case OplogEntry.ActivatePlugin(p)               => s"activate(${p.plugin.name})"
     case OplogEntry.DeactivatePlugin(p)             => s"deactivate(${p.plugin.name})"
     case OplogEntry.Revert(p)                       => s"revert(${p.start})"
@@ -153,7 +159,10 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
       OplogEntry.BeginAtomicRegion(ts),
       OplogEntry.BeginRemoteWrite(ts),
       OplogEntry.Restart(ts),
-      OplogEntry.Error(ErrorParameters(ts, "boom", BigInt(5))),
+      OplogEntry.Resumed(ts),
+      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Invocation, "boom", BigInt(5))),
+      OplogEntry.Error(ErrorParameters(ts, OplogErrorKind.Recovery, "replay failed", BigInt(5))),
+      OplogEntry.RecoverySucceeded(ts),
       OplogEntry.Jump(JumpParameters(ts, oplogRegion)),
       OplogEntry.SetRetryPolicy(
         SetRetryPolicyParameters(ts, "default", 0, """{"nodes":[]}""", """{"nodes":[]}""")
@@ -203,7 +212,8 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
           "idem-1",
           "trace-1",
           List("state"),
-          List(spanDatas)
+          List(spanDatas),
+          walletPin
         )
       ),
       OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head)),

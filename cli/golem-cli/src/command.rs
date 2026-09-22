@@ -152,7 +152,6 @@ impl Verbosity {
     }
 }
 
-// TODO: flags for defining target server for "non-manifest" mode
 #[derive(Debug, Clone, Default, Args)]
 #[command(next_help_heading = "Global options")]
 pub struct GolemCliGlobalFlags {
@@ -1167,11 +1166,12 @@ pub mod environment {
     pub enum EnvironmentSubcommand {
         /// Reconcile the server-side environment's "deployment options" with
         /// the values declared in the application manifest's
-        /// `environments.<env>.deploymentOptions:` block.
+        /// `environments.<env>.deployment:` block.
         ///
         /// Deployment options are environment-level policy flags applied during
         /// `deploy`. The currently synced fields are:
         ///   - `compatibilityCheck` - enforce backward-compatible component upgrades.
+        ///   - `toolCompatibilityMode` - tool middleware comparison mode for new deployments.
         ///   - `versionCheck` - enforce monotonic component version bumps.
         ///   - `securityOverrides` - environment-level security overrides (e.g. allowed signing keys).
         ///
@@ -1196,11 +1196,18 @@ pub mod environment {
 }
 
 pub mod tool {
+    use crate::model::agent::RawAgentId;
+    use chrono::{DateTime, Utc};
     use clap::{ArgGroup, Args, Subcommand};
     use golem_common::base_model::account::{AccountEmail, AccountId};
     use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
+    use golem_common::base_model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrantId;
     use golem_common::base_model::tool::ToolName;
+    use golem_common::base_model::tool_middleware::ToolMiddlewareName;
+    use golem_common::base_model::tool_middleware_release::ToolMiddlewareReleaseId;
     use golem_common::base_model::tool_release::ToolReleaseId;
+    use golem_common::model::IdempotencyKey;
+    use golem_common::model::component::ComponentName;
 
     #[derive(Debug, Subcommand)]
     pub enum ToolSubcommand {
@@ -1213,6 +1220,8 @@ pub mod tool {
             /// Deployed tool name
             tool_name: ToolName,
         },
+        /// Invoke a deployed native external tool
+        Invoke(ToolInvokeArgs),
         /// Manage published tool releases
         Release {
             #[command(subcommand)]
@@ -1223,6 +1232,138 @@ pub mod tool {
             #[command(subcommand)]
             subcommand: ToolGrantSubcommand,
         },
+        /// Manage tool middleware in a separate namespace
+        Middleware {
+            #[command(subcommand)]
+            subcommand: ToolMiddlewareSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolMiddlewareSubcommand {
+        /// List tool middleware in the selected environment's current deployment
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_LIST)]
+        List,
+        /// Get deployed tool middleware by name
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_GET)]
+        Get {
+            /// Deployed tool middleware name
+            middleware_name: ToolMiddlewareName,
+        },
+        /// Manage published tool middleware releases
+        Release {
+            #[command(subcommand)]
+            subcommand: ToolMiddlewareReleaseSubcommand,
+        },
+        /// Manage tool middleware grants for the selected environment
+        Grant {
+            #[command(subcommand)]
+            subcommand: ToolMiddlewareGrantSubcommand,
+        },
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolMiddlewareGrantSubcommand {
+        /// Grant a published tool middleware release to the selected environment
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_GRANT_CREATE)]
+        Create(ToolMiddlewareGrantCreateArgs),
+        /// List active tool middleware grants in the selected environment
+        #[command(after_help = crate::command_examples::TOOL_MIDDLEWARE_GRANT_LIST)]
+        List,
+        /// Get an active tool middleware grant
+        Get {
+            /// Environment tool middleware grant ID
+            grant_id: EnvironmentToolMiddlewareGrantId,
+        },
+        /// Delete a tool middleware grant
+        Delete {
+            /// Environment tool middleware grant ID
+            grant_id: EnvironmentToolMiddlewareGrantId,
+        },
+        /// Restore a deleted tool middleware grant
+        Restore {
+            /// Environment tool middleware grant ID
+            grant_id: EnvironmentToolMiddlewareGrantId,
+        },
+    }
+
+    #[derive(Debug, Args)]
+    #[command(group(ArgGroup::new("release").required(true).multiple(false).args(["release_id", "account"])))]
+    pub struct ToolMiddlewareGrantCreateArgs {
+        /// Published tool middleware release ID
+        #[arg(long)]
+        pub release_id: Option<ToolMiddlewareReleaseId>,
+        /// Publisher account email
+        #[arg(long, requires_all = ["name", "version"])]
+        pub account: Option<AccountEmail>,
+        /// Published tool middleware name
+        #[arg(long, requires_all = ["account", "version"])]
+        pub name: Option<ToolMiddlewareName>,
+        /// Published tool middleware version
+        #[arg(long, requires_all = ["account", "name"])]
+        pub version: Option<String>,
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum ToolMiddlewareReleaseSubcommand {
+        /// List tool middleware releases owned by an account
+        List {
+            /// Account ID; defaults to the authenticated account
+            #[arg(long)]
+            account_id: Option<AccountId>,
+        },
+        /// Get a tool middleware release
+        Get {
+            /// Published tool middleware release ID
+            release_id: ToolMiddlewareReleaseId,
+        },
+        /// Make a release unavailable for new deployments and new grants
+        DePublish {
+            /// Published tool middleware release ID
+            release_id: ToolMiddlewareReleaseId,
+        },
+        /// Restore a de-published tool middleware release
+        Restore {
+            /// Published tool middleware release ID
+            release_id: ToolMiddlewareReleaseId,
+        },
+    }
+
+    #[derive(Debug, Args)]
+    #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
+    pub struct ToolInvokeArgs {
+        /// Existing agent that owns the invocation
+        #[arg(long)]
+        pub agent: Option<RawAgentId>,
+        /// Component used to create a fresh ephemeral invocation owner without constructing an agent
+        #[arg(long)]
+        pub component: Option<ComponentName>,
+        /// Deployed tool name
+        pub tool_name: ToolName,
+        /// Tool subcommands, arguments and options after `--`; use `-- --help` for tool help
+        #[arg(last = true, value_name = "TOOL_ARGUMENT")]
+        pub tool_args: Vec<String>,
+        /// Read raw tool stdin from this file; use `-` for process stdin
+        #[arg(long, value_name = "PATH")]
+        pub stdin: Option<std::path::PathBuf>,
+        /// Request raw tool stdout
+        #[arg(long)]
+        pub stdout: bool,
+        /// Write raw stdout to a file instead of process stdout
+        #[arg(long, requires = "stdout")]
+        pub output: Option<std::path::PathBuf>,
+        /// Enqueue without waiting
+        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output"])]
+        pub trigger: bool,
+        /// Look up an existing invocation without starting execution or input
+        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output"])]
+        pub lookup: bool,
+        /// Schedule execution at an RFC 3339 timestamp
+        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output"])]
+        pub schedule_at: Option<DateTime<Utc>>,
+        /// Idempotency key; `-` generates a fresh key
+        #[arg(long, short)]
+        pub idempotency_key: Option<IdempotencyKey>,
     }
 
     #[derive(Debug, Subcommand)]
@@ -1498,10 +1639,10 @@ pub mod worker {
             ///
             /// Cursor can be used to get the next page of results, use the cursor returned
             /// in the previous response.
-            /// The cursor has the format 'layer/position' where both layer and position are numbers.
+            /// The cursor is an opaque string and must be passed back unchanged.
             ///
             /// Returned cursors: in `--format json/yaml/toon` the response includes a
-            /// `cursors` map of the form `{ "<component-name>": "<layer>/<position>", ... }`
+            /// `cursors` map of the form `{ "<component-name>": "<opaque-cursor>", ... }`
             /// (one entry per component that still has more results). Pass any of
             /// those values back as `--scan-cursor` to fetch the next page.
             /// An entry being absent means that component has been fully scanned.
@@ -1666,8 +1807,9 @@ pub mod worker {
             /// `/data/state.json`). Always starts with `/`.
             path: String,
             /// Local (host) path (including filename) to save the file contents
-            /// to. If omitted, the file is saved in the current directory using
-            /// the guest file basename, or output.bin if no basename is available.
+            /// to. Use `-` to write the raw bytes to stdout. If omitted, the file
+            /// is saved in the current directory using the guest file basename,
+            /// or output.bin if no basename is available.
             #[arg(long)]
             output: Option<String>,
         },
@@ -2318,7 +2460,7 @@ pub mod profile {
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
     pub enum ProfileSubcommand {
-        /// Create a new global profile, call without <PROFILE_NAME> for interactive setup
+        /// Create a new global profile, call without <NAME> for interactive setup
         #[command(after_help = crate::command_examples::PROFILE_NEW)]
         New {
             /// Name of the newly created profile
@@ -2707,7 +2849,7 @@ pub mod server {
         /// Override detected system memory for agent admission and eviction (e.g. 2GiB or 500MB).
         /// Overrides GOLEM_LOCAL_SERVER_SYSTEM_MEMORY_OVERRIDE and localServer.systemMemoryOverride.
         /// The executor reserves 20% for host overhead. This is not a hard RSS limit.
-        #[clap(long, value_parser = crate::model::byte_size::parse_positive)]
+        #[clap(long, value_parser = golem_common::config::byte_size::parse_positive)]
         pub system_memory_override: Option<std::num::NonZeroU64>,
 
         /// Address to serve the main API on, defaults to 0.0.0.0
@@ -2771,7 +2913,7 @@ pub mod server {
                 match get_env(NAME) {
                     Ok(value) => {
                         self.system_memory_override = Some(
-                            crate::model::byte_size::parse_positive(&value)
+                            golem_common::config::byte_size::parse_positive(&value)
                                 .map_err(anyhow::Error::msg)
                                 .with_context(|| format!("Failed to parse {NAME}: {value}"))?,
                         );
@@ -2826,6 +2968,7 @@ pub fn builtin_exec_subcommands() -> BTreeSet<String> {
 fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static str> {
     match target {
         ShowClapHelpTarget::AppNew => vec!["new"],
+        ShowClapHelpTarget::ProfileNew => vec!["profile", "new"],
     }
 }
 
@@ -2921,6 +3064,84 @@ mod test {
         }
 
         assert!(GolemCliCommand::try_parse_from(["golem", "environment", "tool", "list"]).is_err());
+    }
+
+    #[test]
+    fn tool_invoke_enforces_live_io_argument_ownership() {
+        let base = [
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "native",
+        ];
+        for suffix in [
+            &["--trigger", "--stdin", "-"][..],
+            &["--trigger", "--stdout"][..],
+            &["--lookup", "--input", "{}"][..],
+            &["--lookup", "--stdin", "-"][..],
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(base.into_iter().chain(suffix.iter().copied()))
+                    .is_err(),
+                "unexpectedly accepted {suffix:?}"
+            );
+        }
+        assert!(
+            GolemCliCommand::try_parse_from(base.into_iter().chain([
+                "--stdin",
+                "-",
+                "--stdout",
+                "--output",
+                "result.bin"
+            ]))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn tool_invoke_passes_tool_options_after_separator_unchanged() {
+        let parsed = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "native",
+            "--",
+            "query",
+            "--stdout",
+            "--help",
+            "-vv",
+            "--",
+            "-file",
+        ])
+        .unwrap();
+        let GolemCliSubcommand::Tool {
+            subcommand: crate::command::tool::ToolSubcommand::Invoke(args),
+        } = parsed.subcommand
+        else {
+            panic!()
+        };
+        assert!(args.stdout);
+        assert_eq!(
+            args.tool_args,
+            ["query", "--stdout", "--help", "-vv", "--", "-file"]
+        );
+        assert!(
+            GolemCliCommand::try_parse_from([
+                "golem",
+                "tool",
+                "invoke",
+                "--component",
+                "example:component",
+                "native",
+                "query",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

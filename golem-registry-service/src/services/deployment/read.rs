@@ -17,6 +17,7 @@ use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::DeployRepoError;
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
+use crate::services::native_tool_catalog::NativeToolCatalog;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::DeployedRegisteredAgentType;
@@ -35,6 +36,7 @@ use golem_common::model::environment::{Environment, EnvironmentName};
 use golem_common::model::tool::{
     DeployedRegisteredTool, RegisteredTool, ToolDeploymentState, ToolName,
 };
+use golem_common::model::tool_middleware::RegisteredToolMiddleware;
 use golem_common::{
     SafeDisplay, error_forwarding,
     model::{deployment::Deployment, environment::EnvironmentId},
@@ -84,6 +86,7 @@ pub struct DeploymentService {
     environment_service: Arc<EnvironmentService>,
     application_service: Arc<ApplicationService>,
     deployment_repo: Arc<dyn DeploymentRepo>,
+    native_tool_catalog: Arc<NativeToolCatalog>,
 }
 
 impl DeploymentService {
@@ -91,11 +94,13 @@ impl DeploymentService {
         environment_service: Arc<EnvironmentService>,
         application_service: Arc<ApplicationService>,
         deployment_repo: Arc<dyn DeploymentRepo>,
+        native_tool_catalog: Arc<NativeToolCatalog>,
     ) -> Self {
         Self {
             environment_service,
             application_service,
             deployment_repo,
+            native_tool_catalog,
         }
     }
 
@@ -189,11 +194,15 @@ impl DeploymentService {
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewDeploymentPlan)?;
 
-        let summary: DeploymentPlan = self
+        let mut staged_identity = self
             .deployment_repo
             .get_staged_identity(environment_id.0)
-            .await?
+            .await?;
+        staged_identity.middleware.compatibility_mode = environment.tool_compatibility_mode;
+        let mut summary: DeploymentPlan = staged_identity
             .into_plan(environment.current_deployment.as_ref().map(|e| e.revision))?;
+
+        summary.ambient_tools = self.native_tool_catalog.plan_entries();
 
         Ok(summary)
     }
@@ -412,6 +421,24 @@ impl DeploymentService {
             .map_err(Into::into)
     }
 
+    pub async fn list_deployment_registered_tool_middlewares(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+        auth: &AuthCtx,
+    ) -> Result<Vec<RegisteredToolMiddleware>, DeploymentError> {
+        let (_, environment) = self
+            .get_deployment_and_environment(environment_id, deployment_revision, auth)
+            .await?;
+        authorize_environment_permission(auth, &environment, EnvironmentVerb::ViewTools)?;
+        let state: ToolDeploymentState = self
+            .deployment_repo
+            .get_tool_deployment_state(environment_id.0, deployment_revision.into())
+            .await?
+            .try_into()?;
+        Ok(state.registered_tool_middlewares.into_values().collect())
+    }
+
     pub async fn get_current_tool_deployment_state(
         &self,
         environment_id: EnvironmentId,
@@ -424,14 +451,14 @@ impl DeploymentService {
             .map_err(Into::into)
     }
 
-    pub async fn get_latest_tool_deployment_state_by_component_revision(
+    pub async fn get_active_tool_deployment_state_by_component_revision(
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<Option<ToolDeploymentState>, DeploymentError> {
         self.deployment_repo
-            .get_latest_tool_deployment_state_by_component_revision(
+            .get_active_tool_deployment_state_by_component_revision(
                 &environment_id.0,
                 &component_id.0,
                 component_revision.into(),
@@ -603,6 +630,7 @@ mod tests {
             name: EnvironmentName::try_from("dev").unwrap(),
             diff_model_version: 0,
             compatibility_check: false,
+            tool_compatibility_mode: Default::default(),
             version_check: false,
             security_overrides: false,
             owner_account_id: AccountId::new(),

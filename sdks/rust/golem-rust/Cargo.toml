@@ -21,6 +21,11 @@ name = "tool"
 harness = false
 
 [[test]]
+name = "reflection_recipe_compile"
+harness = false
+required-features = ["export_golem_agentic"]
+
+[[test]]
 name = "tool_canonical"
 harness = false
 
@@ -53,7 +58,8 @@ required-features = ["export_golem_agentic"]
 
 [dependencies]
 golem-schema = { path = "../../../golem-schema", version = "0.0.0", default-features = false, features = ["guest"] }
-golem-rust-macro = { path = "../golem-rust-macro", version = "0.0.0", optional = true }
+golem-rust-macro = { path = "../../../golem-rust-macro", version = "0.0.0", optional = true }
+golem-tool-metadata = { path = "../../../golem-tool-metadata", version = "0.0.0", features = ["guest"] }
 
 async-trait = { version = "0.1.89", optional = true }
 bigdecimal = { version = "0.4.9", optional = true }
@@ -61,6 +67,7 @@ bit-vec = { version = "0.8.0", optional = true }
 bytes = { version = "1.11.0", optional = true }
 chrono = { version = "0.4.42", optional = true }
 ctor = { version = "0.4.3", optional = true }
+glob-match = "0.2.1"
 http = { version = "1.3.1" }
 log = { version = "0.4.29", features = ["kv"] }
 mac_address = { version = "1.1.8", optional = true }
@@ -68,7 +75,7 @@ nonempty-collections = { version = "1.2.1", optional = true }
 num-bigint = { version = "0.4", optional = true }
 rust_decimal = { version = "1.39.0", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1.0.145", optional = true }
+serde_json = { version = "1.0.145", features = ["raw_value"], optional = true }
 url = { version = "2.5.7", optional = true }
 unicode-segmentation = ">=1.0, <1.13"
 uuid = { version = "1.19.0", features = ["v4"] }

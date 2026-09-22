@@ -2330,6 +2330,171 @@ type TypedSchemaValue struct {
 	Value SchemaValueTree
 }
 
+// A declared tool failure shared by invocation and oplog interfaces.
+type CustomToolError struct {
+	// The selected declared error-case name, independent of payload shape.
+	Name string
+	// Unit for a payloadless error; otherwise the declared payload type.
+	Payload TypedSchemaValue
+}
+
+const (
+	ToolErrorInvalidToolName     uint8 = 0
+	ToolErrorInvalidCommandPath  uint8 = 1
+	ToolErrorInvalidInput        uint8 = 2
+	ToolErrorConstraintViolation uint8 = 3
+	// The returned value does not match the body's declared result schema.
+	ToolErrorInvalidResult uint8 = 4
+	// Consumers preserve unfamiliar names and typed payloads when forwarding.
+	ToolErrorCustomError uint8 = 5
+)
+
+type ToolError struct {
+	tag   uint8
+	value any
+}
+
+func (self ToolError) Tag() uint8 {
+	return self.tag
+}
+
+func (self ToolError) InvalidToolName() string {
+	if self.tag != ToolErrorInvalidToolName {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self ToolError) InvalidCommandPath() []string {
+	if self.tag != ToolErrorInvalidCommandPath {
+		panic("tag mismatch")
+	}
+	return self.value.([]string)
+}
+func (self ToolError) InvalidInput() string {
+	if self.tag != ToolErrorInvalidInput {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self ToolError) ConstraintViolation() string {
+	if self.tag != ToolErrorConstraintViolation {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self ToolError) InvalidResult() string {
+	if self.tag != ToolErrorInvalidResult {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self ToolError) CustomError() CustomToolError {
+	if self.tag != ToolErrorCustomError {
+		panic("tag mismatch")
+	}
+	return self.value.(CustomToolError)
+}
+
+func MakeToolErrorInvalidToolName(value string) ToolError {
+	return ToolError{ToolErrorInvalidToolName, value}
+}
+func MakeToolErrorInvalidCommandPath(value []string) ToolError {
+	return ToolError{ToolErrorInvalidCommandPath, value}
+}
+func MakeToolErrorInvalidInput(value string) ToolError {
+	return ToolError{ToolErrorInvalidInput, value}
+}
+func MakeToolErrorConstraintViolation(value string) ToolError {
+	return ToolError{ToolErrorConstraintViolation, value}
+}
+func MakeToolErrorInvalidResult(value string) ToolError {
+	return ToolError{ToolErrorInvalidResult, value}
+}
+func MakeToolErrorCustomError(value CustomToolError) ToolError {
+	return ToolError{ToolErrorCustomError, value}
+}
+
+const (
+	ToolRpcErrorProtocolError       uint8 = 0
+	ToolRpcErrorDenied              uint8 = 1
+	ToolRpcErrorNotFound            uint8 = 2
+	ToolRpcErrorRemoteInternalError uint8 = 3
+	ToolRpcErrorRemoteToolError     uint8 = 4
+	// The operation's explicit cancellation won terminal arbitration.
+	ToolRpcErrorCancelled uint8 = 5
+	// A filesystem-capable input or output attachment exceeded the
+	// configured per-direction retained-byte limit.
+	ToolRpcErrorResourceExhausted uint8 = 6
+)
+
+type ToolRpcError struct {
+	tag   uint8
+	value any
+}
+
+func (self ToolRpcError) Tag() uint8 {
+	return self.tag
+}
+
+func (self ToolRpcError) ProtocolError() string {
+	if self.tag != ToolRpcErrorProtocolError {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self ToolRpcError) Denied() string {
+	if self.tag != ToolRpcErrorDenied {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self ToolRpcError) NotFound() string {
+	if self.tag != ToolRpcErrorNotFound {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self ToolRpcError) RemoteInternalError() string {
+	if self.tag != ToolRpcErrorRemoteInternalError {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+func (self ToolRpcError) RemoteToolError() ToolError {
+	if self.tag != ToolRpcErrorRemoteToolError {
+		panic("tag mismatch")
+	}
+	return self.value.(ToolError)
+}
+func (self ToolRpcError) ResourceExhausted() string {
+	if self.tag != ToolRpcErrorResourceExhausted {
+		panic("tag mismatch")
+	}
+	return self.value.(string)
+}
+
+func MakeToolRpcErrorProtocolError(value string) ToolRpcError {
+	return ToolRpcError{ToolRpcErrorProtocolError, value}
+}
+func MakeToolRpcErrorDenied(value string) ToolRpcError {
+	return ToolRpcError{ToolRpcErrorDenied, value}
+}
+func MakeToolRpcErrorNotFound(value string) ToolRpcError {
+	return ToolRpcError{ToolRpcErrorNotFound, value}
+}
+func MakeToolRpcErrorRemoteInternalError(value string) ToolRpcError {
+	return ToolRpcError{ToolRpcErrorRemoteInternalError, value}
+}
+func MakeToolRpcErrorRemoteToolError(value ToolError) ToolRpcError {
+	return ToolRpcError{ToolRpcErrorRemoteToolError, value}
+}
+func MakeToolRpcErrorCancelled() ToolRpcError {
+	return ToolRpcError{ToolRpcErrorCancelled, nil}
+}
+func MakeToolRpcErrorResourceExhausted(value string) ToolRpcError {
+	return ToolRpcError{ToolRpcErrorResourceExhausted, value}
+}
+
 //go:wasmimport golem:core/types@2.0.0 parse-uuid
 func wasm_import_parse_uuid(arg0 uintptr, arg1 uint32, arg2 uintptr)
 

@@ -17,6 +17,7 @@ use figment::Figment;
 use figment::providers::{Format, Toml};
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbPostgresConfig, DbSqliteConfig, HasConfigExamples, RedisConfig,
+    byte_size,
 };
 use golem_common::model::base64::Base64;
 use golem_common::model::{
@@ -520,6 +521,9 @@ impl SafeDisplay for Limits {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DurableStreamConfig {
+    /// Maximum encoded payload size of one external Durable Streams read or append.
+    #[serde(with = "byte_size::required")]
+    pub external_batch_max_size: usize,
     #[serde(with = "humantime_serde")]
     pub lease_ttl: Duration,
     #[serde(with = "humantime_serde")]
@@ -533,6 +537,10 @@ pub struct DurableStreamConfig {
 
 impl DurableStreamConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.external_batch_max_size > 0,
+            "external durable stream batch limit must be non-zero"
+        );
         anyhow::ensure!(
             self.lease_ttl
                 == Duration::from_millis(
@@ -575,6 +583,7 @@ impl DurableStreamConfig {
 impl Default for DurableStreamConfig {
     fn default() -> Self {
         Self {
+            external_batch_max_size: 8 * 1024 * 1024,
             lease_ttl: Duration::from_millis(
                 golem_common::base_model::durable_stream::STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
             ),
@@ -596,6 +605,11 @@ impl Default for DurableStreamConfig {
 impl SafeDisplay for DurableStreamConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "external batch maximum size: {}",
+            humansize::ISizeFormatter::new(self.external_batch_max_size, humansize::BINARY)
+        );
         let _ = writeln!(&mut result, "lease TTL: {:?}", self.lease_ttl);
         let _ = writeln!(&mut result, "renewal interval: {:?}", self.renewal_interval);
         let _ = writeln!(
@@ -734,16 +748,22 @@ pub struct SuspendConfig {
     pub wait_suspend_grace: Duration,
     #[serde(with = "humantime_serde")]
     pub wait_suspend_check_interval: Duration,
+    #[serde(with = "humantime_serde")]
+    pub rpc_suspend_after: Duration,
+    #[serde(with = "humantime_serde")]
+    pub rpc_resume_after: Duration,
 }
 
 impl SafeDisplay for SuspendConfig {
     fn to_safe_string(&self) -> String {
         format!(
-            "suspend after: {:?}, ephemeral max sleep: {:?}, wait suspend grace: {:?}, wait suspend check interval: {:?}",
+            "suspend after: {:?}, ephemeral max sleep: {:?}, wait suspend grace: {:?}, wait suspend check interval: {:?}, RPC suspend after: {:?}, RPC resume after: {:?}",
             self.suspend_after,
             self.ephemeral_max_sleep,
             self.wait_suspend_grace,
-            self.wait_suspend_check_interval
+            self.wait_suspend_check_interval,
+            self.rpc_suspend_after,
+            self.rpc_resume_after
         )
     }
 }
@@ -964,6 +984,8 @@ pub struct OplogConfig {
     /// (`oplog_writes_per_second`). Defaults to false (disabled).
     #[serde(default)]
     pub oplog_rate_limit_enabled: bool,
+    /// Controls the background sweep that archives the oplogs of agents which have gone quiet.
+    pub sweep: OplogSweepConfig,
 }
 
 impl SafeDisplay for OplogConfig {
@@ -1019,6 +1041,8 @@ impl SafeDisplay for OplogConfig {
             "oplog rate limit enabled: {}",
             self.oplog_rate_limit_enabled
         );
+        let _ = writeln!(&mut result, "sweep:");
+        let _ = writeln!(&mut result, "{}", self.sweep.to_safe_string());
         result
     }
 }
@@ -1955,6 +1979,103 @@ impl Default for OplogConfig {
             plugin_max_commit_count: 3,
             plugin_max_elapsed_time: Duration::from_secs(5),
             oplog_rate_limit_enabled: false,
+            sweep: OplogSweepConfig::default(),
+        }
+    }
+}
+
+/// Controls the background sweep that archives the oplogs of ephemeral agents which have gone
+/// quiet. It finds them by paginating the oplog layers, so an ephemeral invocation registers no
+/// `ScheduledAction::ArchiveOplog`. Durable agents are not swept; see
+/// [`oplog_sweep`](crate::services::oplog_sweep).
+///
+/// A tick that hits a per-tick bound keeps its scan cursor and resumes there on the next tick, so
+/// work is deferred, never dropped.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OplogSweepConfig {
+    /// Whether the sweep runs. Also read by `StatusState::schedule_oplog_archive_if_needed`: while
+    /// it is false, ephemeral agents register `ScheduledAction::ArchiveOplog` instead, so an oplog
+    /// stranded by a crashed pod always has something to move it.
+    pub enabled: bool,
+    /// Wait between ticks. An agent is archived once its last oplog index is unchanged across two
+    /// scan passes, and a pass takes one interval only while the namespace fits in one tick's
+    /// budget.
+    #[serde(with = "humantime_serde")]
+    pub interval: Duration,
+    /// Keys read per scan call.
+    pub page_size: u64,
+    /// Agents archived concurrently. Shares the indexed-storage connection budget with
+    /// invocations, and bounds memory: an archive step reads an agent's whole layer into one `Vec`.
+    pub max_concurrency: usize,
+    /// Agents one tick may archive, split across routes. A page is decided as a unit, so a tick can
+    /// exceed this by up to `page_size`.
+    pub max_archives_per_tick: usize,
+    /// Keys one tick may scan, split across routes. A close bound rather than an exact one, since
+    /// Redis and the multi-file SQLite backend can return more keys than asked for.
+    pub max_scanned_per_tick: usize,
+    /// Wall-clock bound on one tick. The count budgets bound work; this bounds how long a tick
+    /// holds the indexed-storage concurrency it shares with invocations, which matters when the
+    /// store is slow. A tick stops at its next boundary, never inside an agent's archive, so it
+    /// can overrun by the agents already started, at most `max_concurrency` of them.
+    #[serde(with = "humantime_serde")]
+    pub max_tick_duration: Duration,
+    /// Most intervals to wait after a tick that hit `max_tick_duration`. The wait doubles after
+    /// each such tick and resets once a tick finishes in time, so the sweep backs off a slow store.
+    pub max_backoff_intervals: u32,
+    /// Most agents whose previous index is remembered. An agent past the bound goes untracked for
+    /// that pass and is archived a pass later, so set this above the largest backlog of stranded
+    /// oplogs one pod should work through.
+    pub max_tracked_agents: usize,
+}
+
+impl SafeDisplay for OplogSweepConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "enabled: {}", self.enabled);
+        let _ = writeln!(&mut result, "interval: {:?}", self.interval);
+        let _ = writeln!(&mut result, "page size: {}", self.page_size);
+        let _ = writeln!(&mut result, "max concurrency: {}", self.max_concurrency);
+        let _ = writeln!(
+            &mut result,
+            "max archives per tick: {}",
+            self.max_archives_per_tick
+        );
+        let _ = writeln!(
+            &mut result,
+            "max scanned per tick: {}",
+            self.max_scanned_per_tick
+        );
+        let _ = writeln!(
+            &mut result,
+            "max tick duration: {:?}",
+            self.max_tick_duration
+        );
+        let _ = writeln!(
+            &mut result,
+            "max backoff intervals: {}",
+            self.max_backoff_intervals
+        );
+        let _ = writeln!(
+            &mut result,
+            "max tracked agents: {}",
+            self.max_tracked_agents
+        );
+        result
+    }
+}
+
+impl Default for OplogSweepConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval: Duration::from_secs(60),
+            page_size: 128,
+            max_concurrency: 4,
+            max_archives_per_tick: 256,
+            max_scanned_per_tick: 4096,
+            max_tick_duration: Duration::from_secs(30),
+            max_backoff_intervals: 8,
+            max_tracked_agents: 100_000,
         }
     }
 }
@@ -1966,6 +2087,8 @@ impl Default for SuspendConfig {
             ephemeral_max_sleep: Duration::from_secs(60),
             wait_suspend_grace: Duration::from_secs(1),
             wait_suspend_check_interval: Duration::from_secs(10),
+            rpc_suspend_after: Duration::from_secs(30),
+            rpc_resume_after: Duration::from_secs(5),
         }
     }
 }
@@ -2558,6 +2681,27 @@ mod tests {
     use golem_common::SafeDisplay;
     use serde_json::Value;
     use test_r::test;
+
+    #[test]
+    fn durable_stream_config_uses_byte_size() {
+        let config = DurableStreamConfig::default();
+        let mut serialized = serde_json::to_value(&config).unwrap();
+        assert_eq!(serialized["external_batch_max_size"], "8388608 B");
+        assert!(serialized.get("external_batch_max_bytes").is_none());
+        serialized["external_batch_max_size"] = Value::from("1536 KiB");
+        let decoded: DurableStreamConfig = serde_json::from_value(serialized.clone()).unwrap();
+        assert_eq!(decoded.external_batch_max_size, 1_572_864);
+        assert!(decoded.validate().is_ok());
+        assert!(
+            decoded
+                .to_safe_string()
+                .contains("external batch maximum size: 1.50 MiB")
+        );
+        for invalid in ["0 B", "1.5 MiB"] {
+            serialized["external_batch_max_size"] = Value::from(invalid);
+            assert!(serde_json::from_value::<DurableStreamConfig>(serialized.clone()).is_err());
+        }
+    }
 
     #[test]
     fn durable_stream_config_enforces_renewal_before_lease_expiry() {

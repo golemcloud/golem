@@ -300,6 +300,44 @@ where
     Ok(store.with(|mut access| get_ctx(access.data_mut()).agent_auth_ctx()))
 }
 
+pub(crate) async fn synchronize_live_agent_authority_access<T, D, Ctx>(
+    store: &Accessor<T, D>,
+    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+) -> Result<(), WorkerExecutorError>
+where
+    T: 'static,
+    D: HasData + ?Sized,
+    Ctx: WorkerCtx,
+{
+    if !store.with(|mut access| get_ctx(access.data_mut()).state.is_live()) {
+        return Ok(());
+    }
+    loop {
+        let boundary_guard =
+            lock_synchronized_card_event_boundary_access_inner(store, get_ctx, true, true)
+                .await?
+                .expect("waiting authority boundary always returns a guard");
+        let stable = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            let generation = ctx
+                .state
+                .published_authority_generation
+                .load(Ordering::Acquire);
+            ctx.refresh_authority_expiration_deadline();
+            if ctx.authority_snapshot_is_stable(generation) {
+                ctx.adopt_authority_generation(generation);
+                true
+            } else {
+                false
+            }
+        });
+        drop(boundary_guard);
+        if stable {
+            return Ok(());
+        }
+    }
+}
+
 pub(super) async fn lock_synchronized_card_event_boundary_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -646,8 +684,8 @@ where
         Ok(wallet_generation) => OplogEntry::card_installed(
             entity_parent_start_index,
             Some(queued_event_index),
-            card,
-            Some(wallet_generation),
+            Box::new(card),
+            wallet_generation,
         ),
         Err(reason) => OplogEntry::card_install_failed(
             entity_parent_start_index,
@@ -666,7 +704,7 @@ async fn apply_received_card_transfer_access<T, D, Ctx>(
     entity_parent_start_index: Option<OplogIndex>,
     queued_event_index: OplogIndex,
     transfer_id: uuid::Uuid,
-    source_card_id: Option<golem_common::model::card::CardId>,
+    source_card_id: golem_common::model::card::CardId,
     card: golem_common::model::card::StoredCard,
 ) -> Result<(), WorkerExecutorError>
 where
@@ -692,8 +730,8 @@ where
             golem_common::model::card::CardHolder::Agent(
                 golem_common::model::card::AgentCardHolder { agent_id },
             ),
-            card,
-            Some(wallet_generation),
+            Box::new(card),
+            wallet_generation,
         ),
         Err(reason) => OplogEntry::card_install_failed(
             entity_parent_start_index,
@@ -762,7 +800,7 @@ where
             .add_and_commit_oplog(OplogEntry::card_expired(
                 entity_parent_start_index,
                 card_id,
-                Some(wallet_generation),
+                wallet_generation,
             ))
             .await;
     }
@@ -852,12 +890,10 @@ where
             } => {
                 store.with(|mut access| -> Result<(), WorkerExecutorError> {
                     let ctx = get_ctx(access.data_mut());
-                    if source_holder.as_ref().is_none_or(|source_holder| {
-                        crate::durable_host::card_holder_is_agent(
-                            source_holder,
-                            &ctx.owned_agent_id.agent_id,
-                        )
-                    }) && crate::durable_host::transfer_started_removes_source_membership(
+                    if crate::durable_host::card_holder_is_agent(
+                        &source_holder,
+                        &ctx.owned_agent_id.agent_id,
+                    ) && crate::durable_host::transfer_started_removes_source_membership(
                         ctx.state.agent_wallet_cards.get(&card_id),
                         &source_holder,
                         &ctx.owned_agent_id.agent_id,
@@ -1132,13 +1168,13 @@ where
             retry.entity_parent_start_index(),
             retry.transfer_id,
             retry.source_card_id,
-            Some(golem_common::model::card::CardHolder::Agent(
+            golem_common::model::card::CardHolder::Agent(
                 golem_common::model::card::AgentCardHolder {
                     agent_id: source_agent_id,
                 },
-            )),
+            ),
             target_holder,
-            store.with(|mut access| Some(get_ctx(access.data_mut()).state.wallet_generation)),
+            store.with(|mut access| get_ctx(access.data_mut()).state.wallet_generation),
         ))
         .await;
 
@@ -1289,7 +1325,7 @@ where
             entity_parent_start_index,
             revoked_card_ids: card_ids,
             affected_wallets,
-            local_wallet_generation: Some(wallet_generation),
+            local_wallet_generation: wallet_generation,
         })
         .await;
     Ok(())
@@ -1365,7 +1401,7 @@ where
             let (component_size, active_plugins) = store.with(|mut access| {
                 let ctx = get_ctx(access.data_mut());
                 (
-                    ctx.state.component_metadata.component_size,
+                    ctx.component_metadata().component_size,
                     HashSet::from_iter({
                         ctx.agent_type_provision_config()
                             .map(|c| c.plugins.as_slice())
@@ -1409,9 +1445,9 @@ where
             file_loader: ctx.state.file_loader.clone(),
             filesystem_generation_handle: ctx.filesystem_generation_handle(),
             owned_agent_id: ctx.owned_agent_id.clone(),
-            agent_id: ctx.state.agent_id.clone(),
+            agent_id: ctx.state.owner_context.agent().cloned(),
             initial_agent_config: ctx.state.initial_agent_config.clone(),
-            current_revision: ctx.state.component_metadata.revision,
+            current_revision: ctx.component_metadata().revision,
         }
     });
 
@@ -1494,7 +1530,8 @@ fn apply_revision_update_access<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     update: AccessRevisionUpdate,
 ) -> Result<(), WorkerExecutorError> {
-    ctx.state.component_metadata = update.metadata;
+    ctx.state.component_metadata = update.metadata.clone();
+    ctx.executable = crate::workerctx::WorkerCtxExecutable::Component(Box::new(update.metadata));
 
     if let Some((agent_config, initial_wallet_cards)) = update.agent_state {
         ctx.state.agent_config = agent_config;

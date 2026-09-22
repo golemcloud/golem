@@ -9,6 +9,7 @@
 declare module 'golem:tool/host@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
   import * as golemTool010Common from 'golem:tool/common@0.1.0';
+  import * as golemTool010Streams from 'golem:tool/streams@0.1.0';
   /**
    * Returns every tool **the calling agent has access to** in
    * the current environment, per the manifest's per-env and
@@ -20,7 +21,7 @@ declare module 'golem:tool/host@0.1.0' {
    * addition of per-caller access filtering. Order is
    * unspecified; callers that
    * want a stable ordering should sort by
-   * `definition.commands.nodes[0].name`.
+   * `lookup-name`.
    */
   export function getAllTools(): RegisteredTool[];
   /**
@@ -58,7 +59,7 @@ declare module 'golem:tool/host@0.1.0' {
    * input order controls the result order; filesystem-capable bodies become
    * eligible together and execute in durable Start order.
    */
-  export function getInvokeResults(futures: FutureInvokeResult[]): Promise<Result<InvocationResult, RpcError>[]>;
+  export function getInvokeResults(futures: FutureInvokeResult[]): Promise<Result<InvocationResult, ToolRpcError>[]>;
   export class ToolStdinWriter {
     /**
      * @throws StreamWriteError
@@ -80,34 +81,28 @@ declare module 'golem:tool/host@0.1.0' {
   }
   export class ToolStdout {
   }
-  export class ToolStdoutWriter {
-    /**
-     * @throws StreamWriteError
-     */
-    write(bytes: Uint8Array): Promise<void>;
-    /**
-     * @throws StreamWriteError
-     */
-    finish(): Promise<void>;
-    /**
-     * @throws StreamWriteError
-     */
-    fail(reason: ByteStreamFailure): Promise<void>;
-  }
   export class ToolRpc {
+    /**
+     * Binds an ordinary tool client to its configured tool name.
+     */
     constructor(toolName: string);
+    /**
+     * Creates a tool RPC resource without trapping on invalid caller input.
+     * @throws ToolRpcError
+     */
+    static create(toolName: string): ToolRpc;
     /**
      * Waits for the structured terminal. Callers that supplied stdout must
      * drive this wait and the already-created reader concurrently. Callers
      * that manually created an open stdin must likewise drive its writer
      * concurrently; see `create-stdin`.
-     * @throws RpcError
+     * @throws ToolRpcError
      */
     invokeAndAwait(commandPath: string[], input: TypedSchemaValue, stdin: ToolStdin | undefined, stdout: ToolStdout | undefined): Promise<InvocationResult>;
     /**
      * Durably admits fire-and-forget work. Declared output is discarded by
      * the host so an absent caller reader cannot apply backpressure.
-     * @throws RpcError
+     * @throws ToolRpcError
      */
     invoke(commandPath: string[], input: TypedSchemaValue, stdin: ToolStdin | undefined): void;
     /**
@@ -121,7 +116,7 @@ declare module 'golem:tool/host@0.1.0' {
     /**
      * Sequential calls return the same immutable terminal. Only one call may
      * be outstanding at a time.
-     * @throws RpcError
+     * @throws ToolRpcError
      */
     get(): Promise<InvocationResult>;
     /**
@@ -131,10 +126,14 @@ declare module 'golem:tool/host@0.1.0' {
     cancel(): void;
   }
   export type Tool = golemTool010Common.Tool;
-  export type ToolError = golemTool010Common.ToolError;
   export type InvocationResult = golemTool010Common.InvocationResult;
+  export type ByteStreamFailure = golemTool010Streams.ByteStreamFailure;
+  export type ByteStreamItem = golemTool010Streams.ByteStreamItem;
+  export type ByteStreamCloseCause = golemTool010Streams.ByteStreamCloseCause;
+  export type StreamWriteError = golemTool010Streams.StreamWriteError;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
   export type ComponentId = golemCore200Types.ComponentId;
+  export type ToolRpcError = golemCore200Types.ToolRpcError;
   /**
    * A tool registered in the environment, addressable by name from
    * any agent or other tool. `definition` carries the full metadata;
@@ -146,83 +145,10 @@ declare module 'golem:tool/host@0.1.0' {
    * component-id) for host-implemented privileged tools (§4.6).
    */
   export type RegisteredTool = {
+    /** Stable leaf name used to construct tool-rpc, independent of adapters. */
+    lookupName: string;
     definition: Tool;
     implementedBy: ComponentId;
-  };
-  export type RpcError =
-  {
-    tag: 'protocol-error'
-    val: string
-  } |
-  {
-    tag: 'denied'
-    val: string
-  } |
-  {
-    tag: 'not-found'
-    val: string
-  } |
-  {
-    tag: 'remote-internal-error'
-    val: string
-  } |
-  {
-    tag: 'remote-tool-error'
-    val: ToolError
-  } |
-  /** The operation's explicit cancellation won terminal arbitration. */
-  {
-    tag: 'cancelled'
-  } |
-  /**
-   * A filesystem-capable input or output attachment exceeded the
-   * configured per-direction retained-byte limit.
-   */
-  {
-    tag: 'resource-exhausted'
-    val: string
-  };
-  /**
-   * Recoverable attachment failures are stream values rather than Component
-   * Model stream errors. A producer emits one final failure item and then
-   * closes the underlying stream. Clean EOF is represented only by closure.
-   */
-  export type ByteStreamFailure =
-  {
-    tag: 'cancelled'
-  } |
-  {
-    tag: 'abandoned'
-  } |
-  {
-    tag: 'resource-exhausted'
-  } |
-  {
-    tag: 'failed'
-    val: string
-  };
-  /**
-   * Every successful item contains a non-empty byte chunk.
-   */
-  export type ByteStreamItem = Result<Uint8Array, ByteStreamFailure>;
-  export type ByteStreamCloseCause =
-  {
-    tag: 'finished'
-  } |
-  {
-    tag: 'failed'
-    val: ByteStreamFailure
-  } |
-  {
-    tag: 'consumer-cancelled'
-  };
-  export type StreamWriteError =
-  {
-    tag: 'closed'
-    val: ByteStreamCloseCause
-  } |
-  {
-    tag: 'concurrent-operation'
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

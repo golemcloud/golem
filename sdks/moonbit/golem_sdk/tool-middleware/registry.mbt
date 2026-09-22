@@ -1,7 +1,7 @@
 ///|
 pub(all) struct MonomorphicToolMiddlewareScope {
   presented : @toolCommon.Tool
-  expected : @toolCommon.Tool
+  expected : @toolCommon.Tool?
 }
 
 ///|
@@ -13,9 +13,11 @@ pub(all) enum ToolMiddlewareScope {
 ///|
 pub(all) struct ToolMiddleware {
   name : String
+  version : String
   aliases : Array[String]
   doc : @toolCommon.Doc
   scope : ToolMiddlewareScope
+  parameter_schema : @model.SchemaGraph
 }
 
 ///|
@@ -43,17 +45,40 @@ let tool_middleware_state : ToolMiddlewareState = {
 fn ToolMiddleware::to_wit(self : ToolMiddleware) -> @toolCommon.ToolMiddleware {
   {
     name: self.name,
+    version: self.version,
     aliases: self.aliases.copy(),
     doc: self.doc,
     scope: match self.scope {
       Monomorphic(scope) =>
         @toolCommon.ToolMiddlewareScope::Monomorphic({
           presented: scope.presented,
-          expected: Some(scope.expected),
+          expected: scope.expected,
         })
       Universal => @toolCommon.ToolMiddlewareScope::Universal
     },
+    parameter_schema: try! @model.schema_graph_to_wit(self.parameter_schema),
   }
+}
+
+///|
+#doc(hidden)
+pub fn empty_parameter_schema() -> @model.SchemaGraph {
+  { defs: [], root: @model.schema_type(@model.SchemaTypeBody::Record([])), }
+}
+
+///|
+fn validate_installation_parameters(
+  declared : @model.SchemaGraph,
+  supplied : @model.TypedSchemaValue,
+) -> Bool {
+  if @model.validate_graph(supplied.graph).length() > 0 ||
+    supplied.graph != declared {
+    return false
+  }
+  if declared == empty_parameter_schema() {
+    return supplied.value is @model.SchemaValue::Record([])
+  }
+  true
 }
 
 ///|
@@ -122,41 +147,167 @@ pub fn discover_tool_middlewares() -> Array[@toolCommon.ToolMiddleware] {
 #doc(hidden)
 pub fn get_registered_tool_middleware(
   name : String,
-) -> Result[@toolCommon.ToolMiddleware, @toolCommon.ToolError] {
+) -> Result[@toolCommon.ToolMiddleware, @types.ToolError] {
   match tool_middleware_state.descriptors.get(name) {
     Some(middleware) => Ok(middleware.to_wit())
-    None => Err(@toolCommon.ToolError::InvalidToolName(name))
+    None => Err(@types.ToolError::InvalidToolName(name))
   }
 }
 
 ///|
 #doc(hidden)
-pub async fn invoke_registered_tool_middleware(
+pub async fn invoke_registered_tool_middleware_wire(
   middleware_name : String,
   tool_name : String,
   tool_metadata : @toolCommon.Tool,
+  parameters : @types.TypedSchemaValue,
+  command_path : Array[String],
+  input : @types.TypedSchemaValue,
+  stdin : @async-core.Stream[
+    Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
+  ]?,
+  stdout : @toolStreams.ToolStdoutWriter?,
+  principal : @agentCommon.Principal,
+  underlying : UnderlyingTool,
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
+  let context = underlying.ownership_context()
+  let decoded_parameters = @model_host.typed_schema_value_from_wit(parameters) catch {
+    error =>
+      return Err(
+        @types.ToolError::InvalidInput(
+          "failed to decode tool middleware parameters: \{Repr(error)}",
+        ),
+      )
+  }
+  context.register_cleanup(fn() {
+    @model.drop_owned_capabilities(decoded_parameters.value)
+  })
+  let invocation = RawToolInvocation::from_wit(
+    context, tool_name, tool_metadata, decoded_parameters, command_path, input, stdin,
+    stdout, principal,
+  )
+  let parameter_schema = match
+    tool_middleware_state.descriptors.get(middleware_name) {
+    Some(middleware) => middleware.parameter_schema
+    None => return Err(@types.ToolError::InvalidToolName(middleware_name))
+  }
+  if !validate_installation_parameters(parameter_schema, decoded_parameters) {
+    return Err(
+      @types.ToolError::InvalidInput(
+        "tool middleware parameters do not match the declared parameter schema",
+      ),
+    )
+  }
+  let invoker = match tool_middleware_state.invokers.get(middleware_name) {
+    Some(invoker) => invoker
+    None => return Err(@types.ToolError::InvalidToolName(middleware_name))
+  }
+  let host_stdout = invocation.take_host_stdout()
+  let authored = invoker(invocation, underlying)
+  let final_result = match authored {
+    Ok(result) =>
+      result
+      .take_for_final(context)
+      .map_err(message => @types.ToolError::InvalidResult(message))
+    Err(error) => Err(encode_raw_tool_error(error, context))
+  }
+  match final_result {
+    Err(error) => {
+      match host_stdout {
+        Some(writer) => writer.drop()
+        None => ()
+      }
+      context.revoke()
+      Err(error)
+    }
+    Ok(result) => {
+      match host_stdout {
+        None => ()
+        Some(writer) => pump_final_stdout(result.stdout, writer)
+      }
+      context.revoke()
+      match host_stdout {
+        None => Ok(result)
+        Some(_) => Ok({ result: result.result, stdout: None, })
+      }
+    }
+  }
+}
+
+///|
+async fn pump_final_stdout(
+  source : @async-core.Stream[Byte]?,
+  writer : @toolStreams.ToolStdoutWriter,
+) -> Unit {
+  defer writer.drop()
+  match source {
+    None => ignore(writer.finish())
+    Some(stream) => {
+      defer stream.drop()
+      for ;; {
+        let chunk = stream.read(65536) catch {
+          @toolCore.ToolStreamError::Cancelled => {
+            ignore(writer.fail(@toolStreams.ByteStreamFailure::Cancelled))
+            return
+          }
+          @toolCore.ToolStreamError::Abandoned => {
+            ignore(writer.fail(@toolStreams.ByteStreamFailure::Abandoned))
+            return
+          }
+          @toolCore.ToolStreamError::ResourceExhausted => {
+            ignore(
+              writer.fail(@toolStreams.ByteStreamFailure::ResourceExhausted),
+            )
+            return
+          }
+          error => {
+            ignore(
+              writer.fail(
+                @toolStreams.ByteStreamFailure::Failed(error.to_string()),
+              ),
+            )
+            return
+          }
+        }
+        match chunk {
+          Some(bytes) =>
+            if writer.write(FixedArray::from_array(bytes)) is Err(_) {
+              return
+            }
+          None => {
+            ignore(writer.finish())
+            return
+          }
+        }
+      }
+    }
+  }
+}
+
+///|
+async fn invoke_registered_tool_middleware(
+  middleware_name : String,
+  tool_name : String,
+  tool_metadata : @toolCommon.Tool,
+  parameters : @types.TypedSchemaValue,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
   principal : @agentCommon.Principal,
   underlying : UnderlyingTool,
-) -> Result[@toolCommon.InvocationResult, @toolCommon.ToolError] {
-  let context = underlying.ownership_context()
-  let invocation = RawToolInvocation::from_wit(
-    context, tool_name, tool_metadata, command_path, input, stdin, principal,
+) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
+  invoke_registered_tool_middleware_wire(
+    middleware_name,
+    tool_name,
+    tool_metadata,
+    parameters,
+    command_path,
+    input,
+    stdin.map(byte_stream_items),
+    None,
+    principal,
+    underlying,
   )
-  let invoker = match tool_middleware_state.invokers.get(middleware_name) {
-    Some(invoker) => invoker
-    None => return Err(@toolCommon.ToolError::InvalidToolName(middleware_name))
-  }
-  match invoker(invocation, underlying) {
-    Ok(result) =>
-      match result.take_for_final(context) {
-        Ok(result) => Ok(result)
-        Err(message) => Err(@toolCommon.ToolError::InvalidResult(message))
-      }
-    Err(error) => Err(encode_raw_tool_error(error, context))
-  }
 }
 
 ///|

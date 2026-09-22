@@ -6,6 +6,8 @@ members = [
     "golem-client",
     "golem-common",
     "golem-debugging-service",
+    "golem-native-tool",
+    "golem-rust-macro",
     "golem-service-base",
     "golem-component-compilation-service",
     "golem-registry-service",
@@ -17,6 +19,7 @@ members = [
     "integration-tests",
     "golem-schema",
     "golem-schema-derive",
+    "golem-tool-metadata",
     "cli/golem",
     "cli/golem-cli",
     "golem-openapi-client-generator",
@@ -37,14 +40,17 @@ golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
+golem-native-tool = { version = "=0.0.0", path = "golem-native-tool" }
 golem-openapi-client-generator = { version = "=0.0.0", path = "golem-openapi-client-generator" }
 golem-registry-service = { path = "golem-registry-service" }
+golem-rust-macro = { version = "=0.0.0", path = "golem-rust-macro" }
 golem-schema = { version = "=0.0.0", path = "golem-schema", default-features = false }
 golem-schema-derive = { version = "=0.0.0", path = "golem-schema-derive" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
 golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
+golem-tool-metadata = { version = "=0.0.0", path = "golem-tool-metadata", default-features = false }
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
 golem-worker-executor-test-utils = { version = "=0.0.0", path = "golem-worker-executor-test-utils" }
 golem-worker-service = { path = "golem-worker-service" }
@@ -113,6 +119,7 @@ evicting_cache_map = "0.4.0"
 expectrl = "0.8.0"
 fancy-regex = "0.14.0"
 fastrand = "2.3.0"
+fd-lock = "4.0.4"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 fmt = "0.1.0"
 flate2 = "1.1.0"
@@ -142,6 +149,7 @@ humansize = "2.1.3"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
 hyper = { version = "1.6.0", features = ["full"] }
+hyper-util = { version = "0.1.20", features = ["server-auto", "tokio"] }
 ident-mash = "0.1.0"
 im = "15.1.0"
 include_dir = "0.7.4"
@@ -309,7 +317,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.248.0"
 wasm-metadata = { version = "0.248.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.4.3", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.4.4", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.248"
 wasmparser = "0.248.0"
 wasmprinter = "0.248.0"

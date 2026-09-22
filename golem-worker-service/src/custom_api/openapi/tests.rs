@@ -35,8 +35,8 @@ use golem_common::schema::{
 };
 use golem_service_base::custom_api::{
     CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema, CorsOptions,
-    MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat, PathSegment, PathSegmentType,
-    QueryOrHeaderType, RequestBodySchema, WebhookCallbackBehaviour,
+    CorsPreflightBehaviour, MethodParameter, OpenApiSpecBehaviour, OpenApiSpecFormat, PathSegment,
+    PathSegmentType, QueryOrHeaderType, RequestBodySchema, WebhookCallbackBehaviour,
 };
 use golem_service_base::model::SafeIndex;
 use http::Method;
@@ -276,6 +276,8 @@ fn call_agent_route(
         path,
         body,
         behavior: RichRouteBehaviour::CallAgent(CallAgentBehaviour {
+            route_mode: golem_service_base::custom_api::AgentRouteMode::Rest,
+            base_path_variables: 0,
             component_id: ComponentId::new(),
             component_revision: ComponentRevision::INITIAL,
             agent_type: agent_type_name("TestAgent"),
@@ -308,6 +310,757 @@ fn spec_for(routes: Vec<RichCompiledRoute>) -> Value {
     HttpApiOpenApiSpec::from_routes(&routes, &Domain("example.com".to_string()))
         .expect("spec generation succeeds")
         .0
+}
+
+#[test]
+async fn durable_stream_cors_exposes_producer_outcomes_only_for_stream_routes() {
+    use crate::custom_api::cors::apply_cors_outgoing_middleware;
+    use crate::custom_api::route_resolver::ResolvedRouteEntry;
+    use crate::custom_api::{ResponseBody, RichRequest, RouteExecutionResult};
+    use golem_service_base::custom_api::{AgentRouteMode, OriginPattern};
+    for mode in [AgentRouteMode::Rest, AgentRouteMode::DurableStreams] {
+        for origin in ["https://allowed.example", "https://blocked.example"] {
+            let mut route = call_agent_route(
+                Method::POST,
+                vec![],
+                RequestBodySchema::Unused,
+                vec![],
+                unit_response(),
+                None,
+            );
+            let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+                panic!()
+            };
+            call.route_mode = mode;
+            route.cors.allowed_patterns = vec![OriginPattern("https://allowed.example".into())];
+            let resolved = ResolvedRouteEntry {
+                domain: Domain("example.com".into()),
+                route: std::sync::Arc::new(route),
+                captured_path_parameters: vec![],
+                openapi_spec: None,
+            };
+            let request = RichRequest::new(
+                poem::Request::builder()
+                    .header("Origin", origin)
+                    .body(poem::Body::empty()),
+            );
+            let mut result = RouteExecutionResult {
+                status: http::StatusCode::CONFLICT,
+                headers: Default::default(),
+                body: ResponseBody::NoBody,
+            };
+            apply_cors_outgoing_middleware(&mut result, &request, &resolved)
+                .await
+                .unwrap();
+            assert_eq!(
+                result
+                    .headers
+                    .contains_key(&http::header::ACCESS_CONTROL_ALLOW_ORIGIN),
+                origin == "https://allowed.example"
+            );
+            assert_eq!(result.headers.get(&http::header::VARY).unwrap(), "Origin");
+            if mode == AgentRouteMode::DurableStreams {
+                let exposed: std::collections::BTreeSet<_> = result.headers
+                    [&http::header::ACCESS_CONTROL_EXPOSE_HEADERS]
+                    .split(", ")
+                    .collect();
+                for name in [
+                    "Producer-Epoch",
+                    "Producer-Seq",
+                    "Producer-Expected-Seq",
+                    "Producer-Received-Seq",
+                    "Stream-Next-Offset",
+                    "Location",
+                    "Retry-After",
+                ] {
+                    assert!(exposed.contains(name), "missing {name}");
+                }
+            } else {
+                assert!(
+                    !result
+                        .headers
+                        .contains_key(&http::header::ACCESS_CONTROL_EXPOSE_HEADERS)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn durable_stream_schema_distinguishes_slots_and_scalar_results() {
+    use super::route_schema::build_document_schema;
+    use golem_common::schema::NamedField;
+    let mut route = call_agent_route(
+        Method::PUT,
+        vec![PathSegment::Literal {
+            value: "streams".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        cm_response(record(vec![
+            field("events", SchemaType::stream(Some(str()))),
+            field(
+                "bytes",
+                SchemaType::stream(Some(SchemaType::ref_to("byte".into()))),
+            ),
+        ])),
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    call.method_input.input_schema = InputSchema::parameters([
+        NamedField::user_supplied("input", SchemaType::stream(Some(SchemaType::u32()))),
+        NamedField::user_supplied("count", SchemaType::u32()),
+    ]);
+    call.expected_agent_response.graph.defs.push(SchemaTypeDef {
+        id: "byte".into(),
+        name: None,
+        body: SchemaType::u8(),
+    });
+    let document = build_document_schema(&[&route]).unwrap();
+    let slots = document.per_route[0]
+        .call_agent
+        .as_ref()
+        .unwrap()
+        .stream_slots
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        slots
+            .iter()
+            .map(|s| (s.name.as_str(), s.writable, s.binary))
+            .collect::<Vec<_>>(),
+        vec![
+            ("input", true, false),
+            ("events", false, false),
+            ("bytes", false, true)
+        ]
+    );
+    assert_eq!(slots[0].element, SchemaType::u32());
+    assert_eq!(
+        document.graph.resolve_ref(&slots[2].element).unwrap(),
+        &SchemaType::u8()
+    );
+
+    let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        panic!()
+    };
+    call.expected_agent_response = cm_response(SchemaType::u8());
+    let document = build_document_schema(&[&route]).unwrap();
+    let slots = document.per_route[0]
+        .call_agent
+        .as_ref()
+        .unwrap()
+        .stream_slots
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        (slots[1].name.as_str(), slots[1].binary),
+        ("$result", false)
+    );
+    assert_eq!(slots[1].element, SchemaType::u8());
+
+    let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        panic!()
+    };
+    call.expected_agent_response = unit_response();
+    let document = build_document_schema(&[&route]).unwrap();
+    assert_eq!(
+        document.per_route[0]
+            .call_agent
+            .as_ref()
+            .unwrap()
+            .stream_slots
+            .as_ref()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn durable_stream_deployment_spec_snapshots() {
+    use golem_common::schema::NamedField;
+    for with_input in [false, true] {
+        let mut route = call_agent_route(
+            Method::PUT,
+            vec![PathSegment::Literal {
+                value: "stream".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            cm_response(SchemaType::stream(Some(str()))),
+            None,
+        );
+        let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+            panic!()
+        };
+        call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+        if with_input {
+            call.method_input.input_schema = InputSchema::parameters([NamedField::user_supplied(
+                "input",
+                SchemaType::stream(Some(str())),
+            )]);
+        }
+        let spec = spec_for(vec![route]);
+        let name = if with_input {
+            "durable-stream-duplex.json"
+        } else {
+            "durable-stream-output.json"
+        };
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/custom_api/openapi/snapshots")
+            .join(name);
+        if std::env::var("UPDATE_GOLDENFILES").as_deref() == Ok("1") {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(
+                &path,
+                format!("{}\n", serde_json::to_string_pretty(&spec).unwrap()),
+            )
+            .unwrap();
+        }
+        let expected: Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(spec, expected, "deployment OpenAPI snapshot {name} changed");
+    }
+}
+
+#[test]
+fn durable_stream_routes_do_not_break_rest_openapi() {
+    let rest = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "rest".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        CompiledOutputSchema {
+            graph: SchemaGraph::empty(),
+            output_schema: OutputSchema::Unit,
+        },
+        None,
+    );
+    let mut stream = call_agent_route(
+        Method::PUT,
+        vec![PathSegment::Literal {
+            value: "stream".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        CompiledOutputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::stream(Some(SchemaType::string()))),
+            output_schema: OutputSchema::Single(Box::new(SchemaType::stream(Some(
+                SchemaType::string(),
+            )))),
+        },
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(ref mut call) = stream.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    let mut shared = call_agent_route(
+        Method::PUT,
+        rest.path.clone(),
+        RequestBodySchema::Unused,
+        vec![],
+        CompiledOutputSchema {
+            graph: SchemaGraph::empty(),
+            output_schema: OutputSchema::Unit,
+        },
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(ref mut call) = shared.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    let mut routes = vec![rest, stream, shared];
+    for path in [routes[0].path.clone(), routes[1].path.clone()] {
+        let mut preflight = call_agent_route(
+            Method::OPTIONS,
+            path,
+            RequestBodySchema::Unused,
+            vec![],
+            CompiledOutputSchema {
+                graph: SchemaGraph::empty(),
+                output_schema: OutputSchema::Unit,
+            },
+            None,
+        );
+        preflight.behavior = RichRouteBehaviour::CorsPreflight(CorsPreflightBehaviour {
+            method_policies: vec![],
+        });
+        routes.push(preflight);
+    }
+    let spec = spec_for(routes);
+    assert!(spec["paths"]["/rest"]["get"].is_object());
+    assert!(spec["paths"]["/rest"]["options"].is_object());
+    assert!(spec["paths"]["/rest"]["put"].is_object());
+    assert!(spec["paths"]["/stream"]["put"].is_object());
+    assert!(spec["paths"]["/stream"]["options"].is_null());
+}
+
+#[test]
+fn durable_stream_operations_have_concrete_typed_slots() {
+    use golem_common::schema::NamedField;
+    let make_route = || {
+        let mut route = call_agent_route(
+            Method::PUT,
+            vec![PathSegment::Literal {
+                value: "duplex".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            cm_response(SchemaType::stream(Some(str()))),
+            None,
+        );
+        let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+            panic!()
+        };
+        call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+        call.method_input.input_schema = InputSchema::parameters([
+            NamedField::user_supplied(
+                "messages",
+                SchemaType::stream(Some(SchemaType::list(SchemaType::u32()))),
+            ),
+            NamedField::user_supplied("bytes", SchemaType::stream(Some(SchemaType::u8()))),
+        ]);
+        route
+    };
+    let mut routes = vec![make_route()];
+    // The compiler expands the family using additional untyped captures. They
+    // must not be lowered as independent method bindings or emitted twice.
+    for suffix in [
+        vec!["invocations", "session"],
+        vec!["invocations", "session", "streams", "slot"],
+        vec!["forks", "fork", "invocations", "session"],
+        vec!["forks", "fork", "invocations", "session", "streams", "slot"],
+    ] {
+        for method in [
+            Method::PUT,
+            Method::GET,
+            Method::HEAD,
+            Method::DELETE,
+            Method::POST,
+        ] {
+            let mut generated = make_route();
+            generated.method = method;
+            generated.path.extend(suffix.iter().map(|part| {
+                if ["session", "slot", "fork"].contains(part) {
+                    PathSegment::Variable {
+                        display_name: (*part).into(),
+                    }
+                } else {
+                    PathSegment::Literal {
+                        value: (*part).into(),
+                    }
+                }
+            }));
+            routes.push(generated);
+        }
+    }
+    let spec = spec_for(routes);
+    let paths = spec["paths"].as_object().unwrap();
+    assert_eq!(paths.len(), 9);
+    let session = "/duplex/invocations/{session}";
+    let input = &paths[&format!("{session}/streams/messages")];
+    let bytes = &paths[&format!("{session}/streams/bytes")];
+    let output = &paths[&format!("{session}/streams/%24result")];
+    assert!(output["post"].is_null());
+    assert!(output["delete"].is_object());
+    assert_eq!(
+        output["get"]["responses"]["200"]["content"]["application/json"]["schema"],
+        json!({"type":"array","items":{"type":"string"}})
+    );
+    assert!(bytes["post"]["requestBody"]["content"]["application/octet-stream"].is_object());
+    assert!(bytes["post"]["requestBody"]["content"]["application/json"].is_null());
+    let append = &input["post"]["requestBody"]["content"]["application/json"]["schema"];
+    assert_eq!(
+        append["anyOf"][0]["allOf"][1],
+        json!({"not":{"type":"array"}})
+    );
+    assert_eq!(append["anyOf"][1]["items"]["type"], "array");
+    assert_eq!(append["anyOf"][1]["minItems"], 1);
+    assert_eq!(append["anyOf"][1]["maxItems"], 4096);
+    assert_eq!(input["post"]["requestBody"]["required"], false);
+    assert!(input["get"]["responses"]["200"]["content"]["text/event-stream"].is_object());
+    assert!(input["head"]["responses"]["200"]["content"].is_null());
+    assert!(paths[session]["get"]["responses"]["200"]["content"]["application/json"].is_object());
+    let fork_session = "/duplex/forks/{fork}/invocations/{session}";
+    for slot in ["messages", "bytes", "%24result"] {
+        let original = &paths[&format!("{session}/streams/{slot}")];
+        let fork = &paths[&format!("{fork_session}/streams/{slot}")];
+        for method in ["get", "head", "post", "delete"] {
+            assert_eq!(fork[method]["requestBody"], original[method]["requestBody"]);
+            assert_eq!(fork[method]["responses"], original[method]["responses"]);
+            if let Some(parameters) = fork[method]["parameters"].as_array() {
+                let inherited: Vec<_> = parameters
+                    .iter()
+                    .filter(|p| p["name"] != "fork")
+                    .cloned()
+                    .collect();
+                assert_eq!(json!(inherited), original[method]["parameters"]);
+            }
+        }
+        assert!(fork["put"]["responses"]["201"].is_object());
+        assert!(
+            fork["put"]["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| { p["name"] == "Stream-Forked-From" && p["required"] == true })
+        );
+    }
+    let mut ids = std::collections::HashSet::new();
+    for item in paths.values() {
+        assert_eq!(item["x-golem-route-mode"], "durable-streams");
+        for method in ["put", "get", "head", "post", "delete"] {
+            if let Some(operation) = item.get(method) {
+                assert!(ids.insert(operation["operationId"].as_str().unwrap()));
+                assert!(operation["responses"]["503"]["headers"]["Retry-After"].is_object());
+            }
+        }
+    }
+    fn check_refs(value: &Value, document: &Value) {
+        match value {
+            Value::Object(object) => {
+                for (name, value) in object {
+                    if name == "$ref" || name == "element-schema-ref" {
+                        assert!(
+                            document
+                                .pointer(value.as_str().unwrap().strip_prefix('#').unwrap())
+                                .is_some(),
+                            "unresolved {value}"
+                        );
+                    } else {
+                        check_refs(value, document);
+                    }
+                }
+            }
+            Value::Array(values) => values.iter().for_each(|value| check_refs(value, document)),
+            _ => {}
+        }
+    }
+    check_refs(&spec, &spec);
+}
+
+#[test]
+fn durable_stream_fork_creation_documents_runtime_response_headers() {
+    use golem_common::schema::NamedField;
+
+    let mut route = call_agent_route(
+        Method::PUT,
+        vec![PathSegment::Literal {
+            value: "fork-response-headers".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    call.method_input.input_schema = InputSchema::parameters([NamedField::user_supplied(
+        "input",
+        SchemaType::stream(Some(str())),
+    )]);
+
+    let spec = spec_for(vec![route]);
+    let put = &spec["paths"]["/fork-response-headers/forks/{fork}/invocations/{session}/streams/input"]
+        ["put"];
+    let mut missing = Vec::new();
+    for status in ["200", "201"] {
+        if !put["responses"][status]["headers"]["Location"].is_object() {
+            missing.push(format!("{status} Location"));
+        }
+    }
+    if !put["responses"]["429"]["headers"]["Retry-After"].is_object() {
+        missing.push("429 Retry-After".into());
+    }
+    assert!(
+        missing.is_empty(),
+        "missing runtime response headers: {missing:?}"
+    );
+}
+
+#[test]
+fn durable_stream_slot_put_documents_optional_content_type() {
+    use golem_common::schema::NamedField;
+
+    let mut route = call_agent_route(
+        Method::PUT,
+        vec![PathSegment::Literal {
+            value: "content-type".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    call.method_input.input_schema = InputSchema::parameters([NamedField::user_supplied(
+        "input",
+        SchemaType::stream(Some(str())),
+    )]);
+
+    let spec = spec_for(vec![route]);
+    let operation = &spec["paths"]["/content-type/invocations/{session}/streams/input"]["put"];
+    assert!(operation["requestBody"].is_null());
+    assert!(
+        operation["description"]
+            .as_str()
+            .unwrap()
+            .contains("Content-Type is optional; when supplied it must be application/json")
+    );
+}
+
+#[test]
+fn durable_stream_slot_named_session_has_unique_operation_ids() {
+    use golem_common::schema::NamedField;
+
+    let mut route = call_agent_route(
+        Method::PUT,
+        vec![PathSegment::Literal {
+            value: "operation-id-collision".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    call.method_input.input_schema = InputSchema::parameters([NamedField::user_supplied(
+        "session",
+        SchemaType::stream(Some(str())),
+    )]);
+
+    let spec = spec_for(vec![route]);
+    let mut operation_ids = std::collections::HashSet::new();
+    let mut duplicates = Vec::new();
+    for path_item in spec["paths"].as_object().unwrap().values() {
+        for method in ["put", "get", "head", "post", "delete"] {
+            if let Some(operation) = path_item.get(method) {
+                let operation_id = operation["operationId"].as_str().unwrap();
+                if !operation_ids.insert(operation_id) {
+                    duplicates.push(operation_id);
+                }
+            }
+        }
+    }
+    assert!(
+        duplicates.is_empty(),
+        "duplicate operationIds: {duplicates:?}"
+    );
+}
+
+#[test]
+fn durable_stream_method_bindings_are_operation_specific() {
+    use golem_common::schema::NamedField;
+    for (body, binding, media) in [
+        (RequestBodySchema::Unused, None, None),
+        (
+            json_body(record(vec![field("value", str())])),
+            Some(MethodParameter::JsonObjectBodyField {
+                field_index: SafeIndex::new(0),
+            }),
+            Some("application/json"),
+        ),
+        (
+            unrestricted_text(),
+            Some(MethodParameter::UnstructuredTextBody),
+            Some("text/plain"),
+        ),
+        (
+            unrestricted_binary(),
+            Some(MethodParameter::UnstructuredBinaryBody),
+            Some("*/*"),
+        ),
+        (
+            RequestBodySchema::Unused,
+            Some(MethodParameter::Header {
+                header_name: "x-value".into(),
+                parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+            }),
+            None,
+        ),
+    ] {
+        let url_bound = binding.is_none();
+        let mut bindings = vec![
+            MethodParameter::Path {
+                path_segment_index: SafeIndex::new(0),
+                parameter_type: PathSegmentType::Str,
+            },
+            MethodParameter::Query {
+                query_parameter_name: "count".into(),
+                parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
+            },
+        ];
+        bindings.extend(binding);
+        let mut route = call_agent_route(
+            Method::PUT,
+            vec![
+                PathSegment::Literal {
+                    value: "bound".into(),
+                },
+                PathSegment::Variable {
+                    display_name: "session".into(),
+                },
+            ],
+            body,
+            bindings,
+            unit_response(),
+            None,
+        );
+        let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+            panic!()
+        };
+        call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+        call.base_path_variables = 1;
+        call.method_input.input_schema = InputSchema::parameters([NamedField::user_supplied(
+            "input",
+            SchemaType::stream(Some(str())),
+        )]);
+        let spec = spec_for(vec![route]);
+        let paths = &spec["paths"];
+        let session = "/bound/{session}/invocations/{ds_session}";
+        let slot = format!("{session}/streams/input");
+        for path in ["/bound/{session}", session] {
+            let op = &paths[path]["put"];
+            assert_eq!(
+                op["parameters"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|p| p["name"] == "count")
+                    .unwrap()["required"],
+                true
+            );
+            if let Some(media) = media {
+                assert!(op["requestBody"]["content"][media].is_object());
+            } else {
+                assert!(op["requestBody"].is_null());
+            }
+        }
+        for method in ["put", "post", "get", "head", "delete"] {
+            let op = &paths[&slot][method];
+            let params = op["parameters"].as_array().unwrap();
+            let count = params.iter().find(|p| p["name"] == "count");
+            if url_bound && ["put", "post"].contains(&method) {
+                assert_eq!(count.unwrap()["required"], method == "put");
+            } else {
+                assert!(count.is_none());
+            }
+            assert!(
+                params
+                    .iter()
+                    .any(|p| p["name"] == "session" && p["required"] == true)
+            );
+            assert!(
+                params
+                    .iter()
+                    .any(|p| p["name"] == "ds_session" && p["required"] == true)
+            );
+            assert!(
+                !params
+                    .iter()
+                    .any(|p| p["name"] == "x-value" || p["name"] == "Content-Language")
+            );
+        }
+        let fork = &paths["/bound/{session}/forks/{fork}/invocations/{ds_session}/streams/input"];
+        for (method, expected) in [
+            ("post", "Producer-Id"),
+            ("put", "Stream-Forked-From"),
+            ("get", "offset"),
+        ] {
+            let parameters = fork[method]["parameters"].as_array().unwrap();
+            assert!(!parameters.iter().any(|p| p["name"] == "count"));
+            assert!(parameters.iter().any(|p| p["name"] == expected));
+        }
+    }
+}
+
+#[test]
+fn durable_stream_concrete_slot_yields_to_explicit_rest_route() {
+    for (reverse, slot) in [
+        (false, "messages"),
+        (true, "messages"),
+        (false, "$result"),
+        (true, "$result"),
+    ] {
+        let mut stream = call_agent_route(
+            Method::PUT,
+            vec![PathSegment::Literal {
+                value: "overlap".into(),
+            }],
+            RequestBodySchema::Unused,
+            vec![],
+            if slot == "$result" {
+                cm_response(SchemaType::stream(Some(str())))
+            } else {
+                cm_response(record(vec![field(
+                    "messages",
+                    SchemaType::stream(Some(str())),
+                )]))
+            },
+            None,
+        );
+        let RichRouteBehaviour::CallAgent(call) = &mut stream.behavior else {
+            panic!()
+        };
+        call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+        let rest = call_agent_route(
+            Method::GET,
+            vec![
+                PathSegment::Literal {
+                    value: "overlap".into(),
+                },
+                PathSegment::Literal {
+                    value: "invocations".into(),
+                },
+                PathSegment::Variable {
+                    display_name: "id".into(),
+                },
+                PathSegment::Literal {
+                    value: "streams".into(),
+                },
+                PathSegment::Literal { value: slot.into() },
+            ],
+            RequestBodySchema::Unused,
+            vec![MethodParameter::Path {
+                path_segment_index: SafeIndex::new(0),
+                parameter_type: PathSegmentType::Str,
+            }],
+            unit_response(),
+            Some("Explicit REST route".into()),
+        );
+        let mut routes = vec![stream, rest];
+        if reverse {
+            routes.reverse();
+        }
+        let spec = spec_for(routes);
+        let canonical = format!(
+            "/overlap/invocations/{{session}}/streams/{}",
+            slot.replace('$', "%24")
+        );
+        let item = &spec["paths"][&canonical];
+        assert_eq!(item["get"]["description"], "Explicit REST route");
+        assert_eq!(item["get"]["x-golem-route-mode"], "rest");
+        assert_eq!(item["get"]["parameters"][0]["name"], "session");
+        assert!(item["get"]["responses"]["204"].is_object());
+        assert!(item["get"]["responses"]["200"].is_null());
+        assert!(item["head"].is_object());
+        assert!(spec["paths"][format!("/overlap/invocations/{{id}}/streams/{slot}")].is_null());
+    }
 }
 
 /// Build the OpenAPI document for a single route and return its operation

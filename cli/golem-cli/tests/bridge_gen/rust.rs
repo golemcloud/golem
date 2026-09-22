@@ -1561,7 +1561,7 @@ fn cargo_check(target_path: &Utf8Path) {
 fn tool_generation_compiles() {
     let (_dir, target_path) = generate_tool(grep_tool(), "grep-tool-guest-client");
     let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
-    assert!(lib_rs.contains("pub fn replace("), "{lib_rs}");
+    assert!(lib_rs.contains("pub async fn replace("), "{lib_rs}");
     assert!(
         lib_rs.contains("agentic::ToolInvocation<(), std::convert::Infallible>"),
         "{lib_rs}"
@@ -1570,6 +1570,23 @@ fn tool_generation_compiles() {
         lib_rs.contains("agentic::start_tool_invocation("),
         "{lib_rs}"
     );
+    assert!(lib_rs.contains(")\n            .await"), "{lib_rs}");
+    for shape in [
+        "__name: String",
+        "__value: golem_rust::TypedSchemaValue",
+        "Result<Option<GrepError>, String>",
+        "\"bad-pattern\" =>",
+        "Some(GrepError::BadPattern(__payload))",
+        "\"bad-query\" =>",
+        "Some(GrepError::BadQuery(__payload))",
+        "\"io\" =>",
+        "Some(GrepError::Io)",
+        "\"unavailable\" =>",
+        "Some(GrepError::Unavailable)",
+        "_ => Ok(None)",
+    ] {
+        assert!(lib_rs.contains(shape), "missing {shape}:\n{lib_rs}");
+    }
     assert!(!lib_rs.contains("expect_stdout"), "{lib_rs}");
     cargo_check(&target_path);
 }
@@ -1743,6 +1760,20 @@ fn grep_tool() -> Tool {
             ErrorCase {
                 name: "io".to_string(),
                 doc: doc("io"),
+                kind: ErrorKind::RuntimeError,
+                exit_code: 1,
+                payload: None,
+            },
+            ErrorCase {
+                name: "bad-query".to_string(),
+                doc: doc("bad query"),
+                kind: ErrorKind::UsageError,
+                exit_code: 2,
+                payload: Some(SchemaType::string()),
+            },
+            ErrorCase {
+                name: "unavailable".to_string(),
+                doc: doc("unavailable"),
                 kind: ErrorKind::RuntimeError,
                 exit_code: 1,
                 payload: None,

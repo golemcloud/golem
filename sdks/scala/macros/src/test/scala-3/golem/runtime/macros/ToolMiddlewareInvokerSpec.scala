@@ -105,7 +105,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
                 "value"  -> IntoSchema[String].toValue(value)
               ),
               None,
-              publicErrors.fromErrorPayloadValue
+              publicErrors.fromErrorValue
             )
             .flatMapResult(result => ToolUnderlyingRuntime.decodeValueResult(result, golem.schema.FromSchema[String]))
 
@@ -193,7 +193,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
               List("execute"),
               List("value" -> IntoSchema[String].toValue(value)),
               None,
-              backendErrors.fromErrorPayloadValue
+              backendErrors.fromErrorValue
             )
             .flatMapResult(result => ToolUnderlyingRuntime.decodeValueResult(result, golem.schema.FromSchema[Long]))
       }
@@ -248,7 +248,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
     }
   }
 
-  @toolMiddleware(name = "transparent-policy", aliases = Array("transparent"))
+  @toolMiddleware(name = "transparent-policy", version = "1.2.3", aliases = Array("transparent"))
   @description("Transparent policy middleware")
   final class TransparentMiddleware extends MiddlewareEchoMiddleware {
     TransparentMiddleware.constructions += 1
@@ -314,7 +314,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       underlying.inspect(config, prefix, name)
   }
 
-  @toolMiddleware(name = "adapter-policy")
+  @toolMiddleware(name = "adapter-policy", version = "2.3.4")
   final class AdapterMiddleware extends MiddlewareEchoMiddleware.Adapter[BackendEchoUnderlying] {
     def middlewareEcho(
       underlying: BackendEchoUnderlying,
@@ -370,10 +370,10 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
   }
 
   object UniversalMiddleware {
-    var constructions: Int                                  = 0
-    var observed: Option[UniversalToolMiddlewareInvocation] = None
-    var observedUnderlying: Option[UniversalToolUnderlying] = None
-    var configuredFinal: Option[ToolMiddlewareResult]       = None
+    var constructions: Int                                                               = 0
+    var observed: Option[UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters]] = None
+    var observedUnderlying: Option[UniversalToolUnderlying]                              = None
+    var configuredFinal: Option[ToolMiddlewareResult]                                    = None
 
     def reset(): Unit = {
       constructions = 0
@@ -383,13 +383,13 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
     }
   }
 
-  @universalToolMiddleware(name = "universal-policy", aliases = Array("universal"))
+  @universalToolMiddleware(name = "universal-policy", version = "3.4.5", aliases = Array("universal"))
   @description("Universal policy middleware")
   final class UniversalMiddleware extends UniversalToolMiddleware {
     UniversalMiddleware.constructions += 1
 
     def invoke(
-      invocation: UniversalToolMiddlewareInvocation,
+      invocation: UniversalToolMiddlewareInvocation[ToolMiddleware.NoParameters],
       underlying: UniversalToolUnderlying
     ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] = {
       UniversalMiddleware.observed = Some(invocation)
@@ -420,11 +420,11 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
   }
 
   private object UnderlyingTestSupport {
-    extension [E](call: Future[Either[ToolInvokeError[E], ToolMiddlewareResult]])
+    extension [E](call: ToolUnderlyingInvocation[E, ToolMiddlewareResult])
       def flatMapResult[A](
         decode: ToolMiddlewareResult => Either[ToolError[Nothing], A]
       ): Future[Either[ToolInvokeError[E], A]] =
-        ToolUnderlyingRuntime.complete(call)(decode)
+        ToolUnderlyingRuntime.complete(call)(decode).toMiddlewareResult
 
     def runInfallible(
       raw: RawToolUnderlying,
@@ -432,7 +432,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       path: List[String],
       params: List[(String, SchemaValue)],
       stdin: Option[ToolMiddlewareInputHandle]
-    ): Future[Either[ToolInvokeError[Nothing], ToolMiddlewareResult]] =
+    ): ToolUnderlyingInvocation[Nothing, ToolMiddlewareResult] =
       ToolUnderlyingRuntime.runInfallible(raw, descriptor, path, encode(descriptor, path, params), stdin)
 
     def run[E](
@@ -441,8 +441,8 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       path: List[String],
       params: List[(String, SchemaValue)],
       stdin: Option[ToolMiddlewareInputHandle],
-      decodeError: TypedSchemaValue => Either[String, E]
-    ): Future[Either[ToolInvokeError[E], ToolMiddlewareResult]] =
+      decodeError: NamedToolError => Either[String, E]
+    ): ToolUnderlyingInvocation[E, ToolMiddlewareResult] =
       ToolUnderlyingRuntime.run(raw, descriptor, path, encode(descriptor, path, params), stdin, decodeError)
 
     private def encode(
@@ -532,9 +532,12 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
     future.value.getOrElse(throw new IllegalStateException("future did not complete synchronously")).get
 
   private def invocationInput(path: List[String], values: SchemaValue*): TypedSchemaValue = {
-    val index  = presented.commandIndexByPath(path).get
-    val schema = presented.canonicalInputRecordSchema(index).toOption.get
-    TypedSchemaValue(schema, SchemaValue.RecordValue(values.toList))
+    val index = presented.commandIndexByPath(path).get
+    val model = presented.canonicalInputModel(index).toOption.get
+    ToolClientRuntime
+      .buildInputFromModel(Right(model), model.fields.map(_.name).zip(values.toList))
+      .toOption
+      .get
   }
 
   private def invoke(
@@ -552,6 +555,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       presented.toolName,
       path,
       input,
+      ToolMiddleware.noParametersValue,
       stdin,
       principal
     )
@@ -569,6 +573,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
       raw,
       toolName,
       presented.tryToTool.toOption.get,
+      ToolMiddleware.noParametersValue,
       path,
       input,
       stdin,
@@ -585,6 +590,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
         val expected   = built(transparentHandle.expected(new ToolBuildCtx))
         assertTrue(
           descriptor.name == "transparent-policy",
+          descriptor.version == "1.2.3",
           descriptor.aliases == List("transparent"),
           descriptor.doc.description == "Transparent policy middleware",
           descriptor.scope == ToolMiddlewareScope.Monomorphic(
@@ -592,6 +598,34 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
             Some(expected.tryToTool.toOption.get)
           ),
           expected.toolName == presented.toolName
+        )
+      },
+      test("invalid middleware descriptor fails before constructing or invoking the middleware") {
+        TransparentMiddleware.reset()
+        val raw    = new FakeRaw(Nil)
+        val handle = transparentHandle.copy(
+          descriptor = _ => Left(ToolBuildError.InvalidIdentifier("middleware name", "invalid name"))
+        )
+        val result = outcome(
+          invoke(
+            handle,
+            raw,
+            List("act"),
+            invocationInput(
+              List("act"),
+              SchemaValue.StringValue("cfg"),
+              SchemaValue.StringValue("forward")
+            )
+          )
+        )
+        assertTrue(
+          result == Left(
+            ToolInvokeError.InvalidInput(
+              "tool middleware descriptor build failed: invalid middleware name: \"invalid name\""
+            )
+          ),
+          TransparentMiddleware.constructions == 0,
+          raw.calls.isEmpty
         )
       },
       test("short-circuit and typed rejection do not call the underlying") {
@@ -622,7 +656,9 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
         )
         assertTrue(
           short == success("short-circuit"),
-          rejected == Left(ToolInvokeError.Tool(IntoSchema[String].toTyped("denied"))),
+          rejected == Left(
+            ToolInvokeError.UnknownToolError("rejected", IntoSchema[String].toTyped("denied"))
+          ),
           raw.calls.isEmpty
         )
       },
@@ -735,7 +771,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
         val descriptor   = built(adapterHandle.descriptor(new ToolBuildCtx))
         val backendError = ToolErrorSchemaDerivation
           .derive[BackendError]
-          .toErrorPayloadValue(BackendError.Failed("backend"))
+          .toErrorValue(BackendError.Failed("backend"))
           .toOption
           .get
         val successRaw    = new FakeRaw(List(success(42L)))
@@ -751,7 +787,9 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
             )
           )
         )
-        val errorRaw    = new FakeRaw(List(Left(ToolInvokeError.Tool(backendError))))
+        val errorRaw = new FakeRaw(
+          List(Left(ToolInvokeError.UnknownToolError(backendError.name, backendError.payload)))
+        )
         val errorResult = outcome(
           invoke(
             adapterHandle,
@@ -767,13 +805,16 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
         assertTrue(
           presented.toolName == "middleware-echo",
           expected.toolName == "backend-echo",
+          descriptor.version == "2.3.4",
           descriptor.scope == ToolMiddlewareScope.Monomorphic(
             presented.tryToTool.toOption.get,
             Some(expected.tryToTool.toOption.get)
           ),
           successRaw.calls.map(_.path).toList == List(List("execute")),
           successResult == success("adapted-42"),
-          errorResult == Left(ToolInvokeError.Tool(IntoSchema[String].toTyped("adapted-backend")))
+          errorResult == Left(
+            ToolInvokeError.UnknownToolError("rejected", IntoSchema[String].toTyped("adapted-backend"))
+          )
         )
       },
       test("nested command aliases dispatch to the flattened middleware leaf") {
@@ -1015,6 +1056,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
             "other",
             List("act"),
             input,
+            ToolMiddleware.noParametersValue,
             None,
             anonymous
           )
@@ -1102,6 +1144,7 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
         val observed = UniversalMiddleware.observed.get
         assertTrue(
           universalHandle.descriptor.name == "universal-policy",
+          universalHandle.descriptor.version == "3.4.5",
           universalHandle.descriptor.aliases == List("universal"),
           universalHandle.descriptor.doc.description == "Universal policy middleware",
           universalHandle.descriptor.scope == ToolMiddlewareScope.Universal,

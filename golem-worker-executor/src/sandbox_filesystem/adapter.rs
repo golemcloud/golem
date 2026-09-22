@@ -728,6 +728,34 @@ pub(crate) trait SandboxFilesystemAllocationReader: Clone + Send + Sync + 'stati
     ) -> impl Future<Output = Result<FilesystemAllocation, FilesystemStorageError>> + Send;
 }
 
+pub(crate) struct DeleteError<Adapter> {
+    adapter: Adapter,
+    source: FilesystemStorageError,
+}
+
+impl<Adapter> DeleteError<Adapter> {
+    pub(crate) fn new(adapter: Adapter, source: FilesystemStorageError) -> Self {
+        Self { adapter, source }
+    }
+
+    pub(crate) fn into_parts(self) -> (Adapter, FilesystemStorageError) {
+        (self.adapter, self.source)
+    }
+
+    pub(crate) fn into_source(self) -> FilesystemStorageError {
+        self.source
+    }
+}
+
+impl<Adapter> Debug for DeleteError<Adapter> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeleteError")
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Capability-confined filesystem operations within one sandbox.
 ///
 /// Path methods accept [`SandboxPath`] and discover the object kind themselves. Methods that accept
@@ -941,8 +969,11 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
         limits: FilesystemLimits,
     ) -> impl Future<Output = Result<InstalledLimits, FilesystemStorageError>> + Send;
 
-    /// Consumes exclusive ownership, deletes the runtime filesystem, and verifies its absence.
-    fn delete_and_verify(self) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send
+    /// Deletes the runtime filesystem and verifies its absence.
+    ///
+    /// This consumes exclusive ownership. On failure, [`DeleteError`] returns that ownership so the
+    /// cleanup owner can retry without releasing the filesystem's exclusive lease.
+    fn delete_and_verify(self) -> impl Future<Output = Result<(), DeleteError<Self>>> + Send
     where
         Self: Sized;
 }
@@ -957,21 +988,10 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         limits: Option<FilesystemLimits>,
     ) -> Result<Self, FilesystemStorageError> {
         let filesystem = provisioning.create_fresh(name).await?;
-        let filesystem = Arc::try_unwrap(filesystem).map_err(|filesystem| {
-            FilesystemStorageError::verification(
-                "take exclusive ownership of fresh sandbox filesystem",
-                filesystem.root(),
-            )
-        })?;
         if let Some(limits) = limits
             && let Err(error) = SandboxFilesystem::install_limits(&filesystem, limits).await
         {
-            return Err(
-                match SandboxFilesystem::delete_and_verify(&filesystem).await {
-                    Ok(()) => error,
-                    Err(cleanup_error) => cleanup_error,
-                },
-            );
+            return Err(rollback_created_filesystem(filesystem, error).await);
         }
         Ok(filesystem)
     }
@@ -1675,8 +1695,8 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         SandboxFilesystem::install_limits(self, limits)
     }
 
-    async fn delete_and_verify(self) -> Result<(), FilesystemStorageError> {
-        SandboxFilesystem::delete_and_verify(&self).await
+    async fn delete_and_verify(self) -> Result<(), DeleteError<Self>> {
+        SandboxFilesystem::delete_and_verify(self).await
     }
 }
 
@@ -2799,12 +2819,16 @@ mod scripted {
             })
         }
 
-        fn delete_and_verify(
-            self,
-        ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
-            self.outcome("delete_and_verify()".to_string(), |state| {
-                &mut state.delete_and_verify
-            })
+        async fn delete_and_verify(self) -> Result<(), DeleteError<Self>> {
+            match self
+                .outcome("delete_and_verify()".to_string(), |state| {
+                    &mut state.delete_and_verify
+                })
+                .await
+            {
+                Ok(()) => Ok(()),
+                Err(source) => Err(DeleteError::new(self, source)),
+            }
         }
     }
 
@@ -3393,6 +3417,43 @@ mod tests {
                 "create_fresh(name=environment/component/filesystem, limits=None)",
                 "read(file=file(1), range=SandboxReadRange { offset: 0, length: 5 })",
                 "read(file=file(1), range=SandboxReadRange { offset: 0, length: 5 })",
+            ]
+        );
+    }
+
+    #[test]
+    async fn failed_delete_returns_adapter_for_retry() {
+        let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
+        control.push_delete_and_verify(Err(scripted_error("first delete")));
+        control.push_delete_and_verify(Ok(()));
+        let filesystem = create_scripted(provisioning).await;
+
+        let failure =
+            match <ScriptedSandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(
+                filesystem,
+            )
+            .await
+            {
+                Ok(()) => panic!("first deletion unexpectedly succeeded"),
+                Err(failure) => failure,
+            };
+        let (filesystem, error) = failure.into_parts();
+        assert_eq!(
+            error.to_string(),
+            "failed to first delete filesystem <scripted-test>"
+        );
+
+        assert!(
+            <ScriptedSandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            control.calls(),
+            vec![
+                "create_fresh(name=environment/component/filesystem, limits=None)",
+                "delete_and_verify()",
+                "delete_and_verify()",
             ]
         );
     }

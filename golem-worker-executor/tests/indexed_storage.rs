@@ -28,8 +28,8 @@ use golem_worker_executor::storage::indexed::postgres::PostgresIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
-    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor,
+    IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
+    IndexedStorageNamespace, ScanResume,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
@@ -257,6 +257,9 @@ async fn postgres_storage(
     Arc::new(PostgresIndexedStorageWrapper { postgres })
 }
 
+/// A compressed level no other test writes to, so a walk over it sees a fixed set of keys.
+const SCAN_STABLE_LEVEL: usize = 97;
+
 #[derive(Debug, Clone)]
 struct IndexedStorageNamespaces {
     ns: IndexedStorageNamespace,
@@ -316,6 +319,319 @@ fn ns2() -> IndexedStorageNamespaces {
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
 define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres");
+define_matrix_dimension!(sql_is: Arc<dyn GetIndexedStorage + Send + Sync> -> "sqlite", "postgres");
+
+#[test]
+async fn staged_publication_preserves_atomic_visibility(
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    let agent = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "fork-publication".into(),
+    };
+    let mode = AgentMode::Durable;
+    let staged = IndexedStorageNamespace::StagedOpLog {
+        agent_id: agent.clone(),
+        agent_mode: mode,
+    };
+    let visible = IndexedStorageNamespace::OpLog {
+        agent_id: agent.clone(),
+        agent_mode: mode,
+    };
+    for (key, ids, expected) in [
+        ("missing", vec![], 1),
+        ("gap", vec![1, 3], 3),
+        ("shifted", vec![2, 3], 2),
+        ("wrong-tip", vec![1, 2, 3], 2),
+        ("zero-tip", vec![1], 0),
+    ] {
+        for id in ids {
+            storage
+                .append(
+                    "test",
+                    "stage",
+                    "entry",
+                    staged.clone(),
+                    key,
+                    id,
+                    vec![id as u8],
+                )
+                .await
+                .unwrap();
+        }
+        assert!(
+            storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    expected,
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !storage
+                .exists("test", "visible", visible.clone(), key)
+                .await
+                .unwrap()
+        );
+    }
+    for (key, value) in [("first", 17u8), ("second", 39)] {
+        storage
+            .append_many(
+                "test",
+                "stage",
+                "entry",
+                &staged,
+                key,
+                (1..=3)
+                    .map(|id| (id, Bytes::from(vec![value, id as u8])))
+                    .collect::<Vec<_>>()
+                    .into(),
+            )
+            .await
+            .unwrap();
+    }
+    assert!(
+        storage
+            .scan_stable(
+                "test",
+                "scan",
+                IndexedStorageMetaNamespace::Oplog { agent_mode: mode },
+                None,
+                None,
+                100
+            )
+            .await
+            .unwrap()
+            .1
+            .is_empty()
+    );
+    let (first, second) = tokio::join!(
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged.clone(),
+            "first",
+            visible.clone(),
+            "target",
+            3,
+        ),
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged.clone(),
+            "second",
+            visible.clone(),
+            "target",
+            3,
+        ),
+    );
+    let first = first.unwrap();
+    assert_ne!(first, second.unwrap());
+    let (winner, loser, value) = if first {
+        ("first", "second", 17)
+    } else {
+        ("second", "first", 39)
+    };
+    let expected: Vec<_> = (1..=3).map(|id| (id, vec![value, id as u8])).collect();
+    assert_eq!(
+        storage
+            .read("test", "read", "entry", visible.clone(), "target", 1, 3)
+            .await
+            .unwrap(),
+        expected
+    );
+    assert!(
+        !storage
+            .exists("test", "stage", staged.clone(), winner)
+            .await
+            .unwrap()
+    );
+    assert!(
+        storage
+            .exists("test", "stage", staged.clone(), loser)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !storage
+            .move_if_absent(
+                "test",
+                "publish",
+                staged.clone(),
+                loser,
+                visible.clone(),
+                "target",
+                3,
+            )
+            .await
+            .unwrap()
+    );
+    storage
+        .delete("test", "discard", staged.clone(), loser)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .read("test", "read", "entry", visible.clone(), "target", 1, 3)
+            .await
+            .unwrap(),
+        expected
+    );
+
+    for (key, first_id) in [("archived", 1), ("archived-arbitrary", 17)] {
+        storage
+            .append(
+                "test",
+                "create",
+                "entry",
+                visible.clone(),
+                key,
+                first_id,
+                vec![61],
+            )
+            .await
+            .unwrap();
+        storage
+            .drop_prefix("test", "archive", visible.clone(), key, first_id)
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .exists("test", "exists", visible.clone(), key)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .length("test", "length", visible.clone(), key)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(
+            storage
+                .first("test", "first", "entry", visible.clone(), key)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .last("test", "last", "entry", visible.clone(), key)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        storage
+            .append("test", "stage", "entry", staged.clone(), key, 1, vec![23])
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    1,
+                )
+                .await
+                .unwrap()
+        );
+        storage
+            .delete("test", "delete", visible.clone(), key)
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .exists("test", "exists", visible.clone(), key)
+                .await
+                .unwrap()
+        );
+        assert!(
+            storage
+                .move_if_absent(
+                    "test",
+                    "publish",
+                    staged.clone(),
+                    key,
+                    visible.clone(),
+                    key,
+                    1,
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .read("test", "read", "entry", visible.clone(), key, 1, first_id)
+                .await
+                .unwrap(),
+            vec![(1, vec![23])]
+        );
+    }
+    storage
+        .drop_prefix("test", "archive", visible.clone(), "never-existed", 50)
+        .await
+        .unwrap();
+    assert!(
+        !storage
+            .exists("test", "exists", visible.clone(), "never-existed")
+            .await
+            .unwrap()
+    );
+
+    storage
+        .append(
+            "test",
+            "stage",
+            "entry",
+            staged.clone(),
+            "race",
+            1,
+            vec![51],
+        )
+        .await
+        .unwrap();
+    let (published, ordinary) = tokio::join!(
+        storage.move_if_absent(
+            "test",
+            "publish",
+            staged,
+            "race",
+            visible.clone(),
+            "ordinary",
+            1,
+        ),
+        storage.append(
+            "test",
+            "create",
+            "entry",
+            visible.clone(),
+            "ordinary",
+            1,
+            vec![77]
+        ),
+    );
+    let published = published.unwrap();
+    assert_ne!(published, ordinary.is_ok());
+    assert_eq!(
+        storage
+            .read("test", "read", "entry", visible, "ordinary", 1, 2)
+            .await
+            .unwrap(),
+        vec![(1, vec![if published { 51 } else { 77 }])]
+    );
+}
 
 #[test]
 async fn postgres_singleton_append_many_preserves_storage_contract(
@@ -369,14 +685,7 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
             Some((17, value.to_vec()))
         );
         let (_, keys) = storage
-            .scan(
-                "svc",
-                "api",
-                ns.meta.clone(),
-                Some("singleton"),
-                ScanCursor::default(),
-                10,
-            )
+            .scan_stable("svc", "api", ns.meta.clone(), Some("singleton"), None, 10)
             .await
             .unwrap();
         assert_eq!(keys, vec!["singleton".to_string()]);
@@ -678,17 +987,17 @@ async fn scan_empty(
     let is = is.get_indexed_storage().await;
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     assert_eq!(result, Vec::<String>::new());
@@ -717,17 +1026,17 @@ async fn scan_with_no_pattern_single_paged(
         .unwrap();
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     result.sort();
@@ -798,16 +1107,16 @@ async fn scan_with_no_pattern_paginated(
     .unwrap();
 
     let mut r1: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r1.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if !r1.is_empty() || cursor == 0 {
+        if !r1.is_empty() || resume.is_none() {
             break;
         }
     }
@@ -815,13 +1124,13 @@ async fn scan_with_no_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r2.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }
@@ -829,13 +1138,13 @@ async fn scan_with_no_pattern_paginated(
     let mut r3: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r3.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }
@@ -852,6 +1161,292 @@ async fn scan_with_no_pattern_paginated(
     assert!(all.contains(&key1.to_string()));
     assert!(all.contains(&key2.to_string()));
     assert!(all.contains(&key3.to_string()));
+}
+
+/// `scan_stable` must not skip keys when the caller deletes each page it is handed. The keys belong
+/// to six agents because the multi-SQLite backend keeps a file per agent, and a second namespace is
+/// drained alongside, as an archive step drains the layer below.
+#[test]
+#[tracing::instrument]
+async fn scan_stable_resumes_past_deleted_keys(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let is = is.get_indexed_storage().await;
+    let swept_meta = IndexedStorageMetaNamespace::CompressedOplog {
+        agent_mode: AgentMode::Durable,
+        level: SCAN_STABLE_LEVEL,
+    };
+
+    // One agent per key, so a backend that shards by agent has six shards to walk.
+    let planted: Vec<(IndexedStorageNamespace, IndexedStorageNamespace, String)> = (0..6)
+        .map(|i| {
+            let component_id = ComponentId::new();
+            let swept = IndexedStorageNamespace::CompressedOpLog {
+                agent_id: AgentId {
+                    component_id,
+                    agent_id: format!("stable-{i}"),
+                },
+                agent_mode: AgentMode::Durable,
+                level: SCAN_STABLE_LEVEL,
+            };
+            let below = IndexedStorageNamespace::CompressedOpLog {
+                agent_id: AgentId {
+                    component_id,
+                    agent_id: format!("stable-{i}"),
+                },
+                agent_mode: AgentMode::Durable,
+                level: SCAN_STABLE_LEVEL + 1,
+            };
+            (swept, below, format!("{}-swept-{i}", Uuid::new_v4()))
+        })
+        .collect();
+
+    for (swept, below, key) in &planted {
+        is.append("svc", "api", "entity", swept.clone(), key, 1, b"v".to_vec())
+            .await
+            .unwrap();
+        is.append("svc", "api", "entity", below.clone(), key, 1, b"v".to_vec())
+            .await
+            .unwrap();
+    }
+
+    // Take a page, delete its keys here and in the layer below, and resume from the token.
+    let mut seen: Vec<String> = Vec::new();
+    let mut resume = None;
+    let mut terminated = false;
+    for _ in 0..256 {
+        let (next, chunk) = is
+            .with("svc", "api")
+            .scan_stable(swept_meta.clone(), None, resume, 2)
+            .await
+            .unwrap();
+        for key in &chunk {
+            if let Some((swept, below, _)) = planted.iter().find(|(_, _, k)| k == key) {
+                is.delete("svc", "api", swept.clone(), key).await.unwrap();
+                is.delete("svc", "api", below.clone(), key).await.unwrap();
+            }
+        }
+        seen.extend(chunk);
+        match next {
+            Some(next) => resume = Some(next),
+            None => {
+                terminated = true;
+                break;
+            }
+        }
+    }
+
+    assert!(
+        terminated,
+        "the walk never reported exhaustion and was cut off by the iteration cap"
+    );
+
+    for (_, _, key) in &planted {
+        assert!(
+            seen.contains(key),
+            "key {key} was skipped: the walk moved past something nothing had examined"
+        );
+    }
+
+    // Redis may return a key more than once, so check membership rather than an exact sequence.
+    for key in &seen {
+        assert!(
+            planted.iter().any(|(_, _, planted)| planted == key),
+            "the walk returned {key}, which belongs to no namespace it was pointed at"
+        );
+    }
+}
+
+/// A drained multi-SQLite namespace keeps its files, so the walk still crosses them a page budget
+/// at a time.
+#[test]
+#[tracing::instrument]
+async fn multi_sqlite_scan_stable_crosses_its_files_a_page_at_a_time() {
+    async fn walk(
+        is: &MultiSqliteIndexedStorage,
+        meta: &IndexedStorageMetaNamespace,
+    ) -> (usize, Vec<String>) {
+        let mut resume = None;
+        let mut seen: Vec<String> = Vec::new();
+        for page in 1..=32 {
+            let (next, chunk) = is
+                .scan_stable("svc", "api", meta.clone(), None, resume, 2)
+                .await
+                .unwrap();
+            seen.extend(chunk);
+            match next {
+                Some(next) => resume = Some(next),
+                None => return (page, seen),
+            }
+        }
+        panic!("the walk never reported exhaustion and was cut off by the iteration cap");
+    }
+
+    let tempdir = TempDir::new().unwrap();
+    let is = MultiSqliteIndexedStorage::new(tempdir.path(), 10, true);
+    let meta = IndexedStorageMetaNamespace::Oplog {
+        agent_mode: AgentMode::Durable,
+    };
+
+    // An odd number of agents, so the last page opens fewer files than its budget allows.
+    let planted: Vec<(IndexedStorageNamespace, String)> = (0..5)
+        .map(|i| {
+            let namespace = IndexedStorageNamespace::OpLog {
+                agent_id: AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: format!("file-{i}"),
+                },
+                agent_mode: AgentMode::Durable,
+            };
+            (namespace, format!("key-{i}"))
+        })
+        .collect();
+
+    for (namespace, key) in &planted {
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            namespace.clone(),
+            key,
+            1,
+            b"v".to_vec(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let (pages, mut seen) = walk(&is, &meta).await;
+    let mut expected: Vec<String> = planted.iter().map(|(_, key)| key.clone()).collect();
+    seen.sort();
+    expected.sort();
+    assert_eq!(seen, expected);
+    assert_eq!(pages, 3, "two files to a page, and the fifth ends the walk");
+
+    for (namespace, key) in &planted {
+        is.delete("svc", "api", namespace.clone(), key)
+            .await
+            .unwrap();
+    }
+
+    let (pages, seen) = walk(&is, &meta).await;
+    assert!(seen.is_empty(), "every key was deleted");
+    assert_eq!(
+        pages, 3,
+        "the drained files are still crossed two at a time, not opened all at once"
+    );
+}
+
+/// A file created after a listing was cached still shows up in the next walk, because creating a
+/// file clears the listing cache.
+#[test]
+#[tracing::instrument]
+async fn multi_sqlite_scan_stable_sees_files_created_after_a_walk() {
+    async fn walk(
+        is: &MultiSqliteIndexedStorage,
+        meta: &IndexedStorageMetaNamespace,
+    ) -> Vec<String> {
+        let mut resume = None;
+        let mut seen: Vec<String> = Vec::new();
+        for _ in 0..32 {
+            let (next, chunk) = is
+                .scan_stable("svc", "api", meta.clone(), None, resume, 2)
+                .await
+                .unwrap();
+            seen.extend(chunk);
+            match next {
+                Some(next) => resume = Some(next),
+                None => {
+                    seen.sort();
+                    return seen;
+                }
+            }
+        }
+        panic!("the walk never reported exhaustion and was cut off by the iteration cap");
+    }
+
+    async fn plant(is: &MultiSqliteIndexedStorage, name: &str) -> String {
+        let namespace = IndexedStorageNamespace::OpLog {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: name.to_string(),
+            },
+            agent_mode: AgentMode::Durable,
+        };
+        let key = format!("key-{name}");
+        is.append("svc", "api", "entity", namespace, &key, 1, b"v".to_vec())
+            .await
+            .unwrap();
+        key
+    }
+
+    let tempdir = TempDir::new().unwrap();
+    let is = MultiSqliteIndexedStorage::new(tempdir.path(), 10, true);
+    let meta = IndexedStorageMetaNamespace::Oplog {
+        agent_mode: AgentMode::Durable,
+    };
+
+    let mut expected = vec![plant(&is, "first").await, plant(&is, "second").await];
+    expected.sort();
+    assert_eq!(walk(&is, &meta).await, expected);
+
+    // Straight after a walk, so the listing the walk took is still inside its window.
+    expected.push(plant(&is, "third").await);
+    expected.sort();
+    assert_eq!(
+        walk(&is, &meta).await,
+        expected,
+        "a walk served a cached listing missed a file created after it was taken"
+    );
+}
+
+/// `last_id` must answer without moving the payload, and must agree with `last` when it does.
+#[test]
+#[tracing::instrument]
+async fn last_id_matches_last_without_the_value(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = format!("{}-last-id", Uuid::new_v4());
+
+    assert_eq!(
+        is.with_entity("svc", "api", "entity")
+            .last_id(ns.ns.clone(), &key)
+            .await
+            .unwrap(),
+        None,
+        "an index with no entries has no last id"
+    );
+
+    for id in [1u64, 7, 42] {
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            &key,
+            id,
+            format!("value-{id}").into_bytes(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let last = is
+        .last("svc", "api", "entity", ns.ns.clone(), &key)
+        .await
+        .unwrap();
+    let last_id = is
+        .with_entity("svc", "api", "entity")
+        .last_id(ns.ns.clone(), &key)
+        .await
+        .unwrap();
+
+    assert_eq!(last_id, Some(42));
+    assert_eq!(last_id, last.map(|(id, _)| id));
 }
 
 #[test]
@@ -882,22 +1477,147 @@ async fn scan_with_prefix_pattern_single_paged(
         .unwrap();
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     result.sort();
     assert!(result.contains(&key1.to_string()));
     assert!(result.contains(&key3.to_string()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn sql_scan_prefix_is_literal_bounded_and_deletion_safe(
+    #[dimension(sql_is)] storage: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let storage = storage.get_indexed_storage().await;
+    let keys = [
+        "A-prefix",
+        "a",
+        "a%",
+        "a%tail",
+        "a\\tail",
+        "a_tail",
+        "aa",
+        "ae\u{301}",
+        "aé",
+        "a😀",
+        "b",
+        "á",
+        "\u{10ffff}",
+        "\u{10ffff}tail",
+    ];
+    for key in keys {
+        storage
+            .append("svc", "api", "entity", ns.ns.clone(), key, 1, vec![1])
+            .await
+            .unwrap();
+    }
+    storage
+        .append("svc", "api", "entity", ns.ns.clone(), "aa", 2, vec![2])
+        .await
+        .unwrap();
+
+    let expected: Vec<String> = keys
+        .into_iter()
+        .filter(|key| key.starts_with('a'))
+        .map(str::to_string)
+        .collect();
+    let (_, literal_wildcard) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("a%"), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(literal_wildcard, ["a%", "a%tail"]);
+
+    let (resume, first) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("a"), None, 2)
+        .await
+        .unwrap();
+    assert_eq!(first, expected[..2]);
+
+    let deleted_marker = first.last().unwrap().clone();
+    storage
+        .delete("svc", "api", ns.ns.clone(), &deleted_marker)
+        .await
+        .unwrap();
+
+    let mut actual = first;
+    let mut resume = resume;
+    loop {
+        let (next, page) = storage
+            .scan_stable("svc", "api", ns.meta.clone(), Some("a"), resume, 2)
+            .await
+            .unwrap();
+        actual.extend(page);
+        resume = next;
+        if resume.is_none() {
+            break;
+        }
+    }
+    assert_eq!(actual, expected);
+
+    let (_, from_before_prefix) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("a"),
+            Some(ScanResume::Marker("A".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        from_before_prefix,
+        expected
+            .iter()
+            .filter(|key| **key != deleted_marker)
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+
+    let (_, at_upper_bound) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("a"),
+            Some(ScanResume::Marker("b".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert!(at_upper_bound.is_empty());
+
+    let (_, maximum_prefix) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("\u{10ffff}"), None, 20)
+        .await
+        .unwrap();
+    assert_eq!(maximum_prefix, ["\u{10ffff}", "\u{10ffff}tail"]);
+
+    let (_, resumed_maximum_prefix) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("\u{10ffff}"),
+            Some(ScanResume::Marker("\u{10ffff}".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resumed_maximum_prefix, ["\u{10ffff}tail"]);
 }
 
 #[test]
@@ -928,16 +1648,16 @@ async fn scan_with_prefix_pattern_paginated(
         .unwrap();
 
     let mut r1: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 1)
             .await
             .unwrap();
         r1.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if r1.len() == 1 || cursor == 0 {
+        if r1.len() == 1 || resume.is_none() {
             break;
         }
     }
@@ -945,13 +1665,13 @@ async fn scan_with_prefix_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 1)
             .await
             .unwrap();
         r2.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }

@@ -1989,6 +1989,169 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/agents/invoke-tool:
+    post:
+      tags:
+      - Agent
+      summary: Invoke a tool on an existing agent or a fresh ephemeral component owner
+      description: |-
+        Uses normal invocation permissions, queueing and idempotency. Byte stdin and stdout
+        require an attached invocation session rather than this scalar endpoint.
+      operationId: invoke_tool
+      parameters:
+      - in: header
+        name: Idempotency-Key
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/NativeToolInvocationRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/NativeToolInvocationResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/agents/describe-tool:
+    post:
+      tags:
+      - Agent
+      summary: Return the effective definition of a tool bound to an existing agent or component baseline.
+      operationId: describe_tool
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/NativeToolDescribeRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/NativeToolDefinition'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/agents/invoke-agent-session:
     get:
       tags:
@@ -6658,6 +6821,438 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/envs/{environment_id}/tool-middlewares:
+    get:
+      tags:
+      - RegistryService
+      - EnvironmentToolMiddlewareGrants
+      - Environment
+      summary: List active tool_middleware grants in an environment
+      operationId: list_environment_tool_middleware_grants
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_EnvironmentToolMiddlewareGrantWithDetails'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    post:
+      tags:
+      - RegistryService
+      - EnvironmentToolMiddlewareGrants
+      - Environment
+      summary: Grant an exact published tool_middleware release to an environment
+      operationId: create_environment_tool_middleware_grant
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/EnvironmentToolMiddlewareGrantCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/EnvironmentToolMiddlewareGrantWithDetails'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/tool-middlewares/validate:
+    post:
+      tags:
+      - RegistryService
+      - EnvironmentToolMiddlewareGrants
+      - Environment
+      summary: Validate environment tool_middleware grants and publications without changing them
+      operationId: validate_environment_tool_middlewares
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/EnvironmentToolMiddlewareValidation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/EnvironmentToolMiddlewareValidationResult'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/environment-tool-middleware-grants/{grant_id}:
+    get:
+      tags:
+      - RegistryService
+      - EnvironmentToolMiddlewareGrants
+      - Environment
+      summary: Get an active environment tool_middleware grant
+      operationId: get_environment_tool_middleware_grant
+      parameters:
+      - in: path
+        name: grant_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/EnvironmentToolMiddlewareGrantWithDetails'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - EnvironmentToolMiddlewareGrants
+      - Environment
+      summary: Delete an environment tool_middleware grant
+      operationId: delete_environment_tool_middleware_grant
+      parameters:
+      - in: path
+        name: grant_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/EnvironmentToolMiddlewareGrantDeletion'
+        required: true
+      responses:
+        '204':
+          description: ''
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/environment-tool-middleware-grants/{grant_id}/restore:
+    post:
+      tags:
+      - RegistryService
+      - EnvironmentToolMiddlewareGrants
+      - Environment
+      summary: Restore a deleted environment tool_middleware grant
+      operationId: restore_environment_tool_middleware_grant
+      parameters:
+      - in: path
+        name: grant_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/EnvironmentToolMiddlewareGrantWithDetails'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/envs/{environment_id}/initial-agent-files:
     post:
       tags:
@@ -7836,6 +8431,170 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/DeployedRegisteredTool'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_id}/tool-middlewares:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      summary: List all registered tool middleware in a deployment
+      operationId: list_deployment_registered_tool_middlewares
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_id
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_RegisteredToolMiddleware'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_id}/tool-middlewares/{middleware_name}:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      summary: Get registered tool middleware in a deployment
+      operationId: get_deployment_registered_tool_middleware
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_id
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: middleware_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RegisteredToolMiddleware'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -12612,6 +13371,282 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/accounts/{account_id}/tool-middleware-releases:
+    get:
+      tags:
+      - RegistryService
+      - ToolMiddlewareReleases
+      - Account
+      summary: List tool_middleware releases owned by an account
+      operationId: list_account_tool_middleware_releases
+      parameters:
+      - in: path
+        name: account_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Page_ToolMiddlewareRelease'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/tool-middleware-releases/{release_id}:
+    get:
+      tags:
+      - RegistryService
+      - ToolMiddlewareReleases
+      summary: Get an account-owned tool_middleware release by ID
+      operationId: get_tool_middleware_release
+      parameters:
+      - in: path
+        name: release_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ToolMiddlewareRelease'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - ToolMiddlewareReleases
+      summary: De-publish an account-owned tool_middleware release
+      operationId: de_publish_tool_middleware_release
+      parameters:
+      - in: path
+        name: release_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ToolMiddlewareRelease'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/tool-middleware-releases/{release_id}/restore:
+    post:
+      tags:
+      - RegistryService
+      - ToolMiddlewareReleases
+      summary: Restore a de-published account-owned tool_middleware release
+      operationId: restore_tool_middleware_release
+      parameters:
+      - in: path
+        name: release_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ToolMiddlewareRelease'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
 components:
   schemas:
     AccountCardHolder:
@@ -13008,6 +14043,8 @@ components:
       properties:
         agentId:
           $ref: '#/components/schemas/AgentId'
+        ownerKind:
+          $ref: '#/components/schemas/OwnerKind'
         environmentId:
           type: string
           format: uuid
@@ -13042,6 +14079,8 @@ components:
           format: date-time
         lastError:
           type: string
+        lastErrorKind:
+          $ref: '#/components/schemas/OplogErrorKind'
         componentSize:
           type: integer
           format: uint64
@@ -13088,6 +14127,7 @@ components:
           format: uuid
       required:
       - agentId
+      - ownerKind
       - environmentId
       - createdBy
       - env
@@ -13901,6 +14941,16 @@ components:
           type: string
       required:
       - bytes
+    BoolFlagShape:
+      type: object
+      properties:
+        default:
+          type: boolean
+        negatable:
+          type: boolean
+      required:
+      - default
+      - negatable
     CancelInvocationResponse:
       title: CancelInvocationResponse
       type: object
@@ -14019,6 +15069,7 @@ components:
           EnvironmentDefault: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
           PermissionShare: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
           AgentInitial: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+          ComponentInitial: '#/components/schemas/CardManagedBy_CardManagedByComponentInitial'
           RuntimeDerived: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
       type: object
       oneOf:
@@ -14026,6 +15077,7 @@ components:
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByEnvironmentDefault'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByPermissionShare'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByAgentInitial'
+      - $ref: '#/components/schemas/CardManagedBy_CardManagedByComponentInitial'
       - $ref: '#/components/schemas/CardManagedBy_CardManagedByRuntimeDerived'
     CardManagedByAccountRoot:
       title: CardManagedByAccountRoot
@@ -14052,6 +15104,19 @@ components:
       - componentId
       - componentRevision
       - agentType
+    CardManagedByComponentInitial:
+      title: CardManagedByComponentInitial
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        componentRevision:
+          type: integer
+          format: uint64
+      required:
+      - componentId
+      - componentRevision
     CardManagedByEnvironmentDefault:
       title: CardManagedByEnvironmentDefault
       type: object
@@ -14113,6 +15178,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/CardManagedByAgentInitial'
+    CardManagedBy_CardManagedByComponentInitial:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentInitial
+            type: string
+            enum:
+            - ComponentInitial
+        required:
+        - type
+      - $ref: '#/components/schemas/CardManagedByComponentInitial'
     CardManagedBy_CardManagedByEnvironmentDefault:
       allOf:
       - type: object
@@ -14149,6 +15226,107 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/CardManagedByRuntimeDerived'
+    CommandAnnotations:
+      type: object
+      properties:
+        read_only:
+          type: boolean
+        destructive:
+          type: boolean
+        idempotent:
+          type: boolean
+        open_world:
+          type: boolean
+      required:
+      - read_only
+      - destructive
+      - idempotent
+      - open_world
+    CommandBody:
+      type: object
+      properties:
+        positionals:
+          $ref: '#/components/schemas/Positionals'
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/OptionSpec'
+        flags:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlagSpec'
+        constraints:
+          type: array
+          items:
+            $ref: '#/components/schemas/Constraint'
+        stdin:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
+        stdout:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
+        result:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/ToolResultSpec'
+          - nullable: true
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorCase'
+        annotations:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CommandAnnotations'
+          - nullable: true
+      required:
+      - positionals
+      - options
+      - flags
+      - constraints
+      - errors
+    CommandNode:
+      type: object
+      properties:
+        name:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        globals:
+          $ref: '#/components/schemas/Globals'
+        subcommands:
+          type: array
+          items:
+            type: integer
+            format: int32
+        body:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/CommandBody'
+          - nullable: true
+      required:
+      - name
+      - aliases
+      - doc
+      - globals
+      - subcommands
+    CommandTree:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommandNode'
+      required:
+      - nodes
     CompleteParameters:
       title: CompleteParameters
       type: object
@@ -14164,6 +15342,83 @@ components:
       required:
       - oplogIdx
       - data
+    Constraint:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - requires-all
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - all-or-none
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - requires-any
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/Ref'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - mutex-groups
+          value:
+            type: array
+            items:
+              $ref: '#/components/schemas/RefGroup'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - implies
+          value:
+            $ref: '#/components/schemas/ImpliesC'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - forbids
+          value:
+            $ref: '#/components/schemas/ForbidsC'
+        required:
+        - kind
+        - value
     CreateAgentRequest:
       title: CreateAgentRequest
       type: object
@@ -14301,6 +15556,26 @@ components:
         required:
         - rule
         - value
+    Doc:
+      type: object
+      properties:
+        summary:
+          type: string
+        description:
+          type: string
+        examples:
+          type: array
+          items:
+            $ref: '#/components/schemas/Example'
+      required:
+      - summary
+      - description
+      - examples
+    DuplicateKeyPolicy:
+      type: string
+      enum:
+      - reject
+      - last-wins
     DurationValuePayload:
       type: object
       properties:
@@ -14344,6 +15619,33 @@ components:
       required:
       - code
       - error
+    ErrorCase:
+      type: object
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        kind:
+          $ref: '#/components/schemas/ErrorKind'
+        exit_code:
+          type: integer
+          format: uint8
+        payload:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaType'
+          - nullable: true
+      required:
+      - name
+      - doc
+      - kind
+      - exit_code
+    ErrorKind:
+      type: string
+      enum:
+      - usage-error
+      - runtime-error
     ErrorsBody:
       title: ErrorsBody
       type: object
@@ -14357,6 +15659,16 @@ components:
       required:
       - code
       - errors
+    Example:
+      type: object
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+      required:
+      - title
+      - body
     ExportedResourceMetadata:
       title: ExportedResourceMetadata
       type: object
@@ -14826,6 +16138,48 @@ components:
         required:
         - kind
         - value
+    ExternalToolInvocationParameters:
+      title: ExternalToolInvocationParameters
+      type: object
+      properties:
+        idempotencyKey:
+          type: string
+        toolName:
+          type: string
+        commandPath:
+          type: array
+          items:
+            type: string
+        input:
+          $ref: '#/components/schemas/TypedSchemaValue'
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        invocationContext:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/PublicSpanData'
+      required:
+      - idempotencyKey
+      - toolName
+      - commandPath
+      - input
+      - traceId
+      - traceStates
+      - invocationContext
+    ExternalToolResultParameters:
+      title: ExternalToolResultParameters
+      type: object
+      properties:
+        result:
+          $ref: '#/components/schemas/PublicExternalToolResult'
+      required:
+      - result
     ExternalTypedSchemaValue:
       type: object
       properties:
@@ -14899,6 +16253,74 @@ components:
       - Greater
       - LessEqual
       - Less
+    FlagShape:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - bool-flag
+          value:
+            $ref: '#/components/schemas/BoolFlagShape'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - count-flag
+          value:
+            nullable: true
+            type: integer
+            format: uint32
+        required:
+        - kind
+        - value
+    FlagSpec:
+      type: object
+      properties:
+        long:
+          type: string
+        short:
+          nullable: true
+          type: char
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        shape:
+          $ref: '#/components/schemas/FlagShape'
+        env_var:
+          nullable: true
+          type: string
+      required:
+      - long
+      - aliases
+      - doc
+      - shape
+    ForbidsC:
+      type: object
+      properties:
+        lhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        lhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+        rhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+      required:
+      - lhs_quant
+      - lhs
+      - rhs
     ForkWorkerRequest:
       title: ForkWorkerRequest
       type: object
@@ -14914,6 +16336,16 @@ components:
     ForkWorkerResponse:
       title: ForkWorkerResponse
       type: object
+    Formatter:
+      type: object
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+      required:
+      - name
+      - doc
     GetFilesResponse:
       title: GetFilesResponse
       type: object
@@ -14944,6 +16376,20 @@ components:
       - entries
       - firstIndexInChunk
       - lastIndex
+    Globals:
+      type: object
+      properties:
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/OptionSpec'
+        flags:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlagSpec'
+      required:
+      - options
+      - flags
     HostStreamKind:
       description: |-
         Identifies which host-owned stream a `HostStreamFrame` oplog entry belongs
@@ -14951,9 +16397,36 @@ components:
       type: string
       enum:
       - P3HttpRequestBody
+    ImpliesC:
+      type: object
+      properties:
+        lhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        lhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+        rhs_quant:
+          $ref: '#/components/schemas/Quantifier'
+        rhs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+      required:
+      - lhs_quant
+      - lhs
+      - rhs_quant
+      - rhs
     InterruptResponse:
       title: InterruptResponse
       type: object
+    InvocationStatus:
+      description: Status of an idempotency key lookup on a worker.
+      type: string
+      enum:
+      - unknown
+      - pending
+      - complete
     JsonSnapshotData:
       title: JsonSnapshotData
       type: object
@@ -15085,6 +16558,157 @@ components:
       required:
       - name
       - body
+    NativeToolDefinition:
+      title: NativeToolDefinition
+      type: object
+      properties:
+        definition:
+          $ref: '#/components/schemas/Tool'
+        componentRevision:
+          type: integer
+          format: uint64
+        deploymentRevision:
+          type: integer
+          format: uint64
+      required:
+      - definition
+      - componentRevision
+      - deploymentRevision
+    NativeToolDescribeRequest:
+      title: NativeToolDescribeRequest
+      type: object
+      properties:
+        appName:
+          type: string
+        envName:
+          type: string
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        componentId:
+          type: string
+          format: uuid
+        toolName:
+          type: string
+      required:
+      - appName
+      - envName
+      - toolName
+    NativeToolFailure:
+      title: NativeToolFailure
+      type: object
+      properties:
+        error:
+          $ref: '#/components/schemas/SerializableToolRpcError'
+      required:
+      - error
+    NativeToolInvocationMode:
+      type: string
+      enum:
+      - await
+      - schedule
+      - lookup
+    NativeToolInvocationRequest:
+      title: NativeToolInvocationRequest
+      description: |-
+        Select exactly one target: `agentId` for an existing real owner, or `componentId`
+        for a fresh ephemeral owner using that deployed component's baseline without constructing an agent.
+        Input is required for await and schedule, and forbidden for lookup.
+      type: object
+      properties:
+        appName:
+          type: string
+        envName:
+          type: string
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        componentId:
+          type: string
+          format: uuid
+        toolName:
+          type: string
+        commandPath:
+          type: array
+          items:
+            type: string
+        input:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
+        mode:
+          $ref: '#/components/schemas/NativeToolInvocationMode'
+        scheduleAt:
+          type: string
+          format: date-time
+        idempotencyKey:
+          type: string
+      required:
+      - appName
+      - envName
+      - toolName
+      - commandPath
+      - mode
+    NativeToolInvocationResponse:
+      title: NativeToolInvocationResponse
+      type: object
+      properties:
+        agentId:
+          $ref: '#/components/schemas/AgentId'
+        idempotencyKey:
+          type: string
+        result:
+          $ref: '#/components/schemas/NativeToolResult'
+        status:
+          $ref: '#/components/schemas/InvocationStatus'
+        componentRevision:
+          type: integer
+          format: uint64
+        agentFingerprint:
+          type: string
+          format: uuid
+        oplogIndex:
+          type: integer
+          format: uint64
+      required:
+      - agentId
+      - idempotencyKey
+    NativeToolResult:
+      discriminator:
+        propertyName: type
+        mapping:
+          Success: '#/components/schemas/NativeToolResult_NativeToolSuccess'
+          Failure: '#/components/schemas/NativeToolResult_NativeToolFailure'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/NativeToolResult_NativeToolSuccess'
+      - $ref: '#/components/schemas/NativeToolResult_NativeToolFailure'
+    NativeToolResult_NativeToolFailure:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Failure
+            type: string
+            enum:
+            - Failure
+        required:
+        - type
+      - $ref: '#/components/schemas/NativeToolFailure'
+    NativeToolResult_NativeToolSuccess:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Success
+            type: string
+            enum:
+            - Success
+        required:
+        - type
+      - $ref: '#/components/schemas/NativeToolSuccess'
+    NativeToolSuccess:
+      title: NativeToolSuccess
+      type: object
+      properties:
+        result:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
     NormalizedJsonValue:
       type: object
     NumericBound:
@@ -15155,6 +16779,11 @@ components:
       required:
       - nextOplogIndex
       - currentComponentRevision
+    OplogErrorKind:
+      type: string
+      enum:
+      - invocation
+      - recovery
     OplogRegion:
       title: OplogRegion
       type: object
@@ -15168,6 +16797,98 @@ components:
       required:
       - start
       - end
+    OptionShape:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - scalar
+          value:
+            $ref: '#/components/schemas/SchemaType'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - optional-scalar
+          value:
+            $ref: '#/components/schemas/SchemaType'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeatable-list
+          value:
+            $ref: '#/components/schemas/RepeatableListShape'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeatable-map
+          value:
+            $ref: '#/components/schemas/RepeatableMapShape'
+        required:
+        - kind
+        - value
+    OptionSpec:
+      type: object
+      properties:
+        long:
+          type: string
+        short:
+          nullable: true
+          type: char
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          nullable: true
+          type: string
+        shape:
+          $ref: '#/components/schemas/OptionShape'
+        default:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
+        required:
+          type: boolean
+        env_var:
+          nullable: true
+          type: string
+      required:
+      - long
+      - aliases
+      - doc
+      - shape
+      - required
+    OwnerKind:
+      description: |-
+        Authoritative kind of an execution owner.
+
+        This is persisted at creation time. In particular, an instance name that
+        happens to look like an external-tool owner never grants that authority.
+      type: string
+      enum:
+      - component-agent
+      - ephemeral-external-tool
     PathDirection:
       type: string
       enum:
@@ -15312,6 +17033,47 @@ components:
       - upperNegative
       - createdAt
       - systemCard
+    Positional:
+      type: object
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          nullable: true
+          type: string
+        type_:
+          $ref: '#/components/schemas/SchemaType'
+        default:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/SchemaValue'
+          - nullable: true
+        required:
+          type: boolean
+        accepts_stdio:
+          type: boolean
+      required:
+      - name
+      - doc
+      - type_
+      - required
+      - accepts_stdio
+    Positionals:
+      type: object
+      properties:
+        fixed:
+          type: array
+          items:
+            $ref: '#/components/schemas/Positional'
+        tail:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/TailPositional'
+          - nullable: true
+      required:
+      - fixed
     ProcessOplogEntriesParameters:
       title: ProcessOplogEntriesParameters
       type: object
@@ -15348,6 +17110,7 @@ components:
         mapping:
           AgentInitialization: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
           AgentMethodInvocation: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
+          ExternalTool: '#/components/schemas/PublicAgentInvocation_ExternalToolInvocationParameters'
           SaveSnapshot: '#/components/schemas/PublicAgentInvocation_Empty'
           LoadSnapshot: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
           ProcessOplogEntries: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
@@ -15356,6 +17119,7 @@ components:
       oneOf:
       - $ref: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocation_ExternalToolInvocationParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_Empty'
       - $ref: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
@@ -15366,6 +17130,7 @@ components:
         mapping:
           AgentInitialization: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
           AgentMethod: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+          ExternalTool: '#/components/schemas/PublicAgentInvocationResult_ExternalToolResultParameters'
           ManualUpdate: '#/components/schemas/PublicAgentInvocationResult_Empty'
           LoadSnapshot: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
           SaveSnapshot: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
@@ -15374,6 +17139,7 @@ components:
       oneOf:
       - $ref: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_AgentInvocationOutputParameters'
+      - $ref: '#/components/schemas/PublicAgentInvocationResult_ExternalToolResultParameters'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_Empty'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_FallibleResultParameters'
       - $ref: '#/components/schemas/PublicAgentInvocationResult_SaveSnapshotResultParameters'
@@ -15402,6 +17168,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    PublicAgentInvocationResult_ExternalToolResultParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ExternalTool
+            type: string
+            enum:
+            - ExternalTool
+        required:
+        - type
+      - $ref: '#/components/schemas/ExternalToolResultParameters'
     PublicAgentInvocationResult_FallibleResultParameters:
       allOf:
       - type: object
@@ -15474,6 +17252,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    PublicAgentInvocation_ExternalToolInvocationParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ExternalTool
+            type: string
+            enum:
+            - ExternalTool
+        required:
+        - type
+      - $ref: '#/components/schemas/ExternalToolInvocationParameters'
     PublicAgentInvocation_LoadSnapshotParameters:
       allOf:
       - type: object
@@ -15663,6 +17453,40 @@ components:
           type: string
       required:
       - spanId
+    PublicExternalToolResult:
+      discriminator:
+        propertyName: type
+        mapping:
+          Success: '#/components/schemas/PublicExternalToolResult_SerializableToolInvocationResult'
+          Failure: '#/components/schemas/PublicExternalToolResult_SerializableToolRpcError'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicExternalToolResult_SerializableToolInvocationResult'
+      - $ref: '#/components/schemas/PublicExternalToolResult_SerializableToolRpcError'
+    PublicExternalToolResult_SerializableToolInvocationResult:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Success
+            type: string
+            enum:
+            - Success
+        required:
+        - type
+      - $ref: '#/components/schemas/SerializableToolInvocationResult'
+    PublicExternalToolResult_SerializableToolRpcError:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Failure
+            type: string
+            enum:
+            - Failure
+        required:
+        - type
+      - $ref: '#/components/schemas/SerializableToolRpcError'
     PublicInvocationWalletPin:
       title: PublicInvocationWalletPin
       type: object
@@ -15738,6 +17562,7 @@ components:
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
+          RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
           NoOp: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
           Jump: '#/components/schemas/PublicOplogEntry_r#JumpParams'
           Interrupted: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
@@ -15753,6 +17578,7 @@ components:
           DropResource: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
           Log: '#/components/schemas/PublicOplogEntry_r#LogParams'
           Restart: '#/components/schemas/PublicOplogEntry_r#RestartParams'
+          Resumed: '#/components/schemas/PublicOplogEntry_r#ResumedParams'
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
           Revert: '#/components/schemas/PublicOplogEntry_r#RevertParams'
@@ -15797,6 +17623,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#NoOpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#JumpParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#InterruptedParams'
@@ -15812,6 +17639,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#DropResourceParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#LogParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RestartParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#ResumedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ActivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RevertParams'
@@ -16387,6 +18215,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#PreRollbackRemoteTransactionParams'
+    PublicOplogEntry_r#RecoverySucceededParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: RecoverySucceeded
+            type: string
+            enum:
+            - RecoverySucceeded
+        required:
+        - type
+      - $ref: '#/components/schemas/r#RecoverySucceededParams'
     PublicOplogEntry_r#RemoveRetryPolicyParams:
       allOf:
       - type: object
@@ -16411,6 +18251,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#RestartParams'
+    PublicOplogEntry_r#ResumedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Resumed
+            type: string
+            enum:
+            - Resumed
+        required:
+        - type
+      - $ref: '#/components/schemas/r#ResumedParams'
     PublicOplogEntry_r#RevertParams:
       allOf:
       - type: object
@@ -17015,6 +18867,11 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/SnapshotBasedUpdateParameters'
+    Quantifier:
+      type: string
+      enum:
+      - all
+      - any
     QuantitySpec:
       type: object
       properties:
@@ -17093,6 +18950,96 @@ components:
       required:
       - data
       - mimeType
+    Ref:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - present
+          value:
+            type: string
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - value-is
+          value:
+            $ref: '#/components/schemas/ValueIsRef'
+        required:
+        - kind
+        - value
+    RefGroup:
+      type: object
+      properties:
+        refs:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ref'
+      required:
+      - refs
+    RepeatableListShape:
+      type: object
+      properties:
+        repetition:
+          $ref: '#/components/schemas/Repetition'
+        item_type:
+          $ref: '#/components/schemas/SchemaType'
+      required:
+      - repetition
+      - item_type
+    RepeatableMapShape:
+      type: object
+      properties:
+        repetition:
+          $ref: '#/components/schemas/Repetition'
+        map_type:
+          $ref: '#/components/schemas/SchemaType'
+        duplicate_key_policy:
+          $ref: '#/components/schemas/DuplicateKeyPolicy'
+      required:
+      - repetition
+      - map_type
+      - duplicate_key_policy
+    Repetition:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - repeated
+        required:
+        - kind
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - delimited
+          value:
+            type: char
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - either
+          value:
+            type: char
+        required:
+        - kind
+        - value
     ResultSpec:
       type: object
       properties:
@@ -17240,18 +19187,7 @@ components:
       required:
       - snapshot
     ScanCursor:
-      title: ScanCursor
-      type: object
-      properties:
-        cursor:
-          type: integer
-          format: uint64
-        layer:
-          type: integer
-          format: uint64
-      required:
-      - cursor
-      - layer
+      type: string
     SchemaGraph:
       type: object
       properties:
@@ -18447,6 +20383,172 @@ components:
       - secretId
       - version
       - resolvedAt
+    SerializableCustomToolError:
+      type: object
+      properties:
+        name:
+          type: string
+        payload:
+          $ref: '#/components/schemas/TypedSchemaValue'
+      required:
+      - name
+      - payload
+    SerializableToolError:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - InvalidToolName
+          value:
+            type: string
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - InvalidCommandPath
+          value:
+            type: array
+            items:
+              type: string
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - InvalidInput
+          value:
+            type: string
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - ConstraintViolation
+          value:
+            type: string
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - InvalidResult
+          value:
+            type: string
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - CustomError
+          value:
+            $ref: '#/components/schemas/SerializableCustomToolError'
+        required:
+        - type
+        - value
+    SerializableToolInvocationResult:
+      type: object
+      properties:
+        result:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/TypedSchemaValue'
+          - nullable: true
+    SerializableToolRpcError:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - ProtocolError
+          value:
+            type: string
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - Denied
+          value:
+            type: string
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - NotFound
+          value:
+            type: string
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - RemoteInternalError
+          value:
+            type: string
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - RemoteToolError
+          value:
+            $ref: '#/components/schemas/SerializableToolError'
+        required:
+        - type
+        - value
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - Cancelled
+        required:
+        - type
+      - type: object
+        properties:
+          type:
+            type: string
+            enum:
+            - ResourceExhausted
+          value:
+            type: string
+        required:
+        - type
+        - value
     SnapshotBasedUpdateParameters:
       title: SnapshotBasedUpdateParameters
       type: object
@@ -18495,6 +20597,21 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PolymorphicCard'
+    StreamSpec:
+      type: object
+      properties:
+        doc:
+          $ref: '#/components/schemas/Doc'
+        mime:
+          type: array
+          items:
+            type: string
+        required:
+          type: boolean
+      required:
+      - doc
+      - mime
+      - required
     StringAttributeValue:
       title: StringAttributeValue
       type: object
@@ -18524,6 +20641,39 @@ components:
       required:
       - timestamp
       - targetRevision
+    TailPositional:
+      type: object
+      properties:
+        name:
+          type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        value_name:
+          nullable: true
+          type: string
+        item_type:
+          $ref: '#/components/schemas/SchemaType'
+        min:
+          type: integer
+          format: uint32
+        max:
+          nullable: true
+          type: integer
+          format: uint32
+        separator:
+          nullable: true
+          type: string
+        verbatim:
+          type: boolean
+        accepts_stdio:
+          type: boolean
+      required:
+      - name
+      - doc
+      - item_type
+      - min
+      - verbatim
+      - accepts_stdio
     TextRestrictions:
       type: object
       properties:
@@ -18553,6 +20703,36 @@ components:
           type: string
       required:
       - text
+    Tool:
+      type: object
+      properties:
+        version:
+          type: string
+        commands:
+          $ref: '#/components/schemas/CommandTree'
+        schema:
+          $ref: '#/components/schemas/SchemaGraph'
+      required:
+      - version
+      - commands
+    ToolResultSpec:
+      type: object
+      properties:
+        type_:
+          $ref: '#/components/schemas/SchemaType'
+        doc:
+          $ref: '#/components/schemas/Doc'
+        formatters:
+          type: array
+          items:
+            $ref: '#/components/schemas/Formatter'
+        default_formatter:
+          type: string
+      required:
+      - type_
+      - doc
+      - formatters
+      - default_formatter
     TypedAgentConfigEntry:
       title: TypedAgentConfigEntry
       type: object
@@ -18689,6 +20869,16 @@ components:
           type: array
           items:
             type: string
+    ValueIsRef:
+      type: object
+      properties:
+        name:
+          type: string
+        value:
+          $ref: '#/components/schemas/SchemaValue'
+      required:
+      - name
+      - value
     VariantCaseType:
       type: object
       properties:
@@ -18854,6 +21044,7 @@ components:
       required:
       - timestamp
       - invocation
+      - walletPin
     r#BeginAtomicRegionParams:
       title: r#BeginAtomicRegionParams
       type: object
@@ -18924,6 +21115,7 @@ components:
       - timestamp
       - cardId
       - parentIds
+      - walletGeneration
     r#CardEventQueuedParams:
       title: r#CardEventQueuedParams
       type: object
@@ -18952,6 +21144,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
     r#CardInstallFailedParams:
       title: r#CardInstallFailedParams
       type: object
@@ -18991,6 +21184,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
     r#CardRevokedCascadeParams:
       title: r#CardRevokedCascadeParams
       type: object
@@ -19010,6 +21204,7 @@ components:
       required:
       - timestamp
       - revokedCardIds
+      - localWalletGeneration
     r#CardRevokedParams:
       title: r#CardRevokedParams
       type: object
@@ -19030,6 +21225,7 @@ components:
       - timestamp
       - queuedEventIndex
       - cardId
+      - walletGeneration
     r#CardTransferConfirmedParams:
       title: r#CardTransferConfirmedParams
       type: object
@@ -19080,6 +21276,7 @@ components:
       - transferId
       - cardId
       - targetHolder
+      - sourceWalletGeneration
     r#CardTransferredParams:
       title: r#CardTransferredParams
       type: object
@@ -19092,7 +21289,7 @@ components:
           type: string
           format: uuid
         sourceCardId:
-          description: Source card identity, absent only on legacy entries.
+          description: Source card identity.
           type: string
           format: uuid
         installedCardId:
@@ -19107,8 +21304,10 @@ components:
       required:
       - timestamp
       - transferId
+      - sourceCardId
       - installedCardId
       - targetHolder
+      - targetWalletGeneration
     r#CommittedRemoteTransactionParams:
       title: r#CommittedRemoteTransactionParams
       type: object
@@ -19157,6 +21356,8 @@ components:
           format: date-time
         agentId:
           $ref: '#/components/schemas/AgentId'
+        ownerKind:
+          $ref: '#/components/schemas/OwnerKind'
         agentMode:
           $ref: '#/components/schemas/AgentMode'
         componentRevision:
@@ -19197,6 +21398,7 @@ components:
       required:
       - timestamp
       - agentId
+      - ownerKind
       - agentMode
       - componentRevision
       - env
@@ -19295,6 +21497,8 @@ components:
         timestamp:
           type: string
           format: date-time
+        kind:
+          $ref: '#/components/schemas/OplogErrorKind'
         error:
           type: string
         retryFrom:
@@ -19306,6 +21510,7 @@ components:
           $ref: '#/components/schemas/PublicRetryPolicyState'
       required:
       - timestamp
+      - kind
       - error
       - retryFrom
       - insideAtomicRegion
@@ -19506,6 +21711,15 @@ components:
       required:
       - timestamp
       - beginIndex
+    r#RecoverySucceededParams:
+      title: r#RecoverySucceededParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+      required:
+      - timestamp
     r#RemoveRetryPolicyParams:
       title: r#RemoveRetryPolicyParams
       type: object
@@ -19520,6 +21734,15 @@ components:
       - name
     r#RestartParams:
       title: r#RestartParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+      required:
+      - timestamp
+    r#ResumedParams:
+      title: r#ResumedParams
       type: object
       properties:
         timestamp:
@@ -20349,16 +22572,6 @@ components:
       type: string
       enum:
       - principal
-    BoolFlagShape:
-      type: object
-      properties:
-        default:
-          type: boolean
-        negatable:
-          type: boolean
-      required:
-      - default
-      - negatable
     CachePolicy:
       discriminator:
         propertyName: type
@@ -20404,113 +22617,63 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
-    CommandAnnotations:
+    ComponentConfigSchema:
       type: object
       properties:
-        read_only:
-          type: boolean
-        destructive:
-          type: boolean
-        idempotent:
-          type: boolean
-        open_world:
-          type: boolean
-      required:
-      - read_only
-      - destructive
-      - idempotent
-      - open_world
-    CommandBody:
-      type: object
-      properties:
-        positionals:
-          $ref: '#/components/schemas/Positionals'
-        options:
+        schema:
+          $ref: '#/components/schemas/SchemaGraph'
+        declarations:
           type: array
           items:
-            $ref: '#/components/schemas/OptionSpec'
-        flags:
-          type: array
-          items:
-            $ref: '#/components/schemas/FlagSpec'
-        constraints:
-          type: array
-          items:
-            $ref: '#/components/schemas/Constraint'
-        stdin:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/StreamSpec'
-          - nullable: true
-        stdout:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/StreamSpec'
-          - nullable: true
-        result:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/ToolResultSpec'
-          - nullable: true
-        errors:
-          type: array
-          items:
-            $ref: '#/components/schemas/ErrorCase'
-        annotations:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/CommandAnnotations'
-          - nullable: true
-      required:
-      - positionals
-      - options
-      - flags
-      - constraints
-      - errors
-    CommandNode:
-      type: object
-      properties:
-        name:
-          type: string
-        aliases:
-          type: array
-          items:
-            type: string
-        doc:
-          $ref: '#/components/schemas/Doc'
-        globals:
-          $ref: '#/components/schemas/Globals'
-        subcommands:
-          type: array
-          items:
-            type: integer
-            format: int32
-        body:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/CommandBody'
-          - nullable: true
-      required:
-      - name
-      - aliases
-      - doc
-      - globals
-      - subcommands
-    CommandTree:
-      type: object
-      properties:
-        nodes:
-          type: array
-          items:
-            $ref: '#/components/schemas/CommandNode'
-      required:
-      - nodes
+            $ref: '#/components/schemas/AgentConfigDeclarationSchema'
     ComponentCreation:
       title: ComponentCreation
       type: object
       properties:
         componentName:
           type: string
+        configSchema:
+          default:
+            schema:
+              root:
+                kind: record
+                value:
+                  fields: []
+          allOf:
+          - $ref: '#/components/schemas/ComponentConfigSchema'
+          - default:
+              schema:
+                root:
+                  kind: record
+                  value:
+                    fields: []
+        componentProvisionConfig:
+          default:
+            config: []
+            env: {}
+            files: {}
+            initialPermissions:
+              lowerBound:
+                negative: []
+                positive: []
+              upperBound:
+                negative: []
+                positive: []
+            pluginInstallations: []
+          allOf:
+          - $ref: '#/components/schemas/ComponentProvisionConfigCreation'
+          - default:
+              config: []
+              env: {}
+              files: {}
+              initialPermissions:
+                lowerBound:
+                  negative: []
+                  positive: []
+                upperBound:
+                  negative: []
+                  positive: []
+              pluginInstallations: []
         agentTypes:
           default: []
           type: array
@@ -20531,6 +22694,16 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/ToolDeploymentConfigCreation'
+        toolMiddlewares:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolMiddleware'
+        toolMiddlewareProvisionConfigs:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolProvisionConfigCreation'
       required:
       - componentName
     ComponentDto:
@@ -20598,6 +22771,23 @@ components:
           type: string
         rootPackageVersion:
           type: string
+        configSchema:
+          default:
+            schema:
+              root:
+                kind: record
+                value:
+                  fields: []
+          allOf:
+          - $ref: '#/components/schemas/ComponentConfigSchema'
+          - default:
+              schema:
+                root:
+                  kind: record
+                  value:
+                    fields: []
+        componentProvisionConfig:
+          $ref: '#/components/schemas/ComponentProvisionConfig'
         agentTypes:
           default: []
           type: array
@@ -20624,11 +22814,74 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/ToolDeploymentMetadata'
+        toolMiddlewares:
+          description: Complete deployment input for every tool middleware implemented by this component.
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolMiddlewareDeploymentMetadata'
       required:
       - knownExports
       - producers
       - memories
+      - componentProvisionConfig
       - agentMethodStreams
+    ComponentProvisionConfig:
+      title: ComponentProvisionConfig
+      type: object
+      properties:
+        initialPermissions:
+          $ref: '#/components/schemas/PolymorphicCard'
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        config:
+          type: array
+          items:
+            $ref: '#/components/schemas/TypedAgentConfigEntry'
+        plugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstalledPlugin'
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialAgentFile'
+      required:
+      - initialPermissions
+      - env
+      - config
+      - plugins
+      - files
+    ComponentProvisionConfigCreation:
+      title: ComponentProvisionConfigCreation
+      type: object
+      properties:
+        initialPermissions:
+          $ref: '#/components/schemas/AgentTypeInitialPermissions'
+        env:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
+        config:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentConfigEntryDto'
+        pluginInstallations:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallation'
+        files:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AgentFileOptions'
+      required:
+      - initialPermissions
     ComponentUpdate:
       title: ComponentUpdate
       type: object
@@ -20636,6 +22889,10 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        configSchema:
+          $ref: '#/components/schemas/ComponentConfigSchema'
+        componentProvisionConfig:
+          $ref: '#/components/schemas/ComponentProvisionConfigCreation'
         agentTypes:
           type: array
           items:
@@ -20652,12 +22909,20 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/ToolDeploymentConfigUpdate'
+        toolMiddlewares:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolMiddleware'
+        toolMiddlewareProvisionConfigUpdates:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolProvisionConfigUpdate'
         allowIncompatibleConfig:
           default: false
           type: boolean
       required:
       - currentRevision
-    Constraint:
+    ConfigKeyScope:
       type: object
       oneOf:
       - type: object
@@ -20665,75 +22930,25 @@ components:
           kind:
             type: string
             enum:
-            - requires-all
-          value:
+            - all
+        required:
+        - kind
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - keys
+          keys:
             type: array
             items:
-              $ref: '#/components/schemas/Ref'
+              title: Canonical representation of an agent config path (segments are each camelCase)
+              type: array
+              items:
+                type: string
         required:
         - kind
-        - value
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - all-or-none
-          value:
-            type: array
-            items:
-              $ref: '#/components/schemas/Ref'
-        required:
-        - kind
-        - value
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - requires-any
-          value:
-            type: array
-            items:
-              $ref: '#/components/schemas/Ref'
-        required:
-        - kind
-        - value
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - mutex-groups
-          value:
-            type: array
-            items:
-              $ref: '#/components/schemas/RefGroup'
-        required:
-        - kind
-        - value
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - implies
-          value:
-            $ref: '#/components/schemas/ImpliesC'
-        required:
-        - kind
-        - value
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - forbids
-          value:
-            $ref: '#/components/schemas/ForbidsC'
-        required:
-        - kind
-        - value
+        - keys
     CorsOptions:
       title: CorsOptions
       type: object
@@ -20803,11 +23018,13 @@ components:
           HttpApiReadOnlyMethodBoundToNonGetVerb: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
           HttpApiReadOnlyTtlBelowOneSecond: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
           ToolRevealableSecretKeysDropped: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
+          ToolMiddleware: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
       type: object
       oneOf:
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
       - $ref: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
+      - $ref: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
     DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
       allOf:
       - type: object
@@ -20832,6 +23049,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_ToolMiddlewareWarning:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ToolMiddleware
+            type: string
+            enum:
+            - ToolMiddleware
+        required:
+        - type
+      - $ref: '#/components/schemas/ToolMiddlewareWarning'
     DeployValidationWarning_ToolRevealableSecretKeysDropped:
       allOf:
       - type: object
@@ -20962,6 +23191,21 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RemoteToolDeployment'
+        publishToolMiddlewares:
+          default: []
+          type: array
+          items:
+            type: string
+        remoteToolMiddlewares:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/RemoteToolMiddlewareDeployment'
+        universalToolMiddlewares:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolMiddlewareInstallation'
         replaceIncompatibleAgentSecrets:
           default: false
           type: boolean
@@ -21002,6 +23246,40 @@ components:
           type: array
           items:
             type: string
+        remoteToolMiddlewares:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanRemoteToolMiddlewareEntry'
+        publishedToolMiddlewares:
+          type: array
+          items:
+            type: string
+        universalToolMiddlewares:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolMiddlewareInstallation'
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
+        environmentToolMiddlewareBindings:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
+        agentToolMiddlewareBindings:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              $ref: '#/components/schemas/ToolBindingInput'
+        ambientTools:
+          description: |-
+            Registry-owned ambient tools available for the proposed deployment.
+
+            Applications cannot declare ambient tools and do not need grants to use them. These
+            entries are not staged and therefore do not contribute to the deployment hash or diff;
+            selected releases and their effective bindings are represented in `remote_tools`.
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanAmbientToolEntry'
       required:
       - deploymentHash
       - components
@@ -21009,6 +23287,55 @@ components:
       - mcpDeployments
       - remoteTools
       - publishedTools
+      - remoteToolMiddlewares
+      - publishedToolMiddlewares
+      - universalToolMiddlewares
+      - toolCompatibilityMode
+      - environmentToolMiddlewareBindings
+      - agentToolMiddlewareBindings
+      - ambientTools
+    DeploymentPlanAmbientToolEntry:
+      title: DeploymentPlanAmbientToolEntry
+      type: object
+      properties:
+        releaseId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        sourceDigest:
+          type: string
+          format: hash
+        ownerAccountId:
+          type: string
+          format: uuid
+        ownerAccountEmail:
+          type: string
+        metadataVersion:
+          type: string
+        metadataDigest:
+          type: string
+          format: hash
+        definition:
+          $ref: '#/components/schemas/Tool'
+        provision:
+          $ref: '#/components/schemas/ToolProvisionConfig'
+        environmentBinding:
+          $ref: '#/components/schemas/ToolBindingInput'
+      required:
+      - releaseId
+      - name
+      - version
+      - sourceDigest
+      - ownerAccountId
+      - ownerAccountEmail
+      - metadataVersion
+      - metadataDigest
+      - definition
+      - provision
+      - environmentBinding
     DeploymentPlanComponentEntry:
       title: DeploymentPlanComponentEntry
       type: object
@@ -21071,6 +23398,18 @@ components:
       - hash
     DeploymentPlanRemoteToolEntry:
       title: DeploymentPlanRemoteToolEntry
+      type: object
+      properties:
+        name:
+          type: string
+        hash:
+          type: string
+          format: hash
+      required:
+      - name
+      - hash
+    DeploymentPlanRemoteToolMiddlewareEntry:
+      title: DeploymentPlanRemoteToolMiddlewareEntry
       type: object
       properties:
         name:
@@ -21144,6 +23483,30 @@ components:
           type: array
           items:
             type: string
+        remoteToolMiddlewares:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanRemoteToolMiddlewareEntry'
+        publishedToolMiddlewares:
+          type: array
+          items:
+            type: string
+        universalToolMiddlewares:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolMiddlewareInstallation'
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
+        environmentToolMiddlewareBindings:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
+        agentToolMiddlewareBindings:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              $ref: '#/components/schemas/ToolBindingInput'
       required:
       - deploymentRevision
       - deploymentHash
@@ -21152,21 +23515,12 @@ components:
       - mcpDeployments
       - remoteTools
       - publishedTools
-    Doc:
-      type: object
-      properties:
-        summary:
-          type: string
-        description:
-          type: string
-        examples:
-          type: array
-          items:
-            $ref: '#/components/schemas/Example'
-      required:
-      - summary
-      - description
-      - examples
+      - remoteToolMiddlewares
+      - publishedToolMiddlewares
+      - universalToolMiddlewares
+      - toolCompatibilityMode
+      - environmentToolMiddlewareBindings
+      - agentToolMiddlewareBindings
     DomainRegistration:
       title: DomainRegistration
       type: object
@@ -21191,11 +23545,6 @@ components:
           type: string
       required:
       - domain
-    DuplicateKeyPolicy:
-      type: string
-      enum:
-      - reject
-      - last-wins
     EnforcementAction:
       type: string
       enum:
@@ -21224,6 +23573,8 @@ components:
           format: uint32
         compatibilityCheck:
           type: boolean
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
         versionCheck:
           type: boolean
         securityOverrides:
@@ -21243,6 +23594,7 @@ components:
       - name
       - diffModelVersion
       - compatibilityCheck
+      - toolCompatibilityMode
       - versionCheck
       - securityOverrides
       - ownerAccountId
@@ -21255,6 +23607,8 @@ components:
           type: string
         compatibilityCheck:
           type: boolean
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
         versionCheck:
           type: boolean
         securityOverrides:
@@ -21262,6 +23616,7 @@ components:
       required:
       - name
       - compatibilityCheck
+      - toolCompatibilityMode
       - versionCheck
       - securityOverrides
     EnvironmentCurrentDeploymentView:
@@ -21346,6 +23701,8 @@ components:
           format: uint32
         compatibilityCheck:
           type: boolean
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
         versionCheck:
           type: boolean
         securityOverrides:
@@ -21358,6 +23715,7 @@ components:
       - name
       - diffModelVersion
       - compatibilityCheck
+      - toolCompatibilityMode
       - versionCheck
       - securityOverrides
     EnvironmentToolGrant:
@@ -21459,6 +23817,128 @@ components:
       - grant
       - release
       - releaseOwner
+    EnvironmentToolMiddlewareGrant:
+      title: EnvironmentToolMiddlewareGrant
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        environmentId:
+          type: string
+          format: uuid
+        toolMiddlewareReleaseId:
+          type: string
+          format: uuid
+        protected:
+          type: boolean
+        automatic:
+          type: boolean
+        followCoordinates:
+          type: boolean
+        lifecycle:
+          $ref: '#/components/schemas/EnvironmentToolMiddlewareGrantLifecycle'
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+          format: uuid
+        stateChangedAt:
+          type: string
+          format: date-time
+        stateChangedBy:
+          type: string
+          format: uuid
+      required:
+      - id
+      - environmentId
+      - toolMiddlewareReleaseId
+      - protected
+      - automatic
+      - followCoordinates
+      - lifecycle
+      - createdAt
+      - createdBy
+      - stateChangedAt
+      - stateChangedBy
+    EnvironmentToolMiddlewareGrantCreation:
+      title: EnvironmentToolMiddlewareGrantCreation
+      type: object
+      properties:
+        release:
+          $ref: '#/components/schemas/ToolMiddlewareReleaseReference'
+        automatic:
+          type: boolean
+      required:
+      - release
+      - automatic
+    EnvironmentToolMiddlewareGrantDeletion:
+      title: EnvironmentToolMiddlewareGrantDeletion
+      type: object
+      properties:
+        automatic:
+          type: boolean
+      required:
+      - automatic
+    EnvironmentToolMiddlewareGrantLifecycle:
+      type: string
+      enum:
+      - active
+      - deleted
+    EnvironmentToolMiddlewareGrantReconciliation:
+      title: EnvironmentToolMiddlewareGrantReconciliation
+      type: object
+      properties:
+        creations:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentToolMiddlewareGrantCreation'
+        deletions:
+          type: array
+          items:
+            type: string
+            format: uuid
+      required:
+      - creations
+      - deletions
+    EnvironmentToolMiddlewareGrantWithDetails:
+      title: EnvironmentToolMiddlewareGrantWithDetails
+      type: object
+      properties:
+        grant:
+          $ref: '#/components/schemas/EnvironmentToolMiddlewareGrant'
+        release:
+          $ref: '#/components/schemas/ToolMiddlewareReleaseMetadata'
+        releaseOwner:
+          $ref: '#/components/schemas/AccountSummary'
+      required:
+      - grant
+      - release
+      - releaseOwner
+    EnvironmentToolMiddlewareValidation:
+      title: EnvironmentToolMiddlewareValidation
+      type: object
+      properties:
+        grantReconciliation:
+          $ref: '#/components/schemas/EnvironmentToolMiddlewareGrantReconciliation'
+        publications:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolMiddlewarePublication'
+      required:
+      - grantReconciliation
+      - publications
+    EnvironmentToolMiddlewareValidationResult:
+      title: EnvironmentToolMiddlewareValidationResult
+      type: object
+      properties:
+        publicationPlan:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolMiddlewarePublicationPlanEntry'
+      required:
+      - publicationPlan
     EnvironmentToolValidation:
       title: EnvironmentToolValidation
       type: object
@@ -21493,6 +23973,8 @@ components:
           type: string
         compatibilityCheck:
           type: boolean
+        toolCompatibilityMode:
+          $ref: '#/components/schemas/ToolCompatibilityMode'
         versionCheck:
           type: boolean
         securityOverrides:
@@ -21537,43 +24019,6 @@ components:
       - environment
       - application
       - account
-    ErrorCase:
-      type: object
-      properties:
-        name:
-          type: string
-        doc:
-          $ref: '#/components/schemas/Doc'
-        kind:
-          $ref: '#/components/schemas/ErrorKind'
-        exit_code:
-          type: integer
-          format: uint8
-        payload:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/SchemaType'
-          - nullable: true
-      required:
-      - name
-      - doc
-      - kind
-      - exit_code
-    ErrorKind:
-      type: string
-      enum:
-      - usage-error
-      - runtime-error
-    Example:
-      type: object
-      properties:
-        title:
-          type: string
-        body:
-          type: string
-      required:
-      - title
-      - body
     FieldSource:
       type: object
       oneOf:
@@ -21596,98 +24041,6 @@ components:
         required:
         - tag
         - value
-    FlagShape:
-      type: object
-      oneOf:
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - bool-flag
-          value:
-            $ref: '#/components/schemas/BoolFlagShape'
-        required:
-        - kind
-        - value
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - count-flag
-          value:
-            nullable: true
-            type: integer
-            format: uint32
-        required:
-        - kind
-        - value
-    FlagSpec:
-      type: object
-      properties:
-        long:
-          type: string
-        short:
-          nullable: true
-          type: char
-        aliases:
-          type: array
-          items:
-            type: string
-        doc:
-          $ref: '#/components/schemas/Doc'
-        shape:
-          $ref: '#/components/schemas/FlagShape'
-        env_var:
-          nullable: true
-          type: string
-      required:
-      - long
-      - aliases
-      - doc
-      - shape
-    ForbidsC:
-      type: object
-      properties:
-        lhs_quant:
-          $ref: '#/components/schemas/Quantifier'
-        lhs:
-          type: array
-          items:
-            $ref: '#/components/schemas/Ref'
-        rhs:
-          type: array
-          items:
-            $ref: '#/components/schemas/Ref'
-      required:
-      - lhs_quant
-      - lhs
-      - rhs
-    Formatter:
-      type: object
-      properties:
-        name:
-          type: string
-        doc:
-          $ref: '#/components/schemas/Doc'
-      required:
-      - name
-      - doc
-    Globals:
-      type: object
-      properties:
-        options:
-          type: array
-          items:
-            $ref: '#/components/schemas/OptionSpec'
-        flags:
-          type: array
-          items:
-            $ref: '#/components/schemas/FlagSpec'
-      required:
-      - options
-      - flags
     HeaderVariable:
       title: HeaderVariable
       type: object
@@ -21962,26 +24315,6 @@ components:
       - phantomAgent
       - corsOptions
       - webhookSuffix
-    ImpliesC:
-      type: object
-      properties:
-        lhs_quant:
-          $ref: '#/components/schemas/Quantifier'
-        lhs:
-          type: array
-          items:
-            $ref: '#/components/schemas/Ref'
-        rhs_quant:
-          $ref: '#/components/schemas/Quantifier'
-        rhs:
-          type: array
-          items:
-            $ref: '#/components/schemas/Ref'
-      required:
-      - lhs_quant
-      - lhs
-      - rhs_quant
-      - rhs
     InitialAgentFile:
       title: InitialAgentFile
       type: object
@@ -22091,6 +24424,9 @@ components:
         toolGuestInterface:
           description: Exact exported interface name for `golem:tool/guest`, e.g. `golem:tool/guest@0.1.0`
           type: string
+        toolMiddlewareGuestInterface:
+          description: Exact exported interface name for `golem:tool/tool-middleware-guest`.
+          type: string
     LinearMemory:
       title: LinearMemory
       type: object
@@ -22139,6 +24475,10 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
         createdAt:
           type: string
           format: date-time
@@ -22149,6 +24489,7 @@ components:
       - domain
       - hash
       - agents
+      - tools
       - createdAt
     McpDeploymentAgentOptions:
       title: McpDeploymentAgentOptions
@@ -22166,9 +24507,32 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
       required:
       - domain
       - agents
+      - tools
+    McpDeploymentToolOptions:
+      title: McpDeploymentToolOptions
+      type: object
+      properties:
+        ownerComponent:
+          type: string
+        securityScheme:
+          type: string
+        include:
+          type: array
+          items:
+            type: string
+        exclude:
+          type: array
+          items:
+            type: string
+      required:
+      - ownerComponent
     McpDeploymentUpdate:
       title: McpDeploymentUpdate
       type: object
@@ -22180,6 +24544,10 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/McpDeploymentAgentOptions'
+        tools:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/McpDeploymentToolOptions'
       required:
       - currentRevision
     MemoryLimit:
@@ -22211,6 +24579,18 @@ components:
       - enabled
       - disabled
       - unknown
+    MonomorphicToolMiddlewareScope:
+      type: object
+      properties:
+        presented:
+          $ref: '#/components/schemas/Tool'
+        expected:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/Tool'
+          - nullable: true
+      required:
+      - presented
     NamedField:
       type: object
       properties:
@@ -22315,88 +24695,6 @@ components:
       required:
       - componentId
       - componentRevision
-    OptionShape:
-      type: object
-      oneOf:
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - scalar
-          value:
-            $ref: '#/components/schemas/SchemaType'
-        required:
-        - kind
-        - value
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - optional-scalar
-          value:
-            $ref: '#/components/schemas/SchemaType'
-        required:
-        - kind
-        - value
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - repeatable-list
-          value:
-            $ref: '#/components/schemas/RepeatableListShape'
-        required:
-        - kind
-        - value
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - repeatable-map
-          value:
-            $ref: '#/components/schemas/RepeatableMapShape'
-        required:
-        - kind
-        - value
-    OptionSpec:
-      type: object
-      properties:
-        long:
-          type: string
-        short:
-          nullable: true
-          type: char
-        aliases:
-          type: array
-          items:
-            type: string
-        doc:
-          $ref: '#/components/schemas/Doc'
-        value_name:
-          nullable: true
-          type: string
-        shape:
-          $ref: '#/components/schemas/OptionShape'
-        default:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/SchemaValue'
-          - nullable: true
-        required:
-          type: boolean
-        env_var:
-          nullable: true
-          type: string
-      required:
-      - long
-      - aliases
-      - doc
-      - shape
-      - required
     OptionalFieldUpdate_ExternalSchemaValue:
       discriminator:
         propertyName: op
@@ -22591,6 +24889,16 @@ components:
             $ref: '#/components/schemas/EnvironmentToolGrantWithDetails'
       required:
       - values
+    Page_EnvironmentToolMiddlewareGrantWithDetails:
+      title: Page_EnvironmentToolMiddlewareGrantWithDetails
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentToolMiddlewareGrantWithDetails'
+      required:
+      - values
     Page_EnvironmentWithDetails:
       title: Page_EnvironmentWithDetails
       type: object
@@ -22641,6 +24949,16 @@ components:
             $ref: '#/components/schemas/PluginRegistrationDto'
       required:
       - values
+    Page_RegisteredToolMiddleware:
+      title: Page_RegisteredToolMiddleware
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/RegisteredToolMiddleware'
+      required:
+      - values
     Page_ResourceDefinition:
       title: Page_ResourceDefinition
       type: object
@@ -22679,6 +24997,16 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Token'
+      required:
+      - values
+    Page_ToolMiddlewareRelease:
+      title: Page_ToolMiddlewareRelease
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolMiddlewareRelease'
       required:
       - values
     Page_ToolRelease:
@@ -23110,47 +25438,6 @@ components:
           format: uuid
       required:
       - environmentPluginGrantId
-    Positional:
-      type: object
-      properties:
-        name:
-          type: string
-        doc:
-          $ref: '#/components/schemas/Doc'
-        value_name:
-          nullable: true
-          type: string
-        type_:
-          $ref: '#/components/schemas/SchemaType'
-        default:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/SchemaValue'
-          - nullable: true
-        required:
-          type: boolean
-        accepts_stdio:
-          type: boolean
-      required:
-      - name
-      - doc
-      - type_
-      - required
-      - accepts_stdio
-    Positionals:
-      type: object
-      properties:
-        fixed:
-          type: array
-          items:
-            $ref: '#/components/schemas/Positional'
-        tail:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/TailPositional'
-          - nullable: true
-      required:
-      - fixed
     ProducerField:
       title: ProducerField
       type: object
@@ -23214,11 +25501,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
-    Quantifier:
-      type: string
-      enum:
-      - all
-      - any
     QueryVariable:
       title: QueryVariable
       type: object
@@ -23241,40 +25523,6 @@ components:
       required:
       - cachePolicy
       - usesPrincipal
-    Ref:
-      type: object
-      oneOf:
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - present
-          value:
-            type: string
-        required:
-        - kind
-        - value
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - value-is
-          value:
-            $ref: '#/components/schemas/ValueIsRef'
-        required:
-        - kind
-        - value
-    RefGroup:
-      type: object
-      properties:
-        refs:
-          type: array
-          items:
-            $ref: '#/components/schemas/Ref'
-      required:
-      - refs
     RegisteredAgentTypeImplementer:
       title: RegisteredAgentTypeImplementer
       type: object
@@ -23298,6 +25546,41 @@ components:
       - componentName
       - accountId
       - accountEmail
+    RegisteredToolMiddleware:
+      title: RegisteredToolMiddleware
+      type: object
+      properties:
+        deploymentRevision:
+          type: integer
+          format: uint64
+        releaseId:
+          type: string
+          format: uuid
+        definition:
+          $ref: '#/components/schemas/ToolMiddleware'
+        provision:
+          $ref: '#/components/schemas/ToolProvisionConfig'
+        source:
+          $ref: '#/components/schemas/ToolMiddlewareSource'
+        ownerAccountId:
+          type: string
+          format: uuid
+        ownerAccountEmail:
+          type: string
+        metadataVersion:
+          type: string
+        metadataDigest:
+          type: string
+          format: hash
+      required:
+      - deploymentRevision
+      - definition
+      - provision
+      - source
+      - ownerAccountId
+      - ownerAccountEmail
+      - metadataVersion
+      - metadataDigest
     RemoteToolDeployment:
       title: RemoteToolDeployment
       type: object
@@ -23310,6 +25593,11 @@ components:
           $ref: '#/components/schemas/ToolProvisionConfig'
         environmentBinding:
           $ref: '#/components/schemas/ToolBindingInput'
+        componentBindings:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           default: {}
           type: object
@@ -23319,62 +25607,20 @@ components:
       - name
       - release
       - provision
-    RepeatableListShape:
+    RemoteToolMiddlewareDeployment:
+      title: RemoteToolMiddlewareDeployment
       type: object
       properties:
-        repetition:
-          $ref: '#/components/schemas/Repetition'
-        item_type:
-          $ref: '#/components/schemas/SchemaType'
+        name:
+          type: string
+        release:
+          $ref: '#/components/schemas/ToolMiddlewareReleaseReference'
+        provision:
+          $ref: '#/components/schemas/ToolProvisionConfig'
       required:
-      - repetition
-      - item_type
-    RepeatableMapShape:
-      type: object
-      properties:
-        repetition:
-          $ref: '#/components/schemas/Repetition'
-        map_type:
-          $ref: '#/components/schemas/SchemaType'
-        duplicate_key_policy:
-          $ref: '#/components/schemas/DuplicateKeyPolicy'
-      required:
-      - repetition
-      - map_type
-      - duplicate_key_policy
-    Repetition:
-      type: object
-      oneOf:
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - repeated
-        required:
-        - kind
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - delimited
-          value:
-            type: char
-        required:
-        - kind
-        - value
-      - type: object
-        properties:
-          kind:
-            type: string
-            enum:
-            - either
-          value:
-            type: char
-        required:
-        - kind
-        - value
+      - name
+      - release
+      - provision
     ResourceCapacityLimit:
       title: ResourceCapacityLimit
       type: object
@@ -23873,21 +26119,6 @@ components:
       - planDefault
       - ceiling
       - userConfigurable
-    StreamSpec:
-      type: object
-      properties:
-        doc:
-          $ref: '#/components/schemas/Doc'
-        mime:
-          type: array
-          items:
-            type: string
-        required:
-          type: boolean
-      required:
-      - doc
-      - mime
-      - required
     SystemToolAvailability:
       type: string
       enum:
@@ -23907,39 +26138,6 @@ components:
           $ref: '#/components/schemas/SystemVariable'
       required:
       - value
-    TailPositional:
-      type: object
-      properties:
-        name:
-          type: string
-        doc:
-          $ref: '#/components/schemas/Doc'
-        value_name:
-          nullable: true
-          type: string
-        item_type:
-          $ref: '#/components/schemas/SchemaType'
-        min:
-          type: integer
-          format: uint32
-        max:
-          nullable: true
-          type: integer
-          format: uint32
-        separator:
-          nullable: true
-          type: string
-        verbatim:
-          type: boolean
-        accepts_stdio:
-          type: boolean
-      required:
-      - name
-      - doc
-      - item_type
-      - min
-      - verbatim
-      - accepts_stdio
     TestSessionHeaderAgentSecurity:
       title: TestSessionHeaderAgentSecurity
       description: |-
@@ -24016,18 +26214,6 @@ components:
       - accountId
       - createdAt
       - expiresAt
-    Tool:
-      type: object
-      properties:
-        version:
-          type: string
-        commands:
-          $ref: '#/components/schemas/CommandTree'
-        schema:
-          $ref: '#/components/schemas/SchemaGraph'
-      required:
-      - version
-      - commands
     ToolBindingInput:
       title: ToolBindingInput
       type: object
@@ -24038,14 +26224,39 @@ components:
           $ref: '#/components/schemas/NormalizedJsonValue'
         account:
           type: string
+        configKeysReadable:
+          $ref: '#/components/schemas/ConfigKeyScope'
         secretKeysReadable:
           $ref: '#/components/schemas/SecretKeyScope'
         secretKeysRevealable:
           $ref: '#/components/schemas/SecretKeyScope'
+        filesystemAccess:
+          default: unset
+          allOf:
+          - $ref: '#/components/schemas/ToolFilesystemAccess'
+          - default: unset
+        middleware:
+          description: |-
+            `None` means no middleware list was authored; `Some([])` explicitly clears the
+            per-tool list when combined with `Replace`.
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolMiddlewareInstallation'
+        middlewareMergeMode:
+          allOf:
+          - $ref: '#/components/schemas/ToolMiddlewareMergeMode'
+          - {}
       required:
       - parameters
+      - configKeysReadable
       - secretKeysReadable
       - secretKeysRevealable
+    ToolCompatibilityMode:
+      type: string
+      enum:
+      - strict-equality
+      - structural-subtype
+      - nominal
     ToolDeploymentConfigCreation:
       title: ToolDeploymentConfigCreation
       type: object
@@ -24054,6 +26265,11 @@ components:
           $ref: '#/components/schemas/ToolProvisionConfigCreation'
         environmentBinding:
           $ref: '#/components/schemas/ToolBindingInput'
+        componentBindings:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           default: {}
           type: object
@@ -24071,6 +26287,10 @@ components:
           allOf:
           - $ref: '#/components/schemas/OptionalFieldUpdate_ToolBindingInput'
           - {}
+        componentBindings:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           type: object
           additionalProperties:
@@ -24085,6 +26305,11 @@ components:
           $ref: '#/components/schemas/ToolProvisionConfig'
         environmentBinding:
           $ref: '#/components/schemas/ToolBindingInput'
+        componentBindings:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
         agentBindings:
           default: {}
           type: object
@@ -24093,6 +26318,318 @@ components:
       required:
       - definition
       - provision
+    ToolFilesystemAccess:
+      type: string
+      enum:
+      - unset
+      - allowed
+      - denied
+    ToolMiddleware:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        aliases:
+          type: array
+          items:
+            type: string
+        doc:
+          $ref: '#/components/schemas/Doc'
+        scope:
+          $ref: '#/components/schemas/ToolMiddlewareScope'
+        parameter_schema:
+          $ref: '#/components/schemas/SchemaGraph'
+      required:
+      - name
+      - version
+      - aliases
+      - doc
+      - scope
+      - parameter_schema
+    ToolMiddlewareDeploymentMetadata:
+      title: ToolMiddlewareDeploymentMetadata
+      type: object
+      properties:
+        definition:
+          $ref: '#/components/schemas/ToolMiddleware'
+        provision:
+          $ref: '#/components/schemas/ToolProvisionConfig'
+      required:
+      - definition
+      - provision
+    ToolMiddlewareInstallation:
+      title: ToolMiddlewareInstallation
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        parameters:
+          $ref: '#/components/schemas/NormalizedJsonValue'
+        account:
+          type: string
+        filesystemAccess:
+          default: unset
+          allOf:
+          - $ref: '#/components/schemas/ToolFilesystemAccess'
+          - default: unset
+      required:
+      - name
+      - parameters
+    ToolMiddlewareMergeMode:
+      type: string
+      enum:
+      - Prepend
+      - Append
+      - Replace
+    ToolMiddlewarePublication:
+      title: ToolMiddlewarePublication
+      type: object
+      properties:
+        name:
+          type: string
+        definition:
+          $ref: '#/components/schemas/ToolMiddleware'
+      required:
+      - name
+      - definition
+    ToolMiddlewarePublicationPlanAction:
+      type: string
+      enum:
+      - noChange
+      - publish
+      - conflict
+    ToolMiddlewarePublicationPlanEntry:
+      title: ToolMiddlewarePublicationPlanEntry
+      type: object
+      properties:
+        action:
+          $ref: '#/components/schemas/ToolMiddlewarePublicationPlanAction'
+        name:
+          type: string
+        version:
+          type: string
+        reason:
+          type: string
+      required:
+      - action
+      - name
+      - version
+    ToolMiddlewareRelease:
+      title: ToolMiddlewareRelease
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        ownerAccountId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        source:
+          $ref: '#/components/schemas/ToolMiddlewareSource'
+        definition:
+          $ref: '#/components/schemas/ToolMiddleware'
+        metadataVersion:
+          type: string
+        metadataDigest:
+          type: string
+          format: hash
+        immutable:
+          type: boolean
+        lifecycle:
+          $ref: '#/components/schemas/ToolMiddlewareReleaseLifecycle'
+        origin:
+          $ref: '#/components/schemas/ToolMiddlewareReleaseOrigin'
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+          format: uuid
+        stateChangedAt:
+          type: string
+          format: date-time
+        stateChangedBy:
+          type: string
+          format: uuid
+      required:
+      - id
+      - ownerAccountId
+      - name
+      - version
+      - source
+      - definition
+      - metadataVersion
+      - metadataDigest
+      - immutable
+      - lifecycle
+      - origin
+      - createdAt
+      - createdBy
+      - stateChangedAt
+      - stateChangedBy
+    ToolMiddlewareReleaseByCoordinates:
+      title: ToolMiddlewareReleaseByCoordinates
+      type: object
+      properties:
+        account:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+      required:
+      - account
+      - name
+      - version
+    ToolMiddlewareReleaseById:
+      title: ToolMiddlewareReleaseById
+      type: object
+      properties:
+        releaseId:
+          type: string
+          format: uuid
+      required:
+      - releaseId
+    ToolMiddlewareReleaseLifecycle:
+      type: string
+      enum:
+      - published
+      - de-published
+      - superseded
+    ToolMiddlewareReleaseMetadata:
+      title: ToolMiddlewareReleaseMetadata
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        definition:
+          $ref: '#/components/schemas/ToolMiddleware'
+        metadataVersion:
+          type: string
+        metadataDigest:
+          type: string
+          format: hash
+        sourceDigest:
+          type: string
+          format: hash
+      required:
+      - id
+      - name
+      - version
+      - definition
+      - metadataVersion
+      - metadataDigest
+      - sourceDigest
+    ToolMiddlewareReleaseOrigin:
+      type: string
+      enum:
+      - ordinary
+      - protected-system
+    ToolMiddlewareReleaseReference:
+      discriminator:
+        propertyName: type
+        mapping:
+          ById: '#/components/schemas/ToolMiddlewareReleaseReference_ToolMiddlewareReleaseById'
+          ByCoordinates: '#/components/schemas/ToolMiddlewareReleaseReference_ToolMiddlewareReleaseByCoordinates'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ToolMiddlewareReleaseReference_ToolMiddlewareReleaseById'
+      - $ref: '#/components/schemas/ToolMiddlewareReleaseReference_ToolMiddlewareReleaseByCoordinates'
+    ToolMiddlewareReleaseReference_ToolMiddlewareReleaseByCoordinates:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ByCoordinates
+            type: string
+            enum:
+            - ByCoordinates
+        required:
+        - type
+      - $ref: '#/components/schemas/ToolMiddlewareReleaseByCoordinates'
+    ToolMiddlewareReleaseReference_ToolMiddlewareReleaseById:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ById
+            type: string
+            enum:
+            - ById
+        required:
+        - type
+      - $ref: '#/components/schemas/ToolMiddlewareReleaseById'
+    ToolMiddlewareScope:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - monomorphic
+          value:
+            $ref: '#/components/schemas/MonomorphicToolMiddlewareScope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - universal
+        required:
+        - kind
+    ToolMiddlewareSource:
+      type: object
+      oneOf:
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - component
+          componentId:
+            type: string
+            format: uuid
+          componentRevision:
+            type: integer
+            format: uint64
+          componentName:
+            type: string
+        required:
+        - kind
+        - componentId
+        - componentRevision
+        - componentName
+    ToolMiddlewareWarning:
+      title: ToolMiddlewareWarning
+      type: object
+      properties:
+        middlewareName:
+          type: string
+        agentType:
+          type: string
+        toolName:
+          type: string
+        message:
+          type: string
+      required:
+      - message
     ToolProvisionConfig:
       title: ToolProvisionConfig
       type: object
@@ -24363,24 +26900,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/ToolReleaseById'
-    ToolResultSpec:
-      type: object
-      properties:
-        type_:
-          $ref: '#/components/schemas/SchemaType'
-        doc:
-          $ref: '#/components/schemas/Doc'
-        formatters:
-          type: array
-          items:
-            $ref: '#/components/schemas/Formatter'
-        default_formatter:
-          type: string
-      required:
-      - type_
-      - doc
-      - formatters
-      - default_formatter
     ToolRevealableSecretKeysDropped:
       title: ToolRevealableSecretKeysDropped
       type: object
@@ -24431,16 +26950,6 @@ components:
     UntypedJsonBody:
       description: A json body without a static schema
       type: object
-    ValueIsRef:
-      type: object
-      properties:
-        name:
-          type: string
-        value:
-          $ref: '#/components/schemas/SchemaValue'
-      required:
-      - name
-      - value
     VersionedName:
       title: VersionedName
       type: object
@@ -24480,6 +26989,7 @@ tags:
 - name: Environment
 - name: EnvironmentPluginGrants
 - name: EnvironmentToolGrants
+- name: EnvironmentToolMiddlewareGrants
 - name: HealthCheck
 - name: Login
   description: The login endpoints are implementing an OAuth2 flow.
@@ -24493,5 +27003,6 @@ tags:
 - name: RetryPolicies
 - name: Token
   description: The token API allows creating custom access tokens for the Golem Cloud REST API to be used by tools and services.
+- name: ToolMiddlewareReleases
 - name: ToolReleases
 - name: Worker

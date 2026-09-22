@@ -34,7 +34,8 @@ use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use golem_common::model::card::{
-    CardId, CardManagedBy, CardManagedByAgentInitial, CardManagedByEnvironmentDefault,
+    CardId, CardManagedBy, CardManagedByAgentInitial, CardManagedByComponentInitial,
+    CardManagedByEnvironmentDefault,
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -445,7 +446,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         e.application_id,
                         r.environment_id, r.revision_id, r.name, r.hash,
                         r.created_at, r.created_by, r.deleted,
-                        r.compatibility_check, r.version_check, r.security_overrides,
+                        r.compatibility_check, r.tool_compatibility_mode, r.version_check, r.security_overrides,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
@@ -491,7 +492,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         e.name, e.application_id, ap.name AS application_name,
                         r.environment_id, r.revision_id, r.hash,
                         r.created_at, r.created_by, r.deleted,
-                        r.compatibility_check, r.version_check, r.security_overrides,
+                        r.compatibility_check, r.tool_compatibility_mode, r.version_check, r.security_overrides,
 
                         a.account_id as owner_account_id,
                         a.email as owner_account_email,
@@ -544,7 +545,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         e.application_id,
                         r.environment_id, r.revision_id, r.name, r.hash,
                         r.created_at, r.created_by, r.deleted,
-                        r.compatibility_check, r.version_check, r.security_overrides,
+                        r.compatibility_check, r.tool_compatibility_mode, r.version_check, r.security_overrides,
 
                         cdr.revision_id as current_deployment_revision,
                         dr.revision_id as current_deployment_deployment_revision,
@@ -776,7 +777,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
         self.with_tx_err("update", |tx| {
             async move {
                 if revision.version_check
-                    && tx
+                    && (tx
                         .fetch_optional(
                             sqlx::query(indoc! { r#"
                                 SELECT etg.environment_tool_grant_id
@@ -795,6 +796,25 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                         )
                         .await?
                         .is_some()
+                        || tx
+                            .fetch_optional(
+                                sqlx::query(indoc! { r#"
+                                    SELECT etmg.environment_tool_middleware_grant_id
+                                    FROM environment_tool_middleware_grants etmg
+                                    JOIN tool_middleware_releases tmr
+                                        ON tmr.tool_middleware_release_id = etmg.tool_middleware_release_id
+                                    WHERE etmg.environment_id = $1
+                                        AND etmg.deleted_at IS NULL
+                                        AND NOT tmr.immutable
+                                        AND tmr.lifecycle IN ($2, $3)
+                                    LIMIT 1
+                                "#})
+                                .bind(revision.environment_id)
+                                .bind(TOOL_RELEASE_LIFECYCLE_PUBLISHED)
+                                .bind(TOOL_RELEASE_LIFECYCLE_SUPERSEDED),
+                            )
+                            .await?
+                            .is_some())
                 {
                     return Err(EnvironmentRepoError::MutableToolGrantsInVersionCheckedEnvironment);
                 }
@@ -1030,6 +1050,21 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 }
                 for component_revision_record in active_component_revisions {
                     let component_revision = component_revision_record.revision_id.try_into()?;
+                    let component_root = (
+                        component_revision_record
+                            .metadata
+                            .value()
+                            .component_provision_config()
+                            .initial_permissions
+                            .card_id,
+                        CardManagedBy::ComponentInitial(CardManagedByComponentInitial {
+                            component_id: ComponentId(component_revision_record.component_id),
+                            component_revision,
+                        }),
+                    );
+                    if !card_roots.contains(&component_root) {
+                        card_roots.push(component_root);
+                    }
                     for (agent_type, config) in component_revision_record
                         .metadata
                         .value()
@@ -1159,6 +1194,7 @@ impl EnvironmentRepo for DbEnvironmentRepo<PostgresPool> {
                 r.revision_id AS environment_revision_id,
                 e.name AS environment_name,
                 r.compatibility_check AS environment_compatibility_check,
+                r.tool_compatibility_mode AS environment_tool_compatibility_mode,
                 r.version_check AS environment_version_check,
                 r.security_overrides AS environment_security_overrides,
 
@@ -1302,9 +1338,9 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
 
         let revision = tx.fetch_one_as(sqlx::query_as(indoc! { r#"
             INSERT INTO environment_revisions
-            (environment_id, revision_id, name, hash, created_at, created_by, deleted, compatibility_check, version_check, security_overrides)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            RETURNING environment_id, revision_id, name, hash, created_at, created_by, deleted, compatibility_check, version_check, security_overrides
+            (environment_id, revision_id, name, hash, created_at, created_by, deleted, compatibility_check, tool_compatibility_mode, version_check, security_overrides)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            RETURNING environment_id, revision_id, name, hash, created_at, created_by, deleted, compatibility_check, tool_compatibility_mode, version_check, security_overrides
         "# })
             .bind(revision.environment_id)
             .bind(revision.revision_id)
@@ -1312,6 +1348,7 @@ impl EnvironmentRepoInternal for DbEnvironmentRepo<PostgresPool> {
             .bind(revision.hash)
             .bind_deletable_revision_audit(revision.audit)
             .bind(revision.compatibility_check)
+            .bind(revision.tool_compatibility_mode)
             .bind(revision.version_check)
             .bind(revision.security_overrides))
             .await

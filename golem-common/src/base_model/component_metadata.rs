@@ -14,10 +14,11 @@
 
 use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
 use crate::base_model::tool::{ToolDeploymentMetadata, ToolName};
+use crate::base_model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
 use crate::model::card::PolymorphicCard;
-use crate::schema::AgentTypeSchema;
+use crate::schema::{AgentTypeSchema, ComponentConfigSchema};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -94,6 +95,10 @@ pub struct KnownExports {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub tool_guest_interface: Option<String>,
+    /// Exact exported interface name for `golem:tool/tool-middleware-guest`.
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub tool_middleware_guest_interface: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +147,7 @@ impl Debug for ComponentMetadata {
                 &self.data.agent_type_provision_configs,
             )
             .field("tools", &self.data.tools)
+            .field("tool_middlewares", &self.data.tool_middlewares)
             .finish()
     }
 }
@@ -192,6 +198,12 @@ pub struct ComponentMetadataInnerData {
 
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
+    pub config_schema: ComponentConfigSchema,
+
+    pub component_provision_config: ComponentProvisionConfig,
+
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
     pub agent_types: Vec<AgentTypeSchema>,
 
     /// Server-derived streaming classification for each declared agent method.
@@ -207,6 +219,44 @@ pub struct ComponentMetadataInnerData {
     #[serde(default)]
     #[cfg_attr(feature = "full", oai(default))]
     pub tools: BTreeMap<ToolName, ToolDeploymentMetadata>,
+
+    /// Complete deployment input for every tool middleware implemented by this component.
+    #[serde(default)]
+    #[cfg_attr(feature = "full", oai(default))]
+    pub tool_middlewares: BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentProvisionConfig {
+    pub initial_permissions: PolymorphicCard,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub config: Vec<TypedAgentConfigEntry>,
+    #[serde(default)]
+    pub plugins: Vec<InstalledPlugin>,
+    #[serde(default)]
+    pub files: Vec<InitialAgentFile>,
+}
+
+impl Default for ComponentProvisionConfig {
+    fn default() -> Self {
+        Self {
+            initial_permissions: crate::model::component::AgentTypeInitialPermissions::default()
+                .to_polymorphic_card(),
+            env: BTreeMap::new(),
+            config: Vec::new(),
+            plugins: Vec::new(),
+            files: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -72,6 +72,12 @@ pub fn encode_typed_schema_value(
     schema::wit::encode_typed(value)
 }
 
+pub async fn encode_typed_schema_value_async(
+    value: &TypedSchemaValue,
+) -> Result<schema::wit::wire::TypedSchemaValue, schema::wit::EncodeError> {
+    schema::wit::encode_typed_async(value).await
+}
+
 pub fn decode_typed_schema_value(
     value: &schema::wit::wire::TypedSchemaValue,
 ) -> Result<TypedSchemaValue, schema::wit::DecodeError> {
@@ -153,7 +159,7 @@ pub mod bindings {
         }
 
         pub mod agent {
-            pub use crate::raw_bindings::golem::agent::{common, host};
+            pub use crate::raw_bindings::golem::agent::{common, durable_streams, host};
         }
 
         pub mod permissions {
@@ -163,7 +169,7 @@ pub mod bindings {
         }
 
         pub mod tool {
-            pub use crate::raw_bindings::golem::tool::host;
+            pub use crate::raw_bindings::golem::tool::{host, streams};
             pub use crate::schema::tool::wit::wire as common;
         }
 
@@ -331,6 +337,7 @@ pub mod golem_tool_middleware {
             "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
             "golem:agent/common@2.0.0": crate::golem_agentic::golem::agent::common,
             "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
+            "golem:tool/streams@0.1.0": crate::golem_agentic::golem::tool::streams,
         }
     });
 
@@ -384,6 +391,40 @@ pub mod golem_agentic_tool_middleware {
 
     pub use __export_golem_agentic_tool_middleware_impl as export_golem_agentic_tool_middleware;
 }
+
+#[cfg(all(
+    feature = "export_golem_tool_middleware",
+    not(feature = "export_golem_agentic_tool_middleware")
+))]
+pub(crate) use golem_tool_middleware::golem::tool::underlying as tool_underlying_bindings;
+
+#[cfg(all(
+    feature = "export_golem_agentic",
+    not(any(
+        feature = "export_golem_tool_middleware",
+        feature = "export_golem_agentic_tool_middleware"
+    ))
+))]
+pub(crate) mod tool_underlying_bindings {
+    use wit_bindgen::generate;
+
+    generate!({
+        path: "wit",
+        world: "golem-tool-underlying-types",
+        generate_all,
+        generate_unused_types: true,
+        with: {
+            "golem:core/types@2.0.0": golem_schema::schema::wit::wire,
+            "golem:tool/common@0.1.0": golem_schema::schema::tool::wit::wire,
+            "golem:tool/streams@0.1.0": crate::golem_agentic::golem::tool::streams,
+        }
+    });
+
+    pub(crate) use golem::tool::underlying::*;
+}
+
+#[cfg(feature = "export_golem_agentic_tool_middleware")]
+pub(crate) use golem_agentic_tool_middleware::golem::tool::underlying as tool_underlying_bindings;
 
 #[cfg(feature = "export_golem_agentic_tool_middleware")]
 pub use golem_agentic_tool_middleware as golem_agentic;
@@ -458,6 +499,12 @@ pub mod oplog_processor {
 ))]
 pub mod agentic;
 
+#[cfg(any(
+    feature = "export_golem_agentic",
+    feature = "export_golem_tool_middleware"
+))]
+pub use agentic::reflection::*;
+
 #[cfg(feature = "durability")]
 pub mod durability;
 
@@ -466,6 +513,9 @@ mod json;
 
 #[cfg(feature = "json")]
 pub use json::*;
+
+#[cfg(feature = "json")]
+pub mod durable_streams;
 
 mod checkpoint;
 pub mod quota;

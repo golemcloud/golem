@@ -1,12 +1,12 @@
 ///|
 /// Enumerate the tools this component exposes.
-pub fn discover_tools() -> Result[Array[@common.Tool], @common.ToolError] {
+pub fn discover_tools() -> Result[Array[@common.Tool], @types.ToolError] {
   Ok(@tool.discover_tools())
 }
 
 ///|
 /// Look up a single tool by name.
-pub fn get_tool(name : String) -> Result[@common.Tool, @common.ToolError] {
+pub fn get_tool(name : String) -> Result[@common.Tool, @types.ToolError] {
   @tool.get_registered_tool(name)
 }
 
@@ -16,12 +16,23 @@ pub async fn invoke(
   tool_name : String,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
-  stdin : @async-core.Stream[Result[FixedArray[Byte], @host.ByteStreamFailure]]?,
-  stdout : @host.ToolStdoutWriter?,
+  stdin : @async-core.Stream[
+    Result[FixedArray[Byte], @streams.ByteStreamFailure],
+  ]?,
+  stdout : @streams.ToolStdoutWriter?,
   principal : @common0.Principal,
   _background_group : @async-core.TaskGroup[Unit],
-) -> Result[@common.InvocationResult, @common.ToolError] {
+) -> Result[@common.InvocationResult, @types.ToolError] {
   let stdin = stdin.map(@tool.byte_stream)
+  match @tool.validate_tool_stdout(tool_name, command_path, stdout is Some(_)) {
+    Err(error) => {
+      if stdout is Some(writer) {
+        writer.drop()
+      }
+      return @tool.reject_wire_invocation(input, stdin, error)
+    }
+    Ok(_) => ()
+  }
   match stdout {
     None =>
       @tool.invoke_registered_tool(
@@ -34,19 +45,16 @@ pub async fn invoke(
       )
     Some(writer) => {
       let stdout = @tool.provider_stdout(writer)
-      defer stdout.drop()
-      let result = @tool.invoke_registered_tool(
-        tool_name,
-        command_path,
-        input,
-        stdin,
-        Some(stdout),
-        principal,
-      )
-      stdout.finish() catch {
-        _ => ()
-      }
-      result
+      @tool.invoke_with_stdout(stdout, () => {
+        @tool.invoke_registered_tool(
+          tool_name,
+          command_path,
+          input,
+          stdin,
+          Some(stdout),
+          principal,
+        )
+      })
     }
   }
 }

@@ -23,9 +23,10 @@ mod clocks;
 mod concurrent;
 mod config;
 pub mod durability;
-pub(crate) mod durable_session;
-pub(crate) mod durable_stream;
+pub mod durable_session;
+pub mod durable_stream;
 pub mod entity;
+pub mod external_durable_stream;
 pub mod golem;
 pub mod http;
 pub mod io;
@@ -37,13 +38,13 @@ pub mod quota;
 mod random;
 pub mod rdbms;
 pub(crate) mod replay_state;
-pub(crate) mod schema_value_stream;
+pub mod schema_value_stream;
 mod secrets;
 pub use schema_value_stream::CoreTypesHost;
 mod sockets;
-pub(crate) mod stream_bus;
-pub(crate) mod stream_session;
-pub(crate) mod stream_transport;
+pub mod stream_bus;
+pub mod stream_session;
+pub mod stream_transport;
 mod suspendable_wait;
 pub mod tail_work;
 pub mod tool;
@@ -107,8 +108,9 @@ use crate::wasi_host;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
-    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
+    AgentExportFuncs, GuestCallSettlementError, InvocationMode, InvokeResult,
+    invocation_uses_streams, invoke_observed_and_traced, load_load_snapshot_guest,
+    lower_invocation, run_guest_call_settled,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::status::{
@@ -125,13 +127,15 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 pub(crate) use concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable,
-    authorize_live_permissions_at_serialized_access,
+    authorize_live_permissions_at_serialized_access, drain_queued_dropped_call_events,
 };
 pub use durability::*;
 use golem_common::base_model::oplog::{CardInstallFailure, QueuedCardEvent};
 use golem_common::model::TransactionId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, AgentPrincipal, ParsedAgentId, Principal};
+use golem_common::model::agent::{
+    AgentMode, AgentPrincipal, ParsedAgentId, Principal, ResolvedOwnerContext,
+};
 use golem_common::model::card::{
     AgentCardHolder, CardHolder, CardId, InvocationWalletPin, PermissionTarget, ScopeCard,
     StoredCard, WalletVersionToken,
@@ -148,7 +152,8 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
-    OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription, UpdateDescription,
+    OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription,
+    UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -172,7 +177,7 @@ use golem_service_base::model::{
 use http_body_util::BodyExt;
 use http_body_util::combinators::UnsyncBoxBody;
 use replay_state::ReplayEvent;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -325,6 +330,32 @@ pub(crate) fn agent_effective_surface_from_component_metadata(
     Ok(golem_common::model::card::agent_effective_surface_from_wallet(&context, [&card]))
 }
 
+pub(crate) fn owner_effective_surface_from_component_metadata(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    owner_context: &ResolvedOwnerContext,
+) -> Result<golem_common::model::card::EffectiveSurface, WorkerExecutorError> {
+    match owner_context {
+        ResolvedOwnerContext::Agent(agent_id) => {
+            agent_effective_surface_from_component_metadata(component, owned_agent_id, agent_id)
+        }
+        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            let card = StoredCard::Polymorphic(
+                component
+                    .metadata
+                    .component_provision_config()
+                    .initial_permissions
+                    .clone(),
+            );
+            Ok(component_baseline_effective_surface_from_wallet(
+                component,
+                owned_agent_id,
+                [&card],
+            ))
+        }
+    }
+}
+
 pub(crate) fn agent_monomorphization_context(
     component: &Component,
     owned_agent_id: &OwnedAgentId,
@@ -336,8 +367,49 @@ pub(crate) fn agent_monomorphization_context(
         environment: component.environment_name.clone(),
         component: component.component_name.clone(),
         agent_name: owned_agent_id.agent_id.agent_id.clone(),
-        agent_type: agent_id.agent_type.clone(),
+        owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
+            agent_id.agent_type.clone(),
+        ),
     }
+}
+
+fn component_baseline_monomorphization_context(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
+    golem_common::model::card::AgentPermissionMonomorphizationContext {
+        account: component.account_email.clone(),
+        application: component.application_name.clone(),
+        environment: component.environment_name.clone(),
+        component: component.component_name.clone(),
+        agent_name: owned_agent_id.agent_id.agent_id.clone(),
+        owner:
+            golem_common::model::card::recipient::RecipientOwnerContext::ComponentExternalToolOwner,
+    }
+}
+
+pub(crate) fn owner_monomorphization_context(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    owner_context: &ResolvedOwnerContext,
+) -> golem_common::model::card::AgentPermissionMonomorphizationContext {
+    match owner_context {
+        ResolvedOwnerContext::Agent(agent_id) => {
+            agent_monomorphization_context(component, owned_agent_id, agent_id)
+        }
+        ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+            component_baseline_monomorphization_context(component, owned_agent_id)
+        }
+    }
+}
+
+fn component_baseline_effective_surface_from_wallet<'a>(
+    component: &Component,
+    owned_agent_id: &OwnedAgentId,
+    cards: impl IntoIterator<Item = &'a StoredCard>,
+) -> golem_common::model::card::EffectiveSurface {
+    let context = component_baseline_monomorphization_context(component, owned_agent_id);
+    golem_common::model::card::agent_effective_surface_from_wallet(&context, cards)
 }
 
 fn agent_initial_card_from_component_metadata(
@@ -372,6 +444,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     http_hooks: DurableHttpHooks,
     pub owned_agent_id: OwnedAgentId,
     runtime: OwnerRuntime,
+    executable: crate::workerctx::WorkerCtxExecutable,
     filesystem: FilesystemCapability,
     entity_invocation_scope: Option<EntityInvocationScope>,
     entity_tool_operation: Option<tool::operation::OwnerToolOperation>,
@@ -403,6 +476,7 @@ pub(crate) struct PrimaryInvocationBody {
 
 impl<Ctx: WorkerCtx> Drop for DurableWorkerCtx<Ctx> {
     fn drop(&mut self) {
+        self.begin_stream_runtime_teardown();
         self.linear_memory.clear_limit_exceeded_callback();
     }
 }
@@ -641,6 +715,52 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await;
     }
 
+    #[cfg(feature = "test-utils")]
+    pub fn test_install_entity_tool_operation(
+        &mut self,
+        parent: OwnerInvocationId,
+        call_mode: crate::worker::owner_lane::EntityCallMode,
+    ) -> Result<(), WorkerExecutorError> {
+        let scope = self.entity_invocation_scope().cloned().ok_or_else(|| {
+            WorkerExecutorError::runtime("Entity invocation scope is not installed")
+        })?;
+        let operation = self.owner_execution.tool_operations().create(
+            tool::operation::OwnerToolOperationContext {
+                parent,
+                call_mode,
+                activation: scope.activation().clone(),
+                calling_principal: scope.calling_principal().clone(),
+                principal: self.invocation_principal(),
+                descriptor: golem_common::model::entity::EntityInvocationDescriptor::Tool(
+                    golem_common::model::entity::ToolInvocationDescriptor {
+                        attempt_ordinal: 0,
+                        command_path: Vec::new(),
+                        args: Vec::new(),
+                        has_stdin: false,
+                        has_stdout: false,
+                        declares_stdout: false,
+                        output_contract: golem_common::model::entity::ToolOutputContract {
+                            result: None,
+                            errors: Vec::new(),
+                        },
+                    },
+                ),
+                input: golem_common::schema::TypedSchemaValue::new(
+                    golem_common::schema::SchemaGraph::anonymous(
+                        golem_common::schema::SchemaType::tuple(Vec::new()),
+                    ),
+                    golem_common::schema::SchemaValue::Tuple {
+                        elements: Vec::new(),
+                    },
+                ),
+            },
+        );
+        let operation = operation
+            .accept(scope.invocation_id().clone())
+            .ok_or_else(|| WorkerExecutorError::runtime("Tool operation registration failed"))?;
+        self.set_entity_tool_operation(operation)
+    }
+
     pub(crate) fn entity_reconstruction_claim_hook(
         &self,
     ) -> Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>> {
@@ -742,7 +862,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -786,7 +906,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Arc<dyn crate::workerctx::EntityReconstructionClaimHook>,
         >,
         filesystem_capability: FilesystemCapability,
-        executable_component: Component,
+        executable: crate::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError> {
         let crate::workerctx::WorkerFilesystemContext {
@@ -814,17 +934,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             "Worker {} starting replay from component revision {}",
             owned_agent_id.agent_id, worker_config.component_revision_for_replay
         );
-        if executable_component.revision != worker_config.component_revision_for_replay {
-            return Err(WorkerExecutorError::runtime(format!(
-                "Executable component revision {} does not match context revision {}",
-                executable_component.revision, worker_config.component_revision_for_replay
-            )));
-        }
-        if runtime == OwnerRuntime::Agent
-            && executable_component.id != owned_agent_id.component_id()
-        {
+        if let crate::workerctx::WorkerCtxExecutable::Component(component) = &executable {
+            if component.revision != worker_config.component_revision_for_replay {
+                return Err(WorkerExecutorError::runtime(format!(
+                    "Executable component revision {} does not match context revision {}",
+                    component.revision, worker_config.component_revision_for_replay
+                )));
+            }
+            if runtime == OwnerRuntime::Agent && component.id != owned_agent_id.component_id() {
+                return Err(WorkerExecutorError::runtime(
+                    "Primary Store executable must be the owner component",
+                ));
+            }
+        } else if runtime == OwnerRuntime::Agent {
             return Err(WorkerExecutorError::runtime(
-                "Primary Store executable must be the owner component",
+                "Primary Store requires a component executable",
             ));
         }
         match (&runtime, &entity_activation) {
@@ -847,6 +971,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ));
             }
         }
+        match (&executable, entity_activation.as_deref()) {
+            (crate::workerctx::WorkerCtxExecutable::Component(component), Some(activation))
+                if activation.executable_opt().is_some_and(|target| {
+                    target.component_id == component.id
+                        && target.component_revision == component.revision
+                }) => {}
+            (
+                crate::workerctx::WorkerCtxExecutable::Native {
+                    host_tool_id,
+                    implementation_version,
+                },
+                Some(activation),
+            ) if matches!(
+                activation.source(),
+                golem_common::model::entity::EntityActivationSource::Host {
+                    host_tool_id: expected_id,
+                    implementation_version: expected_version,
+                } if expected_id == host_tool_id && expected_version == implementation_version
+            ) => {}
+            (crate::workerctx::WorkerCtxExecutable::Component(_), None)
+                if runtime == OwnerRuntime::Agent => {}
+            _ => {
+                return Err(WorkerExecutorError::runtime(
+                    "Context executable does not match its validated activation source",
+                ));
+            }
+        }
         match (&runtime, &worker_config.owner_component_metadata) {
             (OwnerRuntime::Agent, None) | (OwnerRuntime::Entity(_), Some(_)) => {}
             (OwnerRuntime::Agent, Some(_)) => {
@@ -860,16 +1011,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ));
             }
         }
-        let component_metadata = executable_component;
+        let component_metadata = match &executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => {
+                component.as_ref().clone()
+            }
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => worker_config
+                .owner_component_metadata
+                .as_deref()
+                .expect("native entity Store has owner component metadata")
+                .clone(),
+        };
 
-        if component_metadata.metadata.has_shared_linear_memory() {
+        let executable_component_metadata = match &executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => Some(component),
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => None,
+        };
+        if executable_component_metadata
+            .is_some_and(|component| component.metadata.has_shared_linear_memory())
+        {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
                 SHARED_LINEAR_MEMORY_ERROR,
             ));
         }
 
-        let initial_linear_memory = component_metadata.metadata.initial_linear_memory_bytes();
+        let initial_linear_memory = executable_component_metadata
+            .map(|component| component.metadata.initial_linear_memory_bytes())
+            .unwrap_or(0);
         if initial_linear_memory > resource_limits.max_memory_limit() as u64 {
             return Err(WorkerExecutorError::worker_creation_failed(
                 owned_agent_id.agent_id.clone(),
@@ -881,7 +1049,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
 
         let agent_type_provision_configs = match &runtime {
-            OwnerRuntime::Agent => agent_id.as_ref().and_then(|agent_id| {
+            OwnerRuntime::Agent => owner_context.agent().and_then(|agent_id| {
                 component_metadata
                     .metadata
                     .agent_type_provision_configs()
@@ -890,16 +1058,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }),
             OwnerRuntime::Entity(_) => None,
         };
-        let agent_config = if agent_id.is_some() {
-            effective_agent_config(
-                worker_config.initial_agent_config.clone(),
-                agent_type_provision_configs
+        let agent_config = if matches!(runtime, OwnerRuntime::Agent) {
+            let provisioned_config = match &owner_context {
+                ResolvedOwnerContext::Agent(_) => agent_type_provision_configs
                     .as_ref()
                     .map(|c| c.config.clone())
                     .unwrap_or_default(),
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                    component_metadata
+                        .metadata
+                        .component_provision_config()
+                        .config
+                        .clone()
+                }
+            };
+            effective_agent_config(
+                worker_config.initial_agent_config.clone(),
+                provisioned_config,
             )?
         } else {
-            HashMap::new()
+            worker_config
+                .initial_agent_config
+                .iter()
+                .map(|entry| (entry.path.clone(), entry.value.clone()))
+                .collect()
         };
 
         let stdin = ManagedStdIn::disabled();
@@ -949,7 +1131,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             OwnerRuntime::Entity(_) => tail_work::TailWorkTracker::new(),
         };
         let state = PrivateDurableWorkerState::new(
-            agent_id,
+            owner_context,
             oplog_service,
             oplog.clone(),
             promise_service.clone(),
@@ -1016,6 +1198,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             http_hooks,
             owned_agent_id: owned_agent_id.clone(),
             runtime,
+            executable,
             filesystem: filesystem_capability,
             entity_invocation_scope: None,
             entity_tool_operation: None,
@@ -1172,6 +1355,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             (OwnerRuntime::Agent, _, Some(_)) => Err(WorkerExecutorError::runtime(
                 "Cannot install an entity invocation scope in the primary Store",
             )),
+            (OwnerRuntime::Agent, _, None) => Ok(()),
             (OwnerRuntime::Entity(_), Some(_), Some(_)) => Err(WorkerExecutorError::runtime(
                 "Entity invocation scope is already installed",
             )),
@@ -1179,6 +1363,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "Entity invocation scope is not installed",
             )),
             _ => {
+                if let Some(scope) = &scope {
+                    self.state
+                        .set_current_idempotency_key(scope.idempotency_key().clone());
+                    self.state.assume_idempotence = scope.assume_idempotence();
+                    self.state.entity_logical_key_position =
+                        scope.logical_key_positions().then_some(OplogIndex::INITIAL);
+                } else {
+                    self.state.current_idempotency_key = None;
+                    self.state.assume_idempotence = true;
+                    self.state.entity_logical_key_position = None;
+                }
                 self.entity_invocation_scope = scope;
                 Ok(())
             }
@@ -1193,7 +1388,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         operation: tool::operation::OwnerToolOperation,
     ) -> Result<(), WorkerExecutorError> {
-        if !matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))) {
+        if !matches!(
+            self.runtime,
+            OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+        ) {
             return Err(WorkerExecutorError::runtime(
                 "Tool operation can only be installed in a tool entity Store",
             ));
@@ -1330,19 +1528,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn agent_auth_ctx(&self) -> AuthCtx {
-        let delegation_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
-            let context = agent_monomorphization_context(
-                &self.state.component_metadata,
+        let context = match &self.state.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => agent_monomorphization_context(
+                self.owner_component_metadata(),
                 &self.owned_agent_id,
                 agent_id,
-            );
-            golem_common::model::card::agent_delegation_surface_from_wallet(
-                &context,
-                self.state.agent_wallet_cards.values(),
-            )
-        } else {
-            golem_common::model::card::DelegationSurface::default()
+            ),
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                component_baseline_monomorphization_context(
+                    self.owner_component_metadata(),
+                    &self.owned_agent_id,
+                )
+            }
         };
+        let delegation_surface = golem_common::model::card::agent_delegation_surface_from_wallet(
+            &context,
+            self.state.agent_wallet_cards.values(),
+        );
 
         AuthCtx::agent_with_permission_surfaces(
             self.created_by(),
@@ -1726,20 +1928,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         if matches!(self.runtime, OwnerRuntime::Entity(_)) {
             return;
         }
-        self.state.agent_effective_surface = if let Some(agent_id) = self.state.agent_id.as_ref() {
-            let context = agent_monomorphization_context(
+        let context = match &self.state.owner_context {
+            ResolvedOwnerContext::Agent(agent_id) => agent_monomorphization_context(
                 self.owner_component_metadata(),
                 &self.owned_agent_id,
                 agent_id,
-            );
+            ),
+            ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline => {
+                component_baseline_monomorphization_context(
+                    self.owner_component_metadata(),
+                    &self.owned_agent_id,
+                )
+            }
+        };
+        self.state.agent_effective_surface =
             golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
                 &context,
                 self.state.agent_wallet_cards.values(),
                 self.state.invocation_scope_card.as_ref(),
-            )
-        } else {
-            golem_common::model::card::EffectiveSurface::default()
-        };
+            );
     }
 
     fn interested_card_ids(&self) -> Vec<CardId> {
@@ -2025,8 +2232,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .add_and_commit_oplog(OplogEntry::card_installed(
                     entity_parent_start_index,
                     queued_event_index,
-                    card,
-                    Some(self.state.wallet_generation),
+                    Box::new(card),
+                    self.state.wallet_generation,
                 ))
                 .await;
             Ok(Ok(()))
@@ -2038,7 +2245,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         entity_parent_start_index: Option<OplogIndex>,
         queued_event_index: OplogIndex,
         transfer_id: uuid::Uuid,
-        source_card_id: Option<CardId>,
+        source_card_id: CardId,
         card: StoredCard,
     ) -> Result<Result<(), CardInstallFailure>, WorkerExecutorError> {
         let card_id = card.card_id();
@@ -2065,8 +2272,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 CardHolder::Agent(AgentCardHolder {
                     agent_id: self.owned_agent_id.agent_id.clone(),
                 }),
-                card,
-                Some(self.state.wallet_generation),
+                Box::new(card),
+                self.state.wallet_generation,
             ))
             .await;
         Ok(Ok(()))
@@ -2098,7 +2305,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                     queued_event_index,
                     card_id,
-                    Some(self.state.wallet_generation),
+                    self.state.wallet_generation,
                 ))
                 .await;
         }
@@ -2143,7 +2350,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             entity_parent_start_index,
             revoked_card_ids: card_ids,
             affected_wallets,
-            local_wallet_generation: Some(self.state.wallet_generation),
+            local_wallet_generation: self.state.wallet_generation,
         };
         if commit_immediately {
             self.public_state.worker().add_and_commit_oplog(entry).await;
@@ -2185,7 +2392,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .add_and_commit_oplog(OplogEntry::card_expired(
                     self.entity_parent_start_index(),
                     card_id,
-                    Some(wallet_generation),
+                    wallet_generation,
                 ))
                 .await;
         }
@@ -2193,7 +2400,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn parsed_agent_id(&self) -> Option<ParsedAgentId> {
-        self.state.agent_id.clone()
+        self.state.owner_context.agent().cloned()
+    }
+
+    pub fn owner_context(&self) -> &ResolvedOwnerContext {
+        &self.state.owner_context
     }
 
     pub fn agent_mode(&self) -> AgentMode {
@@ -2202,6 +2413,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn component_metadata(&self) -> &Component {
         &self.state.component_metadata
+    }
+
+    pub fn executable_component_metadata(&self) -> Option<&Component> {
+        match &self.executable {
+            crate::workerctx::WorkerCtxExecutable::Component(component) => Some(component),
+            crate::workerctx::WorkerCtxExecutable::Native { .. } => None,
+        }
     }
 
     pub fn owner_component_metadata(&self) -> &Component {
@@ -2224,7 +2442,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig> {
-        self.state.agent_id.as_ref().and_then(|agent_id| {
+        self.state.owner_context.agent().and_then(|agent_id| {
             self.owner_component_metadata()
                 .metadata
                 .agent_type_provision_config(&agent_id.agent_type)
@@ -2322,7 +2540,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn begin_switch_to_live(&self) -> Result<BeginReplayToLive, WorkerExecutorError> {
         begin_replay_to_live(
             self.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
-            matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
+            matches!(
+                self.runtime,
+                OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+            ),
             self.entity_tool_operation(),
             &self.public_state,
             &self.linear_memory,
@@ -2337,26 +2558,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .await
     }
 
-    async fn begin_local_live_continuation(
-        &self,
-    ) -> Result<PendingReplayToLive, WorkerExecutorError> {
-        begin_local_live_continuation(
-            self.state.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete),
-            matches!(self.runtime, OwnerRuntime::Entity(AgentEntity::Tool(_))),
-            self.entity_tool_operation(),
-            &self.public_state,
-            &self.linear_memory,
-            if self.runtime == OwnerRuntime::Agent {
-                ReplayToLiveRole::PrimaryAgent
-            } else {
-                ReplayToLiveRole::NonPrimary
-            },
-            self.state.local_live_tail(),
-            self.state.replay_state.replay_target(),
-        )
-        .await
-    }
-
     async fn finish_switch_to_live(
         &mut self,
         pending: PendingReplayToLive,
@@ -2367,6 +2568,122 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.process_pending_replay_events().await?;
         }
         Ok(outcome)
+    }
+
+    pub(crate) fn rejects_live_continuation_at_replay_tail(&self) -> bool {
+        let mode = self.entity_invocation_scope().map(|scope| scope.mode());
+        mode == Some(InvocationExecutionMode::ReplayingCompleted)
+            || (mode != Some(InvocationExecutionMode::ReplayingIncomplete)
+                && self.runtime != OwnerRuntime::Agent)
+    }
+
+    pub(crate) fn prepare_live_continuation_at_replay_tail(
+        &self,
+        replay_ended: bool,
+        expected: String,
+    ) -> impl Future<Output = Result<BeginReplayToLive, WorkerExecutorError>> + Send + 'static + use<Ctx>
+    {
+        let mode = self.entity_invocation_scope().map(|scope| scope.mode());
+        let replaying_incomplete_entity =
+            mode == Some(InvocationExecutionMode::ReplayingIncomplete);
+        let rejected = self.rejects_live_continuation_at_replay_tail()
+            || (!replaying_incomplete_entity && !replay_ended);
+        let replay_state = self.state.replay_state.clone();
+        let public_state = self.public_state.clone();
+        let linear_memory = self.linear_memory.clone();
+        let tool_entity = matches!(
+            self.runtime,
+            OwnerRuntime::Entity(AgentEntity::Tool(_) | AgentEntity::ToolMiddleware(_))
+        );
+        let tool_operation = self.entity_tool_operation();
+        let local_live_tail = self.state.local_live_tail();
+        let role = if self.runtime == OwnerRuntime::Agent {
+            ReplayToLiveRole::PrimaryAgent
+        } else {
+            ReplayToLiveRole::NonPrimary
+        };
+        async move {
+            if rejected {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    expected,
+                    format!(
+                        "replay continuation at {} is valid only for the primary agent replay tail or an incomplete entity",
+                        replay_state.last_replayed_index()
+                    ),
+                ));
+            }
+            if replay_ended {
+                begin_replay_to_live(
+                    replaying_incomplete_entity,
+                    tool_entity,
+                    tool_operation,
+                    &public_state,
+                    &linear_memory,
+                    &replay_state,
+                    role,
+                    local_live_tail,
+                )
+                .await
+            } else {
+                begin_local_live_continuation(
+                    replaying_incomplete_entity,
+                    tool_entity,
+                    tool_operation,
+                    &public_state,
+                    &linear_memory,
+                    role,
+                    local_live_tail,
+                    replay_state.replay_target(),
+                )
+                .await
+                .map(BeginReplayToLive::Pending)
+            }
+        }
+    }
+
+    pub(crate) async fn continue_live_at_replay_tail(
+        &mut self,
+        replay_ended: bool,
+        expected: String,
+    ) -> Result<bool, WorkerExecutorError> {
+        let pending = match self
+            .prepare_live_continuation_at_replay_tail(replay_ended, expected)
+            .await?
+        {
+            BeginReplayToLive::ReplayResumed => return Ok(false),
+            BeginReplayToLive::Pending(pending) => pending,
+        };
+        self.finish_switch_to_live(pending).await?.require_live()?;
+        Ok(true)
+    }
+
+    pub(crate) async fn get_oplog_entry_or_continue_live(
+        &mut self,
+        expected: &str,
+    ) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+        loop {
+            if self.is_live() {
+                return Ok(None);
+            }
+            match self
+                .state
+                .replay_state
+                .get_oplog_entry_or_replay_end()
+                .await?
+            {
+                PositionalRead::Entry(index, entry) => {
+                    return Ok(Some((index, entry)));
+                }
+                PositionalRead::ReplayEnded => {
+                    if self
+                        .continue_live_at_replay_tail(true, expected.to_string())
+                        .await?
+                    {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
     }
 
     async fn switch_to_live(&mut self) -> Result<(), WorkerExecutorError> {
@@ -2732,7 +3049,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn emit_log_event(&self, event: InternalWorkerEvent) {
         logging::policy::emit_log_event_with_state::<Ctx>(
             event,
-            self.state.component_metadata.metadata.has_oplog_processor(),
+            self.owner_component_metadata()
+                .metadata
+                .has_oplog_processor(),
             &self.owned_agent_id,
             &self.public_state,
             &self.state.replay_state,
@@ -3633,16 +3952,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 let error = error.to_string(&stderr);
                                 Some(format!("Manual update failed to load snapshot: {error}"))
                             }
-                            Ok(InvokeResult::Succeeded {
-                                result: AgentInvocationResult::LoadSnapshot { error },
-                                ..
-                            }) => {
-                                error.map(|e| format!("Manual update failed to load snapshot: {e}"))
-                            }
-                            Ok(InvokeResult::Succeeded { .. }) => Some(
-                                "Unexpected result value from the snapshot load function"
-                                    .to_string(),
-                            ),
+                            Ok(InvokeResult::Succeeded { result, .. }) => match *result {
+                                AgentInvocationResult::LoadSnapshot { error } => error
+                                    .map(|e| format!("Manual update failed to load snapshot: {e}")),
+                                _ => Some(
+                                    "Unexpected result value from the snapshot load function"
+                                        .to_string(),
+                                ),
+                            },
                             _ => None,
                         };
 
@@ -3913,13 +4230,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     "Snapshot recovery failed to load snapshot: {error}"
                 ))
             }
-            Ok(InvokeResult::Succeeded {
-                result: AgentInvocationResult::LoadSnapshot { error },
-                ..
-            }) => error.map(|e| format!("Snapshot recovery load-snapshot returned error: {e}")),
-            Ok(InvokeResult::Succeeded { .. }) => {
-                Some("Unexpected result value from load-snapshot function".to_string())
-            }
+            Ok(InvokeResult::Succeeded { result, .. }) => match *result {
+                AgentInvocationResult::LoadSnapshot { error } => {
+                    error.map(|e| format!("Snapshot recovery load-snapshot returned error: {e}"))
+                }
+                _ => Some("Unexpected result value from load-snapshot function".to_string()),
+            },
             Ok(_) => Some("Snapshot recovery interrupted".to_string()),
         };
 
@@ -4031,7 +4347,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self,
     ) -> Arc<dyn Fn() -> bool + Send + Sync + 'static> {
         let stream_runtime_teardown = self.stream_runtime_teardown.clone();
-        Arc::new(move || stream_runtime_teardown.load(Ordering::Acquire))
+        // Owner failure fences entity Stores immediately. The primary signals teardown
+        // separately when its interrupt is delivered, not when it is merely queued.
+        let fenced_entity_operations = matches!(self.runtime, OwnerRuntime::Entity(_))
+            .then(|| self.owner_execution.tool_operations());
+        let invocation_loops = self
+            .public_state
+            .worker()
+            .active_agents()
+            .invocation_loops();
+        Arc::new(move || {
+            stream_runtime_teardown.load(Ordering::Acquire)
+                || invocation_loops.is_shut_down()
+                || fenced_entity_operations
+                    .as_ref()
+                    .is_some_and(|operations| operations.selected_owner_failure().is_some())
+        })
     }
 
     pub(crate) fn begin_stream_runtime_teardown(&self) {
@@ -4292,9 +4623,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     source_wallet_generation,
                     ..
                 } => {
-                    if source_holder.as_ref().is_none_or(|source_holder| {
-                        card_holder_is_agent(source_holder, &self.owned_agent_id.agent_id)
-                    }) {
+                    if card_holder_is_agent(&source_holder, &self.owned_agent_id.agent_id) {
                         if transfer_started_removes_source_membership(
                             self.state.agent_wallet_cards.get(&card_id),
                             &source_holder,
@@ -4490,7 +4819,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         new_revision: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
-        let current_metadata = &self.state.component_metadata;
+        let current_metadata = self.component_metadata();
 
         if new_revision <= current_metadata.revision {
             debug!("Update {new_revision} was already applied, skipping");
@@ -4552,7 +4881,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         .await
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
 
-        self.state.component_metadata = new_metadata;
+        self.state.component_metadata = new_metadata.clone();
+        self.executable = crate::workerctx::WorkerCtxExecutable::Component(Box::new(new_metadata));
 
         if let Some((updated_agent_config, initial_wallet_cards)) = updated_agent_state {
             self.state.agent_config = updated_agent_config;
@@ -4722,7 +5052,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let stack = self.get_current_invocation_context().await;
 
             let scope_card = match &invocation {
-                AgentInvocation::AgentMethod { scope_card, .. } => scope_card.clone(),
+                AgentInvocation::AgentMethod { scope_card, .. }
+                | AgentInvocation::ExternalTool { scope_card, .. } => scope_card.clone(),
                 _ => None,
             };
             let scope_root_cards = if let Some(scope_card) = &scope_card {
@@ -4740,6 +5071,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             let input = match &invocation {
                 AgentInvocation::AgentInitialization { input, .. }
                 | AgentInvocation::AgentMethod { input, .. } => Some(input),
+                AgentInvocation::ExternalTool { input, .. } => Some(input.value()),
                 _ => None,
             };
             if let Some(input) = input
@@ -4756,6 +5088,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     *invocation_context = stack;
                 }
                 AgentInvocation::AgentMethod {
+                    invocation_context, ..
+                }
+                | AgentInvocation::ExternalTool {
                     invocation_context, ..
                 } => {
                     *invocation_context = stack;
@@ -4870,6 +5205,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         move |_| {
                             OplogEntry::error(
                                 entity_parent_start_index,
+                                OplogErrorKind::Invocation,
                                 AgentError::PermissionDenied(error),
                                 retry_from,
                                 inside_atomic_region,
@@ -4908,6 +5244,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 ..
             } => Some(OplogEntry::error(
                 entity_parent_start_index,
+                OplogErrorKind::Invocation,
                 error.clone(),
                 *retry_from,
                 *atomic_region_had_side_effects,
@@ -5065,7 +5402,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 | AgentInvocationResult::ManualUpdate
                 | AgentInvocationResult::LoadSnapshot { .. }
                 | AgentInvocationResult::SaveSnapshot { .. }
-                | AgentInvocationResult::ProcessOplogEntries { .. } => true,
+                | AgentInvocationResult::ProcessOplogEntries { .. }
+                | AgentInvocationResult::ExternalTool { .. } => true,
             };
 
             // Only `AgentMethod` results need the method name persisted so the
@@ -5279,18 +5617,18 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         parent: &SpanId,
         initial_attributes: &[(String, AttributeValue)],
     ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        let current_span_id = &self.state.current_span_id;
+        let current_span_id = self.state.current_span_id.clone();
 
-        let is_live = self.is_live();
+        let replay_entry = self.get_oplog_entry_or_continue_live("StartSpan").await?;
+        let continued_live = replay_entry.is_none();
 
-        let span = if is_live {
+        let span = if continued_live {
             self.state
                 .invocation_context
                 .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
         } else {
-            let (_, entry) =
-                crate::get_oplog_entry!(self.state.replay_state, OplogEntry::StartSpan)?;
+            let (_, entry) = replay_entry.expect("replay entry was checked above");
 
             let (timestamp, span_id) = match entry {
                 OplogEntry::StartSpan {
@@ -5318,11 +5656,11 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             span
         };
 
-        if current_span_id != parent
+        if &current_span_id != parent
             && !self
                 .state
                 .invocation_context
-                .has_in_stack(current_span_id, parent)
+                .has_in_stack(&current_span_id, parent)
         {
             // The parent span is not in the current invocation stack. This can happen if it was created in a previous
             // invocation and stored in some global state.
@@ -5339,7 +5677,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             span.set_attribute(name.clone(), value.clone());
         }
 
-        if is_live {
+        if continued_live {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::StartSpan {
@@ -5380,7 +5718,14 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     }
 
     async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if self.is_live() {
+        if let Some((_, entry)) = self.get_oplog_entry_or_continue_live("FinishSpan").await? {
+            if !matches!(entry, OplogEntry::FinishSpan { .. }) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "FinishSpan",
+                    format!("{entry:?}"),
+                ));
+            }
+        } else {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::finish_span(
@@ -5388,8 +5733,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     span_id.clone(),
                 ))
                 .await;
-        } else if !self.is_live() {
-            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
         }
 
         if &self.state.current_span_id == span_id {
@@ -5421,7 +5764,17 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             .invocation_context
             .set_attribute(span_id, key.to_string(), value.clone())
             .map_err(WorkerExecutorError::runtime)?;
-        if self.is_live() {
+        if let Some((_, entry)) = self
+            .get_oplog_entry_or_continue_live("SetSpanAttribute")
+            .await?
+        {
+            if !matches!(entry, OplogEntry::SetSpanAttribute { .. }) {
+                return Err(WorkerExecutorError::unexpected_oplog_entry(
+                    "SetSpanAttribute",
+                    format!("{entry:?}"),
+                ));
+            }
+        } else {
             self.public_state
                 .worker()
                 .add_to_oplog(OplogEntry::set_span_attribute(
@@ -5431,8 +5784,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                     value,
                 ))
                 .await;
-        } else if !self.is_live() {
-            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::SetSpanAttribute)?;
         }
         Ok(())
     }
@@ -5492,18 +5843,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 .await?;
         }
 
-        let (agent_mode, is_agent) = {
-            let component = store.as_context().data().component_metadata();
-            (
-                store.as_context().data().agent_mode(),
-                component.metadata.is_agent(),
-            )
-        };
+        let agent_mode = store.as_context().data().agent_mode();
 
         let resume_result = loop {
-            let cont = store.as_context().data().durable_ctx().state.is_replay() && // replay while not live
-                (agent_mode == AgentMode::Durable || // durable components are fully replayed
-                    (number_of_replayed_functions == 0 && is_agent)); // ephemeral agents replay the first (initialize), other ephemerals nothing (deprecated)
+            let context = store.as_context();
+            let durable_ctx = context.data().durable_ctx();
+            let cont = durable_ctx.state.is_replay() && should_replay_invocation(
+                agent_mode,
+                durable_ctx.owner_context(),
+                number_of_replayed_functions,
+            );
 
             if cont {
                 let oplog_entry = store
@@ -5535,11 +5884,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             invocation_payload,
                             invocation_context.clone(),
                         );
-                        let scope_card = match &agent_invocation {
-                            AgentInvocation::AgentMethod { scope_card, .. } => scope_card.clone(),
-                            _ => None,
-                        };
-                        let recorded_scope_card_id = wallet_pin.and_then(|pin| pin.scope_card_id);
+                        if agent_mode == AgentMode::Ephemeral
+                            && !matches!(agent_invocation, AgentInvocation::AgentInitialization { .. })
+                        {
+                            break Err(WorkerExecutorError::unexpected_oplog_entry(
+                                "AgentInitialization for ephemeral initialization replay",
+                                format!("{:?}", agent_invocation.kind()),
+                            ));
+                        }
+                        let scope_card = agent_invocation.scope_card().cloned();
+                        let recorded_scope_card_id = wallet_pin.scope_card_id;
                         let payload_scope_card_id =
                             scope_card.as_ref().map(|card| card.scope_card_id);
                         if payload_scope_card_id != recorded_scope_card_id {
@@ -5616,6 +5970,21 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             .data_mut()
                             .durable_ctx_mut()
                             .primary_invocation_start_index = Some(oplog_index);
+                        // An invocation retained only through its start has no recorded body.
+                        // Publish live before pure guest code or logging runs, without waiting
+                        // for a durable host call to observe the exhausted replay cursor.
+                        if store.as_context().data().durable_ctx().state.replay_state.is_live()
+                            && let Err(error) = store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .switch_to_live()
+                                .await
+                        {
+                            store.as_context_mut().data_mut().durable_ctx_mut()
+                                .clear_invocation_scope_card().await;
+                            break Err(error);
+                        }
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
@@ -5643,7 +6012,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             }) => {
                                 if uses_streams
                                     && let AgentInvocationResult::AgentMethod { output } =
-                                        &mut invocation_result
+                                        &mut *invocation_result
                                 {
                                     let (graph, root, component_revision) = {
                                         let component = store.data().component_metadata();
@@ -5686,8 +6055,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     let worker = worker.clone();
                                     let result_value = output.clone();
                                     let replay_idempotency_key = idempotency_key.clone();
-                                    *output = store
-                                        .run_concurrent(async move |_accessor| {
+                                    *output = store.run_concurrent(async move |_accessor| {
                                             worker
                                                 .materialize_durable_streaming_result(
                                                     &replay_idempotency_key,
@@ -5699,14 +6067,18 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                 .await
                                         })
                                         .await
-                                        .map_err(|error| {
-                                            WorkerExecutorError::runtime(error.to_string())
-                                        })??;
+                                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
+                                    run_guest_call_settled(&mut store.as_context_mut(), async |_accessor| ())
+                                        .await
+                                        .map_err(|error| match error {
+                                            GuestCallSettlementError::Infrastructure(error) => error,
+                                            GuestCallSettlementError::Trap(error) | GuestCallSettlementError::Interrupted(error) => WorkerExecutorError::runtime(error.to_string()),
+                                        })?;
                                 }
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
                                 let mut output = AgentInvocationOutput {
-                                    result: invocation_result,
+                                    result: *invocation_result,
                                     consumed_fuel: Some(consumed_fuel),
                                     invocation_status: None,
                                     component_revision: Some(component_revision),
@@ -5733,12 +6105,16 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 // otherwise resumed session clients never observe completion.
                                 if uses_streams
                                     && store.as_context().data().durable_ctx().is_live()
-                                    && let Err(error) = worker
-                                        .complete_durable_streaming_session(&idempotency_key)
-                                        .await
                                 {
-                                    error!(%error, "Failed to complete durable streaming session");
-                                    break Err(error);
+                                    let worker = worker.clone();
+                                    let idempotency_key = idempotency_key.clone();
+                                    let result = store.run_concurrent(async move |_accessor| {
+                                        worker.complete_durable_streaming_session(&idempotency_key).await
+                                    }).await;
+                                    if let Err(error) = result.map_err(|error| WorkerExecutorError::runtime(error.to_string())).and_then(|result| result) {
+                                        error!(%error, "Failed to complete durable streaming session");
+                                        break Err(error);
+                                    }
                                 }
                                 number_of_replayed_functions += 1;
                                 continue;
@@ -5832,9 +6208,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                     // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
-                                                    break Err(WorkerExecutorError::runtime(
-                                                        "Process exited",
-                                                    ));
+                                                    break Err(
+                                                        WorkerExecutorError::PreviousInvocationExited,
+                                                    );
                                                 }
                                                 TrapType::Error { error, .. } => {
                                                     let stderr = store
@@ -5844,7 +6220,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                         .event_service()
                                                         .get_last_invocation_errors();
                                                     break Err(
-                                                        WorkerExecutorError::InvocationFailed {
+                                                        WorkerExecutorError::PreviousInvocationFailed {
                                                             error,
                                                             stderr,
                                                         },
@@ -5916,7 +6292,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         let prepare_result = if store.as_context().data().agent_mode() == AgentMode::Ephemeral {
             // Ephemeral workers cannot be recovered
 
-            // We have to replay the initialize call for agents:
+            // Only typed agent owners have an initialize call to replay.
             let replay_decision = Self::resume_replay(store, instance, false).await;
             record_resume_worker(start.elapsed());
 
@@ -6052,10 +6428,29 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 store, &error,
                             )))
                         } else {
+                            Err(WorkerExecutorError::InvocationFailed {
+                                error: AgentError::InternalError(error.to_string()),
+                                stderr: String::new(),
+                            })
+                        }
+                    }
+                    SnapshotRecoveryResult::Unavailable(error) => {
+                        if store
+                            .as_context()
+                            .data()
+                            .durable_ctx()
+                            .state
+                            .last_snapshot_source
+                            == Some(SnapshotSource::ManualUpdate)
+                        {
+                            Err(WorkerExecutorError::InvocationFailed {
+                                error: AgentError::InternalError(error.to_string()),
+                                stderr: String::new(),
+                            })
+                        } else {
                             Err(error)
                         }
                     }
-                    SnapshotRecoveryResult::Unavailable(error) => Err(error),
                     SnapshotRecoveryResult::Retry(decision) => Ok(Some(decision)),
                 },
             }
@@ -6084,6 +6479,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 Ok(None)
             }
             Ok(other) => Ok(other),
+            Err(
+                error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+                | WorkerExecutorError::PreviousInvocationExited),
+            ) => Err(error),
             Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
                 agent_id.clone(),
                 error,
@@ -6299,13 +6698,11 @@ fn live_scope_root_cards_from_states(
 
 fn transfer_started_removes_source_membership(
     source_card: Option<&StoredCard>,
-    source_holder: &Option<CardHolder>,
+    source_holder: &CardHolder,
     agent_id: &AgentId,
 ) -> bool {
     matches!(source_card, Some(StoredCard::Concrete(_)))
-        && source_holder
-            .as_ref()
-            .is_none_or(|holder| card_holder_is_agent(holder, agent_id))
+        && card_holder_is_agent(source_holder, agent_id)
 }
 
 fn next_drainable_card_events(
@@ -6460,20 +6857,18 @@ fn apply_invocation_wallet_pin(
 
 fn adopt_recorded_wallet_generation(
     generation: &mut u64,
-    recorded_generation: Option<u64>,
+    recorded_generation: u64,
 ) -> Result<(), WorkerExecutorError> {
-    if let Some(recorded_generation) = recorded_generation {
-        if recorded_generation < *generation {
-            return Err(WorkerExecutorError::unexpected_oplog_entry(
-                "non-decreasing wallet generation",
-                format!(
-                    "recorded generation {recorded_generation} is behind replayed generation {}",
-                    *generation
-                ),
-            ));
-        }
-        *generation = recorded_generation;
+    if recorded_generation < *generation {
+        return Err(WorkerExecutorError::unexpected_oplog_entry(
+            "non-decreasing wallet generation",
+            format!(
+                "recorded generation {recorded_generation} is behind replayed generation {}",
+                *generation
+            ),
+        ));
     }
+    *generation = recorded_generation;
     Ok(())
 }
 
@@ -6554,10 +6949,20 @@ fn recovered_status(
 }
 
 fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> bool {
-    matches!(
-        status.status,
-        AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying | AgentStatus::Interrupted
-    ) || status.has_pending_work()
+    status.status != AgentStatus::Interrupted
+        && (matches!(
+            status.status,
+            AgentStatus::Running | AgentStatus::Idle | AgentStatus::Retrying
+        ) || status.has_pending_work())
+}
+
+fn should_replay_invocation(
+    mode: AgentMode,
+    owner: &ResolvedOwnerContext,
+    replayed_invocations: usize,
+) -> bool {
+    mode == AgentMode::Durable
+        || (matches!(owner, ResolvedOwnerContext::Agent(_)) && replayed_invocations == 0)
 }
 
 fn store_is_live(
@@ -6577,6 +6982,14 @@ fn store_is_live(
 pub(crate) enum BeginReplayToLive {
     ReplayResumed,
     Pending(PendingReplayToLive),
+}
+
+// Callers immediately destructure this transient result; avoid allocating each oplog entry.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub(crate) enum PositionalRead {
+    Entry(OplogIndex, OplogEntry),
+    ReplayEnded,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -6803,6 +7216,43 @@ mod tests {
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
     use test_r::test;
+
+    #[test]
+    fn ephemeral_replay_is_only_for_typed_owner_initialization() {
+        use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+
+        let agent = ResolvedOwnerContext::Agent(Box::new(ParsedAgentId::new(
+            AgentTypeName("counter".to_string()),
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::string()),
+                SchemaValue::String("meaningful-constructor-input".to_string()),
+            ),
+            None,
+        )));
+        assert!(should_replay_invocation(AgentMode::Ephemeral, &agent, 0));
+        assert!(!should_replay_invocation(AgentMode::Ephemeral, &agent, 1));
+        for owner in [
+            ResolvedOwnerContext::ComponentWorker,
+            ResolvedOwnerContext::ComponentBaseline,
+        ] {
+            for replayed in [0, 1, 3] {
+                assert!(!should_replay_invocation(
+                    AgentMode::Ephemeral,
+                    &owner,
+                    replayed
+                ));
+            }
+        }
+        for owner in [agent, ResolvedOwnerContext::ComponentWorker] {
+            for replayed in [0, 1, 3] {
+                assert!(should_replay_invocation(
+                    AgentMode::Durable,
+                    &owner,
+                    replayed
+                ));
+            }
+        }
+    }
 
     #[test]
     fn entity_store_liveness_is_scoped_to_its_invocation_mode() {
@@ -7671,7 +8121,9 @@ mod tests {
             environment: EnvironmentName::try_from("prod").unwrap(),
             component: ComponentName("cart-svc".to_string()),
             agent_name: "Cart(alice)".to_string(),
-            agent_type: AgentTypeName("Cart".to_string()),
+            owner: golem_common::model::card::recipient::RecipientOwnerContext::AgentType(
+                AgentTypeName("Cart".to_string()),
+            ),
         }
     }
 
@@ -7821,7 +8273,7 @@ mod tests {
             )
             .unwrap()
         );
-        adopt_recorded_wallet_generation(&mut replayed_generation, Some(live_generation)).unwrap();
+        adopt_recorded_wallet_generation(&mut replayed_generation, live_generation).unwrap();
         let replayed_surface = golem_common::model::card::agent_effective_surface_from_wallet(
             &context,
             replayed_wallet.values(),
@@ -7902,8 +8354,7 @@ mod tests {
         let recorded_expiry_generation = generation;
 
         assert!(!remove_wallet_card(&mut wallet, &mut generation, card_id).unwrap());
-        adopt_recorded_wallet_generation(&mut generation, Some(recorded_expiry_generation))
-            .unwrap();
+        adopt_recorded_wallet_generation(&mut generation, recorded_expiry_generation).unwrap();
 
         assert!(wallet.is_empty());
         assert_eq!(generation, 8);
@@ -7970,7 +8421,7 @@ mod tests {
                 remove_wallet_card(&mut replayed_wallet, &mut replayed_generation, card_id)
                     .unwrap()
             );
-            adopt_recorded_wallet_generation(&mut replayed_generation, Some(recorded_generation))
+            adopt_recorded_wallet_generation(&mut replayed_generation, recorded_generation)
                 .unwrap();
         }
 
@@ -8038,16 +8489,13 @@ mod tests {
     }
 
     #[test]
-    fn replay_adopts_recorded_wallet_generation_and_defaults_legacy_entries() {
+    fn replay_adopts_recorded_wallet_generation() {
         let mut generation = 10;
 
-        adopt_recorded_wallet_generation(&mut generation, None).unwrap();
+        adopt_recorded_wallet_generation(&mut generation, 10).unwrap();
         assert_eq!(generation, 10);
 
-        adopt_recorded_wallet_generation(&mut generation, Some(10)).unwrap();
-        assert_eq!(generation, 10);
-
-        adopt_recorded_wallet_generation(&mut generation, Some(12)).unwrap();
+        adopt_recorded_wallet_generation(&mut generation, 12).unwrap();
         assert_eq!(generation, 12);
     }
 
@@ -8055,7 +8503,7 @@ mod tests {
     fn replay_rejects_decreasing_recorded_wallet_generation() {
         let mut generation = 10;
 
-        assert!(adopt_recorded_wallet_generation(&mut generation, Some(9)).is_err());
+        assert!(adopt_recorded_wallet_generation(&mut generation, 9).is_err());
         assert_eq!(generation, 10);
     }
 
@@ -8093,7 +8541,7 @@ mod tests {
         assert!(!wallet.contains_key(&derived_card.card_id()));
 
         assert!(add_wallet_card(&mut wallet, &mut generation, derived_card.clone()).unwrap());
-        adopt_recorded_wallet_generation(&mut generation, Some(2)).unwrap();
+        adopt_recorded_wallet_generation(&mut generation, 2).unwrap();
         assert_eq!(wallet.len(), 2);
         assert_eq!(wallet.get(&base_card.card_id()), Some(&base_card));
         assert_eq!(wallet.get(&derived_card.card_id()), Some(&derived_card));
@@ -8120,9 +8568,9 @@ mod tests {
             component_id: ComponentId(Uuid::new_v4()),
             agent_id: "source-agent".to_string(),
         };
-        let source_holder = Some(CardHolder::Agent(AgentCardHolder {
+        let source_holder = CardHolder::Agent(AgentCardHolder {
             agent_id: agent_id.clone(),
-        }));
+        });
         let concrete = concrete_card(CardId::new());
         let polymorphic = polymorphic_card(CardId::new());
 
@@ -8136,36 +8584,15 @@ mod tests {
             &source_holder,
             &agent_id,
         ));
-        assert!(transfer_started_removes_source_membership(
-            Some(&concrete),
-            &None,
-            &agent_id,
-        ));
-
-        let different_source = Some(CardHolder::Agent(AgentCardHolder {
+        let different_source = CardHolder::Agent(AgentCardHolder {
             agent_id: AgentId {
                 component_id: ComponentId(Uuid::new_v4()),
                 agent_id: agent_id.agent_id.clone(),
             },
-        }));
+        });
         assert!(!transfer_started_removes_source_membership(
             Some(&concrete),
             &different_source,
-            &agent_id,
-        ));
-    }
-
-    #[test]
-    fn legacy_transfer_start_removes_concrete_source_membership() {
-        let agent_id = AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "legacy-source-agent".to_string(),
-        };
-        let concrete = concrete_card(CardId::new());
-
-        assert!(transfer_started_removes_source_membership(
-            Some(&concrete),
-            &None,
             &agent_id,
         ));
     }
@@ -8224,7 +8651,7 @@ mod tests {
         assert!(matches!(
             &next[0].event,
             QueuedCardEvent::TransferReceived(event)
-                if event.source_card_id == Some(source_card_id)
+                if event.source_card_id == source_card_id
                     && event.card_id == card.card_id()
                     && event.card.as_ref() == Some(&card)
         ));
@@ -8311,7 +8738,7 @@ mod tests {
             queued_idx,
             &BTreeMap::from([(
                 queued_idx,
-                OplogEntry::card_event_queued(None, QueuedCardEvent::revoke(card_id)),
+                OplogEntry::card_event_queued(None, Box::new(QueuedCardEvent::revoke(card_id))),
             )]),
         );
 
@@ -8322,7 +8749,7 @@ mod tests {
             terminal_idx,
             &BTreeMap::from([(
                 terminal_idx,
-                OplogEntry::card_revoked(None, queued_idx, card_id, None),
+                OplogEntry::card_revoked(None, queued_idx, card_id, 1),
             )]),
         );
 
@@ -8441,6 +8868,33 @@ mod tests {
         };
 
         assert!(!should_restart_after_shard_assignment_change(&status));
+    }
+
+    #[test]
+    fn shard_assignment_recovery_preserves_explicit_interrupt_with_pending_work() {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Interrupted,
+            current_idempotency_key: Some(IdempotencyKey::fresh()),
+            ..AgentStatusRecord::default()
+        };
+        assert!(!should_restart_after_shard_assignment_change(&status));
+
+        status.pending_invocations.push(PendingInvocationRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL,
+            idempotency_key: Some(IdempotencyKey::fresh()),
+            manual_update_target_revision: None,
+        });
+        status.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::INITIAL.next(),
+            target_revision: ComponentRevision::INITIAL,
+            kind: PendingUpdateKind::Automatic,
+        });
+        assert!(!should_restart_after_shard_assignment_change(&status));
+
+        status.status = AgentStatus::Suspended;
+        assert!(should_restart_after_shard_assignment_change(&status));
     }
 
     fn recovered_agent() -> OwnedAgentId {
@@ -9062,6 +9516,9 @@ async fn last_error<T: HasOplogService + HasConfig>(
                 // Skip entries in deleted regions without consulting the read range.
             } else {
                 match entries.get(&idx) {
+                    Some(OplogEntry::RecoverySucceeded { .. }) => {
+                        break 'scan;
+                    }
                     Some(OplogEntry::Error {
                         error, retry_from, ..
                     }) => {
@@ -9763,9 +10220,12 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_agent_id: OwnedAgentId,
     created_by: AccountId,
-    agent_id: Option<ParsedAgentId>,
+    owner_context: ResolvedOwnerContext,
     created_by_email: AccountEmail,
     current_idempotency_key: Option<IdempotencyKey>,
+    /// Child positions under an entity seed admitted in a caller's atomic region.
+    /// This is Store-local derivation state, not an atomic scope or shared lease.
+    entity_logical_key_position: Option<OplogIndex>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
     resources: HashMap<AgentResourceId, (ResourceTypeId, ResourceAny)>,
@@ -9962,8 +10422,8 @@ struct PrivateDurableWorkerState {
     /// incarnation, so a scope left open by a trap is cleared on restart.
     active_durable_scopes: Vec<ActiveDurableScope>,
 
-    /// Number of live durable host calls currently in flight. Used by suspendable P3 waits to
-    /// detect when all in-flight work is parked in waits that can safely suspend the worker.
+    /// Number of live durable host calls currently in flight. Shared wait scheduling uses this
+    /// to defer voluntary suspension while work outside registered waits is progressing.
     live_host_calls: Arc<AtomicUsize>,
 
     /// Activity tracking for Golem-spawned store background tasks. The invocation completion
@@ -9971,10 +10431,10 @@ struct PrivateDurableWorkerState {
     /// [`tail_work::TailWorkTracker`]) before `AgentInvocationFinished` is written.
     tail_work: tail_work::TailWorkTracker,
 
-    /// Suspend-capable waits currently parked by P3 sleep / promise APIs. The value is the wall
-    /// clock deadline for a scheduled wake, if the wait has one; pure promise waits have no
-    /// deadline and are woken by promise completion.
-    suspendable_waits: Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>>,
+    /// Suspend-capable waits currently parked by sleep, promise, and RPC APIs. Deadline waits use
+    /// their wall-clock deadline (if any); RPC waits use a bounded resume delay so their transport
+    /// can be checked again after the worker resumes.
+    suspendable_waits: suspendable_wait::SuspendableWaitRegistry,
     next_suspendable_wait_id: AtomicU64,
 
     /// Latched when the current invocation's wall-clock deadline
@@ -9994,6 +10454,7 @@ struct PrivateDurableWorkerState {
         tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
         tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
     ),
+    dropped_call_event_backlog: VecDeque<concurrent::DropEvent>,
     completion_marker_recorder: concurrent::CompletionMarkerRecorder,
 
     /// The minimum oplog index handed to the guest via `get_oplog_index` during the current
@@ -10082,7 +10543,7 @@ impl WakeupScheduler {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -10136,15 +10597,25 @@ impl PrivateDurableWorkerState {
             OwnerRuntime::Agent => {
                 let initial_agent_wallet_cards =
                     || -> Result<BTreeMap<CardId, StoredCard>, WorkerExecutorError> {
-                        match agent_id.as_ref() {
-                            Some(agent_id) => {
+                        match &owner_context {
+                            ResolvedOwnerContext::Agent(agent_id) => {
                                 let card = agent_initial_card_from_component_metadata(
                                     &component_metadata,
                                     agent_id,
                                 )?;
                                 Ok(BTreeMap::from([(card.card_id(), card)]))
                             }
-                            None => Ok(BTreeMap::new()),
+                            ResolvedOwnerContext::ComponentWorker
+                            | ResolvedOwnerContext::ComponentBaseline => {
+                                let card = StoredCard::Polymorphic(
+                                    component_metadata
+                                        .metadata
+                                        .component_provision_config()
+                                        .initial_permissions
+                                        .clone(),
+                                );
+                                Ok(BTreeMap::from([(card.card_id(), card)]))
+                            }
                         }
                     };
                 if let Some(snapshot_idx) = last_snapshot_index {
@@ -10172,8 +10643,8 @@ impl PrivateDurableWorkerState {
             agent_id: owned_agent_id.agent_id.clone(),
         })
         .wallet_id_hash();
-        let agent_effective_surface = match (&runtime, agent_id.as_ref()) {
-            (OwnerRuntime::Agent, Some(agent_id)) => {
+        let agent_effective_surface = match (&runtime, &owner_context) {
+            (OwnerRuntime::Agent, ResolvedOwnerContext::Agent(agent_id)) => {
                 let context =
                     agent_monomorphization_context(&component_metadata, &owned_agent_id, agent_id);
                 golem_common::model::card::agent_effective_surface_from_wallet(
@@ -10181,14 +10652,21 @@ impl PrivateDurableWorkerState {
                     agent_wallet_cards.values(),
                 )
             }
-            (OwnerRuntime::Agent, None) => golem_common::model::card::EffectiveSurface::default(),
+            (
+                OwnerRuntime::Agent,
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline,
+            ) => component_baseline_effective_surface_from_wallet(
+                &component_metadata,
+                &owned_agent_id,
+                agent_wallet_cards.values(),
+            ),
             (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
         };
         let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
         Ok(Self {
             oplog_service,
             oplog,
-            agent_id,
+            owner_context,
             http_call_count: 0,
             per_invocation_http_call_limit,
             rpc_call_count: 0,
@@ -10211,6 +10689,7 @@ impl PrivateDurableWorkerState {
             agent_config,
             owned_agent_id,
             current_idempotency_key: None,
+            entity_logical_key_position: None,
             rpc,
             worker_proxy,
             resources: HashMap::new(),
@@ -10281,6 +10760,7 @@ impl PrivateDurableWorkerState {
             invocation_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             tail_work_deadline_exceeded: Arc::new(AtomicBool::new(false)),
             dropped_call_events,
+            dropped_call_event_backlog: VecDeque::new(),
             completion_marker_recorder,
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
@@ -10484,11 +10964,11 @@ impl PrivateDurableWorkerState {
         self.tail_work.clone()
     }
 
-    fn suspendable_waits(&self) -> Arc<Mutex<BTreeMap<u64, Option<DateTime<Utc>>>>> {
+    pub(crate) fn suspendable_waits(&self) -> suspendable_wait::SuspendableWaitRegistry {
         self.suspendable_waits.clone()
     }
 
-    fn next_suspendable_wait_id(&self) -> u64 {
+    pub(crate) fn next_suspendable_wait_id(&self) -> u64 {
         self.next_suspendable_wait_id.fetch_add(1, Ordering::AcqRel)
     }
 
@@ -10500,19 +10980,21 @@ impl PrivateDurableWorkerState {
         )
     }
 
-    fn safe_to_suspend(&self) -> bool {
-        Self::suspend_admissible(
-            self.live_host_calls.load(Ordering::Acquire),
-            self.suspendable_waits.lock().unwrap().len(),
-            !self.active_durable_scopes.is_empty(),
-            !self.pending_p3_http_request_transmissions.is_empty(),
-        )
+    fn safe_to_suspend(&mut self) -> bool {
+        let markers_settled = self.settle_completed_marker_events();
+        markers_settled
+            && Self::suspend_admissible(
+                self.live_host_calls.load(Ordering::Acquire),
+                self.suspendable_waits.lock().unwrap().len(),
+                !self.active_durable_scopes.is_empty(),
+                !self.pending_p3_http_request_transmissions.is_empty(),
+            )
     }
 
-    /// Pure form of [`Self::safe_to_suspend`], factored out so its truth table can be tested
-    /// without constructing worker state: the worker may suspend when every live durable host
-    /// call in flight is parked in a suspendable wait, no durable scope is open, and no P3 HTTP
-    /// request transmission is pending.
+    /// Shared scheduling heuristic for voluntary suspension, not a recoverability boundary.
+    /// Explicit interruption and arbitrary Store loss still reconstruct from durable history.
+    /// Defer automatic yielding until every live call is in a registered wait, no durable
+    /// scope is open, and no P3 HTTP request transmission is pending.
     fn suspend_admissible(
         live_host_calls: usize,
         suspendable_waits: usize,
@@ -10533,11 +11015,26 @@ impl PrivateDurableWorkerState {
     }
 
     fn take_dropped_call_events(&mut self) -> Vec<concurrent::DropEvent> {
-        let mut events = Vec::new();
+        let mut events: Vec<_> = self.dropped_call_event_backlog.drain(..).collect();
         while let Ok(event) = self.dropped_call_events.1.try_recv() {
             events.push(event);
         }
         events
+    }
+
+    fn take_next_dropped_call_event(&mut self) -> Option<concurrent::DropEvent> {
+        self.dropped_call_event_backlog
+            .pop_front()
+            .or_else(|| self.dropped_call_events.1.try_recv().ok())
+    }
+
+    /// Releases only marker events known to have completed successfully. Every other event stays
+    /// worker-owned and in its original order for the next ordinary asynchronous drain.
+    fn settle_completed_marker_events(&mut self) -> bool {
+        while let Ok(event) = self.dropped_call_events.1.try_recv() {
+            self.dropped_call_event_backlog.push_back(event);
+        }
+        concurrent::settle_completed_marker_events(&mut self.dropped_call_event_backlog)
     }
 
     fn set_ambient_retry_point(&mut self, retry_point: OplogIndex) {
@@ -10559,7 +11056,9 @@ impl PrivateDurableWorkerState {
     }
 
     pub fn current_idempotency_key_oplog_index(&mut self, oplog_index: OplogIndex) -> OplogIndex {
-        if let Some(outermost_atomic_region) = self.active_atomic_regions.first_mut() {
+        if let Some(position) = self.entity_logical_key_position.as_mut() {
+            next_atomic_region_idempotency_key_oplog_index(position)
+        } else if let Some(outermost_atomic_region) = self.active_atomic_regions.first_mut() {
             next_atomic_region_idempotency_key_oplog_index(
                 &mut outermost_atomic_region.next_idempotency_key_oplog_index,
             )
@@ -10569,15 +11068,17 @@ impl PrivateDurableWorkerState {
     }
 
     pub fn current_atomic_region_idempotency_key_oplog_index(&self) -> Option<OplogIndex> {
-        self.active_atomic_regions
-            .first()
-            .map(|region| region.next_idempotency_key_oplog_index)
+        self.entity_logical_key_position.or_else(|| {
+            self.active_atomic_regions
+                .first()
+                .map(|region| region.next_idempotency_key_oplog_index)
+        })
     }
 
     /// Enriches retry properties with worker-local context: `agent-type` and `is-idempotent`.
     /// Should be called on all executor-constructed retry property bags before policy resolution.
     pub fn enrich_retry_properties(&self, props: &mut RetryProperties) {
-        if let Some(agent_id) = &self.agent_id {
+        if let Some(agent_id) = self.owner_context.agent() {
             props.set(
                 "agent-type",
                 PredicateValue::Text(agent_id.agent_type.to_string()),
@@ -11114,17 +11615,6 @@ macro_rules! get_oplog_entry {
     };
     ($replay_state:expr, $($cases:path),+) => {
         $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry(); $($cases),+)
-    };
-}
-
-/// [`get_oplog_entry!`] variant for call sites running inside Wasmtime accessor futures: reads
-/// through [`crate::durable_host::replay_state::ReplayState::get_oplog_entry_owned`], whose cursor
-/// transaction runs on an owned task, so the store-polled caller never queues on the cursor mutex
-/// directly. Direct invocation-loop / p2 host-call readers keep using [`get_oplog_entry!`].
-#[macro_export]
-macro_rules! get_oplog_entry_owned {
-    ($replay_state:expr, $($cases:path),+) => {
-        $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry_owned(); $($cases),+)
     };
 }
 

@@ -15,6 +15,7 @@
 mod agent_method_input;
 pub(crate) mod constructor_param_extraction;
 mod multimodal_params_extraction;
+pub mod native_tool;
 pub mod resource;
 #[cfg(test)]
 pub(crate) mod test_support;

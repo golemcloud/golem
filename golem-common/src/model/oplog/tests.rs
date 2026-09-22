@@ -34,15 +34,15 @@ use crate::model::oplog::public_oplog_entry::{
     EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
     FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
-    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, RevertParams,
-    RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
+    PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, ResumedParams,
+    RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
     SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
     AgentMethodInvocationParameters, AgentResourceId, AttributeMap, DurableFunctionType,
     JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart,
-    OplogEntry, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
+    OplogEntry, OplogErrorKind, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
     PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
     PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicLocalSpanData,
@@ -65,6 +65,12 @@ use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use test_r::test;
 use uuid::Uuid;
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn raw_oplog_entry_fits_in_176_bytes() {
+    assert!(std::mem::size_of::<OplogEntry>() <= 176);
+}
 
 #[test]
 fn start_desert_roundtrip() {
@@ -294,6 +300,7 @@ fn create_serialization_poem_serde_equivalence() {
     use crate::model::environment::EnvironmentId;
 
     let entry = PublicOplogEntry::Create(CreateParams {
+        owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         timestamp: Timestamp::now_utc().rounded(),
         agent_id: AgentId {
             component_id: ComponentId(
@@ -637,7 +644,13 @@ fn agent_invocation_started_serialization_poem_serde_equivalence() {
                 inherited: true,
             })]],
         }),
-        wallet_pin: None,
+        wallet_pin: PublicInvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: [0; 32],
+                generation: 0,
+            },
+            scope_card_id: None,
+        },
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -683,6 +696,7 @@ fn suspend_serialization_poem_serde_equivalence() {
 fn error_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::Error(ErrorParams {
         timestamp: Timestamp::now_utc().rounded(),
+        kind: OplogErrorKind::Invocation,
         error: "test".to_string(),
         retry_from: OplogIndex::INITIAL,
         inside_atomic_region: false,
@@ -781,7 +795,13 @@ fn agent_invocation_started_with_initialization_serialization_poem_serde_equival
                 inherited: false,
             })]],
         }),
-        wallet_pin: None,
+        wallet_pin: PublicInvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: [0; 32],
+                generation: 0,
+            },
+            scope_card_id: None,
+        },
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1006,6 +1026,33 @@ fn restart_serialization_poem_serde_equivalence() {
 }
 
 #[test]
+fn resumed_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Resumed(ResumedParams {
+        timestamp: Timestamp::now_utc().rounded(),
+    });
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn resumed_raw_and_public_protobuf_roundtrip() {
+    let timestamp = Timestamp::now_utc().rounded();
+
+    let raw = OplogEntry::Resumed { timestamp };
+    let raw_proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        raw.clone().try_into().unwrap();
+    let raw_roundtrip: OplogEntry = raw_proto.try_into().unwrap();
+    assert_eq!(raw, raw_roundtrip);
+
+    let public = PublicOplogEntry::Resumed(ResumedParams { timestamp });
+    let public_proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+        public.clone().try_into().unwrap();
+    let public_roundtrip: PublicOplogEntry = public_proto.try_into().unwrap();
+    assert_eq!(public, public_roundtrip);
+}
+
+#[test]
 fn activate_plugin_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
         timestamp: Timestamp::now_utc().rounded(),
@@ -1222,7 +1269,7 @@ fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
 }
 
 #[test]
-fn invocation_wallet_pin_protobuf_roundtrip_and_legacy_defaults() {
+fn invocation_wallet_pin_protobuf_roundtrip_and_required_validation() {
     let pinned_card_ids = vec![CardId::new(), CardId::new()];
     let scope_card_id = CardId::new();
     let wallet_token = WalletVersionToken {
@@ -1241,7 +1288,7 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_legacy_defaults() {
         trace_id: TraceId::generate(),
         trace_states: Vec::new(),
         invocation_context: Vec::new(),
-        wallet_pin: Some(InvocationWalletPin {
+        wallet_pin: Box::new(InvocationWalletPin {
             wallet_token: wallet_token.clone(),
             pinned_card_ids: pinned_card_ids.clone(),
             scope_card_id: Some(scope_card_id),
@@ -1253,12 +1300,12 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_legacy_defaults() {
     match OplogEntry::try_from(raw_proto.clone()).unwrap() {
         OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
             assert_eq!(
-                wallet_pin,
-                Some(InvocationWalletPin {
+                wallet_pin.as_ref(),
+                &InvocationWalletPin {
                     wallet_token: wallet_token.clone(),
                     pinned_card_ids: pinned_card_ids.clone(),
                     scope_card_id: Some(scope_card_id),
-                })
+                }
             );
         }
         other => panic!("expected raw invocation-started entry, got {other:?}"),
@@ -1273,20 +1320,15 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_legacy_defaults() {
     } else {
         panic!("expected raw invocation-started protobuf entry");
     }
-    match OplogEntry::try_from(raw_proto).unwrap() {
-        OplogEntry::AgentInvocationStarted { wallet_pin, .. } => {
-            assert_eq!(wallet_pin, None);
-        }
-        other => panic!("expected raw invocation-started entry, got {other:?}"),
-    }
+    assert!(OplogEntry::try_from(raw_proto).is_err());
 
     let public_entry = PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
         timestamp: Timestamp::now_utc().rounded(),
         invocation: PublicAgentInvocation::SaveSnapshot(Empty {}),
-        wallet_pin: Some(PublicInvocationWalletPin {
+        wallet_pin: PublicInvocationWalletPin {
             wallet_token,
             scope_card_id: Some(scope_card_id),
-        }),
+        },
     });
     let mut public_proto: golem_api_grpc::proto::golem::worker::OplogEntry =
         public_entry.clone().try_into().unwrap();
@@ -1302,12 +1344,7 @@ fn invocation_wallet_pin_protobuf_roundtrip_and_legacy_defaults() {
     } else {
         panic!("expected public invocation-started protobuf entry");
     }
-    match PublicOplogEntry::try_from(public_proto).unwrap() {
-        PublicOplogEntry::AgentInvocationStarted(params) => {
-            assert_eq!(params.wallet_pin, None);
-        }
-        other => panic!("expected public invocation-started entry, got {other:?}"),
-    }
+    assert!(PublicOplogEntry::try_from(public_proto).is_err());
 }
 
 #[test]
@@ -1396,53 +1433,53 @@ fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
             timestamp,
             entity_parent_start_index: None,
             queued_event_index: None,
-            card: source_card.clone().into(),
-            wallet_generation: Some(1),
+            card: Box::new(source_card.clone().into()),
+            wallet_generation: 1,
         },
         OplogEntry::CardDerived {
             timestamp,
             entity_parent_start_index: None,
-            card: source_card.clone().into(),
-            wallet_generation: Some(3),
+            card: Box::new(source_card.clone().into()),
+            wallet_generation: 3,
         },
         OplogEntry::CardRevoked {
             timestamp,
             entity_parent_start_index: None,
             queued_event_index: OplogIndex::from_u64(1),
             card_id: source_card_id,
-            wallet_generation: Some(4),
+            wallet_generation: 4,
         },
         OplogEntry::CardExpired {
             timestamp,
             entity_parent_start_index: None,
             card_id: installed_card_id,
-            wallet_generation: Some(5),
+            wallet_generation: 5,
         },
         OplogEntry::CardTransferStarted {
             timestamp,
             entity_parent_start_index: None,
             transfer_id,
             card_id: source_card_id,
-            source_holder: Some(source_holder.clone()),
+            source_holder: source_holder.clone(),
             target_holder: target_holder.clone(),
-            source_wallet_generation: Some(4),
+            source_wallet_generation: 4,
         },
         OplogEntry::CardTransferred {
             timestamp,
             entity_parent_start_index: None,
             transfer_id,
-            source_card_id: Some(source_card_id),
+            source_card_id,
             installed_card_id,
             target_holder: target_holder.clone(),
-            card: installed_card.into(),
-            target_wallet_generation: Some(7),
+            card: Box::new(installed_card.into()),
+            target_wallet_generation: 7,
         },
         OplogEntry::CardRevokedCascade {
             timestamp,
             entity_parent_start_index: None,
             revoked_card_ids: vec![source_card_id, installed_card_id],
             affected_wallets: vec![source_holder.clone(), target_holder.clone()],
-            local_wallet_generation: Some(8),
+            local_wallet_generation: 8,
         },
         OplogEntry::CardTransferConfirmed {
             timestamp,
@@ -1455,16 +1492,20 @@ fn phase_five_raw_card_oplog_entries_protobuf_roundtrip() {
         OplogEntry::CardEventQueued {
             timestamp,
             entity_parent_start_index: None,
-            event: QueuedCardEvent::transfer_started(transfer_id, source_card, application_holder),
+            event: Box::new(QueuedCardEvent::transfer_started(
+                transfer_id,
+                source_card,
+                application_holder,
+            )),
         },
         OplogEntry::CardTransferStarted {
             timestamp,
             entity_parent_start_index: None,
             transfer_id: Uuid::new_v4(),
             card_id: installed_card_id,
-            source_holder: None,
+            source_holder,
             target_holder,
-            source_wallet_generation: None,
+            source_wallet_generation: 9,
         },
     ];
 
@@ -1498,44 +1539,44 @@ fn phase_five_public_card_oplog_entries_protobuf_roundtrip() {
             timestamp,
             queued_event_index: None,
             card_id,
-            wallet_generation: Some(1),
+            wallet_generation: 1,
         }),
         PublicOplogEntry::CardDerived(CardDerivedParams {
             timestamp,
             card_id,
             parent_ids: vec![CardId::new(), CardId::new()],
-            wallet_generation: Some(3),
+            wallet_generation: 3,
         }),
         PublicOplogEntry::CardRevoked(CardRevokedParams {
             timestamp,
             queued_event_index: OplogIndex::from_u64(1),
             card_id,
-            wallet_generation: Some(4),
+            wallet_generation: 4,
         }),
         PublicOplogEntry::CardExpired(CardExpiredParams {
             timestamp,
             card_id: installed_card_id,
-            wallet_generation: Some(5),
+            wallet_generation: 5,
         }),
         PublicOplogEntry::CardTransferStarted(CardTransferStartedParams {
             timestamp,
             transfer_id,
             card_id,
             target_holder: target_holder.clone(),
-            source_wallet_generation: Some(4),
+            source_wallet_generation: 4,
         }),
         PublicOplogEntry::CardTransferred(CardTransferredParams {
             timestamp,
             transfer_id,
-            source_card_id: Some(card_id),
+            source_card_id: card_id,
             installed_card_id,
             target_holder: target_holder.clone(),
-            target_wallet_generation: Some(7),
+            target_wallet_generation: 7,
         }),
         PublicOplogEntry::CardRevokedCascade(CardRevokedCascadeParams {
             timestamp,
             revoked_card_ids: vec![card_id, installed_card_id],
-            local_wallet_generation: Some(8),
+            local_wallet_generation: 8,
         }),
         PublicOplogEntry::CardTransferConfirmed(CardTransferConfirmedParams {
             timestamp,
@@ -1662,8 +1703,8 @@ mod scope_scan {
     use crate::model::oplog::host_functions::HostFunctionName;
     use crate::model::oplog::raw_types::PayloadId;
     use crate::model::oplog::{
-        AgentError, AttributeMap, DurableFunctionType, LogLevel, OplogEntry, OplogPayload,
-        OplogScopeProjection, ScopeScanState,
+        AgentError, AttributeMap, DurableFunctionType, LogLevel, OplogEntry, OplogErrorKind,
+        OplogPayload, OplogScopeProjection, ScopeScanState,
     };
     use crate::model::regions::OplogRegion;
     use crate::model::{
@@ -1753,6 +1794,7 @@ mod scope_scan {
                 11,
                 OplogEntry::error(
                     Some(idx(10)),
+                    OplogErrorKind::Invocation,
                     AgentError::TransientError("entity-owned".to_string()),
                     idx(99),
                     false,
@@ -1763,6 +1805,7 @@ mod scope_scan {
                 12,
                 OplogEntry::error(
                     None,
+                    OplogErrorKind::Invocation,
                     AgentError::TransientError("agent-owned".to_string()),
                     idx(10),
                     false,
@@ -1777,7 +1820,7 @@ mod scope_scan {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: Some(idx(10)),
                     card_id: CardId::new(),
-                    wallet_generation: None,
+                    wallet_generation: 1,
                 },
             ),
             (

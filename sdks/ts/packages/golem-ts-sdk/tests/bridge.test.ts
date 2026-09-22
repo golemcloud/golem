@@ -3,7 +3,8 @@
 
 import { WasmRpc, type RpcError as AgentRpcError } from 'golem:agent/host@2.0.0';
 import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0';
-import { createStdin, ToolRpc, type ByteStreamFailure, type RpcError } from 'golem:tool/host@0.1.0';
+import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
+import { createStdin, ToolRpc, type ByteStreamFailure } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
 import { bridge } from '../src';
 import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';
@@ -151,6 +152,24 @@ describe('public bridge runtime', () => {
     const result = await bridge.resultFromSettledToolResult(invocation.settledResult);
     expect(result.result?.value).toEqual(bridge.v.string('ok'));
     expect(ToolRpc).toHaveBeenCalledWith('git');
+  });
+
+  it('keeps tool RPC construction failures recoverable before opening stream attachments', () => {
+    const error = { tag: 'protocol-error', val: 'invalid tool name' } as const;
+    vi.mocked(ToolRpc).mockImplementationOnce(() => {
+      throw error;
+    });
+    const transport = bridge.createToolClientTransport('invalid name');
+
+    let failure: unknown;
+    try {
+      transport.start([], {} as never, undefined, false);
+    } catch (caught) {
+      failure = caught;
+    }
+
+    expect(failure).toBe(error);
+    expect(createStdin).not.toHaveBeenCalled();
   });
 
   it('stops a blocked stdin source when the host closes consumption', async () => {
@@ -433,11 +452,14 @@ describe('public bridge runtime', () => {
       bridge.splitToolRpcError(
         {
           tag: 'remote-tool-error',
-          val: { tag: 'custom-error', val: bridge.typedSchemaValueToWit(typed) },
+          val: {
+            tag: 'custom-error',
+            val: { name: 'failed', payload: bridge.typedSchemaValueToWit(typed) },
+          },
         },
-        (payload) => payload.value,
+        (name, payload) => ({ name, value: payload.value }),
       ),
-    ).toEqual({ tag: 'tool', error: bridge.v.string('bad') });
+    ).toEqual({ tag: 'tool', error: { name: 'failed', value: bridge.v.string('bad') } });
     expect(bridge.splitToolRpcError({ tag: 'denied', val: 'no' }, () => 'unused')).toEqual({
       tag: 'rpc',
       error: { tag: 'denied', val: 'no' },
@@ -449,15 +471,18 @@ describe('public bridge runtime', () => {
       tag: 'remote-tool-error',
       val: {
         tag: 'custom-error',
-        val: bridge.typedSchemaValueToWit({
-          graph: { defs: new Map(), root: bridge.t.string() },
-          value: bridge.v.string('bad'),
-        }),
+        val: {
+          name: 'failed',
+          payload: bridge.typedSchemaValueToWit({
+            graph: { defs: new Map(), root: bridge.t.string() },
+            value: bridge.v.string('bad'),
+          }),
+        },
       },
     } satisfies RpcError;
     for (const error of [custom, { tag: 'denied', val: 'no' } satisfies RpcError]) {
       expect(bridge.isRpcError(error)).toBe(true);
-      expect(bridge.splitToolRpcError(error, (payload) => payload.value).tag).toBe(
+      expect(bridge.splitToolRpcError(error, (_name, payload) => payload.value).tag).toBe(
         error === custom ? 'tool' : 'rpc',
       );
     }
@@ -491,7 +516,7 @@ describe('public bridge runtime', () => {
   it('does not classify malformed custom-error typed payloads as host RPC errors', () => {
     const malformed = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: { graph: null, value: null } },
+      val: { tag: 'custom-error', val: { name: 'broken', payload: { graph: null, value: null } } },
     };
 
     expect(bridge.isRpcError(malformed)).toBe(false);
@@ -511,12 +536,12 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'secret', payload } },
     } as unknown as RpcError;
 
     expect(bridge.isRpcError(error)).toBe(true);
     expect(payload.value.valueNodes[0].val).toBe(raw);
-    expect(bridge.splitToolRpcError(error, (decoded) => decoded.value.tag)).toEqual({
+    expect(bridge.splitToolRpcError(error, (_name, decoded) => decoded.value.tag)).toEqual({
       tag: 'tool',
       error: 'secret',
     });
@@ -624,7 +649,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect(() => bridge.typedSchemaValueFromWit(payload)).toThrow();
@@ -652,7 +677,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect.soft(bridge.isRpcError(error)).toBe(false);
@@ -672,7 +697,7 @@ describe('public bridge runtime', () => {
     };
     const error = {
       tag: 'remote-tool-error',
-      val: { tag: 'custom-error', val: payload },
+      val: { tag: 'custom-error', val: { name: 'broken', payload } },
     } as unknown as RpcError;
 
     expect(bridge.isRpcError(error)).toBe(false);
@@ -778,7 +803,10 @@ describe('public bridge runtime', () => {
     rpc.scheduleInvocation.mockReturnValue(receipt);
     const at = { seconds: 1n, nanoseconds: 0 };
 
-    expect(remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]))).toBe(receipt);
+    const scheduled = remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]));
+    expect(scheduled).toStrictEqual(receipt);
+    expect(scheduled).not.toBe(receipt);
+    expect(Object.isFrozen(scheduled.metadata)).toBe(true);
     expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything(), undefined);
   });
 

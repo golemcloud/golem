@@ -22,6 +22,7 @@ import golem.schema.wire.SchemaWire
 import zio.test._
 
 import scala.scalajs.js
+import scala.scalajs.js.typedarray.Uint8Array
 
 object OplogEntryRoundtripSpec extends ZIOSpecDefault {
   import OplogApi._
@@ -88,6 +89,22 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val parsed = OplogEntry.fromJs(raw)
       assertTrue(parsed.isInstanceOf[OplogEntry.Restart])
     },
+    test("Resumed from dynamic") {
+      val raw    = wrapEntry("resumed", js.Dynamic.literal(timestamp = ts()))
+      val parsed = OplogEntry.fromJs(raw)
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.Resumed],
+        parsed.timestamp.seconds == BigInt(1700000000)
+      )
+    },
+    test("RecoverySucceeded from dynamic") {
+      val raw    = wrapEntry("recovery-succeeded", js.Dynamic.literal(timestamp = ts()))
+      val parsed = OplogEntry.fromJs(raw)
+      assertTrue(
+        parsed.isInstanceOf[OplogEntry.RecoverySucceeded],
+        parsed.timestamp.seconds == BigInt(1700000000)
+      )
+    },
     // --- Single-field parameter entries ---
 
     test("Error from dynamic") {
@@ -95,6 +112,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         "error",
         js.Dynamic.literal(
           timestamp = ts(),
+          kind = "recovery",
           error = "something failed",
           retryFrom = js.BigInt("5")
         )
@@ -103,6 +121,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
       val e      = parsed.asInstanceOf[OplogEntry.Error]
       assertTrue(
         parsed.isInstanceOf[OplogEntry.Error],
+        e.params.kind == OplogErrorKind.Recovery,
         e.params.error == "something failed",
         e.params.retryFrom == BigInt(5)
       )
@@ -254,6 +273,30 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         parsed.isInstanceOf[OplogEntry.Jump],
         j.params.jump.start == BigInt(0),
         j.params.jump.end == BigInt(10)
+      )
+    },
+    test("AgentInvocationStarted preserves the required wallet pin") {
+      val raw = wrapEntry(
+        "agent-invocation-started",
+        js.Dynamic.literal(
+          timestamp = ts(),
+          invocation = js.Dynamic.literal(tag = "save-snapshot"),
+          walletPin = js.Dynamic.literal(
+            walletToken = js.Dynamic.literal(
+              walletIdHash = new Uint8Array(js.Array[Short](1, 2, 255)),
+              generation = js.BigInt("7")
+            ),
+            scopeCardId = js.Dynamic.literal(
+              uuid = js.Dynamic.literal(highBits = js.BigInt("10"), lowBits = js.BigInt("20"))
+            )
+          )
+        )
+      )
+      val parsed = OplogEntry.fromJs(raw).asInstanceOf[OplogEntry.AgentInvocationStarted].params
+      assertTrue(
+        parsed.walletPin.walletToken.walletIdHash.toSeq == Seq[Byte](1, 2, -1),
+        parsed.walletPin.walletToken.generation == BigInt(7),
+        parsed.walletPin.scopeCardId.contains(golem.Uuid(BigInt(10), BigInt(20)))
       )
     },
     test("SetRetryPolicy from dynamic") {

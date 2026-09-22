@@ -111,6 +111,11 @@ pub trait GolemHostApi {
         precise: bool,
     ) -> Vec<AgentMetadata>;
     fn get_agents_next_result(&self, component_id: ComponentId) -> Result<u64, String>;
+    fn get_agents_across_promise(
+        &self,
+        component_id: ComponentId,
+        promise_id: PromiseId,
+    ) -> Result<Vec<Vec<String>>, String>;
     fn get_self_metadata_result(&self) -> Result<String, String>;
     fn resolve_agent_id_strict_result(
         &self,
@@ -118,6 +123,7 @@ pub trait GolemHostApi {
         agent_name: String,
     ) -> Result<bool, String>;
     fn self_fork_result(&self) -> Result<String, String>;
+    fn self_fork_atomic_result(&self) -> Result<String, String>;
     fn get_self_uri(&self) -> AgentMetadata;
     fn get_worker_metadata(&self, agent_id: AgentId) -> Option<AgentMetadata>;
     fn update_worker(&self, agent_id: AgentId, component_revision: u64, update_mode: UpdateMode);
@@ -203,22 +209,16 @@ pub struct GolemHostApiImpl {
 }
 
 fn summarize_tool(tool: tool_host::RegisteredTool) -> ToolSummary {
-    let (name, summary, aliases) = tool
+    let (summary, aliases) = tool
         .definition
         .commands
         .nodes
         .first()
-        .map(|node| {
-            (
-                node.name.clone(),
-                node.doc.summary.clone(),
-                node.aliases.clone(),
-            )
-        })
+        .map(|node| (node.doc.summary.clone(), node.aliases.clone()))
         .unwrap_or_default();
     let uuid = tool.implemented_by.uuid;
     (
-        name,
+        tool.lookup_name,
         tool.definition.version,
         summary,
         aliases,
@@ -666,6 +666,43 @@ impl GolemHostApi for GolemHostApiImpl {
             .map_err(|error| format!("{error:?}"))
     }
 
+    fn get_agents_across_promise(
+        &self,
+        component_id: ComponentId,
+        promise_id: PromiseId,
+    ) -> Result<Vec<Vec<String>>, String> {
+        let getter = GetAgents::new(component_id, None, false);
+        let first = getter
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .ok_or_else(|| "expected first agent page".to_string())?;
+
+        golem_rust::blocking_await_promise(&promise_id);
+
+        let second = getter
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .ok_or_else(|| "expected second agent page".to_string())?;
+        if getter
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?
+            .is_some()
+        {
+            return Err("expected agent enumeration to be exhausted".to_string());
+        }
+
+        Ok(vec![
+            first
+                .into_iter()
+                .map(|metadata| metadata.agent_id.agent_id)
+                .collect(),
+            second
+                .into_iter()
+                .map(|metadata| metadata.agent_id.agent_id)
+                .collect(),
+        ])
+    }
+
     fn get_self_metadata_result(&self) -> Result<String, String> {
         host_api::get_self_metadata()
             .map(|metadata| metadata.agent_id.agent_id)
@@ -681,12 +718,17 @@ impl GolemHostApi for GolemHostApiImpl {
     }
 
     fn self_fork_result(&self) -> Result<String, String> {
+        println!("fork checkpoint");
         host_api::fork()
             .map(|result| match result {
                 host_api::ForkResult::Original(_) => "original".to_string(),
                 host_api::ForkResult::Forked(_) => "forked".to_string(),
             })
             .map_err(|error| format!("{error:?}"))
+    }
+
+    fn self_fork_atomic_result(&self) -> Result<String, String> {
+        atomically(|| self.self_fork_result())
     }
 
     fn get_self_uri(&self) -> AgentMetadata {
@@ -968,7 +1010,8 @@ impl GolemHostApi for GolemHostApiImpl {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String> {
-        tool_host::ToolRpc::new(&tool_name)
+        tool_host::ToolRpc::create(&tool_name)
+            .map_err(|error| format!("{error:?}"))?
             .invoke(&command_path, encode_tool_input(input)?, None)
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
@@ -980,7 +1023,8 @@ impl GolemHostApi for GolemHostApiImpl {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String> {
-        tool_host::ToolRpc::new(&tool_name)
+        tool_host::ToolRpc::create(&tool_name)
+            .map_err(|error| format!("{error:?}"))?
             .async_invoke_and_await(&command_path, encode_tool_input(input)?, None, None)
             .get()
             .await
@@ -994,7 +1038,8 @@ impl GolemHostApi for GolemHostApiImpl {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String> {
-        tool_host::ToolRpc::new(&tool_name)
+        tool_host::ToolRpc::create(&tool_name)
+            .map_err(|error| format!("{error:?}"))?
             .invoke_and_await(command_path, encode_tool_input(input)?, None, None)
             .await
             .map(|_| ())

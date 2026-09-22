@@ -26,18 +26,22 @@ const GOLEM_RUST_PATH: &str = "GOLEM_RUST_PATH";
 const GOLEM_RUST_VERSION: &str = "GOLEM_RUST_VERSION";
 const GOLEM_TS_PACKAGES_PATH: &str = "GOLEM_TS_PACKAGES_PATH";
 const GOLEM_TS_VERSION: &str = "GOLEM_TS_VERSION";
+const GOLEM_EFFECT_GOLEM_PATH: &str = "GOLEM_EFFECT_GOLEM_PATH";
+const GOLEM_EFFECT_GOLEM_VERSION: &str = "GOLEM_EFFECT_GOLEM_VERSION";
 const GOLEM_SCALA_SDK_VERSION: &str = "GOLEM_SCALA_SDK_VERSION";
 const GOLEM_MOONBIT_SDK_PATH: &str = "GOLEM_MOONBIT_SDK_PATH";
 const GOLEM_MOONBIT_SDK_VERSION: &str = "GOLEM_MOONBIT_SDK_VERSION";
 const GOLEM_GO_PATH: &str = "GOLEM_GO_PATH";
 const GOLEM_GO_VERSION: &str = "GOLEM_GO_VERSION";
 
-const SDK_OVERRIDE_KEYS: [&str; 10] = [
+const SDK_OVERRIDE_KEYS: [&str; 12] = [
     GOLEM_PATH,
     GOLEM_RUST_PATH,
     GOLEM_RUST_VERSION,
     GOLEM_TS_PACKAGES_PATH,
     GOLEM_TS_VERSION,
+    GOLEM_EFFECT_GOLEM_PATH,
+    GOLEM_EFFECT_GOLEM_VERSION,
     GOLEM_SCALA_SDK_VERSION,
     GOLEM_MOONBIT_SDK_PATH,
     GOLEM_MOONBIT_SDK_VERSION,
@@ -69,6 +73,8 @@ pub struct SdkOverrides {
     pub golem_rust_version: Option<String>,
     pub ts_packages_path: Option<String>,
     pub ts_version: Option<String>,
+    pub effect_golem_path: Option<String>,
+    pub effect_golem_version: Option<String>,
     pub scala_sdk_version: Option<String>,
     pub moonbit_sdk_path: Option<String>,
     pub moonbit_sdk_version: Option<String>,
@@ -100,6 +106,10 @@ impl SdkOverrides {
                 fs::path_to_str(&workspace_dir.join("sdks/ts/packages"))?.to_string(),
             ),
             ts_version: None,
+            effect_golem_path: Some(
+                fs::path_to_str(&workspace_dir.join("sdks/effect"))?.to_string(),
+            ),
+            effect_golem_version: None,
             scala_sdk_version: Some("0.0.0-SNAPSHOT".to_string()),
             moonbit_sdk_path: Some(
                 fs::path_to_str(&workspace_dir.join("sdks/moonbit/golem_sdk"))?.to_string(),
@@ -122,6 +132,17 @@ impl SdkOverrides {
                 .ts_version
                 .as_deref()
                 .unwrap_or(versions::sdk::TS)
+                .to_string()),
+        }
+    }
+
+    pub fn effect_golem_dep(&self) -> anyhow::Result<String> {
+        match &self.effect_golem_path {
+            Some(path) => Ok(format!("file:{}", fs::path_to_unix_str(Path::new(path))?)),
+            None => Ok(self
+                .effect_golem_version
+                .as_deref()
+                .unwrap_or(versions::sdk::EFFECT_GOLEM)
                 .to_string()),
         }
     }
@@ -362,6 +383,13 @@ impl SdkOverrides {
                 "sdks/ts/packages",
             )?,
             ts_version: get_normalized_value_by_key(&values, GOLEM_TS_VERSION),
+            effect_golem_path: resolved_path_override(
+                &values,
+                GOLEM_EFFECT_GOLEM_PATH,
+                golem_path.as_deref(),
+                "sdks/effect",
+            )?,
+            effect_golem_version: get_normalized_value_by_key(&values, GOLEM_EFFECT_GOLEM_VERSION),
             scala_sdk_version: get_normalized_value_by_key(&values, GOLEM_SCALA_SDK_VERSION),
             moonbit_sdk_path: resolved_path_override(
                 &values,
@@ -393,6 +421,12 @@ impl SdkOverrides {
         }
         if let Some(value) = &self.ts_version {
             values.insert(GOLEM_TS_VERSION.to_string(), value.clone());
+        }
+        if let Some(value) = &self.effect_golem_path {
+            values.insert(GOLEM_EFFECT_GOLEM_PATH.to_string(), value.clone());
+        }
+        if let Some(value) = &self.effect_golem_version {
+            values.insert(GOLEM_EFFECT_GOLEM_VERSION.to_string(), value.clone());
         }
         if let Some(value) = &self.scala_sdk_version {
             values.insert(GOLEM_SCALA_SDK_VERSION.to_string(), value.clone());
@@ -550,7 +584,11 @@ fn parse_dotenv_with_relative_paths(path: &Path) -> anyhow::Result<HashMap<Strin
 fn is_path_override_key(key: &str) -> bool {
     matches!(
         key,
-        GOLEM_PATH | GOLEM_RUST_PATH | GOLEM_TS_PACKAGES_PATH | GOLEM_MOONBIT_SDK_PATH
+        GOLEM_PATH
+            | GOLEM_RUST_PATH
+            | GOLEM_TS_PACKAGES_PATH
+            | GOLEM_EFFECT_GOLEM_PATH
+            | GOLEM_MOONBIT_SDK_PATH
     )
 }
 
@@ -664,6 +702,16 @@ mod tests {
             )
         );
         assert_eq!(
+            overrides.effect_golem_path,
+            Some(
+                Path::new("/repo")
+                    .join("sdks/effect")
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            )
+        );
+        assert_eq!(
             overrides.moonbit_sdk_path,
             Some(
                 Path::new("/repo")
@@ -699,6 +747,8 @@ mod tests {
             golem_rust_version: None,
             ts_packages_path: Some("/repo/sdks/ts/packages".to_string()),
             ts_version: None,
+            effect_golem_path: None,
+            effect_golem_version: None,
             scala_sdk_version: None,
             moonbit_sdk_path: None,
             moonbit_sdk_version: None,
@@ -713,6 +763,19 @@ mod tests {
     }
 
     #[test]
+    fn effect_golem_dep_uses_co_located_sdk_path() {
+        let overrides = SdkOverrides {
+            effect_golem_path: Some("/repo/sdks/effect".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            overrides.effect_golem_dep().unwrap(),
+            "file:/repo/sdks/effect"
+        );
+    }
+
+    #[test]
     fn env_values_override_test_profile_values() {
         let test_values = SdkOverrides {
             golem_path: None,
@@ -720,6 +783,8 @@ mod tests {
             golem_rust_version: None,
             ts_packages_path: Some("/repo/sdks/ts/packages".to_string()),
             ts_version: None,
+            effect_golem_path: Some("/repo/sdks/effect".to_string()),
+            effect_golem_version: None,
             scala_sdk_version: None,
             moonbit_sdk_path: None,
             moonbit_sdk_version: None,

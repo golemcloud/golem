@@ -43,15 +43,15 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
-    CompiledToolBinding, SecretKeyScope, ToolFilesystemAccess, ToolName, ToolProvisionConfig,
-    ToolSource,
+    CompiledToolBinding, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess, ToolName,
+    ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::{agent_id, data_value, widen_infallible};
-use golem_schema::schema::wit::encode_graph;
+use golem_schema::schema::wit::{decode_value, encode_graph};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::AgentDeploymentDetails;
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -59,6 +59,7 @@ use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::DurableWorkerCtxView;
 use golem_worker_executor::preview2::golem::agent::host::Host as AgentHost;
+use golem_worker_executor::preview2::golem_api_1_x::host::Host as GolemApiHost;
 use golem_worker_executor::services::HasComponentService;
 use golem_worker_executor::services::active_agents::ActiveAgent;
 use golem_worker_executor::services::environment_state::EnvironmentStateService;
@@ -93,6 +94,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("agent_sdk_rust")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("agent_rpc_rust")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
@@ -190,10 +195,11 @@ async fn initialize_entity(
     let result =
         invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await?;
     match result {
-        InvokeResult::Succeeded {
-            result: AgentInvocationResult::AgentInitialization,
-            ..
-        } => Ok(()),
+        InvokeResult::Succeeded { result, .. }
+            if matches!(*result, AgentInvocationResult::AgentInitialization) =>
+        {
+            Ok(())
+        }
         result => Err(
             golem_service_base::error::worker_executor::WorkerExecutorError::runtime(format!(
                 "entity initialization did not succeed: {result:?}"
@@ -228,10 +234,8 @@ async fn invoke_sleep_p3(
         invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await?;
     assert!(matches!(
         result,
-        InvokeResult::Succeeded {
-            result: AgentInvocationResult::AgentMethod { .. },
-            ..
-        }
+        InvokeResult::Succeeded { result, .. }
+            if matches!(*result, AgentInvocationResult::AgentMethod { .. })
     ));
     Ok(())
 }
@@ -261,7 +265,7 @@ async fn invoke_entity_method(
     };
     let lowered = lower_invocation(method.clone(), &metadata, Some(parsed_agent_id))?;
     match invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await? {
-        InvokeResult::Succeeded { result, .. } => Ok(result),
+        InvokeResult::Succeeded { result, .. } => Ok(*result),
         result => Err(
             golem_service_base::error::worker_executor::WorkerExecutorError::runtime(format!(
                 "entity method did not succeed: {result:?}"
@@ -354,7 +358,7 @@ fn activation_with_policy(
     let binding = CompiledToolBinding {
         deployment_revision,
         release_id: None,
-        agent_type_name,
+        owner: ToolBindingOwner::AgentType { agent_type_name },
         tool_name,
         version: "1.0.0".to_string(),
         metadata_version: "0.1.0".to_string(),
@@ -362,6 +366,7 @@ fn activation_with_policy(
         account_id,
         account_email: AccountEmail::new("test@golem"),
         parameters: NormalizedJsonValue::new(serde_json::json!({})),
+        config_keys_readable: Default::default(),
         secret_keys_readable,
         secret_keys_revealable,
         filesystem_access: match filesystem {
@@ -460,6 +465,7 @@ fn middleware_activation(
         EntityActivationPolicy::ToolMiddleware {
             middleware_name,
             provision: ToolProvisionConfig::default(),
+            config_keys_readable: Default::default(),
             secret_keys_readable: SecretKeyScope::All,
             secret_keys_revealable: SecretKeyScope::All,
             filesystem_access: ToolFilesystemAccess::Denied,
@@ -490,6 +496,10 @@ fn invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("instance-layer-live-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("instance-layer-live-streams".to_string()),
     )
     .unwrap()
 }
@@ -515,8 +525,338 @@ fn replay_invocation_scope(
         activation,
         principal,
         InvocationExecutionMode::ReplayingCompleted,
+        IdempotencyKey::new("instance-layer-replay-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("instance-layer-replay-streams".to_string()),
     )
     .unwrap()
+}
+
+async fn completed_tool_positional_replay_errors(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    owner_name: &str,
+    record_noop: bool,
+) -> anyhow::Result<(String, String, OplogIndex, OplogIndex)> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("RpcCounter", owner_name);
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?;
+    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let active_agent = executor.active_agent(&owner_id).await.unwrap();
+    let owner_metadata =
+        owner_component_metadata(&active_agent, component.id, component.revision).await?;
+    let tool_name = ToolName::try_from(format!("{owner_name}-tool")).unwrap();
+    let entity = AgentEntity::Tool(tool_name.clone());
+    let principal = Principal::Agent(AgentPrincipal {
+        agent_id: owner_id.agent_id.clone(),
+    });
+    let activation = Arc::new(activation(
+        ExecutableTarget::new(component.id, component.revision),
+        &format!("test:{owner_name}-tool"),
+        agent_id.agent_type.clone(),
+        tool_name,
+        context.account_id,
+        FilesystemCapability::Incapable,
+    ));
+    let lane = active_agent.execution().lane();
+    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let entity_start = parent_start.next();
+    let parent_id = OwnerInvocationId::Agent(parent_start);
+
+    let primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let live = active_agent.start_entity_invocation(
+        parent_id.clone(),
+        invocation_scope(
+            &owner_id,
+            &entity,
+            entity_start,
+            parent_start,
+            activation.clone(),
+            principal.clone(),
+        ),
+        owner_metadata.clone(),
+        EntityCallMode::Synchronous,
+        move |_instance, store| {
+            Box::pin(async move {
+                if record_noop {
+                    GolemApiHost::get_oplog_index(store.data_mut().durable_ctx_mut()).await?;
+                }
+                Ok(())
+            })
+        },
+        std::future::ready,
+    )?;
+    live.await_result(&parent_id).await?;
+    drop(primary);
+    active_agent.execution().commit(CommitLevel::Always).await;
+    let before = active_agent.execution().oplog().current_oplog_index().await;
+
+    active_agent
+        .execution()
+        .install_replay_generation(
+            DeletedRegions::from_regions([OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=parent_start,
+            )]),
+            None,
+        )
+        .await?;
+    let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let replay = active_agent.start_entity_invocation(
+        parent_id.clone(),
+        replay_invocation_scope(
+            &owner_id,
+            &entity,
+            entity_start,
+            parent_start,
+            activation,
+            principal,
+        ),
+        owner_metadata,
+        EntityCallMode::Synchronous,
+        move |_instance, store| {
+            Box::pin(async move {
+                let ctx = store.data_mut().durable_ctx_mut();
+                let first = if record_noop {
+                    GolemApiHost::mark_begin_operation(ctx).await.map(|_| ())
+                } else {
+                    GolemApiHost::get_oplog_index(ctx).await.map(|_| ())
+                }
+                .expect_err("completed entity positional replay must fail");
+                let second = if record_noop {
+                    GolemApiHost::get_oplog_index(ctx).await.map(|_| ())
+                } else {
+                    GolemApiHost::mark_begin_operation(ctx).await.map(|_| ())
+                }
+                .expect_err("a failed positional replay must not make the entity live");
+                Ok((first.to_string(), second.to_string()))
+            })
+        },
+        std::future::ready,
+    )?;
+    let errors = replay.await_result(&parent_id).await?;
+    drop(replay_primary);
+    let after = active_agent.execution().oplog().current_oplog_index().await;
+    Ok((errors.0, errors.1, before, after))
+}
+
+#[test]
+#[timeout("120s")]
+async fn completed_tool_rejects_new_positional_entries_at_replay_tail(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let (noop_error, begin_error, before, after) = completed_tool_positional_replay_errors(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "completed-tail-positional",
+        false,
+    )
+    .await?;
+    assert!(
+        noop_error.contains("NoOp"),
+        "unexpected error: {noop_error}"
+    );
+    assert!(
+        begin_error.contains("BeginAtomicRegion"),
+        "unexpected error: {begin_error}"
+    );
+    assert_eq!(
+        before, after,
+        "rejected positional calls must append nothing"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn completed_tool_wrong_positional_entry_remains_a_mismatch(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let (mismatch, tail_error, before, after) = completed_tool_positional_replay_errors(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        "completed-wrong-positional",
+        true,
+    )
+    .await?;
+    assert!(
+        mismatch.contains("BeginAtomicRegion"),
+        "unexpected error: {mismatch}"
+    );
+    assert!(mismatch.contains("NoOp"), "unexpected error: {mismatch}");
+    assert!(
+        tail_error.contains("NoOp"),
+        "unexpected error: {tail_error}"
+    );
+    assert_eq!(
+        before, after,
+        "mismatch and tail rejection must append nothing"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn incomplete_tool_config_tail_reauthorizes_without_rejecting_recorded_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent_id = agent_id!("RpcCounter", "config-tail-authorization");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?;
+
+    let owner_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let active_agent = executor.active_agent(&owner_id).await.unwrap();
+    let owner_metadata =
+        owner_component_metadata(&active_agent, component.id, component.revision).await?;
+    let middleware_name = ToolMiddlewareName::try_from("config-tail-authorization").unwrap();
+    let entity = AgentEntity::ToolMiddleware(middleware_name.clone());
+    let principal = Principal::Agent(AgentPrincipal {
+        agent_id: owner_id.agent_id.clone(),
+    });
+    let activation = Arc::new(middleware_activation(
+        ExecutableTarget::new(component.id, component.revision),
+        middleware_name,
+    ));
+    let expected = encode_graph(&SchemaGraph::anonymous(SchemaType::option(
+        SchemaType::s32(),
+    )))?;
+    let lane = active_agent.execution().lane();
+    let parent_start = active_agent.execution().oplog().current_oplog_index().await;
+    let entity_start = parent_start.next();
+    let parent_id = OwnerInvocationId::Agent(parent_start);
+
+    let primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let live = active_agent.start_entity_invocation(
+        parent_id.clone(),
+        invocation_scope(
+            &owner_id,
+            &entity,
+            entity_start,
+            parent_start,
+            activation.clone(),
+            principal.clone(),
+        ),
+        owner_metadata.clone(),
+        EntityCallMode::Synchronous,
+        {
+            let expected = expected.clone();
+            move |_instance, store| {
+                Box::pin(async move {
+                    let result = AgentHost::get_config_value(
+                        store.data_mut().durable_ctx_mut(),
+                        vec!["unconfigured".to_string()],
+                        expected,
+                    )
+                    .await?;
+                    assert!(
+                        result.is_ok(),
+                        "live config read must initially be permitted"
+                    );
+                    Ok(())
+                })
+            }
+        },
+        std::future::ready,
+    )?;
+    live.await_result(&parent_id).await?;
+    drop(primary);
+    active_agent.execution().commit(CommitLevel::Always).await;
+
+    active_agent
+        .execution()
+        .install_replay_generation(
+            DeletedRegions::from_regions([OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=parent_start,
+            )]),
+            None,
+        )
+        .await?;
+
+    let replay_primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let replay_scope = EntityInvocationScope::new(
+        EntityInvocationId::new(
+            OwnedAgentEntityId {
+                owner: owner_id,
+                entity,
+            },
+            entity_start,
+        )
+        .unwrap(),
+        parent_start,
+        activation,
+        principal,
+        InvocationExecutionMode::ReplayingIncomplete,
+        IdempotencyKey::new("instance-layer-incomplete-replay-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("instance-layer-incomplete-replay-streams".to_string()),
+    )
+    .unwrap();
+    let replay_parent_id = parent_id.clone();
+    let replay = active_agent.start_entity_invocation(
+        parent_id.clone(),
+        replay_scope,
+        owner_metadata,
+        EntityCallMode::Synchronous,
+        move |_instance, store| {
+            Box::pin(async move {
+                let ctx = store.data_mut().durable_ctx_mut();
+                ctx.test_install_entity_tool_operation(
+                    replay_parent_id,
+                    EntityCallMode::Synchronous,
+                )?;
+                let recorded = AgentHost::get_config_value(
+                    ctx,
+                    vec!["unconfigured".to_string()],
+                    expected.clone(),
+                )
+                .await?;
+                let fresh = AgentHost::get_config_value(ctx, vec![], expected).await?;
+                Ok((recorded, fresh))
+            })
+        },
+        std::future::ready,
+    )?;
+    let (recorded, fresh) = replay.await_result(&parent_id).await?;
+    drop(replay_primary);
+    assert!(recorded.is_ok(), "the recorded config read must replay");
+    assert!(
+        matches!(
+            fresh,
+            Err(golem_worker_executor::preview2::golem::agent::host::ConfigValueError::PermissionDenied)
+        ),
+        "a fresh config read at the replay tail must reject an invalid permission target: {fresh:?}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -613,6 +953,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         owner_activation,
         principal.clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("owner-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("owner-entity-streams".to_string()),
     )
     .unwrap();
 
@@ -705,6 +1049,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("second-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("second-entity-streams".to_string()),
     )
     .unwrap();
     let expected_error = second_hosted
@@ -743,6 +1091,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("cancelled-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("cancelled-entity-streams".to_string()),
     )
     .unwrap();
     let (sleep_started, sleep_started_rx) = tokio::sync::oneshot::channel();
@@ -823,6 +1175,10 @@ async fn transient_entity_store_uses_owner_execution_and_scoped_cleanup(
         scope.activation().clone(),
         scope.calling_principal().clone(),
         InvocationExecutionMode::Live,
+        IdempotencyKey::new("panicking-entity-scope".to_string()),
+        true,
+        false,
+        IdempotencyKey::new("panicking-entity-streams".to_string()),
     )
     .unwrap();
     let invoked_scope = panic_scope.clone();
@@ -1418,7 +1774,7 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
         slot.entity_id.entity == tool_entity
             && slot.invocations.len() == 1
             && slot.invocations[0].invocation_id.start_index() == nested_start
-            && slot.invocations[0].executable == *tool_activation.executable()
+            && slot.invocations[0].executable == tool_activation.executable_opt().cloned()
     }));
     assert!(
         active_agent
@@ -2277,6 +2633,11 @@ async fn entity_agent_config_uses_owner_component_declarations(
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
+    let entity_component = executor
+        .update_component(&entity_component.id, &host_api_tests.wasm_name)
+        .await?;
+    assert_ne!(owner_component.id, entity_component.id);
+    assert_ne!(owner_component.revision, entity_component.revision);
     let agent_id = agent_id!("LocalConfigAgent", "entity-owner-config");
     let worker_id = executor
         .start_agent(&owner_component.id, agent_id.clone())
@@ -2310,10 +2671,13 @@ async fn entity_agent_config_uses_owner_component_declarations(
         context.account_id,
         FilesystemCapability::Incapable,
     ));
-    // The executable deliberately has no LocalConfigAgent declaration. A successful lookup proves
-    // the entity host resolves configuration through the owner component and owner agent state,
-    // rather than accidentally consulting the executable component's metadata.
+    // The executable deliberately has no LocalConfigAgent declaration. Successful config and
+    // agent-type lookups therefore prove that both use the pinned owner component revision.
     let expected = encode_graph(&SchemaGraph::anonymous(SchemaType::s32()))?;
+    let expected_owner_component_id = owner_component.id;
+    let expected_owner_component_revision = owner_component.revision;
+    let expected_entity_component_id = entity_component.id;
+    let expected_entity_component_revision = entity_component.revision;
     run_synchronous_entity_invocation(
         &active_agent,
         owner_metadata,
@@ -2322,14 +2686,48 @@ async fn entity_agent_config_uses_owner_component_declarations(
         activation,
         move |_instance, store, _principal| {
             Box::pin(async move {
-                AgentHost::get_config_value(
+                assert_eq!(
+                    store.data().component_metadata().id,
+                    expected_entity_component_id
+                );
+                assert_eq!(
+                    store.data().component_metadata().revision,
+                    expected_entity_component_revision
+                );
+                assert_eq!(
+                    store.data().durable_ctx().owner_component_metadata().id,
+                    expected_owner_component_id
+                );
+                assert_eq!(
+                    store
+                        .data()
+                        .durable_ctx()
+                        .owner_component_metadata()
+                        .revision,
+                    expected_owner_component_revision
+                );
+
+                let config = AgentHost::get_config_value(
                     store.data_mut().durable_ctx_mut(),
                     vec!["foo".to_string()],
                     expected,
                 )
-                .await
-                .map(|_| ())
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+                .await?
+                .map_err(|error| WorkerExecutorError::runtime(format!("{error:?}")))?;
+                let config = decode_value(&config)
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                assert_eq!(config, SchemaValue::S32(7));
+
+                let agent_type = AgentHost::get_agent_type(
+                    store.data_mut().durable_ctx_mut(),
+                    "LocalConfigAgent".to_string(),
+                )
+                .await?;
+                assert!(
+                    agent_type.is_some(),
+                    "entity agent-type lookup must use the owner's component revision"
+                );
+                Ok(())
             })
         },
     )

@@ -23,9 +23,10 @@ use std::process::Command;
 static SKIP_ENV_VAR_NAME: &str = "GOLEM_BUILD_SKIP_SHADOW";
 const GENERATED_TEMPLATES_DIR_NAME: &str = "templates";
 const SKILL_DESTINATION: &str = ".agents/skills";
-const SUPPORTED_LANGUAGES: &[&str] = &["ts", "rust", "scala", "moonbit", "go"];
+const SUPPORTED_LANGUAGES: &[&str] = &["ts", "effect", "rust", "scala", "moonbit", "go"];
 
 fn main() {
+    export_effect_version().unwrap();
     generate_embedded_templates().unwrap();
 
     if should_skip() {
@@ -38,6 +39,18 @@ fn main() {
         .build_pattern(BuildPattern::Lazy)
         .build()
         .unwrap();
+}
+
+fn export_effect_version() -> std::io::Result<()> {
+    let package_path = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("../../sdks/effect/package.json");
+    println!("cargo::rerun-if-changed={}", package_path.display());
+    let package: serde_json::Value = serde_json::from_str(&fs::read_to_string(package_path)?)?;
+    let version = package["dependencies"]["effect"].as_str().ok_or_else(|| {
+        std::io::Error::other("sdks/effect/package.json has no effect dependency")
+    })?;
+    println!("cargo::rustc-env=GOLEM_EFFECT_VERSION={version}");
+    Ok(())
 }
 
 fn generate_embedded_templates() -> std::io::Result<()> {

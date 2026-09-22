@@ -55,12 +55,12 @@ crossterm = { workspace = true }
 desert_rust = { workspace = true }
 dirs = { workspace = true }
 dotenvy = { workspace = true }
+fd-lock = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
 heck = { workspace = true }
 http = { workspace = true }
-humanize-rs = { workspace = true }
 humansize = { workspace = true }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
@@ -148,4 +148,5 @@ wat = { workspace = true }
 
 [build-dependencies]
 lenient_bool = { workspace = true }
+serde_json = { workspace = true }
 shadow-rs = { workspace = true }

@@ -17,15 +17,6 @@ pub(all) suberror ErrorKind {
 pub fn ErrorKind::from(Int) -> Self
 pub fn ErrorKind::ordinal(Self) -> Int
 
-pub(all) suberror ToolError {
-  InvalidToolName(String)
-  InvalidCommandPath(Array[String])
-  InvalidInput(String)
-  ConstraintViolation(String)
-  InvalidResult(String)
-  CustomError(@types.TypedSchemaValue)
-} derive(Eq, @debug.Debug)
-
 // Types and methods
 pub(all) struct BoolFlagShape {
   default : Bool
@@ -246,19 +237,17 @@ pub(all) struct Tool {
 
 pub(all) struct ToolMiddleware {
   name : String
+  version : String
   aliases : Array[String]
   doc : Doc
   scope : ToolMiddlewareScope
+  parameter_schema : @types.SchemaGraph
 } derive(Eq, @debug.Debug)
 
 pub(all) enum ToolMiddlewareScope {
   Monomorphic(MonomorphicScope)
   Universal
 } derive(Eq, @debug.Debug)
-
-pub(all) struct UnderlyingTool(Int) derive(Eq, @debug.Debug)
-pub fn UnderlyingTool::drop(Self) -> Unit
-pub async fn UnderlyingTool::invoke(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[InvocationResult, ToolError]
 
 pub(all) struct ValueIsRef {
   name : String

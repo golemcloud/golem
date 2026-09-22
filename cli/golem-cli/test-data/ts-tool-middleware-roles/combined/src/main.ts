@@ -11,5 +11,5 @@ export const combinedTool = combinedToolDefinition.implement({
 export const middleware = universalToolMiddleware({
   name: 'combined-middleware',
   invoke: (request, { underlying }) =>
-    underlying.invoke(request.commandPath, request.input, request.stdin),
+    underlying.invokeAndAwait(request.commandPath, request.input, request.stdin),
 });

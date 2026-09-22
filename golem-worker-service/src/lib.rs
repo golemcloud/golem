@@ -16,6 +16,7 @@ pub mod api;
 pub mod bootstrap;
 pub mod config;
 pub mod custom_api;
+mod gateway_server;
 pub mod grpcapi;
 pub mod invocation_session_token;
 pub mod mcp;
@@ -90,12 +91,14 @@ impl WorkerService {
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
+        let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
+                mcp_capability_lookup,
                 None,
             )
             .await;
@@ -132,12 +135,14 @@ impl WorkerService {
         let agent_resolution_cache = self.services.agent_resolution_cache.clone();
         let route_resolver = self.services.route_resolver.clone();
         let auth_service = self.services.auth_service.clone();
+        let mcp_capability_lookup = self.services.mcp_capability_lookup.clone();
         join_set.spawn(async move {
             WorkerServiceRegistryInvalidationHandler::run(
                 registry_service,
                 agent_resolution_cache,
                 route_resolver,
                 auth_service,
+                mcp_capability_lookup,
                 None,
             )
             .await;
@@ -241,8 +246,7 @@ impl WorkerService {
 
         join_set.spawn(
             async move {
-                poem::Server::new_with_acceptor(acceptor)
-                    .run(route)
+                gateway_server::run(acceptor, route)
                     .await
                     .map_err(|err| anyhow!(err).context("API Gateway server failed"))
             }

@@ -77,16 +77,11 @@
  */
 declare module 'golem:tool/common@0.1.0' {
   import * as golemCore200Types from 'golem:core/types@2.0.0';
-  export class UnderlyingTool {
-    /**
-     * @throws ToolError
-     */
-    invoke(commandPath: string[], input: TypedSchemaValue, stdin: AsyncIterable<number> | undefined): Promise<InvocationResult>;
-  }
   export type SchemaGraph = golemCore200Types.SchemaGraph;
   export type TypeNodeIndex = golemCore200Types.TypeNodeIndex;
   export type SchemaValueTree = golemCore200Types.SchemaValueTree;
   export type TypedSchemaValue = golemCore200Types.TypedSchemaValue;
+  export type ToolError = golemCore200Types.ToolError;
   /**
    * Command tree
    */
@@ -422,54 +417,18 @@ declare module 'golem:tool/common@0.1.0' {
   };
   export type ToolMiddleware = {
     name: string;
+    version: string;
     aliases: string[];
     doc: Doc;
     scope: ToolMiddlewareScope;
+    /** Schema of the static configuration supplied for each installation. */
+    parameterSchema: SchemaGraph;
   };
   /**
    * Invocation contract — shared between guest and host.
    */
-  export type ToolError =
-  {
-    tag: 'invalid-tool-name'
-    val: string
-  } |
-  {
-    tag: 'invalid-command-path'
-    val: string[]
-  } |
-  {
-    tag: 'invalid-input'
-    val: string
-  } |
-  {
-    tag: 'constraint-violation'
-    val: string
-  } |
-  /**
-   * Returned `invocation-result` does not match the body's
-   * declared `result-spec` (e.g., the returned value's root type
-   * does not match the body's declared result schema; see §6.1
-   * transparency invariant).
-   */
-  {
-    tag: 'invalid-result'
-    val: string
-  } |
-  /**
-   * Tool-defined failure. Mirrors `golem:agent/common`'s
-   * `agent-error::custom-error`: the payload is a self-contained
-   * `typed-schema-value` carrying the error value. Producers SHOULD
-   * shape it so its root type matches one of the body's declared
-   * `error-case` payload types.
-   */
-  {
-    tag: 'custom-error'
-    val: TypedSchemaValue
-  };
   export type InvocationResult = {
     result?: TypedSchemaValue;
     stdout?: AsyncIterable<number>;
   };
-  export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

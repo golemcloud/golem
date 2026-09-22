@@ -101,6 +101,7 @@ fn publisher_tool_config() -> ToolDeploymentConfigCreation {
             files: BTreeMap::new(),
         },
         environment_binding: None,
+        component_bindings: BTreeMap::new(),
         agent_bindings: BTreeMap::new(),
     }
 }
@@ -123,8 +124,12 @@ fn remote_tool_request(
                 version: None,
                 parameters: NormalizedJsonValue::new(json!({"index": "consumer-documents"})),
                 account: None,
+                config_keys_readable: Default::default(),
                 secret_keys_readable: consumer_secret_scope(),
                 secret_keys_revealable: consumer_secret_scope(),
+                filesystem_access: Default::default(),
+                middleware: None,
+                middleware_merge_mode: Default::default(),
             },
         )])
     } else {
@@ -140,6 +145,7 @@ fn remote_tool_request(
             files: Vec::new(),
         },
         environment_binding: None,
+        component_bindings: BTreeMap::new(),
         agent_bindings,
     }
 }
@@ -155,6 +161,7 @@ fn remote_tool_hash_input(
                 parameters: NormalizedJsonValue::new(json!({
                     "index": "consumer-documents"
                 })),
+                config_keys_readable: Default::default(),
                 secret_keys_readable: consumer_secret_scope(),
                 secret_keys_revealable: consumer_secret_scope(),
                 filesystem_access: ToolFilesystemAccess::Unset,
@@ -177,6 +184,7 @@ fn remote_tool_hash_input(
             plugins: Vec::new(),
             files: Vec::new(),
         },
+        component_bindings: BTreeMap::new(),
         bindings,
     }
 }
@@ -197,6 +205,9 @@ fn deployment_creation(
         retry_policy_defaults: Vec::new(),
         publish_tools,
         remote_tools,
+        publish_tool_middlewares: Vec::new(),
+        remote_tool_middlewares: Vec::new(),
+        universal_tool_middlewares: Vec::new(),
         replace_incompatible_agent_secrets: false,
     }
 }
@@ -237,6 +248,9 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 publish_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 remote_tools: Vec::new(),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
@@ -290,6 +304,7 @@ async fn deploy_rejects_reset_secret_override_when_compatibility_check_enabled(
                 current_revision: env.revision,
                 name: None,
                 compatibility_check: Some(true),
+                tool_compatibility_mode: None,
                 version_check: None,
                 security_overrides: None,
             },
@@ -311,6 +326,9 @@ async fn deploy_rejects_reset_secret_override_when_compatibility_check_enabled(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 publish_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 remote_tools: Vec::new(),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
@@ -346,6 +364,7 @@ async fn deploy_allows_reset_secret_override_when_compatibility_check_disabled(
                 current_revision: env.revision,
                 name: None,
                 compatibility_check: Some(false),
+                tool_compatibility_mode: None,
                 version_check: None,
                 security_overrides: None,
             },
@@ -367,6 +386,9 @@ async fn deploy_allows_reset_secret_override_when_compatibility_check_disabled(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 publish_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 remote_tools: Vec::new(),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
@@ -402,6 +424,9 @@ async fn fail_with_409_on_hash_mismatch(deps: &EnvBasedTestDependencies) -> anyh
                     expected_deployment_hash: Hash::empty(),
                     version: DeploymentVersion("0.0.1".to_string()),
                     publish_tools: Vec::new(),
+                    publish_tool_middlewares: Vec::new(),
+                    remote_tool_middlewares: Vec::new(),
+                    universal_tool_middlewares: Vec::new(),
                     remote_tools: Vec::new(),
                     agent_secret_defaults: Vec::new(),
                     quota_resource_defaults: Vec::new(),
@@ -447,6 +472,9 @@ async fn get_component_version_from_previous_deployment(
                 expected_deployment_hash: plan_1.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 publish_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 remote_tools: Vec::new(),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
@@ -461,6 +489,8 @@ async fn get_component_version_from_previous_deployment(
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("Counter".to_string()),
@@ -473,6 +503,8 @@ async fn get_component_version_from_previous_deployment(
                     },
                 )])),
                 tools: None,
+                tool_middlewares: None,
+                tool_middleware_provision_config_updates: None,
                 tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
@@ -491,6 +523,9 @@ async fn get_component_version_from_previous_deployment(
                 expected_deployment_hash: plan_2.deployment_hash,
                 version: DeploymentVersion("0.0.2".to_string()),
                 publish_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 remote_tools: Vec::new(),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
@@ -591,6 +626,9 @@ async fn full_deployment(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> 
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 publish_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 remote_tools: Vec::new(),
                 agent_secret_defaults: Vec::new(),
                 quota_resource_defaults: Vec::new(),
@@ -728,6 +766,8 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
             &component.id.0,
             &ComponentUpdate {
                 current_revision: component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
                     AgentTypeName("Counter".to_string()),
@@ -740,6 +780,8 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
                     },
                 )])),
                 tools: None,
+                tool_middlewares: None,
+                tool_middleware_provision_config_updates: None,
                 tool_deployment_config_updates: None,
                 allow_incompatible_config: false,
             },
@@ -794,6 +836,9 @@ async fn deploy_creates_missing_secret_from_default(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 publish_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 remote_tools: Vec::new(),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: AgentSecretPath(secret_path.clone()),
@@ -865,6 +910,9 @@ async fn deploy_ignores_default_if_secret_already_exists(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 publish_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 remote_tools: Vec::new(),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: AgentSecretPath(secret_path.clone()),
@@ -938,6 +986,9 @@ async fn deploy_uses_default_if_secret_already_exists_with_no_value(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 publish_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 remote_tools: Vec::new(),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: AgentSecretPath(secret_path.clone()),
@@ -1010,6 +1061,9 @@ async fn deploy_fails_if_existing_secret_type_mismatches_default(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 publish_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 remote_tools: Vec::new(),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: AgentSecretPath(secret_path.clone()),
@@ -1058,6 +1112,9 @@ async fn deploy_fails_if_secret_default_mismatches_component(
                 expected_deployment_hash: plan.deployment_hash,
                 version: DeploymentVersion("0.0.1".to_string()),
                 publish_tools: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: Vec::new(),
+                universal_tool_middlewares: Vec::new(),
                 remote_tools: Vec::new(),
                 agent_secret_defaults: vec![DeploymentAgentSecretDefault {
                     path: AgentSecretPath(secret_path.clone()),
@@ -1101,9 +1158,13 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
             &ComponentCreation {
                 component_name: ComponentName::try_from("publisher-tools:search")
                     .map_err(anyhow::Error::msg)?,
+                config_schema: Default::default(),
+                component_provision_config: Default::default(),
                 agent_types: Vec::new(),
                 agent_type_provision_configs: BTreeMap::new(),
                 tools: vec![cross_account_tool("1.2.0")],
+                tool_middlewares: Vec::new(),
+                tool_middleware_provision_configs: BTreeMap::new(),
                 tool_deployment_configs: BTreeMap::from([(
                     tool_name.clone(),
                     publisher_tool_config(),
@@ -1289,14 +1350,19 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
             &publisher_component.id.0,
             &ComponentUpdate {
                 current_revision: publisher_component.revision,
+                config_schema: None,
+                component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
                 tools: Some(vec![cross_account_tool("1.3.0")]),
+                tool_middlewares: None,
+                tool_middleware_provision_config_updates: None,
                 tool_deployment_config_updates: Some(BTreeMap::from([(
                     tool_name.clone(),
                     ToolDeploymentConfigUpdate {
                         provision: None,
                         environment_binding: OptionalFieldUpdate::NoChange,
+                        component_bindings: None,
                         agent_bindings: None,
                     },
                 )])),

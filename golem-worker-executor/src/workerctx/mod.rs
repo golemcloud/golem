@@ -43,12 +43,12 @@ use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{HasAll, HasOplog, HasWorker, worker_enumeration};
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
-use crate::worker::{RetryDecision, Worker};
+use crate::worker::{RetryDecision, Worker, WorkerDeletionHook};
 use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::account::{AccountEmail, AccountId};
-use golem_common::model::agent::{AgentMode, ParsedAgentId};
+use golem_common::model::agent::{AgentMode, ParsedAgentId, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
@@ -75,6 +75,18 @@ use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::p2::WasiHttpCtxView;
 use wasmtime_wasi_http::p3::WasiHttpView;
+
+/// Executable identity used to construct a worker context.
+///
+/// Native contexts deliberately carry no component metadata or Wasm executable.
+#[derive(Clone)]
+pub enum WorkerCtxExecutable {
+    Component(Box<Component>),
+    Native {
+        host_tool_id: golem_common::model::tool::HostToolId,
+        implementation_version: String,
+    },
+}
 
 pub struct WorkerFilesystemContext {
     pub(crate) generation_handle: FilesystemGenerationHandle,
@@ -164,7 +176,7 @@ pub trait WorkerCtx:
     /// instead of re-executing.
     const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = true;
 
-    /// Wraps a worker's oplog before it is shared with the worker internals and its context.
+    /// Wraps per-agent oplog handles used by worker internals, their context, and fork source reads.
     fn wrap_oplog(
         _owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -182,6 +194,12 @@ pub trait WorkerCtx:
     /// Supplies optional test-harness coordination for entity body execution.
     #[doc(hidden)]
     fn entity_invocation_body_hook(&self) -> Option<Arc<dyn EntityInvocationBodyHook>> {
+        None
+    }
+
+    /// Supplies optional test-harness coordination for worker deletion stages.
+    #[doc(hidden)]
+    fn worker_deletion_hook(_extra_deps: &Self::ExtraDeps) -> Option<Arc<dyn WorkerDeletionHook>> {
         None
     }
 
@@ -211,7 +229,7 @@ pub trait WorkerCtx:
     async fn create(
         account_id: AccountId,
         owned_agent_id: OwnedAgentId,
-        agent_id: Option<ParsedAgentId>,
+        owner_context: ResolvedOwnerContext,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -230,6 +248,7 @@ pub trait WorkerCtx:
         card_service: Arc<dyn CardService>,
         card_interest_index: Arc<CardInterestIndex>,
         component_service: Arc<dyn ComponentService>,
+        native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Self>>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         filesystem: WorkerFilesystemContext,
@@ -252,7 +271,7 @@ pub trait WorkerCtx:
         owner_execution: Arc<OwnerExecution>,
         owner_resources: Arc<OwnerRuntimeResources>,
         filesystem_capability: FilesystemCapability,
-        executable_component: Component,
+        executable: WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
     ) -> Result<Self, WorkerExecutorError>;
 
@@ -277,6 +296,10 @@ pub trait WorkerCtx:
     /// Get the agent-id resolved from the worker name
     fn parsed_agent_id(&self) -> Option<ParsedAgentId>;
 
+    /// Authoritative persisted execution-owner identity. Authorization and component-scoped
+    /// runtime selection must use this instead of interpreting `parsed_agent_id() == None`.
+    fn owner_context(&self) -> &ResolvedOwnerContext;
+
     fn agent_mode(&self) -> AgentMode;
 
     /// Gets the account created this worker
@@ -285,6 +308,10 @@ pub trait WorkerCtx:
     /// Gets the email of the account that created this worker
     fn created_by_email(&self) -> &AccountEmail;
 
+    /// Metadata for the executable component. Native entity contexts have none.
+    fn executable_component_metadata(&self) -> Option<&Component>;
+
+    /// Metadata for the owning component.
     fn component_metadata(&self) -> &Component;
 
     fn agent_type_provision_config(&self) -> Option<&AgentTypeProvisionConfig>;

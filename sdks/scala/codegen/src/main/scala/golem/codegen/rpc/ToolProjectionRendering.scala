@@ -83,7 +83,15 @@ object ToolProjectionRendering {
     val error =
       if (policy.useProjectedTypes) codec.projectedErrType.getOrElse("_root_.scala.Nothing")
       else codec.errType.getOrElse("_root_.scala.Nothing")
-    s"_root_.scala.concurrent.Future[_root_.scala.Either[${policy.errorType}[$error], ${successType(codec, policy)}]]"
+    if (policy == InvocationUnderlying)
+      s"_root_.golem.tool.ToolUnderlyingInvocation[$error, ${successType(codec, policy)}]"
+    else
+      s"_root_.scala.concurrent.Future[_root_.scala.Either[${policy.errorType}[$error], ${successType(codec, policy)}]]"
+  }
+
+  def middlewareHandlerReturnType(codec: LeafReturn): String = {
+    val error = codec.projectedErrType.getOrElse("_root_.scala.Nothing")
+    s"_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolInvokeError[$error], ${successType(codec, InvocationUnderlying)}]]"
   }
 
   def valueEntry(projected: ProjectedParam, policy: Policy): String = {
@@ -113,7 +121,7 @@ object ToolProjectionRendering {
     }
     errorType match {
       case Some(error) =>
-        s"${policy.runtime}.run[$error]($arguments, ${errorSchema.get}.fromErrorPayloadValue(_))"
+        s"${policy.runtime}.run[$error]($arguments, ${errorSchema.get}.fromErrorValue(_))"
       case None =>
         s"${policy.runtime}.runInfallible($arguments)"
     }
@@ -127,11 +135,11 @@ object ToolProjectionRendering {
     val okType = if (policy.useProjectedTypes) codec.projectedOkType else codec.okType
     (okType, codec.hasStdout) match {
       case (Some(ok), true) =>
-        s"${policy.runtime}.decodeValueStdoutResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
+        s"${policy.runtime}.decodeValueStdoutResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]], _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[$ok]].graph)"
       case (None, true) =>
         s"${policy.runtime}.decodeStdoutResult($result)"
       case (Some(ok), false) =>
-        s"${policy.runtime}.decodeValueResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]])"
+        s"${policy.runtime}.decodeValueResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]], _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[$ok]].graph)"
       case (None, false) =>
         s"${policy.runtime}.decodeUnitResult($result)"
     }

@@ -1,4 +1,6 @@
 use super::*;
+use golem_common::model::entity::{AgentEntity, EntityInvocationPlanReference};
+use golem_common::schema::TypedSchemaValue;
 
 #[derive(Debug, Clone)]
 pub(crate) enum RequestClaimIdentity {
@@ -486,17 +488,21 @@ impl ReplayState {
                             Ok(StartClaimAttempt::Missing) if tx.cursor.is_live() => {
                                 Ok((None, false, true, false))
                             }
-                            Ok(StartClaimAttempt::Missing)
-                                if tx.deleted_region_contains_start(&owned_claim).await? =>
-                            {
-                                Ok((None, false, false, true))
-                            }
                             Ok(StartClaimAttempt::Missing) => {
-                                Err(WorkerExecutorError::unexpected_oplog_entry(
-                                    owned_claim.expected_description(),
-                                    "no matching Start between the replay cursor and the replay target"
-                                        .to_string(),
-                                ))
+                                match tx.deleted_region_contains_start(&owned_claim).await? {
+                                    Some(index) if index > tx.cursor.last_replayed_index() => {
+                                        // The entity's atomic mask is installed before its body
+                                        // starts. A host subtask must not publish local liveness
+                                        // before the guest consumes the retained atomic Begin.
+                                        Ok((None, true, false, false))
+                                    }
+                                    Some(_) => Ok((None, false, false, true)),
+                                    None => Err(WorkerExecutorError::unexpected_oplog_entry(
+                                        owned_claim.expected_description(),
+                                        "no matching Start between the replay cursor and the replay target"
+                                            .to_string(),
+                                    )),
+                                }
                             }
                             Ok(StartClaimAttempt::MissingSettling { .. }) => unreachable!(
                                 "ordinary Start claims never enter missing-scope settlement"
@@ -539,6 +545,7 @@ impl ReplayState {
     /// time. The request payload is not decoded: `function_name` already pins the request type
     /// (and the `Req` associated type has no `TryFrom<HostRequest>` to decode it generically); the
     /// response is fully type-checked on the `End` side during replay.
+    #[cfg(test)]
     pub async fn claim_concurrent_start(
         &self,
         expected_function_name: &HostFunctionName,
@@ -557,7 +564,7 @@ impl ReplayState {
     /// function name or durable function type, registering a resolver receiver keyed by the
     /// `Start`'s index and returning the claimed entry's identity for the caller to inspect.
     ///
-    /// This is the dynamic counterpart of [`Self::claim_concurrent_start`]: it is used by callers
+    /// This is the dynamic counterpart of an identity-based claim: it is used by callers
     /// that learn the call identity from the claimed entry itself rather than knowing it up front —
     /// notably the guest-facing `golem::durability` read, which returns the persisted invocation's
     /// function name to the guest and therefore has no expected name to validate against.
@@ -590,6 +597,7 @@ impl ReplayState {
     /// `Start` ahead of the cursor when concurrent host tasks interleaved the live append order.
     /// Matching `Start`s that share the same full identity (several chunks under one parent) are
     /// claimed in oplog order, preserving the deterministic per-parent chain order.
+    #[cfg(test)]
     pub async fn claim_owned_concurrent_start(
         &self,
         expected_function_name: &HostFunctionName,
@@ -1135,7 +1143,11 @@ fn request_claim_identity_matches(
                         .map_err(|error| {
                             format!("failed to decode entity invocation request metadata: {error}")
                         })?;
-                Ok(expected.matches(&metadata, &request.input))
+                Ok(ambient_tool_invocation_identity_matches(
+                    expected,
+                    &metadata,
+                    &request.input,
+                ))
             }
             HostRequest::GolemToolInvocationRejected(request) => Ok(request.attempt_ordinal
                 == expected.rejected.attempt_ordinal
@@ -1151,15 +1163,57 @@ fn request_claim_identity_matches(
     }
 }
 
+fn ambient_tool_invocation_identity_matches(
+    expected: &EntityInvocationRequestIdentity,
+    request: &EntityInvocationRequest,
+    input: &TypedSchemaValue,
+) -> bool {
+    let (None, AgentEntity::Tool(expected_tool), EntityInvocationPlanReference::Root { plan }) =
+        (&expected.plan_position, &expected.entity, &request.plan)
+    else {
+        return expected.matches(request, input);
+    };
+    let Some(final_position) = plan.len().checked_sub(1) else {
+        return false;
+    };
+    let Ok(final_layer) = plan.layer(final_position as u32) else {
+        return false;
+    };
+    if final_layer.activation().entity() != AgentEntity::Tool(expected_tool.clone()) {
+        return false;
+    }
+
+    let mut layer_identity = expected.clone();
+    layer_identity.entity = request.entity.clone();
+    layer_identity.matches(request, input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::AgentId;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::{AgentPrincipal, AgentTypeName, Principal};
+    use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+    use golem_common::model::deployment::DeploymentRevision;
     use golem_common::model::entity::{
-        EntityCallMode, ToolInputDecodeFailure, ToolInvocationRejectedIdentity,
+        AgentEntity, EntityActivation, EntityActivationPolicy, EntityCallMode,
+        EntityInvocationDescriptor, EntityInvocationPlan, EntityInvocationPlanLayer,
+        EntityInvocationPlanPositionIdentity, EntityInvocationPlanReference,
+        EntityInvocationRequest, ExecutableTarget, FilesystemCapability, ToolInputDecodeFailure,
+        ToolInvocationDescriptor, ToolInvocationRejectedIdentity, ToolMiddlewareName,
+        ToolOutputContract,
     };
-    use golem_common::model::oplog::HostRequestGolemToolInvocationRejected;
+    use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::payload::types::SerializableToolRpcError;
-    use golem_common::model::tool::ToolName;
+    use golem_common::model::oplog::{
+        HostRequestEntityInvocation, HostRequestGolemToolInvocationRejected,
+    };
+    use golem_common::model::tool::{
+        CompiledToolBinding, ConfigKeyScope, SecretKeyScope, ToolBindingOwner,
+        ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
+    };
+    use golem_common::schema::tool::{CommandTree, Tool};
     use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
     use test_r::test;
 
@@ -1168,6 +1222,249 @@ mod tests {
             SchemaGraph::anonymous(SchemaType::string()),
             SchemaValue::String(value.to_string()),
         )
+    }
+
+    fn tool_definition() -> Tool {
+        Tool {
+            version: "1.0.0".to_string(),
+            commands: CommandTree { nodes: Vec::new() },
+            schema: SchemaGraph::empty(),
+        }
+    }
+
+    fn tool_activation(name: &str) -> EntityActivation {
+        let component_id = ComponentId::new();
+        let component_revision = ComponentRevision::try_from(7_u64).unwrap();
+        let deployment_revision = DeploymentRevision::try_from(11_u64).unwrap();
+        EntityActivation::new(
+            ExecutableTarget::new(component_id, component_revision),
+            deployment_revision,
+            EntityActivationPolicy::Tool {
+                provision: ToolProvisionConfig::default(),
+                binding: Box::new(CompiledToolBinding {
+                    deployment_revision,
+                    release_id: None,
+                    owner: ToolBindingOwner::AgentType {
+                        agent_type_name: AgentTypeName("Example".to_string()),
+                    },
+                    tool_name: ToolName::try_from(name).unwrap(),
+                    version: "1.0.0".to_string(),
+                    metadata_version: "0.1.0".to_string(),
+                    metadata_digest: Default::default(),
+                    account_id: AccountId::new(),
+                    account_email: AccountEmail::new("owner@example.com"),
+                    parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                    config_keys_readable: ConfigKeyScope::All,
+                    secret_keys_readable: SecretKeyScope::All,
+                    secret_keys_revealable: SecretKeyScope::All,
+                    filesystem_access: ToolFilesystemAccess::Unset,
+                    source: ToolSource::Component {
+                        component_id,
+                        component_revision,
+                        component_name: ComponentName("tools:test".to_string()),
+                    },
+                }),
+            },
+            FilesystemCapability::Incapable,
+        )
+        .unwrap()
+    }
+
+    fn middleware_activation(name: &str) -> EntityActivation {
+        EntityActivation::new(
+            ExecutableTarget::new(
+                ComponentId::new(),
+                ComponentRevision::try_from(9_u64).unwrap(),
+            ),
+            DeploymentRevision::try_from(12_u64).unwrap(),
+            EntityActivationPolicy::ToolMiddleware {
+                middleware_name: ToolMiddlewareName::try_from(name).unwrap(),
+                provision: ToolProvisionConfig::default(),
+                config_keys_readable: ConfigKeyScope::All,
+                secret_keys_readable: SecretKeyScope::All,
+                secret_keys_revealable: SecretKeyScope::All,
+                filesystem_access: ToolFilesystemAccess::Unset,
+            },
+            FilesystemCapability::Incapable,
+        )
+        .unwrap()
+    }
+
+    fn accepted_tool_claim_and_recording() -> (
+        RequestClaimIdentity,
+        EntityInvocationRequest,
+        TypedSchemaValue,
+    ) {
+        let recorded_input = input("needle");
+        let calling_principal = Principal::Agent(AgentPrincipal {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "Example(\"owner\")".to_string(),
+            },
+        });
+        let operation = EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+            attempt_ordinal: 4,
+            command_path: vec!["search".to_string()],
+            args: golem_common::model::card::ToolInvocationPattern::from_command_and_args(
+                &[],
+                &["recorded"],
+            )
+            .unwrap()
+            .args,
+            has_stdin: true,
+            has_stdout: false,
+            declares_stdout: false,
+            output_contract: ToolOutputContract {
+                result: None,
+                errors: Vec::new(),
+            },
+        });
+        let request = EntityInvocationRequest {
+            entity: AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
+            calling_principal: calling_principal.clone(),
+            call_mode: EntityCallMode::Synchronous,
+            operation: operation.clone(),
+            principal: calling_principal.clone(),
+            plan: EntityInvocationPlanReference::Root {
+                plan: EntityInvocationPlan::new(vec![
+                    EntityInvocationPlanLayer::Middleware {
+                        activation: middleware_activation("audit"),
+                        parameters: input("settings"),
+                        expected_definition: None,
+                        presented_definition: None,
+                        next_effective_definition: tool_definition(),
+                        compatibility: None,
+                    },
+                    EntityInvocationPlanLayer::Tool {
+                        activation: tool_activation("grep"),
+                    },
+                ])
+                .unwrap(),
+            },
+            assume_idempotence: true,
+        };
+        let accepted = EntityInvocationRequestIdentity {
+            entity: AgentEntity::Tool(ToolName::try_from("grep").unwrap()),
+            calling_principal,
+            call_mode: request.call_mode,
+            operation: (&operation).into(),
+            plan_position: None,
+            input: recorded_input.clone(),
+        };
+        let rejected = ToolInvocationRejectedIdentity {
+            attempt_ordinal: 4,
+            tool_name: ToolName::try_from("grep").unwrap(),
+            command_path: vec!["search".to_string()],
+            input: Some(recorded_input.clone()),
+            input_decode_failure: None,
+            has_stdin: true,
+            has_stdout: false,
+            call_mode: EntityCallMode::Synchronous,
+        };
+        (
+            RequestClaimIdentity::ToolInvocation(Box::new(ToolInvocationClaimIdentity {
+                accepted: Some(accepted),
+                rejected,
+            })),
+            request,
+            recorded_input,
+        )
+    }
+
+    fn serialized_entity_request(
+        metadata: &EntityInvocationRequest,
+        input: TypedSchemaValue,
+    ) -> HostRequest {
+        HostRequest::EntityInvocation(HostRequestEntityInvocation {
+            metadata: desert_rust::serialize_to_byte_vec(metadata).unwrap(),
+            input,
+            stream_session_idempotency_key: IdempotencyKey::new("claim-stream-session".to_string()),
+        })
+    }
+
+    #[test]
+    fn ambient_root_tool_claim_matches_recorded_leaf_and_keeps_other_identity_strict() {
+        let (expected, request, recorded_input) = accepted_tool_claim_and_recording();
+        let recorded = serialized_entity_request(&request, recorded_input.clone());
+        assert!(request_claim_identity_matches(&recorded, &expected).unwrap());
+
+        let mut wrong_leaf = request.clone();
+        wrong_leaf.plan = EntityInvocationPlanReference::Root {
+            plan: EntityInvocationPlan::new(vec![
+                EntityInvocationPlanLayer::Middleware {
+                    activation: middleware_activation("audit"),
+                    parameters: input("settings"),
+                    expected_definition: None,
+                    presented_definition: None,
+                    next_effective_definition: tool_definition(),
+                    compatibility: None,
+                },
+                EntityInvocationPlanLayer::Tool {
+                    activation: tool_activation("sed"),
+                },
+            ])
+            .unwrap(),
+        };
+        assert!(
+            !request_claim_identity_matches(
+                &serialized_entity_request(&wrong_leaf, recorded_input.clone()),
+                &expected,
+            )
+            .unwrap()
+        );
+        assert!(
+            !request_claim_identity_matches(
+                &serialized_entity_request(&request, input("different")),
+                &expected,
+            )
+            .unwrap()
+        );
+
+        let mut wrong_principal = request.clone();
+        wrong_principal.calling_principal = Principal::Agent(AgentPrincipal {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "Example(\"other\")".to_string(),
+            },
+        });
+        assert!(
+            !request_claim_identity_matches(
+                &serialized_entity_request(&wrong_principal, recorded_input.clone()),
+                &expected,
+            )
+            .unwrap()
+        );
+
+        let mut descendant = request.clone();
+        descendant.entity = AgentEntity::Tool(ToolName::try_from("grep").unwrap());
+        descendant.plan = EntityInvocationPlanReference::Descendant {
+            root_start_index: OplogIndex::from_u64(31),
+            position: 1,
+        };
+        assert!(
+            !request_claim_identity_matches(
+                &serialized_entity_request(&descendant, recorded_input.clone()),
+                &expected,
+            )
+            .unwrap()
+        );
+
+        let mut descendant_expected = expected.clone();
+        let RequestClaimIdentity::ToolInvocation(identity) = &mut descendant_expected else {
+            unreachable!();
+        };
+        identity.accepted.as_mut().unwrap().plan_position =
+            Some(EntityInvocationPlanPositionIdentity {
+                root_start_index: OplogIndex::from_u64(31),
+                position: 2,
+            });
+        assert!(
+            !request_claim_identity_matches(
+                &serialized_entity_request(&descendant, recorded_input),
+                &descendant_expected,
+            )
+            .unwrap()
+        );
     }
 
     #[test]

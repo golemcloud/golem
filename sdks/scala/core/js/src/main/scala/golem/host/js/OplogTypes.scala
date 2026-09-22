@@ -169,6 +169,7 @@ sealed trait JsExternalSpanData extends js.Object {
 @js.native
 sealed trait JsErrorParameters extends js.Object {
   def timestamp: JsDatetime = js.native
+  def kind: String          = js.native
   def error: String         = js.native
   def retryFrom: js.BigInt  = js.native
 }
@@ -330,12 +331,30 @@ sealed trait JsAgentInvocationResultWithValue extends JsAgentInvocationResult {
   @JSName("val") def value: js.Any = js.native
 }
 
+@js.native
+sealed trait JsCardId extends js.Object {
+  def uuid: JsUuid = js.native
+}
+
+@js.native
+sealed trait JsWalletVersionToken extends js.Object {
+  def walletIdHash: Uint8Array = js.native
+  def generation: js.BigInt    = js.native
+}
+
+@js.native
+sealed trait JsPublicInvocationWalletPin extends js.Object {
+  def walletToken: JsWalletVersionToken = js.native
+  def scopeCardId: js.UndefOr[JsCardId] = js.native
+}
+
 // --- AgentInvocationStartedParameters ---
 
 @js.native
 sealed trait JsAgentInvocationStartedParameters extends js.Object {
-  def timestamp: JsDatetime         = js.native
-  def invocation: JsAgentInvocation = js.native
+  def timestamp: JsDatetime                  = js.native
+  def invocation: JsAgentInvocation          = js.native
+  def walletPin: JsPublicInvocationWalletPin = js.native
 }
 
 // --- AgentInvocationFinishedParameters ---

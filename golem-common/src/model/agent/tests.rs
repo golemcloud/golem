@@ -19,13 +19,111 @@ use crate::base_model::agent::{
     SnapshottingPeriodic,
 };
 use crate::model::agent::{
-    AgentTypeSchemaResolver, InvocationFreshnessDisposition, ParsedAgentId,
-    ephemeral_invocation_phantom_id,
+    AgentTypeSchemaResolver, InvocationFreshnessDisposition, OwnerKind, ParsedAgentId,
+    ResolvedOwnerContext, ephemeral_invocation_phantom_id, typed_constructor_parameters,
 };
+
+#[test]
+fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
+    use crate::model::component_metadata::{ComponentMetadata, KnownExports};
+
+    let non_agent = ComponentMetadata::default();
+    let agent = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        None,
+        None,
+        test_agent_types().into_values().collect(),
+        Default::default(),
+    );
+    let worker_name = "4f8d62ad-9a36-4ddb-a8f2-6ae73fc302d1";
+    let external_name = OwnerKind::external_tool_instance_name(&IdempotencyKey::new(
+        "external-invocation".to_string(),
+    ));
+
+    assert_eq!(
+        ResolvedOwnerContext::from_authoritative_kind(
+            OwnerKind::ComponentAgent,
+            worker_name,
+            &non_agent,
+        )
+        .unwrap(),
+        ResolvedOwnerContext::ComponentWorker,
+    );
+    let typed = ResolvedOwnerContext::from_authoritative_kind(
+        OwnerKind::ComponentAgent,
+        "agent-2(1)",
+        &agent,
+    )
+    .unwrap();
+    assert_eq!(typed.agent().unwrap().to_string(), "agent-2(1)");
+    assert!(
+        ResolvedOwnerContext::from_authoritative_kind(
+            OwnerKind::ComponentAgent,
+            worker_name,
+            &agent,
+        )
+        .is_err()
+    );
+
+    for metadata in [&non_agent, &agent] {
+        assert_eq!(
+            ResolvedOwnerContext::from_authoritative_kind(
+                OwnerKind::EphemeralExternalTool,
+                &external_name,
+                metadata,
+            )
+            .unwrap(),
+            ResolvedOwnerContext::ComponentBaseline,
+        );
+        assert!(
+            ResolvedOwnerContext::from_authoritative_kind(
+                OwnerKind::ComponentAgent,
+                &external_name,
+                metadata,
+            )
+            .is_err()
+        );
+        assert!(
+            ResolvedOwnerContext::from_authoritative_kind(
+                OwnerKind::EphemeralExternalTool,
+                worker_name,
+                metadata,
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn external_tool_owner_identity_is_stable_and_reserved() {
+    let key = crate::model::IdempotencyKey::new("same-request".to_string());
+    let name1 = crate::model::agent::OwnerKind::external_tool_instance_name(&key);
+    let name2 = crate::model::agent::OwnerKind::external_tool_instance_name(&key);
+    assert_eq!(name1, name2);
+    assert!(crate::model::agent::OwnerKind::is_reserved_instance_name(
+        &name1
+    ));
+    assert!(
+        crate::model::agent::OwnerKind::ComponentAgent
+            .validate_instance_name(&name1)
+            .is_err()
+    );
+    assert!(
+        crate::model::agent::OwnerKind::EphemeralExternalTool
+            .validate_instance_name(&name1)
+            .is_ok()
+    );
+    assert!(
+        crate::model::agent::OwnerKind::EphemeralExternalTool
+            .validate_instance_name("caller-controlled")
+            .is_err()
+    );
+}
 use crate::schema::{
-    AgentConstructorSchema, AgentTypeSchema, BinaryRestrictions, InputSchema, MetadataEnvelope,
-    NamedField, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TextRestrictions,
-    TypedSchemaValue,
+    AgentConstructorSchema, AgentTypeSchema, AutoInjectedKind, BinaryRestrictions, InputSchema,
+    MetadataEnvelope, NamedField, NamedFieldType, SchemaGraph, SchemaType, SchemaValue,
+    TextRestrictions, TypedSchemaValue,
 };
 use crate::{agent_id, data_value, phantom_agent_id};
 use poem_openapi::types::ToJSON;
@@ -52,6 +150,39 @@ fn agent_id_structural_normalization() {
         .unwrap();
         assert_eq!(agent_id.to_string(), "agent-3(32,(12,32,f(0,1,2)))");
     }
+}
+
+#[test]
+fn agent_id_excludes_auto_injected_constructor_fields() {
+    let mut agent_type = make_agent_type("principal-scoped", vec![]);
+    agent_type.constructor.input_schema = InputSchema::Parameters(vec![
+        NamedField::auto_injected(
+            "principal",
+            AutoInjectedKind::Principal,
+            SchemaType::string(),
+        ),
+        NamedField::user_supplied("key", SchemaType::u32()),
+    ]);
+    let mut types = TestAgentTypes::new();
+    types
+        .types
+        .insert(agent_type.type_name.clone(), agent_type.clone());
+
+    let parsed = ParsedAgentId::parse("principal-scoped(42)", types).unwrap();
+    assert_eq!(parsed.to_string(), "principal-scoped(42)");
+    assert_eq!(
+        parsed.parameters,
+        typed_constructor_parameters(
+            &agent_type,
+            SchemaValue::Record {
+                fields: vec![SchemaValue::U32(42)],
+            },
+        )
+    );
+    assert_eq!(
+        parsed.parameters.graph().root,
+        SchemaType::record(vec![record_field("key", SchemaType::u32())]),
+    );
 }
 
 #[test]

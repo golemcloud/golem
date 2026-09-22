@@ -8,6 +8,7 @@ import "golem/component/agent.proto";
 import "golem/component/component_id.proto";
 import "golem/component/component_metadata.proto";
 import "golem/registry/environment_state.proto";
+import "golem/worker/idempotency_key.proto";
 import "golem/worker/worker_id.proto";
 
 message AgentEntity {
@@ -57,6 +58,7 @@ message ToolMiddlewareEntityActivationPolicy {
   golem.component.SecretKeyScope secret_keys_readable = 3;
   golem.component.SecretKeyScope secret_keys_revealable = 4;
   golem.registry.ToolFilesystemAccess filesystem_access = 5;
+  golem.component.ConfigKeyScope config_keys_readable = 6;
 }
 
 message EntityActivationPolicy {
@@ -70,8 +72,16 @@ message EntityActivationFingerprint {
   bytes value = 1;
 }
 
+message HostEntityActivationSource {
+  string host_tool_id = 1;
+  string implementation_version = 2;
+}
+
 message EntityActivation {
-  ExecutableTarget executable = 1;
+  oneof source {
+    ExecutableTarget component = 1;
+    HostEntityActivationSource host = 6;
+  }
   uint64 deployment_revision = 2;
   EntityActivationPolicy policy = 3;
   FilesystemCapability filesystem = 4;
@@ -91,4 +101,8 @@ message EntityInvocationScope {
   EntityActivation activation = 3;
   golem.component.Principal calling_principal = 4;
   InvocationExecutionMode mode = 5;
+  IdempotencyKey idempotency_key = 6;
+  bool assume_idempotence = 7;
+  bool logical_key_positions = 8;
+  IdempotencyKey stream_session_idempotency_key = 9;
 }

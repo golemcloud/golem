@@ -12,13 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type {
-  InvocationResult,
-  Tool,
-  ToolError,
-  TypedSchemaValue,
-  UnderlyingTool,
-} from 'golem:tool/common@0.1.0';
+import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
 import { compileSchema } from '../src/schema/adapter';
@@ -37,8 +31,12 @@ import {
   type MonomorphicToolMiddlewareInvocation,
 } from '../src/internal/tool/middlewareRuntime';
 import { typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
+import {
+  adaptLegacyRawUnderlying,
+  type LegacyRawUnderlyingTool,
+} from './tool-middleware-test-support';
 
-type RawUnderlyingTool = Pick<UnderlyingTool, 'invoke'>;
+type RawUnderlyingTool = LegacyRawUnderlyingTool;
 
 beforeEach(() => {
   ToolMiddlewareRegistry.clearForTests();
@@ -86,9 +84,10 @@ function invoke(
     {
       toolName: 'runtime-name-is-not-a-codec-input',
       toolMetadata: { intentionally: 'malformed and ignored' } as unknown as Tool,
+      parameters: wireValue(z.object({}), {}),
       ...options,
     },
-    raw,
+    adaptLegacyRawUnderlying(raw),
   );
 }
 
@@ -388,14 +387,21 @@ describe('monomorphic tool middleware dispatch', () => {
     expect(monomorphicSource('adapter-policy').presented.toolName).toBe('convert');
     expect(monomorphicSource('adapter-policy').expected.toolName).toBe('backend');
 
-    failure = { tag: 'custom-error', val: wireValue(z.string(), 'denied') };
+    failure = {
+      tag: 'custom-error',
+      val: { name: 'failed', payload: wireValue(z.string(), 'denied') },
+    };
     const custom = (await rejectionOf(run())) as ToolInvokeError<TypedSchemaValue>;
-    expect(custom.cause.tag).toBe('tool');
-    if (custom.cause.tag !== 'tool') throw new Error('custom error was not encoded');
+    expect(custom.cause.tag).toBe('unknown-error');
+    if (custom.cause.tag !== 'unknown-error') throw new Error('custom error was not encoded');
     const presentedBody = getExtendedToolDefinition(presented).root.body!;
-    expect(decodeDeclaredToolError(presentedBody, custom.cause.error, 'convert')).toEqual(
-      err('rejected', 'denied'),
-    );
+    expect(
+      decodeDeclaredToolError(
+        presentedBody,
+        { name: custom.cause.name, payload: custom.cause.payload },
+        'convert',
+      ),
+    ).toEqual(err('rejected', 'denied'));
 
     failure = { tag: 'invalid-tool-name', val: 'missing-backend' };
     await expect(run()).rejects.toMatchObject({
@@ -675,5 +681,61 @@ describe('monomorphic tool middleware dispatch', () => {
         raw,
       ),
     ).rejects.toMatchObject({ cause: { tag: 'invalid-result' } });
+  });
+
+  it('exports a nested parameter schema and decodes typed parameters per occurrence', async () => {
+    const parameterSchema = z.object({
+      policy: z.object({ mode: z.enum(['audit', 'enforce']), labels: z.array(z.string()) }),
+      retries: z.number().int().optional(),
+    });
+    const definition = toolDefinition('configured').body((body) => body.returns(z.string()));
+    const observed: Array<z.infer<typeof parameterSchema>> = [];
+    definition.middleware({
+      name: 'configured-policy',
+      parameterSchema,
+      implementation: {
+        configured: async (_args, { parameters }) => {
+          observed.push(parameters);
+          return `${parameters.policy.mode}:${parameters.policy.labels.join(',')}`;
+        },
+      },
+    });
+
+    const encoded = ToolMiddlewareRegistry.get('configured-policy')!.encoded;
+    expect(encoded.parameterSchema).toEqual(
+      wireValue(parameterSchema, {
+        policy: { mode: 'audit', labels: [] },
+      }).graph,
+    );
+    const raw = { invoke: vi.fn(async () => ({})) } as RawUnderlyingTool;
+    const run = (parameters: TypedSchemaValue) =>
+      invoke(
+        'configured-policy',
+        {
+          parameters,
+          commandPath: [],
+          input: commandInput(definition, [], {}),
+          stdin: undefined,
+          principal: anonymous,
+        },
+        raw,
+      );
+
+    await run(wireValue(parameterSchema, { policy: { mode: 'audit', labels: ['one'] } }));
+    await run(
+      wireValue(parameterSchema, {
+        policy: { mode: 'enforce', labels: ['two'] },
+        retries: 3,
+      }),
+    );
+    expect(observed).toEqual([
+      { policy: { mode: 'audit', labels: ['one'] } },
+      { policy: { mode: 'enforce', labels: ['two'] }, retries: 3 },
+    ]);
+
+    await expect(
+      run(wireValue(z.object({ policy: z.string() }), { policy: 'audit' })),
+    ).rejects.toMatchObject({ cause: { tag: 'invalid-input' } });
+    expect(observed).toHaveLength(2);
   });
 });

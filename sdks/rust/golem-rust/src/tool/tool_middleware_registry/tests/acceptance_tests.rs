@@ -15,11 +15,11 @@
 use super::super::{get_tool_middleware_by_name, get_tool_middleware_invoker_by_name};
 use crate::agentic::ToolErrorSchema;
 use crate::schema::wit::{GuestQuotaTokenHandle, GuestSecretHandle, wire as schema_wire};
-use crate::schema::{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue};
+use crate::schema::{FromSchema, IntoSchema, SchemaType, SchemaValue, TypedSchemaValue};
 use crate::tool::wire;
 use crate::tool::{
-    InputStream, InvocationResult, Principal, Tool, ToolInvokeError, ToolMiddlewareScope,
-    ToolUnderlying, UnderlyingTool,
+    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool, ToolInvokeError,
+    ToolMiddlewareScope, ToolUnderlying, UnderlyingTool,
 };
 use crate::{
     IntoTypedSchemaValue, decode_typed_schema_value_owned, encode_typed_schema_value_owned,
@@ -37,7 +37,11 @@ use std::task::{Context, Poll, Waker};
 use test_r::test;
 use wit_bindgen::rt::async_support::StreamVtable;
 
-static TEST_STREAMS: Mutex<BTreeMap<u32, VecDeque<u8>>> = Mutex::new(BTreeMap::new());
+type TestStreamItem = Result<
+    Vec<u8>,
+    crate::golem_agentic::golem::tool::streams::ByteStreamFailure,
+>;
+static TEST_STREAMS: Mutex<BTreeMap<u32, VecDeque<TestStreamItem>>> = Mutex::new(BTreeMap::new());
 static NEXT_TEST_STREAM: AtomicU32 = AtomicU32::new(1);
 static TEST_STREAM_NEW_CALLS: AtomicU32 = AtomicU32::new(0);
 
@@ -48,7 +52,7 @@ fn registry_test_state() -> RegistryTestState {
     RegistryTestState
 }
 
-fn test_streams() -> MutexGuard<'static, BTreeMap<u32, VecDeque<u8>>> {
+fn test_streams() -> MutexGuard<'static, BTreeMap<u32, VecDeque<TestStreamItem>>> {
     TEST_STREAMS
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -69,7 +73,11 @@ unsafe extern "C" fn test_stream_new() -> u64 {
     0
 }
 
-unsafe extern "C" fn test_stream_read(handle: u32, destination: *mut u8, amount: usize) -> u32 {
+unsafe extern "C" fn test_stream_read(
+    handle: u32,
+    destination: *mut u8,
+    amount: usize,
+) -> u32 {
     let mut streams = test_streams();
     let Some(stream) = streams.get_mut(&handle) else {
         return 1;
@@ -77,13 +85,20 @@ unsafe extern "C" fn test_stream_read(handle: u32, destination: *mut u8, amount:
     let count = amount.min(stream.len());
     for offset in 0..count {
         unsafe {
-            ptr::write(destination.add(offset), stream.pop_front().unwrap());
+            ptr::write(
+                destination.cast::<TestStreamItem>().add(offset),
+                stream.pop_front().unwrap(),
+            );
         }
     }
     ((count as u32) << 4) | u32::from(stream.is_empty())
 }
 
-unsafe extern "C" fn test_stream_write(_handle: u32, _source: *const u8, _amount: usize) -> u32 {
+unsafe extern "C" fn test_stream_write(
+    _handle: u32,
+    _source: *const u8,
+    _amount: usize,
+) -> u32 {
     1
 }
 
@@ -97,8 +112,8 @@ unsafe extern "C" fn test_stream_drop_readable(handle: u32) {
 
 unsafe extern "C" fn test_stream_drop_writable(_handle: u32) {}
 
-static TEST_STREAM_VTABLE: StreamVtable<u8> = StreamVtable {
-    layout: std::alloc::Layout::new::<u8>(),
+static TEST_STREAM_VTABLE: StreamVtable<TestStreamItem> = StreamVtable {
+    layout: std::alloc::Layout::new::<TestStreamItem>(),
     lower: None,
     dealloc_lists: None,
     lift: None,
@@ -126,6 +141,22 @@ fn canonical_input<T: ToolUnderlying>(
     let model = tool
         .canonical_input_model(command_index)
         .expect("acceptance canonical input model builds");
+    let fields = model
+        .fields
+        .iter()
+        .zip(fields)
+        .map(|(field, value)| {
+            if matches!(field.type_, SchemaType::Option { .. })
+                && !matches!(value, SchemaValue::Option { .. })
+            {
+                SchemaValue::Option {
+                    inner: Some(Box::new(value)),
+                }
+            } else {
+                value
+            }
+        })
+        .collect();
     TypedSchemaValue::new(model.record_schema, SchemaValue::Record { fields })
 }
 
@@ -142,7 +173,7 @@ fn readable_stream(bytes: &[u8]) -> InputStream {
     let handle = NEXT_TEST_STREAM.fetch_add(1, Ordering::Relaxed);
     assert!(
         test_streams()
-            .insert(handle, bytes.iter().copied().collect())
+            .insert(handle, [Ok(bytes.to_vec())].into_iter().collect())
             .is_none()
     );
     wit_bindgen::StreamReader::new(handle, &TEST_STREAM_VTABLE)
@@ -157,23 +188,25 @@ async fn invoke(
     stdin: Option<InputStream>,
     principal: Principal,
     underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     get_tool_middleware_invoker_by_name(middleware_name)
         .unwrap_or_else(|| panic!("middleware `{middleware_name}` is registered"))(
         tool_name.to_string(),
         tool,
+        crate::tool::EmptyMiddlewareParameters {}
+            .into_typed_schema_value()
+            .unwrap(),
         command_path,
         input,
         stdin,
+        None,
         principal,
         underlying,
     )
     .await
 }
 
-fn invocation_error(
-    result: Result<InvocationResult, ToolInvokeError<TypedSchemaValue>>,
-) -> ToolInvokeError<TypedSchemaValue> {
+fn invocation_error<E>(result: Result<InvocationResult, ToolInvokeError<E>>) -> ToolInvokeError<E> {
     match result {
         Ok(_) => panic!("invocation unexpectedly succeeded"),
         Err(error) => error,
@@ -195,12 +228,13 @@ impl AcceptancePolicy {
 
 #[tool_middleware(
     name = "phase-six-transparent-policy",
+    version = "1.2.3",
     constructor = AcceptancePolicy::new
 )]
 impl AcceptanceEchoMiddleware for AcceptancePolicy {
     async fn echo(
         &self,
-        underlying: &mut AcceptanceEchoUnderlying,
+        underlying: &AcceptanceEchoUnderlying,
         value: String,
     ) -> Result<String, ToolInvokeError<Infallible>> {
         match value.as_str() {
@@ -241,11 +275,80 @@ fn echo_underlying(calls: Rc<Cell<u32>>, fail_first_retry: bool) -> UnderlyingTo
     }))
 }
 
+#[test]
+async fn generated_typed_methods_overlap_on_one_shared_underlying_proxy() {
+    let admitted = Rc::new(Cell::new(0));
+    let release_first = Rc::new(Cell::new(false));
+    let admitted_for_fake = Rc::clone(&admitted);
+    let release_first_for_fake = Rc::clone(&release_first);
+    let raw = UnderlyingTool::from_fake(Box::new(move |_, input, _| {
+        admitted_for_fake.set(admitted_for_fake.get() + 1);
+        let admitted = Rc::clone(&admitted_for_fake);
+        let release_first = Rc::clone(&release_first_for_fake);
+        Box::pin(async move {
+            let input = decode_typed_schema_value_owned(input).unwrap();
+            let SchemaValue::Record { fields } = input.value() else {
+                panic!("echo input is a record")
+            };
+            let value = String::from_value(&fields[0]).unwrap();
+            if value == "first" {
+                std::future::poll_fn(|cx| {
+                    if release_first.get() {
+                        Poll::Ready(())
+                    } else {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                })
+                .await;
+            } else {
+                assert_eq!(admitted.get(), 2);
+                release_first.set(true);
+            }
+            Ok(typed_result(value))
+        })
+    }));
+    let underlying = AcceptanceEchoUnderlying::__golem_from_underlying(raw);
+    let first = underlying.start_echo("first".to_string()).await.unwrap();
+    let second = underlying.start_echo("second".to_string()).await.unwrap();
+    let first = first.get();
+    let second = second.get();
+    let mut first = std::pin::pin!(first);
+    let mut second = std::pin::pin!(second);
+    let mut first_result = None;
+    let mut second_result = None;
+    let (first, second) = std::future::poll_fn(|cx| {
+        if first_result.is_none()
+            && let Poll::Ready(result) = first.as_mut().poll(cx)
+        {
+            first_result = Some(result);
+        }
+        if second_result.is_none()
+            && let Poll::Ready(result) = second.as_mut().poll(cx)
+        {
+            assert!(first_result.is_none());
+            second_result = Some(result);
+        }
+        match (first_result.take(), second_result.take()) {
+            (Some(first), Some(second)) => Poll::Ready((first, second)),
+            (first, second) => {
+                first_result = first;
+                second_result = second;
+                Poll::Pending
+            }
+        }
+    })
+    .await;
+    assert_eq!(admitted.get(), 2);
+    assert_eq!(second.unwrap(), "second");
+    assert_eq!(first.unwrap(), "first");
+}
+
 async fn invoke_echo(
     value: &str,
     stdin: Option<InputStream>,
     underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     invoke(
         "phase-six-transparent-policy",
         "acceptance-echo",
@@ -349,6 +452,16 @@ fn transparent_dispatch_preserves_all_five_protocol_errors_exactly(
                 ToolInvokeError::ConstraintViolation(value) => assert_eq!(value, "constraint"),
                 ToolInvokeError::InvalidResult(value) => assert_eq!(value, "bad-result"),
                 ToolInvokeError::Tool(_) => panic!("protocol error became a custom error"),
+                ToolInvokeError::UnknownCustomError(_) => {
+                    panic!("protocol error became an unknown custom error")
+                }
+                ToolInvokeError::ProtocolError(_)
+                | ToolInvokeError::Denied(_)
+                | ToolInvokeError::InternalError(_)
+                | ToolInvokeError::Cancelled
+                | ToolInvokeError::ResourceExhausted(_) => {
+                    panic!("protocol error became an underlying lifecycle error")
+                }
             }
         }
     });
@@ -391,7 +504,7 @@ impl AdapterPolicy {
 impl AdapterPresentedMiddleware<AdapterBackendUnderlying> for AdapterPolicy {
     async fn convert(
         &self,
-        underlying: &mut AdapterBackendUnderlying,
+        underlying: &AdapterBackendUnderlying,
         value: u32,
     ) -> Result<String, ToolInvokeError<PresentedError>> {
         underlying
@@ -419,10 +532,13 @@ fn adapter_underlying(calls: AdapterCalls, result: Result<u64, String>) -> Under
         Box::pin(async move {
             match result {
                 Ok(value) => Ok(typed_result(value)),
-                Err(message) => Err(wire::ToolError::CustomError(
-                    encode_typed_schema_value_owned(message.into_typed_schema_value().unwrap())
-                        .unwrap(),
-                )),
+                Err(message) => Err(wire::ToolError::CustomError(crate::schema::wit::wire::CustomToolError {
+                    name: "failed".to_string(),
+                    payload: encode_typed_schema_value_owned(
+                        message.into_typed_schema_value().unwrap(),
+                    )
+                    .unwrap(),
+                })),
             }
         })
     }))
@@ -431,7 +547,7 @@ fn adapter_underlying(calls: AdapterCalls, result: Result<u64, String>) -> Under
 async fn invoke_adapter(
     value: u32,
     underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     invoke(
         "phase-six-adapter-policy",
         "adapter-presented",
@@ -488,8 +604,8 @@ fn adapter_converts_input_output_and_custom_errors_between_exact_descriptors(
             panic!("mapped adapter error is custom")
         };
         assert_eq!(
-            PresentedError::from_error_payload_value(error).unwrap(),
-            PresentedError::Rejected("denied".to_string())
+            PresentedError::from_error_payload_value(error.name, error.payload).unwrap(),
+            Some(PresentedError::Rejected("denied".to_string()))
         );
     });
 }
@@ -524,7 +640,7 @@ impl NestedTransparent {
 impl NestedPresentedMiddleware for NestedTransparent {
     async fn branch__leaf(
         &self,
-        underlying: &mut NestedPresentedUnderlying,
+        underlying: &NestedPresentedUnderlying,
         count: u32,
         name: String,
     ) -> Result<String, ToolInvokeError<Infallible>> {
@@ -547,7 +663,7 @@ impl NestedAdapter {
 impl NestedPresentedMiddleware<AdapterBackendUnderlying> for NestedAdapter {
     async fn branch__leaf(
         &self,
-        underlying: &mut AdapterBackendUnderlying,
+        underlying: &AdapterBackendUnderlying,
         count: u32,
         name: String,
     ) -> Result<String, ToolInvokeError<Infallible>> {
@@ -568,7 +684,9 @@ fn nested_transparent_underlying(calls: NestedCalls) -> UnderlyingTool {
         let SchemaValue::Record { fields } = input.value() else {
             panic!("nested input is a record")
         };
-        let count = u32::from_value(&fields[0]).unwrap();
+        let count = Option::<u32>::from_value(&fields[0])
+            .unwrap()
+            .expect("count is present");
         let name = String::from_value(&fields[1]).unwrap();
         calls.borrow_mut().push((path, count, name.clone()));
         Box::pin(async move { Ok(typed_result(format!("nested:{count}:{name}"))) })
@@ -578,7 +696,7 @@ fn nested_transparent_underlying(calls: NestedCalls) -> UnderlyingTool {
 async fn invoke_nested(
     middleware_name: &str,
     underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     invoke(
         middleware_name,
         "nested-presented",
@@ -662,9 +780,10 @@ async fn universal_acceptance(
     command_path: Vec<String>,
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
     principal: Principal,
-    mut underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     UNIVERSAL_OBSERVATION.with(|observation| {
         *observation.borrow_mut() = Some(UniversalObservation {
             tool_name,
@@ -675,7 +794,9 @@ async fn universal_acceptance(
             had_stdin: stdin.is_some(),
         });
     });
-    underlying.invoke(command_path, input, stdin).await
+    underlying
+        .invoke_forwarding_stdout(command_path, input, stdin, stdout)
+        .await
 }
 
 #[test]
@@ -742,7 +863,7 @@ trait StreamTool {
     fn copy(
         &self,
         input: crate::agentic::InputStream,
-        output: crate::agentic::OutputStream,
+        output: Option<crate::agentic::OutputStream>,
     ) -> String;
 }
 
@@ -761,36 +882,50 @@ impl StreamPolicy {
 impl StreamToolMiddleware for StreamPolicy {
     async fn copy(
         &self,
-        underlying: &mut StreamToolUnderlying,
+        underlying: &StreamToolUnderlying,
         input: InputStream,
-    ) -> Result<(String, InputStream), ToolInvokeError<Infallible>> {
-        underlying.copy(input).await
+        output: Option<OutputStream>,
+    ) -> Result<String, ToolInvokeError<Infallible>> {
+        underlying
+            .start_copy(input)
+            .await?
+            .get_forwarding_stdout(output)
+            .await
     }
 }
 
 fn stream_underlying(include_stdout: bool) -> UnderlyingTool {
-    UnderlyingTool::from_fake(Box::new(move |path, _input, stdin| {
+    UnderlyingTool::from_fake_started(Box::new(move |path, _input, stdin| {
         assert_eq!(path, ["copy"]);
-        Box::pin(async move {
-            let bytes = stdin.expect("copy receives stdin").collect().await;
+        let result = Box::pin(async move {
+            let bytes = stdin
+                .expect("copy receives stdin")
+                .collect()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .concat();
             assert_eq!(bytes, b"request");
-            Ok(wire::InvocationResult {
-                result: Some(
+            Ok(Some(
                     encode_typed_schema_value_owned(
                         "copied".to_string().into_typed_schema_value().unwrap(),
                     )
                     .unwrap(),
-                ),
-                stdout: include_stdout.then(|| readable_stream(b"response")),
-            })
-        })
+            ))
+        });
+        (
+            result as _,
+            include_stdout.then(|| readable_stream(b"response")),
+            Rc::new(Cell::new(false)),
+        )
     }))
 }
 
 async fn invoke_stream(
     stdin: Option<InputStream>,
     underlying: UnderlyingTool,
-) -> Result<InvocationResult, ToolInvokeError<TypedSchemaValue>> {
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     invoke(
         "phase-six-stream-policy",
         "stream-tool",
@@ -805,7 +940,7 @@ async fn invoke_stream(
 }
 
 #[test]
-fn middleware_transfers_stdin_and_forwards_readable_stdout(
+fn middleware_receives_ordinary_output_writer_parameter(
     _registry_test_state: &RegistryTestState,
 ) {
     TEST_STREAM_NEW_CALLS.store(0, Ordering::Relaxed);
@@ -817,7 +952,7 @@ fn middleware_transfers_stdin_and_forwards_readable_stdout(
             String::from_value(result.result.unwrap().value()).unwrap(),
             "copied"
         );
-        assert_eq!(result.stdout.unwrap().collect().await, b"response");
+        assert!(result.stdout.is_none());
     });
     assert_eq!(TEST_STREAM_NEW_CALLS.load(Ordering::Relaxed), 0);
 }
@@ -826,6 +961,12 @@ fn middleware_transfers_stdin_and_forwards_readable_stdout(
 fn dispatch_rejects_invalid_commands_inputs_results_and_stream_shapes(
     _registry_test_state: &RegistryTestState,
 ) {
+    assert_eq!(
+        get_tool_middleware_by_name("phase-six-transparent-policy")
+            .unwrap()
+            .version,
+        "1.2.3"
+    );
     run_acceptance(async {
         let invalid_command = invoke(
             "phase-six-transparent-policy",
@@ -904,12 +1045,12 @@ fn dispatch_rejects_invalid_commands_inputs_results_and_stream_shapes(
         let unexpected_stdout = invoke_echo(
             "forward",
             None,
-            UnderlyingTool::from_fake(Box::new(|_, _, _| {
-                Box::pin(async {
-                    let mut result = typed_result("value".to_string());
-                    result.stdout = Some(readable_stream(b"unexpected"));
-                    Ok(result)
-                })
+            UnderlyingTool::from_fake_started(Box::new(|_, _, _| {
+                (
+                    Box::pin(async { Ok(typed_result("value".to_string()).result) }),
+                    Some(readable_stream(b"unexpected")),
+                    Rc::new(Cell::new(false)),
+                )
             })),
         )
         .await;
@@ -940,7 +1081,7 @@ impl CapabilityPolicy {
 impl CapabilityToolMiddleware for CapabilityPolicy {
     async fn carry(
         &self,
-        underlying: &mut CapabilityToolUnderlying,
+        underlying: &CapabilityToolUnderlying,
         capabilities: Vec<(GuestSecretHandle, GuestQuotaTokenHandle)>,
     ) -> Result<(), ToolInvokeError<Infallible>> {
         underlying.carry(capabilities).await
