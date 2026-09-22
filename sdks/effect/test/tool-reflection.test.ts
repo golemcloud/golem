@@ -5,10 +5,10 @@ import { ToolType } from "../src/ToolReflection.js"
 import { toolClientDefinition, ToolTransport } from "../src/Tool.js"
 import { ToolClient } from "../src/host/ToolClient.js"
 import { compile } from "../src/WitCodec.js"
-import { t, v } from "../src/internal/schema-model/model.js"
-import { schemaGraphToWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
+import { t } from "../src/internal/schema-model/model.js"
+import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
 import { SchemaRef } from "../src/SchemaRef.js"
-import { restrict } from "../src/WitTypes.js"
+import { Binary, restrict } from "../src/WitTypes.js"
 
 const definition = toolDefinition("effect-reflection").body((body) =>
   body.positional("name", Schema.String).returns(Schema.String),
@@ -87,12 +87,11 @@ describe("native tool reflection", () => {
   })
 
   it("owns binary defaults without exposing their mutable bytes", () => {
+    const source = new Uint8Array([1, 255])
     const definition = toolDefinition("effect-binary-snapshot").body((body) =>
-      body.option("payload", Schema.String),
+      body.option("payload", Binary(), { default: source }),
     )
     const wire = compileDefinition(definition).wire
-    const source = new Uint8Array([1, 255])
-    wire.commands.nodes[0].body!.options[0].default_ = schemaValueToWit(v.binary(source))
     const command = new ToolType({
       ...registered,
       lookupName: "effect-binary-snapshot",
@@ -109,25 +108,68 @@ describe("native tool reflection", () => {
     })
   })
 
-  it("does not nest already optional positional and scalar option schemas", () => {
+  it("invokes with one authored option carrier for omitted and supplied inputs", async () => {
     const definition = toolDefinition("effect-single-option").body((body) =>
       body
         .positional("position", Schema.UndefinedOr(Schema.String), { required: false })
         .option("choice", Schema.UndefinedOr(Schema.String)),
     )
-    const command = new ToolType({
+    const compiled = compileDefinition(definition)
+    const optionalRegistered = {
       ...registered,
       lookupName: "effect-single-option",
-      definition: compileDefinition(definition).wire,
-    }).client.command([])
+      definition: compiled.wire,
+    }
+    const sent: Array<Parameters<ToolTransport["start"]>[2]> = []
+    const transport = ToolTransport.of({
+      start: (_tool, _path, input) => {
+        sent.push(input)
+        return Effect.succeed({
+          result: Effect.succeed({ result: undefined }),
+          cancel: Effect.void,
+        })
+      },
+    })
+    const host = ToolClient.of({
+      getAllTools: () => [optionalRegistered],
+      getTool: () => optionalRegistered,
+      createStdin: vi.fn() as never,
+      createStdinFromStream: vi.fn() as never,
+      createStdout: vi.fn() as never,
+      rpc: vi.fn() as never,
+      createRpc: vi.fn() as never,
+    })
+    const command = new ToolType(optionalRegistered).client.command([])
     for (const argument of command.arguments) {
       expect(argument.schema.root.body.tag).toBe("option")
       if (argument.schema.root.body.tag === "option") {
         expect(argument.schema.root.body.element.body.tag).not.toBe("option")
       }
     }
-    expect(command.validateJson({ position: null, choice: null }).success).toBe(true)
-    expect(command.validateJson({ position: "p", choice: "c" }).success).toBe(true)
+    const expectedSchema = new SchemaRef(compiled.bodies.get("")!.input.schemaGraph).toJsonSchema()
+    for (const [position, choice] of [
+      [null, null],
+      ["p", null],
+      [null, "c"],
+      ["p", "c"],
+    ] as const) {
+      expect(command.validateJson({ position, choice }).success).toBe(true)
+      await expect(
+        Effect.runPromise(
+          command
+            .invokeJson({ position, choice })
+            .pipe(
+              Effect.provideService(ToolTransport, transport),
+              Effect.provideService(ToolClient, host),
+            ),
+        ),
+      ).resolves.toBeUndefined()
+      const value = sent.at(-1)!
+      const wire = new SchemaRef(value.graph)
+      expect(wire.validateValue(value.value).success).toBe(true)
+      expect(wire.toJsonSchema()).toEqual(expectedSchema)
+    }
+    expect(sent).toHaveLength(4)
   })
 
   it("sends optional inputs with a graph that accepts both carriers", async () => {
