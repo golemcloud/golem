@@ -4,9 +4,12 @@ package "golemcloud/golem_sdk/gen/interface/golem/api/save-snapshot"
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/api/host",
+  "moonbitlang/core/ref",
 }
 
 // Values
+pub let handler : @ref.Ref[(async (@async-core.TaskGroup[Unit]) -> @host.Snapshot)?]
+
 pub async fn save(@async-core.TaskGroup[Unit]) -> @host.Snapshot
 
 // Errors

@@ -105,6 +105,23 @@ const importObject = {
     },
     finish_read_string() {},
   },
+  "wasi:cli/environment@0.3.0": {
+    "get-environment"(resultPtr) {
+      const memory = new DataView(instance.exports.memory.buffer)
+      memory.setUint32(resultPtr, 0, true)
+      memory.setUint32(resultPtr + 4, 0, true)
+    },
+  },
+  "golem:agent/host@2.0.0": {
+    "parse-agent-id"() {
+      throw new Error("parse-agent-id is not supplied by the SDK unit-test host")
+    },
+  },
+  "wasi:logging/logging": {
+    log() {
+      throw new Error("unexpected guest log in SDK unit-test host")
+    },
+  },
   "$root": rootImports,
   "[export]$root": rootImports,
   "golem:test": {

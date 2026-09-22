@@ -231,6 +231,16 @@ fn run_agents(project_root : String, component_dir : String) -> Unit raise {
     let has_middlewares = middlewares.length() > 0
     let required_pkg_imports : Array[(String, String)] = []
     let file_plan = GeneratedFilePlan::new()
+    let (export_hooks, export_imports) = @lib.generate_export_hooks(
+      has_agents, has_tools, has_middlewares,
+    )
+    required_pkg_imports.append(export_imports)
+    let hooks_path = "\{pkg_dir}/golem_exports.mbt"
+    file_plan.stage_write(
+      hooks_path,
+      generated_file_banner + "\n\n" + @formatter.impls_to_string(export_hooks),
+      "Generated \{hooks_path}",
+    )
     if has_middlewares {
       let middleware_impls = @lib.generate_tool_middleware_registration(
         middlewares, tools,
