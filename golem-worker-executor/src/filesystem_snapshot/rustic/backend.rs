@@ -287,15 +287,18 @@ fn file_size(path: &Path, size: u64) -> RusticResult<u32> {
     })
 }
 
-/// Gives the bytes of the parts one after the other.
-fn join(parts: &[Bytes]) -> Vec<u8> {
-    parts.iter().fold(
-        Vec::with_capacity(parts.iter().map(Bytes::len).sum()),
-        |mut joined, part| {
-            joined.extend_from_slice(part);
-            joined
-        },
-    )
+/// Gives the bytes of the parts one after the other, in one allocation of the final size.
+fn join(parts: &[Bytes]) -> Box<[u8]> {
+    parts
+        .iter()
+        .fold(
+            Vec::with_capacity(parts.iter().map(Bytes::len).sum()),
+            |mut joined, part| {
+                joined.extend_from_slice(part);
+                joined
+            },
+        )
+        .into_boxed_slice()
 }
 
 /// The error of a file that the blob storage does not hold.

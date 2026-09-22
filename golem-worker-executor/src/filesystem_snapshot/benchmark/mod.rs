@@ -180,10 +180,11 @@ fn results_namespace() -> BlobStorageNamespace {
 }
 
 /// Gives the path of the result of a phase in the namespace of the results.
-fn result_path(scenario: &str, cpu_setting: &str, tree: &str, phase: &str) -> PathBuf {
+fn result_path(scenario: &str, cpu_setting: &str, tree: &str, phase: &str) -> Box<Path> {
     PathBuf::from(format!(
         "results/{scenario}/{cpu_setting}/{tree}/{phase}.json"
     ))
+    .into_boxed_path()
 }
 
 /// Gives the scope of the repository of a scenario, a CPU setting and a tree.
@@ -218,7 +219,7 @@ impl PhaseContext {
         )
     }
 
-    fn result_path(&self, phase: &str) -> PathBuf {
+    fn result_path(&self, phase: &str) -> Box<Path> {
         result_path(
             self.selection.scenario.name,
             &self.cpu_setting,

@@ -103,8 +103,8 @@ fn each_run_id_gives_its_own_repository_key() {
 #[test]
 fn a_result_is_at_the_path_of_its_scenario_cpu_setting_tree_and_phase() {
     assert_eq!(
-        result_path("base", "limit-3", "files-1g", "save"),
-        std::path::PathBuf::from("results/base/limit-3/files-1g/save.json")
+        &*result_path("base", "limit-3", "files-1g", "save"),
+        std::path::Path::new("results/base/limit-3/files-1g/save.json")
     );
 }
 

@@ -71,7 +71,7 @@ const GEOMETRY_FLAGS: [(u32, &str); 26] = [
 /// One line of `/proc/self/mountinfo`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Mount {
-    pub(super) mount_point: PathBuf,
+    pub(super) mount_point: Box<Path>,
     pub(super) filesystem_type: Box<str>,
     pub(super) source: Box<str>,
     pub(super) mount_options: Box<str>,
@@ -150,7 +150,7 @@ fn parse_mount(line: &str) -> Option<Mount> {
     let mount = mount.split(' ').collect::<Vec<_>>();
     let filesystem = filesystem.split(' ').collect::<Vec<_>>();
     Some(Mount {
-        mount_point: PathBuf::from(unescape(mount.get(4)?)),
+        mount_point: PathBuf::from(unescape(mount.get(4)?)).into_boxed_path(),
         mount_options: (*mount.get(5)?).into(),
         filesystem_type: (*filesystem.first()?).into(),
         source: (*filesystem.get(1)?).into(),

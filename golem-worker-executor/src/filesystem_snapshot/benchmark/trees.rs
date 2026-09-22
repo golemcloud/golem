@@ -147,9 +147,9 @@ pub(super) async fn change(spec: &TreeSpec, root: &Path) -> anyhow::Result<Value
 }
 
 /// Gives the path of the file with the index, relative to the root of the tree.
-fn file_path(index: u64, files: u64, directories: u64) -> PathBuf {
+fn file_path(index: u64, files: u64, directories: u64) -> Box<Path> {
     let per_directory = files.div_ceil(directories.max(1)).max(1);
-    PathBuf::from(format!("d{:03}/f{index:05}", index / per_directory))
+    PathBuf::from(format!("d{:03}/f{index:05}", index / per_directory)).into_boxed_path()
 }
 
 /// Gives the size of the file with the index. The sizes add up to `bytes`.
@@ -158,8 +158,8 @@ fn file_size(index: u64, files: u64, bytes: u64) -> u64 {
 }
 
 /// Gives `size` bytes that do not compress, the same for the same path and generation.
-fn content(path: &Path, generation: u8, size: u64) -> io::Result<Vec<u8>> {
-    let mut content = vec![0; usize::try_from(size).map_err(io::Error::other)?];
+fn content(path: &Path, generation: u8, size: u64) -> io::Result<Box<[u8]>> {
+    let mut content = vec![0; usize::try_from(size).map_err(io::Error::other)?].into_boxed_slice();
     blake3::Hasher::new_derive_key("golem fs-snapshot benchmark file content")
         .update(&[generation])
         .update(path.as_os_str().as_bytes())
@@ -402,9 +402,9 @@ mod tests {
             (
                 100,
                 vec![15, 15, 14, 14, 14, 14, 14],
-                "d000/f00000".into(),
-                "d001/f00019".into(),
-                "d009/f00099".into(),
+                Path::new("d000/f00000").into(),
+                Path::new("d001/f00019").into(),
+                Path::new("d009/f00099").into(),
             )
         );
     }
