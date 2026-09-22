@@ -1238,7 +1238,8 @@ impl DurableStreamStore {
                         StreamSessionRecord::ExternalProducerState(record) => {
                             index.apply_external_producer_state(&record);
                         }
-                        StreamSessionRecord::InputHighWater(_) => {}
+                        StreamSessionRecord::InputHighWater(_)
+                        | StreamSessionRecord::ExpiryRefreshed(_) => {}
                         _ => unreachable!("write batch contains an unrelated session record"),
                     }
                 }

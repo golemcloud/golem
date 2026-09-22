@@ -488,8 +488,9 @@ pub(crate) mod tests {
     use golem_common::model::durable_stream::{
         AttachmentId, AttemptId, PersistedInvocationTarget, PersistedStreamInvocationDescriptor,
         StartAttemptDescriptor, StreamForkCutRecord, StreamItemsPayload, StreamOffset,
-        StreamRegistrationRecordCoordinate, StreamRootKind, StreamSessionFinishedRecord,
-        StreamSessionKey, StreamSessionPreparedRecord, StreamSourceKind,
+        StreamRegistrationRecordCoordinate, StreamRootKind, StreamSessionExpiryPolicy,
+        StreamSessionFinishedRecord, StreamSessionKey, StreamSessionPreparedRecord,
+        StreamSourceKind,
     };
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::{
@@ -608,6 +609,9 @@ pub(crate) mod tests {
         StreamSessionPreparedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: key.idempotency_key.clone(),
+            public_session_id: key.idempotency_key.value.clone(),
+            expiry_policy: StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
             attempt: StartAttemptDescriptor {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: key.clone(),

@@ -7,7 +7,7 @@
 use super::{DefaultWorkerFork, admission, admission::Admission, stream_cut};
 use crate::durable_host::durable_stream::DurableStreamStore;
 use crate::services::HasOplog;
-use crate::services::oplog::{CommitLevel, OplogService, OplogServiceOps};
+use crate::services::oplog::{CommitLevel, OplogOps, OplogService, OplogServiceOps};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -16,10 +16,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{
-    StreamExportFork, StreamForkCutRecord, StreamItemsPayload, StreamOffset, StreamSessionRecord,
+    DURABLE_STREAM_FORMAT_VERSION, StreamExportFork, StreamExportForkInitializedRecord,
+    StreamForkCutRecord, StreamItemsPayload, StreamOffset, StreamSessionExpiryPolicy,
+    StreamSessionRecord,
 };
 use golem_common::model::oplog::OplogEntry;
-use golem_common::model::{AgentFingerprint, AgentId, OplogIndex, OwnedAgentId, Timestamp};
+use golem_common::model::{
+    AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId, Timestamp,
+};
 use golem_common::schema::SchemaGraph;
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -29,6 +33,7 @@ use uuid::Uuid;
 
 pub(super) use golem_common::model::durable_stream::StreamExportForkCandidate as Candidate;
 
+#[derive(Debug)]
 enum Error {
     Rejected(ForkStreamSlotRejection),
     Worker(WorkerExecutorError),
@@ -93,16 +98,104 @@ async fn execute<Ctx: WorkerCtx>(
     }
     service.shard_service.check_worker(&source_id)?;
 
-    // The target receipt wins before consulting the source: its tail, tombstone or even
-    // existence may have changed since the successful request whose response was lost.
-    if let Some(receipt) = creation_record(service.oplog_service.as_ref(), &target).await? {
+    let source_metadata = service
+        .worker_service
+        .get(&source)
+        .await?
+        .ok_or_else(|| reject(Reason::NotFound))?;
+    let metadata = source_metadata.initial_worker_metadata.clone();
+    if let Some(receipt) = creation_receipt(service.oplog_service.as_ref(), &target).await? {
+        if !receipt.live {
+            return Err(reject(Reason::NotFound));
+        }
         let export = receipt
+            .cut
             .export
             .as_ref()
-            .filter(|export| matches_request(export, request, &source_id))
+            .filter(|export| {
+                export.source_fingerprint == metadata.fingerprint
+                    && matches_request(export, request, &source_id)
+            })
             .ok_or_else(|| reject(Reason::Conflict))?;
+        if receipt.initialized.request_hash != receipt.cut.request_hash
+            || receipt.initialized.public_session_id != request.session
+            || receipt.initialized.expiry_policy != export.target_expiry_policy
+        {
+            return Err(reject(Reason::Conflict));
+        }
+        let status = crate::worker::status::calculate_last_known_status_with_checkpoint(
+            service,
+            &source,
+            metadata.agent_mode,
+            source_metadata.last_known_status,
+        )
+        .await
+        .map_err(WorkerExecutorError::runtime)?
+        .ok_or_else(|| reject(Reason::NotFound))?;
+        let binding = service
+            .worker_service
+            .lookup_durable_stream_public_binding(
+                &source,
+                metadata.agent_mode,
+                &status,
+                &request.session,
+            )
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        let Some(golem_common::model::DurableStreamPublicBinding::Live {
+            session_key: source_public_key,
+            expiry_deadline_millis,
+            ..
+        }) = binding
+        else {
+            return Err(reject(Reason::NotFound));
+        };
+        if expiry_deadline_millis
+            .is_some_and(|deadline| deadline <= Timestamp::now_utc().to_millis())
+        {
+            return Err(reject(Reason::NotFound));
+        }
+        let source_public_session = service
+            .worker_service
+            .lookup_durable_stream_session(
+                &source,
+                metadata.agent_mode,
+                &status,
+                &source_public_key,
+            )
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        let source_content_key = source_public_session
+            .as_ref()
+            .and_then(|status| status.export_source_invocation.as_ref())
+            .map_or(&source_public_key, |source| &source.idempotency_key);
+        let source_content_session = service
+            .worker_service
+            .lookup_durable_stream_session(
+                &source,
+                metadata.agent_mode,
+                &status,
+                source_content_key,
+            )
+            .await
+            .map_err(WorkerExecutorError::runtime)?;
+        if source_content_key != &receipt.initialized.source_invocation.idempotency_key
+            || source_public_session
+                .as_ref()
+                .is_none_or(|status| status.tombstoned_slots.contains(&request.slot))
+            || source_content_session
+                .as_ref()
+                .is_none_or(|status| status.tombstoned_slots.contains(&request.slot))
+        {
+            return Err(reject(Reason::NotFound));
+        }
         resume(service, &target_id, &auth).await?;
-        return Ok(response(export, receipt.cut_index, true));
+        return Ok(response(
+            export,
+            receipt.cut.cut_index,
+            true,
+            &receipt.initialized.session_key,
+        ));
     }
     if service
         .oplog_service
@@ -115,15 +208,16 @@ async fn execute<Ctx: WorkerCtx>(
     {
         return Err(reject(Reason::Conflict));
     }
-    let metadata = service
-        .worker_service
-        .get(&source)
-        .await?
-        .ok_or_else(|| reject(Reason::NotFound))?
-        .initial_worker_metadata;
     let worker = Worker::find_durable_stream_worker(service, &source)
         .await?
         .ok_or_else(|| reject(Reason::NotFound))?;
+    if worker
+        .resolve_export_fork_slot(&request.session, &request.slot, &request.expected_method)
+        .await?
+        .is_none_or(|slot| slot.tombstoned)
+    {
+        return Err(reject(Reason::NotFound));
+    }
     let status = worker.get_export_fork_status().await?;
     match admission::check(
         &status.export_fork_admissions,
@@ -175,6 +269,7 @@ async fn execute<Ctx: WorkerCtx>(
             candidate.export.content_type.clone(),
             candidate.export.initial_content_hash.clone(),
             request.closed,
+            candidate.export.target_expiry_policy,
         ),
     );
     let hash =
@@ -182,7 +277,7 @@ async fn execute<Ctx: WorkerCtx>(
     let mut stage_id = Uuid::new_v4();
     let result = async {
         // Stage before charging limits. A rejected byte budget never consumes admission.
-        let (mut oplog, copied_bytes) = stage(
+        let (mut oplog, copied_bytes, mut target_fingerprint) = stage(
             service,
             &source,
             &target_id,
@@ -208,6 +303,8 @@ async fn execute<Ctx: WorkerCtx>(
                 worker.read_export_fork_candidate(oplog_index).await?
             }
             Admission::Conflict | Admission::LimitReached => return Err(reject(Reason::Conflict)),
+            Admission::Expired => return Err(reject(Reason::NotFound)),
+            Admission::InvalidExpiry => return Err(reject(Reason::Conflict)),
             Admission::RateLimited {
                 retry_after_seconds,
             } => {
@@ -227,7 +324,7 @@ async fn execute<Ctx: WorkerCtx>(
                 .map_err(WorkerExecutorError::runtime)?;
             stage_id = Uuid::new_v4();
             candidate = winner;
-            (oplog, _) = stage(
+            (oplog, _, target_fingerprint) = stage(
                 service,
                 &source,
                 &target_id,
@@ -240,25 +337,58 @@ async fn execute<Ctx: WorkerCtx>(
             .await?;
         }
         oplog.commit(CommitLevel::Always).await;
+        let target_lifecycle = service.oplog_service.lock_lifecycle(&target.agent_id).await;
+        let expiry_deadline_millis = admitted_publication_deadline(&candidate);
+        append_target_initialization(oplog.as_ref(), &candidate, hash, expiry_deadline_millis)
+            .await?;
+        schedule_expiry(
+            service,
+            &target,
+            target_fingerprint,
+            &candidate,
+            expiry_deadline_millis,
+        )
+        .await?;
+        oplog.commit(CommitLevel::Always).await;
         let last = oplog.current_oplog_index().await;
         drop(oplog);
-        let target_lifecycle = service.oplog_service.lock_lifecycle(&target.agent_id).await;
         let published = service
             .oplog_service
             .publish_staged(&target, AgentMode::Durable, stage_id, last)
             .await;
         let result = match published {
-            Ok(true) => Ok(response(&candidate.export, candidate.cut, false)),
+            Ok(true) => Ok(response(
+                &candidate.export,
+                candidate.cut,
+                false,
+                &candidate.target_session_key,
+            )),
             outcome => {
                 if let Some(receipt) =
-                    creation_record(service.oplog_service.as_ref(), &target).await?
+                    creation_receipt(service.oplog_service.as_ref(), &target).await?
                 {
                     let export = receipt
+                        .cut
                         .export
                         .as_ref()
-                        .filter(|export| matches_request(export, request, &source_id))
+                        .filter(|export| {
+                            export.source_fingerprint == metadata.fingerprint
+                                && matches_request(export, request, &source_id)
+                        })
                         .ok_or_else(|| reject(Reason::Conflict))?;
-                    Ok(response(export, receipt.cut_index, true))
+                    if !receipt.live
+                        || receipt.initialized.request_hash != receipt.cut.request_hash
+                        || receipt.initialized.public_session_id != request.session
+                        || receipt.initialized.expiry_policy != export.target_expiry_policy
+                    {
+                        return Err(reject(Reason::Conflict));
+                    }
+                    Ok(response(
+                        export,
+                        receipt.cut.cut_index,
+                        true,
+                        &receipt.initialized.session_key,
+                    ))
                 } else {
                     Err(
                         WorkerExecutorError::runtime(outcome.err().unwrap_or_else(|| {
@@ -311,7 +441,14 @@ async fn stage<Ctx: WorkerCtx>(
     hash: [u8; 32],
     candidate: &Candidate,
     max_bytes: u64,
-) -> Result<(std::sync::Arc<dyn crate::services::oplog::Oplog>, u64), Error> {
+) -> Result<
+    (
+        std::sync::Arc<dyn crate::services::oplog::Oplog>,
+        u64,
+        AgentFingerprint,
+    ),
+    Error,
+> {
     service
         .copy_source_oplog(
             account,
@@ -337,6 +474,81 @@ async fn stage<Ctx: WorkerCtx>(
                 Error::Worker(error)
             }
         })
+}
+
+fn admitted_publication_deadline(candidate: &Candidate) -> Option<u64> {
+    match candidate.expiry_policy {
+        StreamSessionExpiryPolicy::None => None,
+        StreamSessionExpiryPolicy::Sliding { ttl_seconds } => Some(
+            Timestamp::now_utc()
+                .to_millis()
+                .checked_add(
+                    ttl_seconds
+                        .checked_mul(1_000)
+                        .expect("admitted stream TTL must be representable"),
+                )
+                .expect("admitted stream deadline must be representable"),
+        ),
+        StreamSessionExpiryPolicy::Absolute { .. } => candidate.expiry_deadline_millis,
+    }
+}
+
+async fn append_target_initialization(
+    oplog: &dyn crate::services::oplog::Oplog,
+    candidate: &Candidate,
+    request_hash: [u8; 32],
+    expiry_deadline_millis: Option<u64>,
+) -> Result<(), Error> {
+    let initialized =
+        StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            public_session_id: candidate.export.session.clone(),
+            session_key: candidate.target_session_key.clone(),
+            source_invocation: candidate.source_invocation.clone(),
+            request_hash: request_hash.to_vec(),
+            expiry_policy: candidate.expiry_policy,
+            expiry_deadline_millis,
+        });
+    let record = oplog
+        .upload_payload(&initialized)
+        .await
+        .map_err(WorkerExecutorError::runtime)?;
+    oplog
+        .add(OplogEntry::StreamSession {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            record,
+        })
+        .await;
+    Ok(())
+}
+
+async fn schedule_expiry<Ctx: WorkerCtx>(
+    service: &DefaultWorkerFork<Ctx>,
+    target: &OwnedAgentId,
+    fingerprint: AgentFingerprint,
+    candidate: &Candidate,
+    deadline_millis: Option<u64>,
+) -> Result<(), Error> {
+    let Some(deadline_millis) = deadline_millis else {
+        return Ok(());
+    };
+    let deadline = expiry_datetime(deadline_millis)
+        .expect("admitted stream expiry must have a representable deadline");
+    service
+        .scheduler_service
+        .schedule(
+            deadline,
+            golem_common::model::ScheduledAction::ExpireDurableStreamSession {
+                owned_agent_id: target.clone(),
+                target_agent_fingerprint: fingerprint,
+                public_session_id: candidate.export.session.clone(),
+                session_key: candidate.target_session_key.clone(),
+                expected_deadline_millis: deadline_millis,
+            },
+        )
+        .await;
+    Ok(())
 }
 
 async fn prepare_candidate<Ctx: WorkerCtx>(
@@ -378,6 +590,8 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
         return Err(reject(Reason::ReadOnly));
     }
     let initial = initial_payload(&slot.graph, slot.bytes, &request.initial_content)?;
+    let (expiry_policy, expiry_deadline_millis) =
+        effective_expiry_policy(request.expiry_policy, slot.expiry_policy)?;
     let requested_offset = request
         .fork_offset
         .as_deref()
@@ -470,19 +684,46 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
             content_type: content_type.into(),
             initial_content_hash: blake3::hash(&request.initial_content).as_bytes().to_vec(),
             closed: request.closed,
+            target_expiry_policy: expiry_policy,
         },
         horizon: snapshot.horizon,
         cut: cut.oplog_index,
         selected: handle.stream_id,
+        source_invocation: handle.source_invocation,
+        target_session_key: IdempotencyKey::new(Uuid::new_v4().to_string()),
+        expiry_policy,
+        expiry_deadline_millis,
         retained_through: cut.last_item_offset,
         initial,
     })
+}
+
+fn effective_expiry_policy(
+    explicit: Option<golem_api_grpc::proto::golem::workerexecutor::v1::StreamSessionExpiryPolicy>,
+    inherited: StreamSessionExpiryPolicy,
+) -> Result<(StreamSessionExpiryPolicy, Option<u64>), Error> {
+    let policy = match explicit {
+        Some(policy) => crate::grpc::stream_slots::expiry_policy_from_proto(Some(policy))?,
+        None => inherited,
+    };
+    let deadline = match policy {
+        StreamSessionExpiryPolicy::None | StreamSessionExpiryPolicy::Sliding { .. } => None,
+        StreamSessionExpiryPolicy::Absolute { expires_at_millis } => Some(expires_at_millis),
+    };
+    Ok((policy, deadline))
+}
+
+fn expiry_datetime(millis: u64) -> Option<chrono::DateTime<chrono::Utc>> {
+    i64::try_from(millis)
+        .ok()
+        .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
 }
 
 pub(crate) fn response(
     export: &StreamExportFork,
     cut: OplogIndex,
     replayed: bool,
+    invocation_key: &IdempotencyKey,
 ) -> ForkStreamSlotSuccess {
     ForkStreamSlotSuccess {
         replayed,
@@ -493,6 +734,7 @@ pub(crate) fn response(
             .unwrap_or_default(),
         sub_offset: export.sub_offset,
         oplog_index: cut.as_u64(),
+        invocation_key: Some(invocation_key.clone().into()),
     }
 }
 
@@ -516,6 +758,10 @@ pub(super) fn matches_request(
             .is_none_or(|ct| ct == &export.content_type)
         && export.initial_content_hash == blake3::hash(&request.initial_content).as_bytes()
         && export.closed == request.closed
+        && request.expiry_policy.as_ref().is_none_or(|policy| {
+            crate::grpc::stream_slots::expiry_policy_from_proto(Some(*policy))
+                .is_ok_and(|policy| policy == export.target_expiry_policy)
+        })
 }
 
 /// The first marker authored for this incarnation is its immutable creation receipt, even
@@ -524,6 +770,21 @@ pub(crate) async fn creation_record(
     service: &dyn OplogService,
     target: &OwnedAgentId,
 ) -> Result<Option<StreamForkCutRecord>, WorkerExecutorError> {
+    Ok(creation_receipt(service, target)
+        .await?
+        .map(|receipt| receipt.cut))
+}
+
+struct CreationReceipt {
+    cut: StreamForkCutRecord,
+    initialized: StreamExportForkInitializedRecord,
+    live: bool,
+}
+
+async fn creation_receipt(
+    service: &dyn OplogService,
+    target: &OwnedAgentId,
+) -> Result<Option<CreationReceipt>, WorkerExecutorError> {
     let mode = AgentMode::Durable;
     let horizon = service.get_last_index(target, mode).await;
     if horizon == OplogIndex::NONE {
@@ -536,6 +797,10 @@ pub(crate) async fn creation_record(
         return Ok(None);
     };
     let mut covered = OplogIndex::INITIAL;
+    let mut cut = None;
+    let mut initialized = None;
+    let mut current_deadline_millis = None;
+    let mut live = true;
     while covered < horizon {
         let count = (horizon.as_u64() - covered.as_u64()).min(1024);
         let entries = service
@@ -553,16 +818,66 @@ pub(crate) async fn creation_record(
                     .download_payload(target, mode, record)
                     .await
                     .map_err(WorkerExecutorError::runtime)?;
-                if let StreamSessionRecord::ForkCut(cut) = record
-                    && cut.creation_fingerprint.0 == *instance_id
-                    && cut.revert.is_none()
-                {
-                    return Ok(Some(cut));
+                match record {
+                    StreamSessionRecord::ForkCut(record)
+                        if cut.is_none()
+                            && record.creation_fingerprint.0 == *instance_id
+                            && record.revert.is_none() =>
+                    {
+                        cut = Some(record);
+                    }
+                    StreamSessionRecord::ExportForkInitialized(record)
+                        if initialized.is_none()
+                            && cut.as_ref().is_some_and(|cut: &StreamForkCutRecord| {
+                                record.request_hash == cut.request_hash
+                            }) =>
+                    {
+                        current_deadline_millis = record.expiry_deadline_millis;
+                        initialized = Some(record);
+                    }
+                    StreamSessionRecord::ExpiryRefreshed(record)
+                        if initialized.as_ref().is_some_and(
+                            |initialized: &StreamExportForkInitializedRecord| {
+                                initialized.session_key == record.session_key
+                                    && initialized.public_session_id == record.public_session_id
+                            },
+                        ) && current_deadline_millis
+                            == Some(record.expected_deadline_millis) =>
+                    {
+                        current_deadline_millis = Some(record.deadline_millis);
+                    }
+                    StreamSessionRecord::Expired(record)
+                        if initialized.as_ref().is_some_and(
+                            |initialized: &StreamExportForkInitializedRecord| {
+                                initialized.session_key == record.session_key
+                                    && initialized.public_session_id == record.public_session_id
+                            },
+                        ) && current_deadline_millis
+                            == Some(record.expected_deadline_millis) =>
+                    {
+                        live = false;
+                    }
+                    _ => {}
                 }
             }
         }
     }
-    Ok(None)
+    match (cut, initialized) {
+        (Some(cut), Some(initialized)) => {
+            live &= current_deadline_millis
+                .is_none_or(|deadline| deadline > Timestamp::now_utc().to_millis());
+            Ok(Some(CreationReceipt {
+                cut,
+                initialized,
+                live,
+            }))
+        }
+        (None, None) => Ok(None),
+        (Some(cut), None) if cut.export.is_none() => Ok(None),
+        _ => Err(WorkerExecutorError::runtime(
+            "incomplete fork creation receipt",
+        )),
+    }
 }
 
 pub(super) fn initial_payload(
@@ -600,4 +915,72 @@ pub(super) fn initial_payload(
     DurableStreamStore::validate_external_input(Some(&payload))
         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
     Ok(Some(payload))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        StreamSessionExpiryPolicy as ProtoExpiryPolicy, stream_session_expiry_policy,
+    };
+    use test_r::test;
+
+    #[test]
+    fn fork_expiry_inherits_or_overrides_the_source_policy() {
+        let inherited = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 60 };
+        assert_eq!(
+            effective_expiry_policy(None, inherited).unwrap(),
+            (inherited, None)
+        );
+
+        let explicit = ProtoExpiryPolicy {
+            kind: Some(stream_session_expiry_policy::Kind::ExpiresAtMillis(5_000)),
+        };
+        assert_eq!(
+            effective_expiry_policy(Some(explicit), inherited).unwrap(),
+            (
+                StreamSessionExpiryPolicy::Absolute {
+                    expires_at_millis: 5_000
+                },
+                Some(5_000)
+            )
+        );
+        assert_eq!(
+            effective_expiry_policy(Some(explicit), inherited).unwrap(),
+            (
+                StreamSessionExpiryPolicy::Absolute {
+                    expires_at_millis: 5_000
+                },
+                Some(5_000)
+            )
+        );
+
+        let overflowing = ProtoExpiryPolicy {
+            kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(u64::MAX)),
+        };
+        assert_eq!(
+            effective_expiry_policy(Some(overflowing), inherited).unwrap(),
+            (
+                StreamSessionExpiryPolicy::Sliding {
+                    ttl_seconds: u64::MAX
+                },
+                None
+            )
+        );
+
+        let out_of_range = ProtoExpiryPolicy {
+            kind: Some(stream_session_expiry_policy::Kind::ExpiresAtMillis(
+                u64::MAX,
+            )),
+        };
+        assert_eq!(
+            effective_expiry_policy(Some(out_of_range), inherited).unwrap(),
+            (
+                StreamSessionExpiryPolicy::Absolute {
+                    expires_at_millis: u64::MAX
+                },
+                Some(u64::MAX)
+            )
+        );
+    }
 }

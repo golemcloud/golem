@@ -553,7 +553,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         )>,
         max_copied_bytes: Option<u64>,
         export: Option<&export::Candidate>,
-    ) -> Result<(Arc<dyn Oplog>, u64), WorkerExecutorError> {
+    ) -> Result<(Arc<dyn Oplog>, u64, AgentFingerprint), WorkerExecutorError> {
         record_worker_call("fork");
 
         tracing::debug!(
@@ -605,7 +605,10 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         .map_err(WorkerExecutorError::runtime)?
         .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_source_agent_id.agent_id()))?;
 
-        let instance_id = Uuid::new_v4();
+        // The stage id also identifies the target incarnation while it is hidden. This lets
+        // scheduled work for that incarnation distinguish publication in progress from a target
+        // that genuinely does not exist.
+        let instance_id = stage_id;
         let source_oplog_metadata = initial_source_worker_metadata.clone();
 
         // Use the source worker's `created_by` (the component owner) rather
@@ -878,7 +881,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         for (idempotency_key, pending_index) in pending_invocation_keys {
             if let Some(candidate) = export {
-                if idempotency_key.value == candidate.export.session {
+                if idempotency_key == candidate.source_invocation.idempotency_key {
                     continue;
                 }
                 if let OplogEntry::PendingAgentInvocation { payload, .. } =
@@ -966,6 +969,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         Ok((
             new_oplog,
             copied_bytes.saturating_add(external_payload_bytes.load(Ordering::Relaxed)),
+            AgentFingerprint(instance_id),
         ))
     }
 
@@ -998,7 +1002,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         if !publication::existing_fork(self.oplog_service.as_ref(), &target, cut, hash).await? {
             let stage_id = Uuid::new_v4();
             let result = async {
-                let (oplog, _) = self
+                let (oplog, _, _) = self
                     .copy_source_oplog(
                         fork_account_id,
                         source,

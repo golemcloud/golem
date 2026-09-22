@@ -30,7 +30,8 @@ use golem_common::base_model::durable_stream::{
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{
-    AgentFingerprint, DurableStreamSessionStatus, IdempotencyKey, OwnedAgentId,
+    AgentFingerprint, DurableStreamPublicBinding, DurableStreamSessionStatus, IdempotencyKey,
+    OwnedAgentId,
 };
 use golem_common::serialization::{deserialize, serialize};
 use std::collections::{HashMap, HashSet};
@@ -39,6 +40,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 pub(super) const METADATA_FIELD: &str = "coverage";
 const SESSION_FIELD_PREFIX: &str = "session:";
+const PUBLIC_BINDING_FIELD_PREFIX: &str = "public-binding:";
 pub(crate) const CONSUMER_JOURNAL_INDEX_PAGE_SIZE: u64 = 256;
 const RECOVERY_CATALOGUE_PAGE_SIZE: u64 = 256;
 
@@ -79,6 +81,7 @@ pub(super) struct Metadata {
     pub(super) producer_fingerprint: Option<AgentFingerprint>,
     pub(super) lineage_discovered_through: OplogIndex,
     pub(super) stream_fork_lineage: StreamForkLineage,
+    pub(super) export_fork_initialized_sessions: HashSet<IdempotencyKey>,
 }
 
 /// Producer identity read from the same projection as stream metadata. `covered_through` is at
@@ -637,6 +640,45 @@ impl StreamSessionIndexService {
         .map_err(|err| format!("stream session index task failed: {err}"))?
     }
 
+    pub async fn lookup_public_binding(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        public_session_id: &str,
+    ) -> Result<Option<DurableStreamPublicBinding>, String> {
+        let oplog = self.oplog.upgrade().ok_or("oplog service is unavailable")?;
+        let horizon = oplog.get_last_index(id, mode).await;
+        self.catch_up(id, mode, horizon).await?;
+        let lock = self.index_lock(id);
+        let _guard = lock.inner.lock().await;
+        let values = self
+            .kv
+            .with_entity("stream_session_index", "lookup", "public_binding")
+            .get_many_raw(
+                Self::namespace(id),
+                vec![
+                    METADATA_FIELD.into(),
+                    Self::public_binding_field(public_session_id),
+                ]
+                .into(),
+            )
+            .await?;
+        let metadata: Metadata = values
+            .first()
+            .and_then(Option::as_ref)
+            .map(|bytes| deserialize(bytes))
+            .transpose()?
+            .ok_or("stream session index coverage is unavailable after catch-up")?;
+        if metadata.covered_through < horizon {
+            return Err("stream session index coverage regressed after catch-up".into());
+        }
+        values
+            .get(1)
+            .and_then(Option::as_ref)
+            .map(|bytes| deserialize(bytes))
+            .transpose()
+    }
+
     pub async fn clear(&self, id: &OwnedAgentId) -> Result<(), String> {
         let this = self.clone();
         let id = id.clone();
@@ -657,6 +699,10 @@ impl StreamSessionIndexService {
 
     pub(super) fn field(key: &IdempotencyKey) -> String {
         format!("{SESSION_FIELD_PREFIX}{}", key.value)
+    }
+
+    pub(super) fn public_binding_field(public_session_id: &str) -> String {
+        format!("{PUBLIC_BINDING_FIELD_PREFIX}{public_session_id}")
     }
 
     fn index_lock(&self, id: &OwnedAgentId) -> IndexLock {
@@ -788,13 +834,8 @@ impl StreamSessionIndexService {
                 .stream_fork_lineage
                 .cuts()
                 .iter()
-                .any(|(index, cut)| {
-                    *index > previously_discovered
-                        && (cut.cut_index <= metadata.covered_through
-                            || cut
-                                .revert
-                                .as_ref()
-                                .is_some_and(|region| region.start <= metadata.covered_through))
+                .any(|(index, _)| {
+                    *index > previously_discovered && metadata.covered_through != OplogIndex::NONE
                 })
             {
                 self.refold_and_publish(id, mode, horizon, &namespace, expected.as_deref())
@@ -869,6 +910,8 @@ impl StreamSessionIndexService {
                     ProducerMetadataProjection::default()
                 };
                 let mut updates = HashMap::<IdempotencyKey, DurableStreamSessionStatus>::new();
+                let mut public_bindings =
+                    HashMap::<String, Option<DurableStreamPublicBinding>>::new();
                 let mut controls = HashMap::<StreamSessionKey, SessionControlMetadata>::new();
                 let mut journal_pages = HashMap::<String, Vec<OplogIndex>>::new();
                 let mut resume_offsets = HashMap::<String, OplogIndex>::new();
@@ -925,7 +968,27 @@ impl StreamSessionIndexService {
                             &decoded
                         }
                     };
+                    if let StreamSessionRecord::ExportForkInitialized(record) = record {
+                        metadata
+                            .export_fork_initialized_sessions
+                            .insert(record.session_key.clone());
+                    }
                     if let StreamSessionRecord::ForkCut(cut) = record {
+                        for key in metadata.export_fork_initialized_sessions.clone() {
+                            if !updates.contains_key(&key) {
+                                let status: Option<DurableStreamSessionStatus> = self
+                                    .kv
+                                    .with_entity("stream_session_index", "read", "session")
+                                    .get(namespace.clone(), &Self::field(&key))
+                                    .await?;
+                                if let Some(status) = status {
+                                    updates.insert(key.clone(), status);
+                                }
+                            }
+                            if let Some(status) = updates.get_mut(&key) {
+                                status.apply_record(*idx, record);
+                            }
+                        }
                         if let Some(fork) = producer_fields.fork.as_ref() {
                             for key in &fork.sessions {
                                 let old = if let Some(control) = controls.remove(key) {
@@ -944,14 +1007,22 @@ impl StreamSessionIndexService {
                                 let mut projected = old.for_fork(cut)?;
                                 projected.assign_recovery_slot(old.recovery_slot());
                                 controls.insert(key.clone(), projected);
-                                let field = Self::field(&key.idempotency_key);
-                                let status: Option<DurableStreamSessionStatus> = self.kv
-                                    .with_entity("stream_session_index", "read", "session")
-                                    .get(namespace.clone(), &field)
-                                    .await?;
-                                if let Some(mut status) = status {
+                                if !updates.contains_key(&key.idempotency_key) {
+                                    let status: Option<DurableStreamSessionStatus> = self
+                                        .kv
+                                        .with_entity(
+                                            "stream_session_index",
+                                            "read",
+                                            "session",
+                                        )
+                                        .get(namespace.clone(), &Self::field(&key.idempotency_key))
+                                        .await?;
+                                    if let Some(status) = status {
+                                        updates.insert(key.idempotency_key.clone(), status);
+                                    }
+                                }
+                                if let Some(status) = updates.get_mut(&key.idempotency_key) {
                                     status.apply_record(*idx, record);
-                                    updates.insert(key.idempotency_key.clone(), status);
                                 }
                             }
                         }
@@ -960,6 +1031,54 @@ impl StreamSessionIndexService {
                     }
                     if metadata.stream_fork_lineage.resets_control(*idx, record) {
                         continue;
+                    }
+                    let inherited = metadata
+                        .stream_fork_lineage
+                        .cuts()
+                        .iter()
+                        .rev()
+                        .find(|(_, cut)| cut.revert.is_none())
+                        .is_some_and(|(marker, _)| idx < marker);
+                    let public_session_id = if inherited {
+                        None
+                    } else {
+                        match record {
+                            StreamSessionRecord::Prepared(record) => {
+                                Some(&record.public_session_id)
+                            }
+                            StreamSessionRecord::ExportForkInitialized(record) => {
+                                Some(&record.public_session_id)
+                            }
+                            StreamSessionRecord::ExpiryRefreshed(record) => {
+                                Some(&record.public_session_id)
+                            }
+                            StreamSessionRecord::Expired(record) => {
+                                Some(&record.public_session_id)
+                            }
+                            _ => None,
+                        }
+                    };
+                    if let Some(public_session_id) = public_session_id {
+                        if !public_bindings.contains_key(public_session_id) {
+                            let old = self
+                                .kv
+                                .with_entity(
+                                    "stream_session_index",
+                                    "read",
+                                    "public_binding",
+                                )
+                                .get(
+                                    namespace.clone(),
+                                    &Self::public_binding_field(public_session_id),
+                                )
+                                .await?;
+                            public_bindings.insert(public_session_id.clone(), old);
+                        }
+                        let current = public_bindings
+                            .get(public_session_id)
+                            .and_then(Option::as_ref);
+                        let binding = DurableStreamPublicBinding::fold(current, record);
+                        public_bindings.insert(public_session_id.clone(), binding);
                     }
                     if let StreamSessionRecord::ConsumerDeleting(record) = record {
                         consumer_deleting = Some(Some(record.clone()));
@@ -1092,7 +1211,12 @@ impl StreamSessionIndexService {
                         }
                     }
                     if status.first_prepared.is_some()
-                        || matches!(record, StreamSessionRecord::Prepared(_))
+                        || status.export_fork_initialized
+                        || matches!(
+                            record,
+                            StreamSessionRecord::Prepared(_)
+                                | StreamSessionRecord::ExportForkInitialized(_)
+                        )
                     {
                         status.apply_record(*idx, record);
                     }
@@ -1103,9 +1227,19 @@ impl StreamSessionIndexService {
                 metadata.covered_through = physical_chunk_end;
                 let mut fields: Vec<(String, Vec<u8>)> = updates
                     .into_iter()
-                    .filter(|(_, value)| value.first_prepared.is_some())
+                    .filter(|(_, value)| {
+                        value.first_prepared.is_some() || value.export_fork_initialized
+                    })
                     .map(|(key, value)| Ok((Self::field(&key), serialize(&value)?)))
                     .collect::<Result<_, String>>()?;
+                for (public_session_id, binding) in public_bindings {
+                    if let Some(binding) = binding {
+                        fields.push((
+                            Self::public_binding_field(&public_session_id),
+                            serialize(&binding)?,
+                        ));
+                    }
+                }
                 fields.extend(producer_fields.rows);
                 for (key, value) in controls {
                     fields.push((stream_control_index_field(&key)?, serialize(&value)?));
@@ -1282,8 +1416,15 @@ impl StreamSessionIndexService {
                 value.attachment_attempt_id = None;
                 value.attachment_attached = None;
                 value.lifecycle_error = None;
+                value.public_session_id = None;
+                value.expiry_policy =
+                    golem_common::model::durable_stream::StreamSessionExpiryPolicy::None;
+                value.expiry_deadline_millis = None;
+                value.expired = false;
+                value.export_fork_initialized = false;
+                value.export_source_invocation = None;
             }
         }
-        Ok(value.first_prepared.map(|_| value))
+        Ok((value.first_prepared.is_some() || value.export_fork_initialized).then_some(value))
     }
 }

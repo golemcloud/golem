@@ -1560,6 +1560,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         .create_staged(&owned, AgentMode::Durable, stage_id, metadata.clone())
         .await
         .unwrap();
+    assert!(
+        !service
+            .staged_exists(&owned, AgentMode::Durable, stage_id)
+            .await
+            .unwrap()
+    );
     // A crashed attempt leaves its committed stage behind. A fresh attempt must neither
     // enumerate it as an agent nor reuse its contents when publishing the same target.
     let orphan_id = Uuid::new_v4();
@@ -1579,6 +1585,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     for entry in &entries {
         stage.add(entry.clone()).await;
         stage.commit(CommitLevel::Always).await;
+        assert!(
+            service
+                .staged_exists(&owned, AgentMode::Durable, stage_id)
+                .await
+                .unwrap()
+        );
         assert!(!service.exists(&owned, AgentMode::Durable).await);
         assert_eq!(
             service.get_last_index(&owned, AgentMode::Durable).await,
@@ -1624,6 +1636,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
                 stage_id,
                 OplogIndex::from_u64(3)
             )
+            .await
+            .unwrap()
+    );
+    assert!(
+        !service
+            .staged_exists(&owned, AgentMode::Durable, stage_id)
             .await
             .unwrap()
     );

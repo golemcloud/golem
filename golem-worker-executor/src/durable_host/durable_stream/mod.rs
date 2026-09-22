@@ -77,9 +77,9 @@ use golem_common::base_model::durable_stream::{
     StreamId, StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
     StreamProducerDeletingRecord, StreamRecordReference, StreamRegisteredRecord,
     StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamRegistrationRecordCoordinate,
-    StreamSessionAttachedRecord, StreamSessionFinishedRecord, StreamSessionInputHighWaterRecord,
-    StreamSessionKey, StreamSessionMapping, StreamSessionMappingRecord,
-    StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind,
+    StreamSessionAttachedRecord, StreamSessionExpiryRefreshedRecord, StreamSessionFinishedRecord,
+    StreamSessionInputHighWaterRecord, StreamSessionKey, StreamSessionMapping,
+    StreamSessionMappingRecord, StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind,
     StreamSourceUnavailableRecord, StreamTerminalAuthor, StreamTopologyPreparedRecord,
 };
 use golem_common::base_model::environment::EnvironmentId;

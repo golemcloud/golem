@@ -2627,8 +2627,8 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
-        ForkStreamSlotRequest, ReadStreamSlotRequest, fork_stream_slot_response,
-        read_stream_slot_response, stream_slot_item,
+        ForkStreamSlotRequest, ReadStreamSlotRequest, StreamSlotReadAdmission,
+        fork_stream_slot_response, read_stream_slot_response, stream_slot_item,
     };
     use prost::Message;
 
@@ -2738,6 +2738,7 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
                 expected_method: "increment_stream_input".into(),
                 max_items: 100,
                 max_bytes: 1_000_000,
+                admission: StreamSlotReadAdmission::Head as i32,
                 ..Default::default()
             })
             .await?

@@ -33,9 +33,9 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentMetadata, AgentStatus, AgentStatusRecord,
-    DurableStreamSessionStatus, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
-    OwnedAgentId, ReceivedCardTransferIndex, ReceivedCardTransferState, ShardId,
-    SuccessfulUpdateRecord,
+    DurableStreamPublicBinding, DurableStreamPublicBindingState, DurableStreamSessionStatus,
+    FailedUpdateRecord, IdempotencyKey, InvocationResultMembership, OwnedAgentId,
+    ReceivedCardTransferIndex, ReceivedCardTransferState, ShardId, SuccessfulUpdateRecord,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -348,6 +348,16 @@ pub trait WorkerService: Send + Sync {
         status: &AgentStatusRecord,
         key: &IdempotencyKey,
     ) -> Result<Option<DurableStreamSessionStatus>, String>;
+
+    async fn lookup_durable_stream_public_binding(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _status: &AgentStatusRecord,
+        _public_session_id: &str,
+    ) -> Result<Option<DurableStreamPublicBinding>, String> {
+        Err("durable stream public binding index is unavailable".into())
+    }
 
     /// Reads per-session metadata through a captured persisted horizon, independently of status
     /// publication. Payloads remain in the oplog and are addressed by index.
@@ -1469,6 +1479,44 @@ impl WorkerService for DefaultWorkerService {
         self.stream_session_index
             .lookup_persisted_offsets(owned_agent_id, agent_mode, status.oplog_idx, key)
             .await
+    }
+
+    async fn lookup_durable_stream_public_binding(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        status: &AgentStatusRecord,
+        public_session_id: &str,
+    ) -> Result<Option<DurableStreamPublicBinding>, String> {
+        match status
+            .durable_stream_sessions
+            .public_binding(public_session_id)
+        {
+            DurableStreamPublicBindingState::Live {
+                session_key,
+                expiry_policy,
+                expiry_deadline_millis,
+            } => Ok(Some(DurableStreamPublicBinding::Live {
+                session_key: session_key.clone(),
+                expiry_policy,
+                expiry_deadline_millis,
+            })),
+            DurableStreamPublicBindingState::Retired { session_key } => {
+                Ok(Some(DurableStreamPublicBinding::Retired {
+                    session_key: session_key.clone(),
+                }))
+            }
+            DurableStreamPublicBindingState::NeverBound
+                if !status.durable_stream_sessions.has_history() =>
+            {
+                Ok(None)
+            }
+            DurableStreamPublicBindingState::NeverBound => {
+                self.stream_session_index
+                    .lookup_public_binding(owned_agent_id, agent_mode, public_session_id)
+                    .await
+            }
+        }
     }
 
     async fn catch_up_invocation_result_index(

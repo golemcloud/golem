@@ -122,6 +122,16 @@ pub trait OplogService: Debug + Send + Sync {
         Err("staged oplogs are unsupported by this oplog service".to_string())
     }
 
+    /// Checks whether one particular hidden stage still awaits publication.
+    async fn staged_exists(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _stage_id: uuid::Uuid,
+    ) -> Result<bool, String> {
+        Ok(false)
+    }
+
     /// Publishes a fully committed stage if no primary oplog exists. The caller must stop
     /// and drop its staged writer first. `false` means a competing target exists; errors may
     /// have indeterminate outcomes and must be reconciled using the target's fork provenance.

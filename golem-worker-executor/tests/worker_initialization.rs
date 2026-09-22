@@ -624,7 +624,10 @@ async fn prepare_session(
     for record in [
         StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
+            public_session_id: idempotency_key.value.clone(),
             session_key: idempotency_key.clone(),
+            expiry_policy: StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
             attempt: StartAttemptDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),

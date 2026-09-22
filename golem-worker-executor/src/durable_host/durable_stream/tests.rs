@@ -44,9 +44,10 @@ use golem_common::base_model::durable_stream::{
     StreamConsumerDeletingRecord, StreamConsumerItemValueRecord, StreamEndResult, StreamId,
     StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset, StreamRecordReference,
     StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamRootKind,
-    StreamSessionMapping, StreamSessionMappingRecord, StreamSessionMappingUpdateRecord,
-    StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind, StreamTerminalAuthor,
-    StreamTopologyActivatedRecord, StreamTopologyPreparedRecord, StreamValuePathStep,
+    StreamSessionExpiryPolicy, StreamSessionMapping, StreamSessionMappingRecord,
+    StreamSessionMappingUpdateRecord, StreamSessionPreparedRecord, StreamSessionRecord,
+    StreamSourceKind, StreamTerminalAuthor, StreamTopologyActivatedRecord,
+    StreamTopologyPreparedRecord, StreamValuePathStep,
 };
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
@@ -5484,7 +5485,10 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
                     committed,
                     move |bindings| StreamSessionPreparedRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        public_session_id: session_key.idempotency_key.value.clone(),
                         session_key: session_key.idempotency_key.clone(),
+                        expiry_policy: StreamSessionExpiryPolicy::None,
+                        expiry_deadline_millis: None,
                         attempt: StartAttemptDescriptor {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: session_key.clone(),
@@ -5629,7 +5633,10 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     };
     let prepared = StreamSessionPreparedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
+        public_session_id: identity.invocation.idempotency_key.value.clone(),
         session_key: identity.invocation.idempotency_key.clone(),
+        expiry_policy: StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: identity.invocation.clone(),

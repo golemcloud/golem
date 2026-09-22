@@ -18,10 +18,11 @@ mod durable_stream_producer;
 pub use durable_stream_producer::EphemeralResponseLease;
 pub mod durable_stream_slots;
 pub use durable_stream_slots::{
-    AppendStreamSlotPayload, AppendToStreamSlotRequest, AppendToStreamSlotResult,
-    CreateStreamSessionResult, ExportStreamControlRequest, ExportStreamControlResult,
-    ReadStreamSlotRequest, ReadStreamSlotResult, StreamSlotItem, StreamSlotItemContent,
-    StreamSlotProducer,
+    AppendStreamSlotOutcome, AppendStreamSlotPayload, AppendToStreamSlotRequest,
+    AppendToStreamSlotResult, CreateStreamSessionResult, ExportStreamControlRequest,
+    ExportStreamControlResult, ReadStreamSlotRequest, ReadStreamSlotResult,
+    StreamSessionCreationIntent, StreamSlotItem, StreamSlotItemContent, StreamSlotProducer,
+    StreamSlotReadAdmission,
 };
 pub mod entity_invocation;
 pub mod entity_slot;
@@ -119,8 +120,9 @@ use golem_common::base_model::durable_stream::{
     StartAttemptDescriptor, StreamAttachmentControlOperation, StreamAttachmentControlRequest,
     StreamAttachmentFinalizationReason, StreamAttachmentKey, StreamBindingRecord,
     StreamConsumerDeletingRecord, StreamRecordReference, StreamRegistrationInvocation,
-    StreamSessionAttachedRecord, StreamSessionKey, StreamSessionMappingRecord,
-    StreamSessionPreparedRecord, StreamSessionRecord, StreamSessionResumeAttemptRecord,
+    StreamSessionAttachedRecord, StreamSessionExpiryPolicy, StreamSessionKey,
+    StreamSessionMappingRecord, StreamSessionPreparedRecord, StreamSessionRecord,
+    StreamSessionResumeAttemptRecord,
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::base_model::oplog::QueuedCardEvent;
@@ -217,6 +219,9 @@ struct ReadOnlyContext {
 /// Fully resolved durable streaming invocation admitted by the executor service.
 pub struct DurableStreamingInvocationRequest {
     pub attempt: StartAttemptDescriptor,
+    pub public_session_id: String,
+    pub expiry_policy: StreamSessionExpiryPolicy,
+    pub expiry_deadline_millis: Option<u64>,
     pub registrations: Vec<(u64, ProducerRegistrationRequest)>,
     pub foreign_mappings: Vec<StreamSessionMappingRecord>,
     pub input_schema: Arc<golem_schema::schema::SchemaGraph>,
@@ -654,6 +659,10 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     owner_runtime_resources: Arc<OwnerRuntimeResources>,
     /// Serializes permission-card event appends with the durable boundaries that consume them.
     card_event_boundary_lock: Arc<Mutex<()>>,
+    /// Serializes public Durable Streams binding resolution with creation acceptance. The oplog
+    /// remains authoritative; this lock only prevents concurrent requests from minting two live
+    /// invocation keys for one public session ID.
+    stream_session_creation_lock: Arc<Mutex<()>>,
     /// Release-published by the status actor after committed card authority
     /// entries are folded into worker status.
     published_authority_generation: Arc<AtomicU64>,
@@ -1973,6 +1982,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             last_known_status: current_status,
             metrics_status,
             card_event_boundary_lock: Arc::new(Mutex::new(())),
+            stream_session_creation_lock: Arc::new(Mutex::new(())),
             published_authority_generation,
             oom_retry_config: deps.config().memory.oom_retry_config.clone(),
             snapshot_policy,
@@ -5411,6 +5421,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .accept_durable_streaming_invocation_unmetered(
                         request,
                         DurableStreamingAcceptanceMatch::ExactAttempt,
+                        None,
                     )
                     .await
             }))
@@ -5439,10 +5450,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn accept_durable_stream_slot_invocation(
         self: &Arc<Self>,
         request: DurableStreamingInvocationRequest,
+        creation_admission: durable_stream_slots::StreamSessionCreationAdmission,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
         self.accept_durable_streaming_invocation_unmetered(
             request,
             DurableStreamingAcceptanceMatch::StreamSlotSession,
+            Some(creation_admission),
         )
         .await
     }
@@ -5451,6 +5464,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         request: DurableStreamingInvocationRequest,
         acceptance_match: DurableStreamingAcceptanceMatch,
+        creation_admission: Option<durable_stream_slots::StreamSessionCreationAdmission>,
     ) -> Result<DurableStreamingInvocationAcceptance, WorkerExecutorError> {
         let producer = self.durable_stream_producer().await?;
         let instance_guard = self.lock_non_stopping_worker_owned().await;
@@ -5464,14 +5478,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let worker = self.clone();
         tokio::spawn(async move {
-            worker
+            let result = worker
                 .accept_durable_streaming_invocation_owned(
                     request,
                     acceptance_match,
                     producer,
                     instance_guard,
                 )
-                .await
+                .await;
+            drop(creation_admission);
+            result
         })
         .await
         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
@@ -5562,6 +5578,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
             }
         }
+        let expiry_publication_guard = if existing_prepared.is_none() {
+            let guard = producer.session_lock(&session_key).lock_owned().await;
+            self.schedule_stream_session_expiry(
+                request.public_session_id.clone(),
+                session_key.idempotency_key.clone(),
+                request.expiry_deadline_millis,
+            )
+            .await?;
+            Some(guard)
+        } else {
+            None
+        };
 
         let prepared = if let Some(prepared) = existing_prepared {
             let mut requested_attempt = request.attempt.clone();
@@ -5680,6 +5708,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let prepared = StreamSessionPreparedRecord {
                 format_version: 1,
                 session_key: session_key.idempotency_key.clone(),
+                public_session_id: request.public_session_id.clone(),
+                expiry_policy: request.expiry_policy,
+                expiry_deadline_millis: request.expiry_deadline_millis,
                 attempt,
                 stream_mappings: foreign_mappings
                     .iter()
@@ -5740,6 +5771,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
             let attempt = request.attempt.clone();
             let local_session_key = session_key.idempotency_key.clone();
+            let public_session_id = request.public_session_id.clone();
+            let expiry_policy = request.expiry_policy;
+            let expiry_deadline_millis = request.expiry_deadline_millis;
             let prepared = producer
                 .prepare_session(
                     None,
@@ -5751,7 +5785,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .expect("fresh durable session has a commit notification"),
                     move |bindings| StreamSessionPreparedRecord {
                         format_version: 1,
+                        public_session_id,
                         session_key: local_session_key,
+                        expiry_policy,
+                        expiry_deadline_millis,
                         stream_mappings: bindings,
                         attempt,
                     },
@@ -5761,6 +5798,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             attached_during_prepare = true;
             prepared
         };
+        drop(expiry_publication_guard);
 
         let mut attached_records = records.iter().filter_map(|record| match record {
             StreamSessionRecord::Attached(attached) => Some(attached),
@@ -12379,6 +12417,18 @@ pub(crate) fn stream_session_record_key(
             callee_fingerprint: owner_fingerprint,
             idempotency_key: record.session_key.clone(),
         }),
+        StreamSessionRecord::ExpiryRefreshed(record) => Some(StreamSessionKey {
+            callee_environment_id: owner_environment_id,
+            callee: owner.clone(),
+            callee_fingerprint: owner_fingerprint,
+            idempotency_key: record.session_key.clone(),
+        }),
+        StreamSessionRecord::Expired(record) => Some(StreamSessionKey {
+            callee_environment_id: owner_environment_id,
+            callee: owner.clone(),
+            callee_fingerprint: owner_fingerprint,
+            idempotency_key: record.session_key.clone(),
+        }),
         StreamSessionRecord::Attached(record) => Some(StreamSessionKey {
             callee_environment_id: owner_environment_id,
             callee: owner.clone(),
@@ -12457,6 +12507,12 @@ pub(crate) fn stream_session_record_key(
             owner,
             owner_fingerprint,
         )),
+        StreamSessionRecord::ExportForkInitialized(record) => Some(StreamSessionKey {
+            callee_environment_id: owner_environment_id,
+            callee: owner.clone(),
+            callee_fingerprint: owner_fingerprint,
+            idempotency_key: record.session_key.clone(),
+        }),
         StreamSessionRecord::ProducerDeleting(_)
         | StreamSessionRecord::ConsumerDeleting(_)
         | StreamSessionRecord::ForkCut(_)

@@ -15,8 +15,9 @@ use super::{
 };
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    AppendToStreamSlotRequest, ExternalStreamProducer, ReadStreamSlotSuccess, TypedStreamSlotItems,
-    append_to_stream_slot_request::Payload, append_to_stream_slot_response::Result as Outcome,
+    AppendToStreamSlotRequest, ExternalStreamProducer, StreamSessionCreationIntent,
+    StreamSessionExpiryPolicy, TypedStreamSlotItems, append_to_stream_slot_request::Payload,
+    append_to_stream_slot_response::Result as Outcome,
 };
 use golem_common::model::AgentId;
 use golem_common::schema::{FieldSource, SchemaGraph, SchemaType};
@@ -39,6 +40,7 @@ impl DurableStreamsHandler {
         session: &str,
         slot: &str,
         allow_create: bool,
+        expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         let key = format!("{}:{agent_id}:{session}:{slot}", route.route.environment_id);
         if let Err(rejection) = self.limiter.check_append(&key) {
@@ -167,7 +169,8 @@ impl DurableStreamsHandler {
                     return append_response(
                         Outcome::Closed(Default::default()),
                         producer.as_ref(),
-                        metadata,
+                        metadata.head_offset.clone(),
+                        Some(metadata.closed),
                     );
                 }
                 return Ok(response(StatusCode::CONFLICT));
@@ -187,10 +190,18 @@ impl DurableStreamsHandler {
             ));
         }
         if metadata.is_none() {
-            self.create(request, route, behaviour, agent_id, session)
-                .await?;
+            self.create(
+                request,
+                route,
+                behaviour,
+                agent_id,
+                session,
+                StreamSessionCreationIntent::LazyPost,
+                expiry_policy,
+            )
+            .await?;
         }
-        let outcome = self
+        let append = self
             .worker_service
             .append_to_stream_slot(
                 agent_id,
@@ -207,18 +218,18 @@ impl DurableStreamsHandler {
                 },
             )
             .await?;
-        // Deletion can race an append or a duplicate. The offset stays tied to the
-        // acknowledged batch, but EOF and tombstone metadata describe the current stream.
-        let Some(metadata) = self
-            .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
-            .await?
-        else {
+        let outcome = append
+            .result
+            .ok_or_else(|| anyhow::anyhow!("empty append stream response"))?;
+        if matches!(&outcome, Outcome::NotFound(_)) {
             return Ok(response(StatusCode::NOT_FOUND));
-        };
-        if metadata.tombstoned {
-            return Ok(response(StatusCode::GONE));
         }
-        append_response(outcome, producer.as_ref(), &metadata)
+        append_response(
+            outcome,
+            producer.as_ref(),
+            append.stream_head_offset,
+            append.stream_closed,
+        )
     }
 }
 
@@ -308,7 +319,8 @@ fn decode_body(
 fn append_response(
     outcome: Outcome,
     producer: Option<&ExternalStreamProducer>,
-    metadata: &ReadStreamSlotSuccess,
+    stream_head_offset: Vec<u8>,
+    stream_closed: Option<bool>,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     let mut result = response(StatusCode::NO_CONTENT);
     let (offset, sequence) = match outcome {
@@ -347,7 +359,7 @@ fn append_response(
         }
         Outcome::Closed(_) => {
             result.status = StatusCode::CONFLICT;
-            (metadata.head_offset.clone(), None)
+            (stream_head_offset, None)
         }
         Outcome::Gone(_) => return Ok(response(StatusCode::GONE)),
         Outcome::NotFound(_) => return Ok(response(StatusCode::NOT_FOUND)),
@@ -360,7 +372,7 @@ fn append_response(
     );
     result.headers.insert(
         HeaderName::from_static("stream-closed"),
-        metadata.closed.to_string(),
+        stream_closed.unwrap_or(true).to_string(),
     );
     if let (Some(producer), Some(sequence)) = (producer, sequence) {
         result.headers.insert(
@@ -499,10 +511,8 @@ mod tests {
                 epoch: 4,
                 sequence: 2,
             }),
-            &ReadStreamSlotSuccess {
-                closed: false,
-                ..Default::default()
-            },
+            Vec::new(),
+            Some(false),
         )
         .unwrap();
         assert_eq!(result.status, StatusCode::NO_CONTENT);
@@ -522,5 +532,11 @@ mod tests {
             result.headers[&HeaderName::from_static("stream-closed")],
             "false"
         );
+    }
+
+    #[test]
+    fn problem_responses_are_not_cacheable() {
+        let result = problem(StatusCode::NOT_FOUND, "$", "missing");
+        assert_eq!(result.headers[&http::header::CACHE_CONTROL], "no-store");
     }
 }
