@@ -111,7 +111,7 @@ async fn observe(service: &BlobOplogArchiveService, agent: &OwnedAgentId) -> Obs
 
 /// Each agent gets its own archive, which it can make, read, list and delete. As blob paths,
 /// `counter("a/./b")`, `counter("a//b")` and `counter("a/b")` have one form. So the test deletes
-/// one of them and reads the other two.
+/// one of them first and reads the other two. Then it deletes the other four agents.
 async fn check_that_each_agent_name_gets_its_own_archive(
     storage: Arc<dyn BlobStorage + Send + Sync>,
 ) {
@@ -132,12 +132,12 @@ async fn check_that_each_agent_name_gets_its_own_archive(
             .then(|(agent, _)| observe(&service, agent))
             .collect::<Vec<_>>()
     };
-    let expected = |deleted: Option<&OwnedAgentId>| {
+    let expected = |deleted: &[&OwnedAgentId]| {
         (
             archives
                 .iter()
                 .map(|(agent, entry)| {
-                    if Some(agent) == deleted {
+                    if deleted.contains(&agent) {
                         (false, BTreeMap::new(), OplogIndex::NONE)
                     } else {
                         (
@@ -151,7 +151,7 @@ async fn check_that_each_agent_name_gets_its_own_archive(
             archives
                 .iter()
                 .map(|(agent, _)| agent)
-                .filter(|agent| Some(*agent) != deleted)
+                .filter(|agent| !deleted.contains(agent))
                 .cloned()
                 .collect::<BTreeSet<_>>(),
         )
@@ -174,16 +174,33 @@ async fn check_that_each_agent_name_gets_its_own_archive(
         scan(&service, environment_id, component_id).await,
     );
 
-    let deleted = &archives[3].0;
-    service.delete(deleted, MODE).await;
-    let after_delete = (
+    let first_deleted = &archives[3].0;
+    service.delete(first_deleted, MODE).await;
+    let after_one_delete = (
         observe_all().await,
         scan(&service, environment_id, component_id).await,
     );
 
+    futures::stream::iter(archives.iter())
+        .filter(|(agent, _)| futures::future::ready(agent != first_deleted))
+        .for_each(|(agent, _)| service.delete(agent, MODE))
+        .await;
+    let after_all_deletes = (
+        observe_all().await,
+        scan(&service, environment_id, component_id).await,
+    );
+
+    let all_agents = archives
+        .iter()
+        .map(|(agent, _)| agent)
+        .collect::<Box<[_]>>();
     assert_eq!(
-        (made, after_delete),
-        (expected(None), expected(Some(deleted)))
+        (made, after_one_delete, after_all_deletes),
+        (
+            expected(&[]),
+            expected(&[first_deleted]),
+            expected(&all_agents)
+        )
     );
 }
 
@@ -221,9 +238,9 @@ async fn each_agent_name_gets_its_own_archive_on_the_sqlite_backend() {
     .await;
 }
 
-/// `drop_prefix` deletes the directory of the archive that it empties, and the agent id goes with
-/// it. The next append on the same archive makes the directory and the agent id again, so the
-/// archive exists and the scan lists the agent again.
+/// `drop_prefix` deletes the directory of the archive that it empties, with the `agent_id` blob
+/// in it. The next append on the same archive makes the directory and the blob again. So the
+/// archive exists, and the scan lists the agent again.
 #[test]
 async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
     let service = BlobOplogArchiveService::new(Arc::new(InMemoryBlobStorage::new()), 0);
@@ -267,9 +284,9 @@ async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
 }
 
 /// A process that stops after it makes the directory of an archive and before it writes the
-/// agent id leaves a directory without the agent id. The test makes that directory directly.
-/// Such a directory holds no archive: `exists` gives false and the scan skips the directory. The
-/// next append writes the agent id, although the directory is there.
+/// `agent_id` blob leaves a directory without that blob. The test makes such a directory. The
+/// directory holds no archive: `exists` gives false, and the scan skips the directory. The next
+/// append writes the blob, although the directory is there.
 #[test]
 async fn a_directory_without_an_agent_id_holds_no_archive() {
     let storage = Arc::new(InMemoryBlobStorage::new());

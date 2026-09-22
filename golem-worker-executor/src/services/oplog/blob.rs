@@ -45,13 +45,14 @@ const AGENT_ID_BLOB: &str = "agent_id";
 
 /// Gives the directory of the archive of an agent, which is the path segment of the agent.
 ///
-/// The agent name can hold `/`, `\` and `.` segments, and it can be longer than a file name. The
-/// path segment holds none of them, and the hash in it makes the directory of each agent its own.
+/// An agent name can hold `/`, `\` and `.` segments, and it can be longer than a file name. So
+/// the directory does not use the agent name. The path segment holds none of them, and its hash
+/// gives each agent its own directory.
 fn archive_directory(agent_id: &AgentId) -> PathBuf {
     PathBuf::from(agent_path_segment(agent_id))
 }
 
-/// Gives the path of the blob that holds the agent name in the directory of an archive.
+/// Gives the path of the `agent_id` blob in the directory of an archive.
 fn agent_id_blob_path(directory: &Path) -> PathBuf {
     directory.join(AGENT_ID_BLOB)
 }
@@ -61,11 +62,11 @@ fn chunk_path(directory: &Path, idx: OplogIndex) -> PathBuf {
     directory.join(idx.to_string())
 }
 
-/// Reads the agent name that the directory of an archive holds.
+/// Reads the agent name from the `agent_id` blob in the directory of an archive.
 ///
-/// Gives `None` when the directory holds no agent id blob. A process that stops after it makes
-/// the directory and before it writes the agent id leaves such a directory, and that directory
-/// holds no chunk. Content that is not UTF-8 gives an error.
+/// Gives `None` when the directory has no `agent_id` blob. A process that stops after it makes
+/// the directory and before it writes the blob leaves such a directory, and that directory holds
+/// no chunk. A blob that is not UTF-8 gives an error.
 async fn read_agent_name(
     blob_storage: &(dyn BlobStorage + Send + Sync),
     namespace: BlobStorageNamespace,
@@ -77,13 +78,13 @@ async fn read_agent_name(
         .await
         .map_err(|err| {
             WorkerExecutorError::unknown(format!(
-                "Failed to read the agent id of compressed oplog directory {directory:?} in blob storage: {err}"
+                "Failed to read the agent name of compressed oplog directory {directory:?} in blob storage: {err}"
             ))
         })?
         .map(|bytes| {
             String::from_utf8(bytes).map_err(|err| {
                 WorkerExecutorError::unknown(format!(
-                    "The agent id of compressed oplog directory {directory:?} is not UTF-8: {err}"
+                    "The agent name of compressed oplog directory {directory:?} is not UTF-8: {err}"
                 ))
             })
         })
@@ -364,9 +365,9 @@ impl BlobOplogArchive {
     }
 
     async fn ensure_is_created(&self) {
-        // `create_dir` is idempotent in every blob storage backend, and `put_raw_if_absent` of
-        // the agent id gives `AlreadyExists` to the second creator, so racing creators are
-        // harmless.
+        // Each backend accepts a second `create_dir` of one directory. `put_raw_if_absent` gives
+        // `AlreadyExists` to the second writer of the `agent_id` blob. So two calls at the same
+        // time do no harm.
         if self.created.load(Ordering::Acquire) {
             return;
         }
@@ -388,10 +389,10 @@ impl BlobOplogArchive {
                 )
             });
 
-        // The agent id comes after the directory and before the first chunk. So a directory
-        // without the agent id holds no chunk, and `exists` and `scan_for_component` do not see
-        // it. On the filesystem backend `put_raw_if_absent` writes the whole blob or no blob,
-        // also when the process stops. Both results are a success.
+        // The `agent_id` blob comes after the directory and before the first chunk. So a
+        // directory without the blob holds no chunk, and `exists` and `scan_for_component`
+        // ignore it. On the filesystem backend, `put_raw_if_absent` writes the whole blob or no
+        // blob, also when the process stops. `Written` and `AlreadyExists` are both a success.
         let _: PutIfAbsent = self
             .blob_storage
             .put_raw_if_absent(
@@ -404,7 +405,7 @@ impl BlobOplogArchive {
             .await
             .unwrap_or_else(|err| {
                 panic!(
-                    "failed to store the agent id of the compressed oplog for worker {} in blob storage: {err}",
+                    "failed to store the agent name of the compressed oplog for worker {} in blob storage: {err}",
                     self.owned_agent_id.agent_id
                 )
             });
@@ -414,8 +415,8 @@ impl BlobOplogArchive {
 
     /// Tells whether the archive of the agent exists.
     ///
-    /// The archive exists when its directory holds the agent id blob. `ensure_is_created` writes
-    /// that blob before the first chunk, so a directory without it holds no chunk.
+    /// The archive exists when its directory holds the `agent_id` blob. `ensure_is_created`
+    /// writes that blob before the first chunk, so a directory without it holds no chunk.
     pub(crate) async fn exists(
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
@@ -470,7 +471,7 @@ impl BlobOplogArchive {
 
         paths
             .into_iter()
-            // The agent id blob is not a chunk, and its name is not an index.
+            // The `agent_id` blob is not a chunk, and its name is not an index.
             .filter(|path| path.file_name() != Some(OsStr::new(AGENT_ID_BLOB)))
             .map(|path| {
                 let idx = Self::path_to_oplog_index(&path);
