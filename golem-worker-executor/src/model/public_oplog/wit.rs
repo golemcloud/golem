@@ -1668,7 +1668,7 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
             }
             oplog::OplogEntry::SetRetryPolicy(params) => {
                 let named: golem_common::model::retry_policy::NamedRetryPolicy =
-                    params.policy.into();
+                    params.policy.try_into()?;
                 Ok(Self::SetRetryPolicy {
                     timestamp: timestamp_from_datetime(params.timestamp),
                     entity_parent_start_index: None,
