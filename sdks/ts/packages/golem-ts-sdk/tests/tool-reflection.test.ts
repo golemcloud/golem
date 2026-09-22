@@ -14,6 +14,7 @@ import {
   emptyMetadata,
   field,
   schemaShapesMatch,
+  schemaValueToWit,
   schemaType,
   t,
   v,
@@ -117,6 +118,56 @@ describe('native tool reflection', () => {
     constraints[0] = { tag: 'requires-all', val: [{ tag: 'present', val: 'missing' }] };
     expect(command.validateJson({ enabled: false }).success).toBe(true);
     expect(Object.isFrozen(command.constraints[0])).toBe(true);
+  });
+
+  it('owns binary defaults without exposing their mutable bytes', () => {
+    const definition = toolDefinition('binary-snapshot').body((body) =>
+      body.option('payload', z.string()),
+    );
+    const wire = encodeTool(getExtendedToolDefinition(definition));
+    const source = new Uint8Array([1, 255]);
+    wire.commands.nodes[0].body!.options[0].default_ = schemaValueToWit(v.binary(source));
+    const command = new ToolType(
+      {
+        lookupName: 'binary-snapshot',
+        definition: wire,
+        implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
+      },
+      { start: vi.fn() } as unknown as ToolClientRuntime,
+    ).client.command([]);
+    source[0] = 8;
+    const first = command.arguments[0].default;
+    expect(first).toMatchObject({ tag: 'binary', bytes: new Uint8Array([1, 255]) });
+    if (first?.tag !== 'binary') throw new Error('expected binary default');
+    first.bytes[1] = 9;
+    expect(command.arguments[0].default).toMatchObject({
+      tag: 'binary',
+      bytes: new Uint8Array([1, 255]),
+    });
+  });
+
+  it('does not nest already optional positional and scalar option schemas', () => {
+    const definition = toolDefinition('single-option').body((body) =>
+      body
+        .positional('position', z.string().optional(), { required: false })
+        .option('choice', z.string().optional()),
+    );
+    const command = new ToolType(
+      {
+        lookupName: 'single-option',
+        definition: encodeTool(getExtendedToolDefinition(definition)),
+        implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
+      },
+      { start: vi.fn() } as unknown as ToolClientRuntime,
+    ).client.command([]);
+    for (const argument of command.arguments) {
+      expect(argument.schema.root.body.tag).toBe('option');
+      if (argument.schema.root.body.tag === 'option') {
+        expect(argument.schema.root.body.element.body.tag).not.toBe('option');
+      }
+    }
+    expect(command.validateJson({ position: null, choice: null }).success).toBe(true);
+    expect(command.validateJson({ position: 'p', choice: 'c' }).success).toBe(true);
   });
 
   it('renders discriminator conditions without replacing the branch schema', () => {
