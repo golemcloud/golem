@@ -174,7 +174,7 @@ steps:
       method discovers `ReflectionTarget`, inspects `echo`, and invokes it
       through the JSON convenience path with `hello`.
 
-      Also define a discovery-free caller-codec contract using
+      Also define a discovery-free caller-owned method-only client using
       `InputRecordCodec` and `OutputCodec`, and invoke `echo` with
       `caller codec`. Explicitly pack JSON through the reflected method
       `SchemaRef`, invoke its value API, await the result, and unpack it as
