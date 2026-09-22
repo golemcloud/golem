@@ -1610,6 +1610,7 @@ async fn test_go_counter() {
         .await;
     assert!(outputs.success_or_dump());
     assert!(outputs.stdout_contains_ordered(["Invocation result", "10"]));
+}
 
 /// Builds a real Scala component and exercises streaming through both the
 /// direct guest ABI and native same-component agent RPC. This does not depend
