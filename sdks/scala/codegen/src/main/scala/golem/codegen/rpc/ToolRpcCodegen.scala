@@ -189,7 +189,7 @@ object ToolRpcCodegen {
     private def valueEntry(tool: Tool, method: Method, param: Param): String =
       ToolProjectionRendering.valueEntry(projected(tool, method, param), AmbientClient)
 
-    private def prefixEntry(tool: Tool, m: Method, p: Param): String = {
+    private def prefixEntry(tool: Tool, m: Method, p: Param, model: String): String = {
       val name        = canonicalValueName(tool, m, p)
       val aliases     = canonicalAliases(tool, m, p)
       val aliasesExpr =
@@ -198,7 +198,7 @@ object ToolRpcCodegen {
       if (isCountFlag(p))
         s"""_root_.golem.tool.ToolClientRuntime.countFlagPrefixValue("$name", $aliasesExpr, ${p.ident})"""
       else
-        s"""_root_.golem.tool.ToolClientRuntime.prefixValue("$name", $aliasesExpr, ${p.ident}, _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[${p.typeExpr}]])"""
+        s"""_root_.golem.tool.ToolClientRuntime.prefixValue("$name", $aliasesExpr, ${p.ident}, _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[${p.typeExpr}]], $model)"""
     }
 
     private def listExpr(entries: List[String], indent: String): String =
@@ -326,7 +326,7 @@ $indent}"""
           !p.isPrincipal && !isStreamParam(p) && !omittedMatches(tool, m, p, omitted)
         }
       }
-      val prefixEntries = prefixParams.map(prefixEntry(tool, m, _))
+      val prefixEntries = prefixParams.map(prefixEntry(tool, m, _, "__prefixModel"))
 
       val basePrefix = if (isWrapper) "__inheritedPrefix ++ " else ""
       val prefixExpr =
@@ -345,6 +345,9 @@ $indent}"""
 
       Some(
         s"""${indent}def ${m.name}($paramDecls): $clientName.$wrapperName = {
+$indent  val __prefixModel = _root_.golem.tool.ToolClientRuntime.prefixInputModel($clientName.${descriptorVal(
+            tool
+          )}, ${ToolProjectionRendering.stringList(m.localCommandPath)})
 $indent  val __prefix = $prefixExpr
 $indent  new $clientName.$wrapperName(
 $indent    __transport,
