@@ -490,8 +490,8 @@ enum InjectedAppendFailure {
     CommitDifferentThenIndeterminate,
     CommitPrefixThenIndeterminate,
     /// Refuses the write as a stale epoch would, naming the epoch one above whatever was
-    /// asserted. Used to simulate the storage fencing the reconciliation probe
-    /// `retry_oplog_append` repeats after a genuine indeterminate-write mismatch (F16).
+    /// asserted. Simulates the storage fencing the reconciliation probe `retry_oplog_append`
+    /// repeats after a genuine indeterminate-write mismatch.
     Fenced,
 }
 
@@ -2499,7 +2499,7 @@ async fn differing_read_back_after_indeterminate_append_remains_fatal(_tracing: 
 
 /// Same mismatch as `differing_read_back_after_indeterminate_append_remains_fatal`, except this
 /// writer asserts a shard epoch and the mismatch is explained: a new owner already wrote those
-/// indices. The reconciliation probe this fences (F16) must return `Fenced` and let the caller
+/// indices. The reconciliation probe this fences must return `Fenced` and let the caller
 /// give up the agent, rather than panicking and aborting the whole - otherwise still live -
 /// executor process (`panic = "abort"`).
 #[test]
@@ -9871,7 +9871,7 @@ async fn aborting_a_transfer_waits_for_the_prefix_drop_it_handed_to_the_primary(
 /// reached the archive when that happened. The real owner's next transfer would start from the
 /// same, never-trimmed source range and derive the identical chunk id and bytes - exercised here
 /// directly against the archive rather than by racing a real abort, since the archive is what
-/// must tolerate the repeat (F19).
+/// must tolerate the repeat.
 #[test]
 async fn compressed_archive_append_reconciles_a_resumed_transfers_repeat_chunk(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());

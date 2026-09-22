@@ -386,9 +386,11 @@ mod tests {
         // Thawed, the frozen executors carry on from exactly where they stopped, still holding
         // invocations the survivor now owns. For each one, either the executor gives the agent up
         // when it re-registers, or it finishes the sleep first and the fence refuses its write.
-        // Which of the two each agent took is not visible from here, and both are safe only
+        // Which of the two each agent took is a race this cannot steer, and both are safe only
         // because the survivor recorded a higher epoch first, which the epoch check below asserts.
-        // The refusal itself is pinned deterministically by golem-worker-executor's oplog tests.
+        // The refusal itself is pinned deterministically by golem-worker-executor's oplog and
+        // indexed-storage tests; in a live cluster it is visible as
+        // `oplog_epoch_fence_total{op="append",outcome="refused"}`.
         info!("Resuming worker executors {frozen:?}");
         for idx in frozen {
             cluster_control.resume(*idx).await;

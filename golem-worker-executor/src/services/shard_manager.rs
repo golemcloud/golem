@@ -1333,11 +1333,11 @@ mod tests {
     }
 
     #[test]
-    // F29: giving up a still-loading agent waits for its whole component load and replay,
-    // with no timeout. If the renewal loop awaited the assignment-changed hook inline, that sweep
-    // would hold every later renewal RPC back and the lease would lapse for the whole executor
-    // while a single agent is loading. The hook here blocks on a flag the test controls, standing
-    // in for that sweep, and the assertion is that the loop keeps renewing right through it.
+    // Giving a still-loading agent up waits for its whole component load and replay, with no
+    // timeout. If the renewal loop awaited the assignment-changed hook inline, that sweep would
+    // hold every later renewal RPC back and the lease would lapse for the whole executor while a
+    // single agent is loading. The hook here blocks on a flag the test controls, standing in for
+    // that sweep, and the assertion is that the loop keeps renewing right through it.
     async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
         // Short enough that a stalled loop would be obvious within the test's own timeout, but
         // the cadence this derives floors at `MIN_RENEWAL_INTERVAL` (1 s) regardless - see
@@ -1399,8 +1399,8 @@ mod tests {
         );
 
         // Several renewal periods pass (cadence is ~1s) while the hook stays blocked: the loop
-        // must keep renewing rather than waiting on the sweep, which is exactly the stall F29
-        // fixes. Each of these renewals also finds `recovery_outstanding` still set by the first
+        // must keep renewing rather than waiting on the sweep. Each of these renewals also finds
+        // `recovery_outstanding` still set by the first
         // one - the sweep has not reported back yet - and asks for the announcement again; that
         // is correct (an unchanged grant re-runs a recovery still owed), and the single-flight
         // coalesces every one of these requests into exactly one rerun, asserted below.

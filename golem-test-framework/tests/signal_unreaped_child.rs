@@ -12,10 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Pins `signal_unreaped_child`'s process-supervision behavior. It lives here rather than as a
-//! `--lib` unit test in `spawned.rs` because it needs a real child process to signal, and unit
-//! tests must never spawn external processes (AGENTS.md); `cargo make unit-tests` runs
-//! `--workspace --lib` and would otherwise pick it up.
+//! Pins `signal_unreaped_child`'s process-supervision behavior.
+//!
+//! It is worth pinning because the guard it implements has no second line of defence: a reaped
+//! child's pid is free for the OS to reuse, so a `kill(2)` on it can signal an unrelated process
+//! on the machine running the tests. Nothing else in the suite would notice.
+//!
+//! It lives here rather than as a `--lib` unit test in `spawned.rs` because it needs a real child
+//! process to signal, and unit tests must never spawn external processes (AGENTS.md);
+//! `cargo make unit-tests` runs `--workspace --lib` and would otherwise pick it up.
+//!
+//! Everything here is `#[cfg(unix)]`, because `signal_unreaped_child` is: pausing an executor is
+//! `SIGSTOP`, which Windows does not have. On Windows this file compiles to nothing, and the
+//! `SpawnedWorkerExecutor::pause`/`resume` that use it panic with that as the reason - so the
+//! sharding tests that freeze an executor are unix-only, not silently weaker elsewhere.
 
 test_r::enable!();
 

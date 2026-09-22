@@ -7437,8 +7437,8 @@ async fn a_caller_is_answered_when_its_agents_shard_is_taken_away_while_the_even
 ///
 /// A given-up agent passes through the stop's removal more than once - from its own loop and
 /// again from the give-up that waited for it - and a handle kept past its generation can stop it
-/// once more. Removal used to be keyed by agent id only, so any of those passes evicted whatever
-/// was cached under that id by then: here, the newer generation the shard's return created.
+/// once more. Removal keyed by agent id alone would let any of those passes evict whatever was
+/// cached under that id by then: here, the newer generation the shard's return created.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -7824,10 +7824,10 @@ async fn a_caller_waiting_on_an_invocation_fenced_inside_a_host_call_is_told_to_
 /// An invocation enqueued onto an oplog that has a new owner must be refused, not accepted.
 ///
 /// Enqueueing buffers the pending-invocation entry and commits it through the status actor, and
-/// that commit is where the takeover is found. The refusal used to be folded into "status
-/// unchanged", so the enqueue reported success for a key that never reached the status. Neither the
-/// give-up the refusal spawns nor the stop's removal fails keys the status does not hold, so
-/// nothing ever answered the caller.
+/// that commit is where the takeover is found. A refusal folded into "status unchanged" would
+/// report the enqueue a success for a key that never reached the status, and neither the give-up
+/// the refusal spawns nor the stop's removal fails keys the status does not hold - so nothing
+/// would ever answer the caller.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]

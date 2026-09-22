@@ -357,6 +357,11 @@ impl IndexedStorage for SqliteIndexedStorage {
                     // db/sqlite.rs:46-50), so this transaction holds the only writer and the
                     // check cannot be interleaved. Raising that cap means switching this to
                     // `BEGIN IMMEDIATE`.
+                    //
+                    // That holds within one process. Two processes on one SQLite file would rely
+                    // on SQLite's own lock upgrade, which surfaces a loser as `SQLITE_BUSY` - a
+                    // storage error, not a fence - so a SQLite file shared between executors is
+                    // not supported; give each its own file, or use PostgreSQL.
                     if let Some(expected) = expected_epoch {
                         let stored: Option<(i64, String)> = tx
                             .fetch_optional_as(

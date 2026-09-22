@@ -211,9 +211,9 @@ impl Oplog for RateLimitedOplog {
         &self,
         make_batch: DurableStreamBatchBuilder,
     ) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogError> {
-        let result = self.inner.add_durable_stream_batch(make_batch).await;
+        let result = self.inner.add_durable_stream_batch(make_batch).await?;
         self.apply_rate_limit().await;
-        result
+        Ok(result)
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {

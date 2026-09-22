@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::metrics::oplog::{record_oplog_call, record_oplog_storage_retry};
+use crate::metrics::oplog::{
+    record_oplog_call, record_oplog_epoch_fence, record_oplog_storage_retry,
+};
 use crate::metrics::storage::{
     STORAGE_TYPE_OPLOG, record_storage_bytes_written, record_storage_objects_deleted,
     record_storage_objects_written,
@@ -325,6 +327,15 @@ async fn retry_oplog_append(
 ///
 /// A refusal is also handed to `fence_observer`, because the epoch it carries is what a shard
 /// manager whose state lost history has to mint above.
+/// Whether an open still has to record the epoch it asserts, or its caller did so already.
+#[derive(Clone)]
+enum EpochRecord {
+    /// The open records it, and takes the refusal it gets.
+    Pending,
+    /// A create recorded it before the first entry went in, with this refusal.
+    Recorded(Option<OplogFence>),
+}
+
 async fn record_owning_epoch(
     indexed_storage: &(dyn IndexedStorage + Send + Sync),
     retry_config: &RetryConfig,
@@ -347,6 +358,7 @@ async fn record_owning_epoch(
     })
     .await;
 
+    record_oplog_epoch_fence("record", outcome.is_err());
     match outcome {
         Ok(()) => None,
         Err(IndexedStorageError::Fenced {
@@ -539,6 +551,7 @@ impl PrimaryOplogService {
         last_oplog_index: Option<OplogIndex>,
         initial_worker_metadata: AgentMetadata,
         shard_epoch: Option<ShardEpoch>,
+        epoch_record: EpochRecord,
         reconcile_last_index: bool,
     ) -> Arc<dyn Oplog> {
         record_oplog_call("open");
@@ -555,6 +568,7 @@ impl PrimaryOplogService {
                 &owned_agent_id.agent_id,
                 CreateOplogConstructor::new(
                     shard_epoch,
+                    epoch_record,
                     self.indexed_storage.clone(),
                     self.blob_storage.clone(),
                     self.replicas,
@@ -711,25 +725,23 @@ impl OplogService for PrimaryOplogService {
         // the initial append would then collide with it. If the claim is refused, this executor
         // has already lost the shard: it writes nothing, so whether the owner created the oplog
         // first is not its question, and `open` below hands back an oplog that refuses every write.
-        // The refusal is reported here even though the open behind it may report it again: an
-        // unfenced handle this service still holds at the same epoch is handed back without
-        // asking the storage, and then this is the only refusal before a write.
-        let fenced_at_create = match shard_epoch {
-            Some(epoch) => record_owning_epoch(
-                &*self.indexed_storage,
-                &self.retry_config,
-                owned_agent_id,
-                agent_mode,
-                &key,
-                epoch,
-                self.fence_observer.as_deref(),
-            )
-            .await
-            .is_some(),
-            None => false,
+        let fence_at_create = match shard_epoch {
+            Some(epoch) => {
+                record_owning_epoch(
+                    &*self.indexed_storage,
+                    &self.retry_config,
+                    owned_agent_id,
+                    agent_mode,
+                    &key,
+                    epoch,
+                    self.fence_observer.as_deref(),
+                )
+                .await
+            }
+            None => None,
         };
 
-        if !fenced_at_create {
+        if fence_at_create.is_none() {
             let already_exists: bool = {
                 let is = self.indexed_storage.clone();
                 let agent_id = owned_agent_id.agent_id();
@@ -769,6 +781,7 @@ impl OplogService for PrimaryOplogService {
             Some(OplogIndex::INITIAL),
             initial_worker_metadata,
             shard_epoch,
+            EpochRecord::Recorded(fence_at_create),
             false,
         )
         .await
@@ -793,22 +806,23 @@ impl OplogService for PrimaryOplogService {
         // entry is appended directly without any prior read. The epoch record still goes in
         // first - a fresh agent id does not mean a fresh shard.
         let key = Self::oplog_key(&owned_agent_id.agent_id);
-        let fenced_at_create = match shard_epoch {
-            Some(epoch) => record_owning_epoch(
-                &*self.indexed_storage,
-                &self.retry_config,
-                owned_agent_id,
-                agent_mode,
-                &key,
-                epoch,
-                self.fence_observer.as_deref(),
-            )
-            .await
-            .is_some(),
-            None => false,
+        let fence_at_create = match shard_epoch {
+            Some(epoch) => {
+                record_owning_epoch(
+                    &*self.indexed_storage,
+                    &self.retry_config,
+                    owned_agent_id,
+                    agent_mode,
+                    &key,
+                    epoch,
+                    self.fence_observer.as_deref(),
+                )
+                .await
+            }
+            None => None,
         };
 
-        if !fenced_at_create {
+        if fence_at_create.is_none() {
             self.append_initial_entry(
                 owned_agent_id,
                 agent_mode,
@@ -829,6 +843,7 @@ impl OplogService for PrimaryOplogService {
             Some(OplogIndex::INITIAL),
             initial_worker_metadata,
             shard_epoch,
+            EpochRecord::Recorded(fence_at_create),
             false,
         )
         .await
@@ -854,6 +869,7 @@ impl OplogService for PrimaryOplogService {
             last_oplog_index,
             initial_worker_metadata,
             shard_epoch,
+            EpochRecord::Pending,
             reconcile_last_index,
         )
         .await
@@ -1083,6 +1099,7 @@ struct CreateOplogConstructor {
     account_id: AccountId,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     shard_epoch: Option<ShardEpoch>,
+    epoch_record: EpochRecord,
     fence_observer: Option<Arc<dyn OplogFenceObserver>>,
 }
 
@@ -1090,6 +1107,7 @@ impl CreateOplogConstructor {
     #[allow(clippy::too_many_arguments)]
     fn new(
         shard_epoch: Option<ShardEpoch>,
+        epoch_record: EpochRecord,
         indexed_storage: Arc<dyn IndexedStorage + Send + Sync>,
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         replicas: u8,
@@ -1107,6 +1125,7 @@ impl CreateOplogConstructor {
     ) -> Self {
         Self {
             shard_epoch,
+            epoch_record,
             indexed_storage,
             blob_storage,
             replicas,
@@ -1138,8 +1157,9 @@ impl OplogConstructor for CreateOplogConstructor {
     ) -> Arc<dyn Oplog> {
         // Recorded before the oplog is usable, so an executor whose shard has moved is refused
         // at its very first write rather than after replaying the new owner's entries.
-        let fence = match self.shard_epoch {
-            Some(shard_epoch) => {
+        let fence = match (self.epoch_record, self.shard_epoch) {
+            (EpochRecord::Recorded(fence), _) => fence,
+            (EpochRecord::Pending, Some(shard_epoch)) => {
                 record_owning_epoch(
                     &*self.indexed_storage,
                     &self.retry_config,
@@ -1151,7 +1171,7 @@ impl OplogConstructor for CreateOplogConstructor {
                 )
                 .await
             }
-            None => None,
+            (EpochRecord::Pending, None) => None,
         };
 
         // Read after the claim: once it returns, every writer at an older epoch is refused, so the
@@ -2033,6 +2053,9 @@ impl PrimaryOplogState {
         )
         .await
         .map_err(|err| Self::as_oplog_error(&self.owned_agent_id, err));
+        if self.shard_epoch.is_some() {
+            record_oplog_epoch_fence("append", matches!(appended, Err(OplogError::Fenced(_))));
+        }
         if let Err(error) = appended {
             if let OplogError::Fenced(fence) = &error {
                 // The commit barrier above already awaited every payload the batch referenced, so

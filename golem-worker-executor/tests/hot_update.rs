@@ -1590,8 +1590,8 @@ async fn manual_update_on_idle(
 
 /// A stop arriving while a manual update is in flight must not deadlock either side.
 ///
-/// This is the shape the final review's F10 was about: the update is enqueued from the invocation
-/// loop, and a stop taking the same worker down could wait on the loop that was waiting to enqueue.
+/// The update is enqueued from the invocation loop, and a stop taking the same worker down could
+/// wait on the loop that was waiting to enqueue.
 /// The enqueue is non-blocking now (`enqueue_update_from_loop`), so both finish. The test is
 /// written as a race rather than a fixed order - either outcome is legal, a hang is not - and the
 /// timeout is the assertion.

@@ -551,6 +551,10 @@ impl<'a> RetryState<'a> {
                     op = self.op,
                     "Retry calling executor reached the maximum attempts"
                 );
+                // The attempt counter restarts and the loop goes on, so the wait has to happen
+                // here too, or an executor that keeps refusing is retried as fast as the network
+                // allows.
+                sleep(delay).await;
                 Ok(None)
             }
         }

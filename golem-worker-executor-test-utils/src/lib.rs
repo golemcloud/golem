@@ -4227,7 +4227,7 @@ impl Oplog for TestOplog {
         entry: OplogEntry,
     ) -> Result<OplogIndex, golem_worker_executor::services::oplog::OplogError> {
         self.pause_before_agent_initialization_enqueue(&entry).await;
-        // Tests inject write failures by entry name; they used to go through `fallible_add`.
+        // Tests inject write failures by entry name.
         if let Err(details) = self.check_oplog_add(&entry).await {
             return Err(golem_worker_executor::services::oplog::OplogError::Storage(
                 details,
