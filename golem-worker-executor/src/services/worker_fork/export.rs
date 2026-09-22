@@ -206,12 +206,14 @@ async fn execute<Ctx: WorkerCtx>(
     let worker = Worker::find_durable_stream_worker(service, &source)
         .await?
         .ok_or_else(|| reject(Reason::NotFound))?;
-    if worker
+    let slot = worker
         .resolve_export_fork_slot(&request.session, &request.slot, &request.expected_method)
-        .await?
-        .is_none_or(|slot| slot.tombstoned)
-    {
+        .await?;
+    let Some(slot) = slot else {
         return Err(reject(Reason::NotFound));
+    };
+    if slot.tombstoned {
+        return Err(reject(Reason::Conflict));
     }
     let status = worker.get_export_fork_status().await?;
     match admission::check(

@@ -2307,6 +2307,15 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
             .unwrap(),
         None
     );
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_latest(&id, AgentMode::Durable, &key)
+            .await
+            .unwrap()
+            .and_then(|status| status.public_session_id),
+        Some(public.into())
+    );
     service.stream_session_index.clear(&id).await.unwrap();
     assert_eq!(
         service
@@ -2315,6 +2324,15 @@ async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
             .await
             .unwrap(),
         None
+    );
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_latest(&id, AgentMode::Durable, &key)
+            .await
+            .unwrap()
+            .and_then(|status| status.public_session_id),
+        Some(public.into())
     );
 }
 
