@@ -29,8 +29,6 @@ pub mod postgres;
 pub mod redis;
 pub mod sqlite;
 
-pub type ScanCursor = u64;
-
 /// Typed error for [`IndexedStorage`] operations.
 ///
 /// `Transient` errors are safe to retry. `Indeterminate` errors can only be retried by callers
@@ -43,6 +41,8 @@ pub enum IndexedStorageError {
     Indeterminate(String),
     /// The requested index already exists.
     Conflict(String),
+    /// A scan resume token is not valid for this backend.
+    InvalidResume(String),
     /// Permanent error — data issue or schema error. Caller should not retry.
     Other(String),
 }
@@ -61,6 +61,7 @@ impl Display for IndexedStorageError {
                 write!(f, "Indeterminate storage error: {msg}")
             }
             IndexedStorageError::Conflict(msg) => write!(f, "Storage conflict: {msg}"),
+            IndexedStorageError::InvalidResume(msg) => write!(f, "Invalid scan resume: {msg}"),
             IndexedStorageError::Other(msg) => write!(f, "Storage error: {msg}"),
         }
     }
@@ -76,13 +77,14 @@ impl From<String> for IndexedStorageError {
 
 /// Where a [`IndexedStorage::scan_stable`] walk left off. Only the backend that produced it can
 /// read it; a caller passes it back unchanged.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
 pub enum ScanResume {
     /// The last position reached in the backend's walk order: usually the last key handed back,
     /// but the multi-SQLite backend names the last file it finished.
     Marker(String),
     /// The iteration cursor of a backend with no key order to seek in.
-    Cursor(ScanCursor),
+    Cursor(u64),
 }
 
 impl ScanResume {
@@ -90,6 +92,9 @@ impl ScanResume {
     /// produce.
     pub fn into_marker(self, backend: &str) -> Result<String, IndexedStorageError> {
         match self {
+            ScanResume::Marker(marker) if marker.contains('\0') => Err(
+                IndexedStorageError::InvalidResume(format!("{backend} marker contains NUL")),
+            ),
             ScanResume::Marker(marker) => Ok(marker),
             ScanResume::Cursor(_) => Err(Self::foreign(backend)),
         }
@@ -97,7 +102,7 @@ impl ScanResume {
 
     /// The cursor this token carries, or an error if `backend` was handed a token it did not
     /// produce.
-    pub fn into_cursor(self, backend: &str) -> Result<ScanCursor, IndexedStorageError> {
+    pub fn into_cursor(self, backend: &str) -> Result<u64, IndexedStorageError> {
         match self {
             ScanResume::Cursor(cursor) => Ok(cursor),
             ScanResume::Marker(_) => Err(Self::foreign(backend)),
@@ -105,10 +110,59 @@ impl ScanResume {
     }
 
     fn foreign(backend: &str) -> IndexedStorageError {
-        IndexedStorageError::Other(format!(
+        IndexedStorageError::InvalidResume(format!(
             "{backend} indexed storage was handed a resume token it did not produce"
         ))
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StableScanKeyBounds {
+    lower: String,
+    inclusive: bool,
+    upper: Option<String>,
+}
+
+fn stable_scan_key_bounds(
+    prefix: Option<&str>,
+    resume: Option<ScanResume>,
+    backend: &str,
+) -> Result<StableScanKeyBounds, IndexedStorageError> {
+    let prefix = prefix.unwrap_or_default();
+    let marker = resume
+        .map(|resume| resume.into_marker(backend))
+        .transpose()?
+        .unwrap_or_default();
+    let inclusive = prefix > marker.as_str();
+
+    Ok(StableScanKeyBounds {
+        lower: if inclusive {
+            prefix.to_string()
+        } else {
+            marker
+        },
+        inclusive,
+        upper: scan_prefix_upper_bound(prefix),
+    })
+}
+
+fn scan_prefix_upper_bound(prefix: &str) -> Option<String> {
+    for (index, ch) in prefix.char_indices().rev() {
+        if ch == char::MAX {
+            continue;
+        }
+
+        let mut next = ch as u32 + 1;
+        if next == 0xD800 {
+            next = 0xE000;
+        }
+
+        let mut upper = prefix[..index].to_string();
+        upper.push(char::from_u32(next).expect("successor must be a valid Unicode scalar"));
+        return Some(upper);
+    }
+
+    None
 }
 
 /// Generic indexed storage interface
@@ -145,26 +199,14 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
     ) -> Result<bool, IndexedStorageError>;
 
-    /// Returns keys in the given meta-namespace, optionally filtered by key prefix, in a
-    /// paginated way. If there are no more pages to scan, the returned cursor will be 0.
-    async fn scan(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError>;
-
     /// Pages the keys of a namespace so that the caller can delete the keys it was handed without
-    /// the walk skipping any. [`Self::scan`] cannot: its cursor is a position, so a delete behind
-    /// it makes the next page step over keys nothing has seen.
+    /// the walk skipping any.
     ///
-    /// `resume` is `None` for the first page, then whatever the previous call returned; the
-    /// returned token is `None` once the walk is done. A backend that pages in key order only
-    /// learns that from a short page, so it may take one extra, empty call. A key present for the
-    /// whole walk is returned at least once; a key the caller deletes may or may not be.
+    /// `prefix` is a literal, case-sensitive UTF-8 prefix. `resume` is `None` for the first page,
+    /// then whatever the previous call returned; the returned token is `None` once the walk is
+    /// done. A backend that pages in key order only learns that from a short page, so it may take
+    /// one extra, empty call. A key present for the whole walk is returned at least once; a key the
+    /// caller deletes may or may not be.
     async fn scan_stable(
         &self,
         svc_name: &'static str,
@@ -385,25 +427,6 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
     ) -> Result<bool, IndexedStorageError> {
         self.storage
             .exists(self.svc_name, self.api_name, namespace, key)
-            .await
-    }
-
-    pub async fn scan(
-        &self,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        self.storage
-            .scan(
-                self.svc_name,
-                self.api_name,
-                namespace,
-                prefix,
-                cursor,
-                count,
-            )
             .await
     }
 
@@ -813,5 +836,95 @@ pub fn agent_mode_prefix(mode: AgentMode) -> &'static str {
     match mode {
         AgentMode::Durable => "durable",
         AgentMode::Ephemeral => "ephemeral",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ScanResume, scan_prefix_upper_bound, stable_scan_key_bounds};
+    use proptest::prelude::*;
+    use test_r::test;
+
+    test_r::enable!();
+
+    #[test]
+    fn scan_prefix_upper_bound_handles_unicode_boundaries() {
+        let cases = [
+            ("", None),
+            ("abc", Some("abd")),
+            ("\u{7f}", Some("\u{80}")),
+            ("\u{ff}", Some("\u{100}")),
+            ("\u{7ff}", Some("\u{800}")),
+            ("\u{d7ff}", Some("\u{e000}")),
+            ("\u{ffff}", Some("\u{10000}")),
+            ("a\u{10ffff}", Some("b")),
+            ("\u{10ffff}a", Some("\u{10ffff}b")),
+            ("\u{10ffff}\u{10ffff}", None),
+        ];
+
+        for (prefix, expected) in cases {
+            assert_eq!(scan_prefix_upper_bound(prefix).as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn stable_scan_uses_prefix_as_inclusive_first_lower_bound() {
+        assert_eq!(
+            stable_scan_key_bounds(Some("component:"), None, "test").unwrap(),
+            super::StableScanKeyBounds {
+                lower: "component:".to_string(),
+                inclusive: true,
+                upper: Some("component;".to_string()),
+            }
+        );
+        assert_eq!(
+            stable_scan_key_bounds(
+                Some("component:"),
+                Some(ScanResume::Marker("component:agent".to_string())),
+                "test",
+            )
+            .unwrap(),
+            super::StableScanKeyBounds {
+                lower: "component:agent".to_string(),
+                inclusive: false,
+                upper: Some("component;".to_string()),
+            }
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn prefix_interval_matches_starts_with(prefix in any::<String>(), keys in prop::collection::vec(any::<String>(), 0..64)) {
+            let upper = scan_prefix_upper_bound(&prefix);
+            for key in keys {
+                let in_interval = key.as_str() >= prefix.as_str()
+                    && upper.as_ref().is_none_or(|upper| key.as_str() < upper.as_str());
+                prop_assert_eq!(in_interval, key.starts_with(&prefix));
+            }
+        }
+
+        #[test]
+        fn effective_bounds_match_prefix_and_resume(
+            prefix in any::<String>(),
+            marker in any::<String>().prop_filter("markers cannot contain NUL", |value| !value.contains('\0')),
+            keys in prop::collection::vec(any::<String>(), 0..64),
+        ) {
+            let bounds = stable_scan_key_bounds(
+                Some(&prefix),
+                Some(ScanResume::Marker(marker.clone())),
+                "test",
+            ).unwrap();
+
+            for key in keys {
+                let above_lower = if bounds.inclusive {
+                    key.as_str() >= bounds.lower.as_str()
+                } else {
+                    key.as_str() > bounds.lower.as_str()
+                };
+                let in_bounds = above_lower
+                    && bounds.upper.as_ref().is_none_or(|upper| key.as_str() < upper.as_str());
+                prop_assert_eq!(in_bounds, key.starts_with(&prefix) && key > marker);
+            }
+        }
     }
 }

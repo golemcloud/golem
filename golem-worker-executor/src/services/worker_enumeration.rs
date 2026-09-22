@@ -179,6 +179,17 @@ pub trait WorkerEnumerationService: Send + Sync {
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError>;
 }
 
+fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
+    if count == 0 || count > i64::MAX as u64 {
+        Err(WorkerExecutorError::invalid_request(format!(
+            "Agent enumeration count must be between 1 and {}",
+            i64::MAX
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct DefaultWorkerEnumerationService {
     worker_service: Arc<dyn WorkerService>,
@@ -301,6 +312,8 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
         count: u64,
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<AgentMetadata>), WorkerExecutorError> {
+        validate_agent_enumeration_count(count)?;
+
         info!(
             environment_id = %environment_id,
             component_id = %component_id,
@@ -341,11 +354,19 @@ impl WorkerEnumerationService for DefaultWorkerEnumerationService {
 
 #[cfg(test)]
 mod tests {
-    use super::modes_from_filter;
+    use super::{modes_from_filter, validate_agent_enumeration_count};
     use golem_common::base_model::worker_filter::{FilterComparator, StringFilterComparator};
     use golem_common::model::AgentFilter;
     use golem_common::model::agent::AgentMode;
     use test_r::test;
+
+    #[test]
+    fn agent_enumeration_count_bounds_are_validated() {
+        assert!(validate_agent_enumeration_count(1).is_ok());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64).is_ok());
+        assert!(validate_agent_enumeration_count(0).is_err());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64 + 1).is_err());
+    }
 
     #[test]
     fn no_filter_defaults_to_durable() {
