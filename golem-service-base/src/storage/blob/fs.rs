@@ -15,7 +15,8 @@
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobMissingError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
-    NormalizedBlobPath, blob_copy_changes_nothing, normalized_blob_path,
+    NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_copy_changes_nothing,
+    normalized_blob_path,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
@@ -23,6 +24,7 @@ use bytes::Bytes;
 use futures::TryStreamExt;
 use futures::stream::BoxStream;
 use golem_common::model::Timestamp;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::io::AsyncWriteExt;
@@ -101,7 +103,7 @@ impl FileSystemBlobStorage {
                 result.push(environment_id.to_string());
                 // The filesystem backend needs a bounded worker-derived path component because
                 // very long agent ids can exceed local filename limits on many operating systems.
-                result.push(Self::filesystem_safe_oplog_payload_agent_key(agent_id));
+                result.push(agent_path_segment(agent_id));
             }
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
@@ -123,6 +125,14 @@ impl FileSystemBlobStorage {
                 result.push("component_store");
                 result.push(environment_id.to_string());
             }
+            BlobStorageNamespace::FilesystemSnapshots {
+                environment_id,
+                agent_id,
+            } => {
+                result.push("filesystem_snapshots");
+                result.push(environment_id.to_string());
+                result.push(agent_path_segment(agent_id));
+            }
         }
 
         result.push(path);
@@ -135,32 +145,6 @@ impl FileSystemBlobStorage {
         } else {
             Ok(())
         }
-    }
-
-    pub fn filesystem_safe_oplog_payload_agent_key(
-        agent_id: &golem_common::model::AgentId,
-    ) -> String {
-        let logical = agent_id.to_string();
-        let digest = blake3::hash(logical.as_bytes()).to_hex();
-
-        let mut sanitized_prefix = String::with_capacity(32);
-        for ch in agent_id.agent_id.chars() {
-            if sanitized_prefix.len() >= 32 {
-                break;
-            }
-
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-                sanitized_prefix.push(ch);
-            } else {
-                sanitized_prefix.push('_');
-            }
-        }
-
-        if sanitized_prefix.is_empty() {
-            sanitized_prefix.push_str("agent");
-        }
-
-        format!("{sanitized_prefix}-{digest}")
     }
 }
 
@@ -251,6 +235,27 @@ impl BlobStorage for FileSystemBlobStorage {
         async_fs::write(&full_path, data).await?;
 
         Ok(())
+    }
+
+    async fn put_raw_if_absent(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error> {
+        let path = normalized_blob_path(path)?;
+        path.reject_root()?;
+        let full_path = self.path_of(&namespace, &path);
+        self.ensure_path_is_inside_root(&full_path)?;
+        let staging = self.root.join(STAGING_DIRECTORY);
+        let data: Box<[u8]> = Box::from(data);
+
+        Ok(
+            tokio::task::spawn_blocking(move || write_if_absent(&staging, &full_path, &data))
+                .await??,
+        )
     }
 
     async fn put_stream(
@@ -462,6 +467,35 @@ impl BlobStorage for FileSystemBlobStorage {
 
         async_fs::copy(&from_full_path, &to_full_path).await?;
         Ok(())
+    }
+}
+
+/// The directory at the storage root that holds the bytes of a `put_raw_if_absent` call while
+/// the call writes them.
+///
+/// The directory is outside the directory of every namespace, so no listing shows a blob that is
+/// only partly written. A process that stops during a write can leave a file in it, and no
+/// namespace sees that file.
+const STAGING_DIRECTORY: &str = ".staging";
+
+/// Writes `data` as the file at `target` when `target` has no file.
+///
+/// The bytes go to a new file in `staging` first. Then the file gets the name `target` in one step.
+/// That step refuses a name that exists. So a reader sees the whole file or no file. Of two calls
+/// for one `target`, only one gives `Written`. The file in `staging` goes away when the step fails.
+fn write_if_absent(staging: &Path, target: &Path, data: &[u8]) -> std::io::Result<PutIfAbsent> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::create_dir_all(staging)?;
+    let mut file = tempfile::NamedTempFile::new_in(staging)?;
+    file.write_all(data)?;
+    match file.persist_noclobber(target) {
+        Ok(_) => Ok(PutIfAbsent::Written),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Ok(PutIfAbsent::AlreadyExists)
+        }
+        Err(error) => Err(error.error),
     }
 }
 

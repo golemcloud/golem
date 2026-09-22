@@ -120,6 +120,27 @@ pub trait BlobStorage: Debug + Send + Sync {
         data: &[u8],
     ) -> Result<(), Error>;
 
+    /// Writes the bytes as the blob at the path when the path has no blob.
+    ///
+    /// When the path has no blob, the call writes the blob and gives [`PutIfAbsent::Written`]. When
+    /// the path has a blob, the call writes nothing and gives [`PutIfAbsent::AlreadyExists`]. The
+    /// check and the write are one step. So when two calls write one path at the same time, one
+    /// call gives `Written` and the other gives `AlreadyExists`. The rules of [`BlobNameError`]
+    /// apply as for `put_raw`, and a root path gives [`BlobNameError::NoName`] on every backend.
+    ///
+    /// The S3 backend sends the request again after an error that one more attempt can pass, as
+    /// `put_raw` does. When the response to an attempt that wrote the blob does not arrive, the
+    /// next attempt finds that blob. The call then gives `AlreadyExists`, although the call
+    /// wrote the blob.
+    async fn put_raw_if_absent(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error>;
+
     /// Writes the bytes of the stream as the blob at the path, over the blob that was there.
     ///
     /// A blob cannot be where a directory is, so a root path is an error.
@@ -524,6 +545,54 @@ pub enum BlobStorageNamespace {
     Components {
         environment_id: EnvironmentId,
     },
+    /// The filesystem snapshots of one agent. Each agent has its own location on each backend.
+    FilesystemSnapshots {
+        environment_id: EnvironmentId,
+        agent_id: AgentId,
+    },
+}
+
+/// What [`BlobStorage::put_raw_if_absent`] did.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PutIfAbsent {
+    /// The path had no blob, and the call wrote the blob.
+    Written,
+    /// The path had a blob, and the call wrote nothing.
+    AlreadyExists,
+}
+
+/// Gives one path segment for an agent, which a backend can use as a directory name.
+///
+/// The segment is the agent name with each character that is not an ASCII letter, a digit, `-` or
+/// `_` replaced by `_`. The name is cut to 32 characters, and an empty name gives `agent`. Then
+/// come `-` and the blake3 hash of the full agent id, which holds the component id and the agent
+/// name. So the segment has at most 97 bytes, and it holds no separator and no `.` segment. The
+/// hash makes it very unlikely that two agents get the same segment. An agent name can be longer
+/// than a file name, and it can hold `/`, `\` and `.` segments. So a backend does not use the agent
+/// name itself.
+pub fn agent_path_segment(agent_id: &AgentId) -> String {
+    let logical = agent_id.to_string();
+    let digest = blake3::hash(logical.as_bytes()).to_hex();
+
+    let mut sanitized_prefix = String::with_capacity(32);
+    for ch in agent_id.agent_id.chars() {
+        if sanitized_prefix.len() >= 32 {
+            break;
+        }
+
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+            sanitized_prefix.push(ch);
+        } else {
+            sanitized_prefix.push('_');
+        }
+    }
+
+    if sanitized_prefix.is_empty() {
+        sanitized_prefix.push_str("agent");
+    }
+
+    format!("{sanitized_prefix}-{digest}")
 }
 
 /// Returns the symmetric per-mode prefix used by all blob-storage backends for oplog data.
@@ -1023,8 +1092,11 @@ pub(crate) fn blob_child_path(directory: &str, name: &str) -> Box<Path> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlobNameError, BlobRangeError, blob_path_to_string, blob_range, normalized_blob_path,
+        BlobNameError, BlobRangeError, agent_path_segment, blob_path_to_string, blob_range,
+        normalized_blob_path,
     };
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
     use pretty_assertions::assert_eq;
     use std::path::{Path, PathBuf};
     use test_r::test;
@@ -1233,6 +1305,31 @@ mod tests {
                 Err(BlobNameError::NoName {
                     path: PathBuf::from("")
                 }),
+            ]
+        );
+    }
+
+    /// The segment is the agent name with each character that is not an ASCII letter, a digit, `-`
+    /// or `_` replaced by `_`. The name is cut to 32 characters, and an empty name gives `agent`.
+    /// Then come `-` and the blake3 hash of the full agent id. The first agent name here is longer
+    /// than 32 characters and holds characters that the segment replaces. The second name is empty.
+    #[test]
+    fn the_path_segment_of_an_agent_keeps_its_form() {
+        let component_id =
+            ComponentId(uuid::Uuid::parse_str("0d9f6c1e-2b8a-4f3d-9e7c-5a4b3c2d1e0f").unwrap());
+        let segments = [r#"counter("a/../b", 12345678901234567890)"#, ""].map(|agent| {
+            agent_path_segment(&AgentId {
+                component_id,
+                agent_id: agent.to_string(),
+            })
+        });
+
+        assert_eq!(
+            segments,
+            [
+                "counter__a____b___12345678901234-97f0841e19646b6f20282e1d316187fb327b2df867064639c28e15d22dd797ec"
+                    .to_string(),
+                "agent-6a683fb8dbe943ef400d01ca02589e2b93eb9e982cfff9bf930fdcad6787107f".to_string(),
             ]
         );
     }

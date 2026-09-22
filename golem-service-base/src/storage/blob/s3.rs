@@ -16,9 +16,9 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobMissingError, BlobNameError, BlobRangeError, BlobStorage,
-    BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob, NormalizedBlobPath,
-    blob_copy_changes_nothing, blob_path_to_string, blob_range, check_blob_name,
-    normalized_blob_path,
+    BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+    agent_path_segment, blob_copy_changes_nothing, blob_path_to_string, blob_range,
+    check_blob_name, normalized_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -74,6 +74,17 @@ const RANGE_NOT_SATISFIABLE: u16 = 416;
 /// permanent.
 const CLIENT_ERROR: u16 = 400;
 const SERVER_ERROR: u16 = 500;
+
+/// A response with this HTTP status tells the backend that the key already has an object. It is
+/// the answer to a write with `If-None-Match: *` for a key that has an object (RFC 9110, section
+/// 15.5.13). `put_raw_if_absent` gives `PutIfAbsent::AlreadyExists` for it.
+const PRECONDITION_FAILED: u16 = 412;
+
+/// This HTTP status answers a write with `If-None-Match: *` when a request on the same key ran at
+/// the same time. RFC 9110 defines it in section 15.5.10. S3 gives it when a delete of the key
+/// finishes before the write. The S3 documentation of conditional writes says that the client can
+/// send a `PutObject` again after it.
+const CONFLICT: u16 = 409;
 
 /// The 4xx statuses that ask the client to send the request again: the server did not get the
 /// request in time (RFC 9110, section 15.5.9), or the client sent too many requests (RFC 6585,
@@ -266,6 +277,9 @@ impl S3BlobStorage {
                 &self.config.initial_agent_files_bucket
             }
             BlobStorageNamespace::Components { .. } => &self.config.components_bucket,
+            BlobStorageNamespace::FilesystemSnapshots { .. } => {
+                &self.config.filesystem_snapshots_bucket
+            }
         }
     }
 
@@ -325,6 +339,22 @@ impl S3BlobStorage {
                         .join(environment_id_string)
                         .join(component_id_string)
                         .to_path_buf()
+                }
+            }
+            BlobStorageNamespace::FilesystemSnapshots {
+                environment_id,
+                agent_id,
+            } => {
+                // The agent is one segment of a bounded length, because a raw agent id can hold
+                // `/`, `\` and `.` segments, which the rules of a key refuse.
+                let environment_id_string = environment_id.to_string();
+                let agent = agent_path_segment(agent_id);
+                if self.config.object_prefix.is_empty() {
+                    Path::new(&environment_id_string).join(agent)
+                } else {
+                    Path::new(&self.config.object_prefix)
+                        .join(environment_id_string)
+                        .join(agent)
                 }
             }
         }
@@ -838,6 +868,48 @@ impl S3BlobStorage {
             && !RETRIABLE_SERVICE_ERROR_CODES.contains(&error.meta().code().unwrap_or_default())
     }
 
+    /// Tells whether a response says that the key already has an object
+    /// ([`PRECONDITION_FAILED`]).
+    fn is_precondition_failed(response: &HttpResponse) -> bool {
+        response.status().as_u16() == PRECONDITION_FAILED
+    }
+
+    /// Tells whether the retry loop sends a `PutObject` with `If-None-Match: *` again after an
+    /// error.
+    ///
+    /// A [`CONFLICT`] keeps the loop. A request on the same key ran at the same time, and the next
+    /// attempt gets the answer for the key as it is then. Every other error follows
+    /// `is_put_object_error_retriable`, so a [`PRECONDITION_FAILED`], which is an error of the
+    /// client, stops the loop.
+    fn is_put_if_absent_error_retriable(error: &SdkError<PutObjectError>) -> bool {
+        match error {
+            SdkError::ServiceError(service_error)
+                if service_error.raw().status().as_u16() == CONFLICT =>
+            {
+                true
+            }
+            _ => Self::is_put_object_error_retriable(error),
+        }
+    }
+
+    /// Gives the text that the retry loop records for an error of a `PutObject` with
+    /// `If-None-Match: *`. Gives `None` for an error that the loop does not record and does not
+    /// count as a failure.
+    ///
+    /// A key that already has an object ([`PRECONDITION_FAILED`]) is an answer and not a failure.
+    /// So it stays out of the error log and out of the failure counter. Every other error gets its
+    /// text.
+    fn put_if_absent_error_as_loggable(error: &SdkError<PutObjectError>) -> Option<String> {
+        match error {
+            SdkError::ServiceError(service_error)
+                if Self::is_precondition_failed(service_error.raw()) =>
+            {
+                None
+            }
+            _ => Some(Self::error_string(error)),
+        }
+    }
+
     fn is_list_objects_v2_error_retriable(
         _error: &SdkError<aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error>,
     ) -> bool {
@@ -1234,6 +1306,56 @@ impl BlobStorage for S3BlobStorage {
         .await?;
 
         Ok(())
+    }
+
+    async fn put_raw_if_absent(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error> {
+        let path = normalized_blob_path(path)?;
+        path.reject_root()?;
+
+        let bucket = self.bucket_of(&namespace);
+        let key = self.key_of(&namespace, &path)?;
+        let bytes = Bytes::copy_from_slice(data);
+
+        let result = with_retries_customized(
+            target_label,
+            op_label,
+            Some(format!("{bucket} - {key:?}")),
+            &self.config.retries,
+            &(self.client.clone(), bucket, key, bytes),
+            |(client, bucket, key, bytes)| {
+                Box::pin(async move {
+                    client
+                        .put_object()
+                        .bucket(*bucket)
+                        .key(key.clone())
+                        .if_none_match("*")
+                        .body(ByteStream::from(bytes.clone()))
+                        .send()
+                        .await
+                })
+            },
+            Self::is_put_if_absent_error_retriable,
+            Self::put_if_absent_error_as_loggable,
+            false,
+        )
+        .await;
+
+        match result {
+            Ok(_) => Ok(PutIfAbsent::Written),
+            Err(SdkError::ServiceError(service_error))
+                if Self::is_precondition_failed(service_error.raw()) =>
+            {
+                Ok(PutIfAbsent::AlreadyExists)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     async fn put_stream(

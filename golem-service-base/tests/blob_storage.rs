@@ -21,6 +21,7 @@ use aws_sdk_s3::config::Credentials;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -183,6 +184,12 @@ async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
         .send()
         .await
         .unwrap();
+    client
+        .create_bucket()
+        .bucket(&config.filesystem_snapshots_bucket)
+        .send()
+        .await
+        .unwrap();
     for bucket in &config.compressed_oplog_buckets {
         client.create_bucket().bucket(bucket).send().await.unwrap();
     }
@@ -261,6 +268,19 @@ impl BlobStorage for S3BlobStorageWithContainer {
     ) -> Result<(), Error> {
         self.storage
             .put_raw(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_raw_if_absent(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error> {
+        self.storage
+            .put_raw_if_absent(target_label, op_label, namespace, path, data)
             .await
     }
 
@@ -456,6 +476,33 @@ fn custom_storage() -> BlobStorageNamespace {
         environment_id: EnvironmentId(
             Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
         ),
+    }
+}
+
+/// The filesystem snapshots of one agent whose name holds a `..` segment. The rules of a blob
+/// name refuse such a segment, so the location of the agent must not hold its name.
+#[test_dep(scope = PerWorker, tagged_as = "fss")]
+fn filesystem_snapshots() -> BlobStorageNamespace {
+    filesystem_snapshots_of(
+        "4c8c5ff4-2a42-4e81-ac48-e63005f609fd",
+        "7e0e4c9a-3c34-4d52-8d6f-0d2f6b6d3a11",
+        r#"counter("a/../b")"#,
+    )
+}
+
+/// The filesystem snapshots namespace of the agent `agent` of the component `component` in the
+/// environment `environment`.
+fn filesystem_snapshots_of(
+    environment: &str,
+    component: &str,
+    agent: &str,
+) -> BlobStorageNamespace {
+    BlobStorageNamespace::FilesystemSnapshots {
+        environment_id: EnvironmentId(Uuid::parse_str(environment).unwrap()),
+        agent_id: AgentId {
+            component_id: ComponentId(Uuid::parse_str(component).unwrap()),
+            agent_id: agent.to_string(),
+        },
     }
 }
 
@@ -1441,6 +1488,11 @@ async fn a_name_that_breaks_a_rule_of_the_storage_gives_that_rule(
             .await
             .err()
             .and_then(name_error);
+        let written_if_absent = storage
+            .put_raw_if_absent(label, "put-if-absent", namespace.clone(), path, b"payload")
+            .await
+            .err()
+            .and_then(name_error);
         let created = storage
             .create_dir(label, "create-dir", namespace.clone(), path)
             .await
@@ -1453,8 +1505,13 @@ async fn a_name_that_breaks_a_rule_of_the_storage_gives_that_rule(
             .and_then(name_error);
 
         assert_eq!(
-            (written, created, read),
-            (Some(rule.clone()), Some(rule.clone()), Some(rule)),
+            (written, written_if_absent, created, read),
+            (
+                Some(rule.clone()),
+                Some(rule.clone()),
+                Some(rule.clone()),
+                Some(rule)
+            ),
             "the name {name:?}"
         );
     }
@@ -2126,6 +2183,12 @@ fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamesp
         },
         BlobStorageNamespace::Components { .. } => {
             BlobStorageNamespace::Components { environment_id }
+        }
+        BlobStorageNamespace::FilesystemSnapshots { agent_id, .. } => {
+            BlobStorageNamespace::FilesystemSnapshots {
+                environment_id,
+                agent_id,
+            }
         }
     }
 }
@@ -3480,4 +3543,335 @@ async fn a_copy_or_a_move_onto_itself_needs_a_blob(
             "move({from:?}, {to:?})"
         );
     }
+}
+
+#[test]
+#[tracing::instrument]
+async fn put_raw_if_absent_writes_a_blob_where_the_path_has_none(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("fss")] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "put_raw_if_absent_writes_a_blob_where_the_path_has_none";
+    let path = Path::new("dir/blob");
+
+    let written = storage
+        .put_raw_if_absent(label, "put-if-absent", namespace.clone(), path, b"first")
+        .await
+        .unwrap();
+    let read = storage
+        .get_raw(label, "get-raw", namespace.clone(), path)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (written, read),
+        (PutIfAbsent::Written, Some(b"first".to_vec()))
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn put_raw_if_absent_keeps_the_blob_that_is_at_the_path(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("fss")] namespace: &BlobStorageNamespace,
+) {
+    // One blob comes from `put_raw` and one from `put_raw_if_absent`. The call refuses both, and
+    // each keeps its first bytes.
+    let storage = test.get_blob_storage().await;
+    let label = "put_raw_if_absent_keeps_the_blob_that_is_at_the_path";
+    let put = Path::new("put");
+    let conditional = Path::new("dir/conditional");
+    storage
+        .put_raw(label, "put-raw", namespace.clone(), put, b"first")
+        .await
+        .unwrap();
+    let first_conditional = storage
+        .put_raw_if_absent(
+            label,
+            "put-if-absent",
+            namespace.clone(),
+            conditional,
+            b"first",
+        )
+        .await
+        .unwrap();
+
+    let second_put = storage
+        .put_raw_if_absent(label, "put-if-absent", namespace.clone(), put, b"second")
+        .await
+        .unwrap();
+    let second_conditional = storage
+        .put_raw_if_absent(
+            label,
+            "put-if-absent",
+            namespace.clone(),
+            conditional,
+            b"second",
+        )
+        .await
+        .unwrap();
+    let read_put = storage
+        .get_raw(label, "get-raw", namespace.clone(), put)
+        .await
+        .unwrap();
+    let read_conditional = storage
+        .get_raw(label, "get-raw", namespace.clone(), conditional)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            first_conditional,
+            second_put,
+            second_conditional,
+            read_put,
+            read_conditional
+        ),
+        (
+            PutIfAbsent::Written,
+            PutIfAbsent::AlreadyExists,
+            PutIfAbsent::AlreadyExists,
+            Some(b"first".to_vec()),
+            Some(b"first".to_vec())
+        )
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn put_raw_if_absent_writes_again_after_a_delete(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("fss")] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "put_raw_if_absent_writes_again_after_a_delete";
+    let path = Path::new("blob");
+    let first = storage
+        .put_raw_if_absent(label, "put-if-absent", namespace.clone(), path, b"first")
+        .await
+        .unwrap();
+    storage
+        .delete(label, "delete", namespace.clone(), path)
+        .await
+        .unwrap();
+
+    let second = storage
+        .put_raw_if_absent(label, "put-if-absent", namespace.clone(), path, b"second")
+        .await
+        .unwrap();
+    let read = storage
+        .get_raw(label, "get-raw", namespace.clone(), path)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (first, second, read),
+        (
+            PutIfAbsent::Written,
+            PutIfAbsent::Written,
+            Some(b"second".to_vec())
+        )
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn of_concurrent_put_raw_if_absent_calls_on_one_path_one_writes(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("fss")] namespace: &BlobStorageNamespace,
+) {
+    // Each call writes other bytes, so the blob tells which call wrote it. The calls run at the
+    // same time. The filesystem backend writes on blocking threads, the SQLite pool has more than
+    // one connection, and S3 gets the requests in parallel.
+    let storage = test.get_blob_storage().await;
+    let label = "of_concurrent_put_raw_if_absent_calls_on_one_path_one_writes";
+    let path = Path::new("dir/blob");
+    let payloads = (0..16)
+        .map(|writer| format!("writer {writer}").into_bytes())
+        .collect::<Vec<_>>();
+
+    let results = futures::future::join_all(payloads.iter().map(|payload| {
+        storage.put_raw_if_absent(label, "put-if-absent", namespace.clone(), path, payload)
+    }))
+    .await
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
+    let read = storage
+        .get_raw(label, "get-raw", namespace.clone(), path)
+        .await
+        .unwrap();
+    let writers = results
+        .iter()
+        .zip(&payloads)
+        .filter(|(result, _)| **result == PutIfAbsent::Written)
+        .map(|(_, payload)| payload.clone())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (writers.len(), read.map(|read| writers.contains(&read))),
+        (1, Some(true)),
+        "{results:?}"
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn put_raw_if_absent_at_a_root_path_gives_the_no_name_error(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("fss")] namespace: &BlobStorageNamespace,
+) {
+    // A root path is a directory, and a blob cannot be where a directory is. Each backend gives
+    // the error of the name, which is permanent, before it writes anything.
+    let storage = test.get_blob_storage().await;
+    let label = "put_raw_if_absent_at_a_root_path_gives_the_no_name_error";
+    let storage = &storage;
+
+    let errors = futures::future::join_all(ROOT_PATHS.map(|root_path| async move {
+        storage
+            .put_raw_if_absent(
+                label,
+                "put-if-absent",
+                namespace.clone(),
+                Path::new(root_path),
+                b"payload",
+            )
+            .await
+            .err()
+            .and_then(name_error)
+    }))
+    .await;
+
+    assert_eq!(
+        errors,
+        ROOT_PATHS.map(|_| Some(BlobNameError::NoName {
+            path: PathBuf::new()
+        }))
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn fs_put_raw_if_absent_gives_the_error_of_a_name_that_the_filesystem_refuses(
+    #[tagged_as("fs")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("fss")] namespace: &BlobStorageNamespace,
+) {
+    // The filesystem that holds the storage must not accept a name of 300 bytes. So the move of the
+    // written file into place fails with an error that is not "already exists". The call gives that
+    // error and writes no blob.
+    let storage = test.get_blob_storage().await;
+    let label = "fs_put_raw_if_absent_gives_the_error_of_a_name_that_the_filesystem_refuses";
+    let too_long = "x".repeat(300);
+
+    let written = storage
+        .put_raw_if_absent(
+            label,
+            "put-if-absent",
+            namespace.clone(),
+            Path::new(&too_long),
+            b"payload",
+        )
+        .await;
+    let listed = sorted_listing(&storage, namespace, "").await;
+
+    assert!(written.is_err(), "{written:?}");
+    assert_eq!(listed, Vec::new());
+}
+
+#[test]
+#[tracing::instrument]
+async fn the_filesystem_snapshots_namespace_gives_each_agent_its_own_location(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    // Each namespace holds a blob at the same path with its own bytes. The agents differ in their
+    // name, their environment or their component. The last two namespaces are other kinds of
+    // namespace of the same environment and agent. One agent name holds a `..` segment, which the
+    // rules of a blob name refuse. So its location must not hold the name. The oplog payloads of
+    // such an agent are not in the test, because their S3 location holds the agent name.
+    let storage = test.get_blob_storage().await;
+    let label = "the_filesystem_snapshots_namespace_gives_each_agent_its_own_location";
+    let environment = "0a8cd1b1-5c35-4f0e-9c67-2bb4c0f0f3a1";
+    let other_environment = "1b9de2c2-6d46-4a1f-8d78-3cc5d101a4b2";
+    let component = "2caef3d3-7e57-4b2a-9e89-4dd6e212b5c3";
+    let other_component = "3dbf04e4-8f68-4c3b-8f9a-5ee7f323c6d4";
+    let agent = r#"counter("a")"#;
+    let namespaces = [
+        filesystem_snapshots_of(environment, component, agent),
+        filesystem_snapshots_of(environment, component, r#"counter("a/../b")"#),
+        filesystem_snapshots_of(other_environment, component, agent),
+        filesystem_snapshots_of(environment, other_component, agent),
+        BlobStorageNamespace::OplogPayload {
+            environment_id: EnvironmentId(Uuid::parse_str(environment).unwrap()),
+            agent_id: AgentId {
+                component_id: ComponentId(Uuid::parse_str(component).unwrap()),
+                agent_id: agent.to_string(),
+            },
+            agent_mode: AgentMode::Durable,
+        },
+        BlobStorageNamespace::CustomStorage {
+            environment_id: EnvironmentId(Uuid::parse_str(environment).unwrap()),
+        },
+    ];
+    let path = Path::new("tree/blob");
+    futures::stream::iter(namespaces.iter().enumerate())
+        .then(|(index, namespace)| {
+            let storage = storage.clone();
+            async move {
+                storage
+                    .put_raw(
+                        label,
+                        "put-raw",
+                        namespace.clone(),
+                        path,
+                        format!("namespace {index}").as_bytes(),
+                    )
+                    .await
+            }
+        })
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+
+    let read = |namespace: BlobStorageNamespace| {
+        let storage = storage.clone();
+        async move {
+            (
+                storage
+                    .get_raw(label, "get-raw", namespace.clone(), path)
+                    .await
+                    .unwrap(),
+                sorted_listing(&storage, &namespace, "").await,
+            )
+        }
+    };
+    let before_delete = futures::stream::iter(namespaces.clone())
+        .then(read)
+        .collect::<Vec<_>>()
+        .await;
+    storage
+        .delete(label, "delete", namespaces[0].clone(), path)
+        .await
+        .unwrap();
+    let after_delete = futures::stream::iter(namespaces.clone())
+        .then(read)
+        .collect::<Vec<_>>()
+        .await;
+
+    let own_blob = |index: usize| {
+        (
+            Some(format!("namespace {index}").into_bytes()),
+            listed_blobs(&[("tree/blob", format!("namespace {index}").len())]),
+        )
+    };
+    assert_eq!(
+        before_delete,
+        (0..namespaces.len()).map(own_blob).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        after_delete,
+        std::iter::once((None, Vec::new()))
+            .chain((1..namespaces.len()).map(own_blob))
+            .collect::<Vec<_>>()
+    );
 }

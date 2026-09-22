@@ -16,6 +16,8 @@ pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
 pub(crate) mod filesystem_pressure;
+#[allow(dead_code)]
+pub(crate) mod filesystem_snapshot;
 pub mod grpc;
 pub mod identity;
 pub mod metrics;

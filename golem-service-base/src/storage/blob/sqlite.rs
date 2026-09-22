@@ -17,8 +17,8 @@ use crate::db::{DBValue, PoolApi};
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::repo::RepoError;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, blob_child_path,
-    normalized_blob_path,
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent,
+    agent_path_segment, blob_child_path, normalized_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -90,6 +90,13 @@ impl SqliteBlobStorage {
             }
             BlobStorageNamespace::Components { environment_id } => {
                 format!("components-{environment_id}")
+            }
+            BlobStorageNamespace::FilesystemSnapshots {
+                environment_id,
+                agent_id,
+            } => {
+                let agent = agent_path_segment(&agent_id);
+                format!("filesystem_snapshots-{environment_id}-{agent}")
             }
         }
     }
@@ -194,6 +201,46 @@ impl BlobStorage for SqliteBlobStorage {
             .await?;
 
         Ok(())
+    }
+
+    async fn put_raw_if_absent(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error> {
+        let path = normalized_blob_path(path)?;
+        path.reject_root()?;
+        let size = data.len() as i64;
+        // The primary key holds the path, so the insert and the check of the key are one
+        // statement. A row that is there makes the insert change no row.
+        let query = sqlx::query(
+            r#"
+                INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
+                VALUES (?, ?, ?, ?, ?, FALSE)
+                ON CONFLICT(namespace, parent, name) DO NOTHING;
+            "#,
+        )
+        .bind(Self::namespace(namespace))
+        .bind(path.parent_text()?)
+        .bind(path.file_name_text()?)
+        .bind(data)
+        .bind(size);
+
+        let inserted = self
+            .pool
+            .with_rw(target_label, op_label)
+            .execute(query)
+            .await?
+            .rows_affected();
+
+        Ok(if inserted == 0 {
+            PutIfAbsent::AlreadyExists
+        } else {
+            PutIfAbsent::Written
+        })
     }
 
     async fn put_stream(
