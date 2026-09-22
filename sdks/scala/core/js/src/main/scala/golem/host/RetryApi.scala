@@ -26,8 +26,9 @@ import scala.scalajs.js.annotation.JSImport
  * Scala.js facade for `golem:api/retry@1.5.0`.
  *
  * Provides typed access to the semantic retry policy API. The tree-based policy
- * and predicate types are kept opaque — the SDK just passes them through
- * to/from the host.
+ * and predicate types used by the raw methods are kept opaque and passed
+ * through without SDK validation. Typed methods decode or encode them through
+ * the validated Scala retry DSL.
  */
 object RetryApi {
 
@@ -56,6 +57,7 @@ object RetryApi {
       .toOption
       .map(Retry.Policy.fromJs)
 
+  /** Passes a raw policy to the host without local validation. */
   def setRetryPolicy(policy: JsNamedRetryPolicy): Unit =
     RetryModule.setRetryPolicy(policy)
 
@@ -83,5 +85,6 @@ object RetryApi {
     def removeRetryPolicy(name: String): Unit            = js.native
   }
 
+  /** Exposes the unvalidated native host facade. */
   def raw: Any = RetryModule
 }
