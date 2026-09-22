@@ -4180,6 +4180,93 @@ mod tests {
     }
 
     #[test]
+    fn inherited_prefix_keeps_optional_parent_field_absent_from_child() {
+        let optional = option_wrapper_graph(&u32_graph());
+        for value in [
+            SchemaValue::Option { inner: None },
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U32(7))),
+            },
+        ] {
+            let input = build_canonical_input_with_prefix(
+                vec![CanonicalInputField {
+                    name: "query".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: str_graph(),
+                }],
+                &[CanonicalInputValue {
+                    name: "verbose".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: optional.clone(),
+                    value: value.clone(),
+                }],
+                vec![("query", SchemaValue::String("demo".to_string()))],
+            )
+            .unwrap();
+            let expected = CanonicalInputModel::from_fields(vec![
+                CanonicalInputField {
+                    name: "verbose".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: optional.clone(),
+                },
+                CanonicalInputField {
+                    name: "query".to_string(),
+                    aliases: vec![],
+                    short: None,
+                    schema: str_graph(),
+                },
+            ])
+            .unwrap();
+            assert_eq!(input.graph(), &expected.record_schema);
+            assert_eq!(
+                input.value(),
+                &SchemaValue::Record {
+                    fields: vec![value, SchemaValue::String("demo".to_string())]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn inherited_prefix_keeps_required_parent_carrier_when_child_is_optional() {
+        let required = str_graph();
+        let input = build_canonical_input_with_prefix(
+            vec![CanonicalInputField {
+                name: "format".to_string(),
+                aliases: vec![],
+                short: None,
+                schema: option_wrapper_graph(&required),
+            }],
+            &[CanonicalInputValue {
+                name: "format".to_string(),
+                aliases: vec![],
+                short: None,
+                schema: required.clone(),
+                value: SchemaValue::String("json".to_string()),
+            }],
+            vec![],
+        )
+        .unwrap();
+        let expected = CanonicalInputModel::from_fields(vec![CanonicalInputField {
+            name: "format".to_string(),
+            aliases: vec![],
+            short: None,
+            schema: required,
+        }])
+        .unwrap();
+        assert_eq!(input.graph(), &expected.record_schema);
+        assert_eq!(
+            input.value(),
+            &SchemaValue::Record {
+                fields: vec![SchemaValue::String("json".to_string())]
+            }
+        );
+    }
+
+    #[test]
     fn canonical_input_model_decodes_positional_record_by_index() {
         let tool = sample_tool();
         let model = tool.canonical_input_model(1).unwrap();
