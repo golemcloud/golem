@@ -36,11 +36,15 @@ agents:
   ScalaToolStreamingCaller:
     tools:
       scala-streaming: { }
+  ScalaToolReflectionCaller:
+    tools:
+      scala-reflection-test: { }
 
 tools:
   git: { }
   grep: { }
   scala-streaming: { }
+  scala-reflection-test: { }
   tool-demo: { }
 
 httpApi:

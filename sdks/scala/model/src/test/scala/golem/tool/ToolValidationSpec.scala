@@ -651,6 +651,41 @@ object ToolValidationSpec extends ZIOSpecDefault {
         shapesMatch(unrestricted, t.string),
         !shapesMatch(t.string, languageRestricted)
       )
+    },
+    test("finite schema shapes match beyond the former recursion boundary") {
+      def nested(depth: Int, leaf: SchemaType): SchemaType =
+        (0 until depth).foldLeft(leaf)((current, _) => t.option(current))
+      assertTrue(
+        List(31, 32, 33).forall(depth => shapesMatch(nested(depth, t.string), nested(depth, t.string))),
+        !shapesMatch(nested(33, t.string), nested(33, t.u32))
+      )
+    },
+    test("optional tool inputs have one canonical option carrier") {
+      val optionalString = graph(t.option(t.string))
+      val positional     =
+        ExtendedPositional("position", doc(""), None, optionalString, None, required = false, acceptsStdio = false)
+      val option = ExtendedOptionSpec(
+        "choice",
+        None,
+        Nil,
+        doc(""),
+        None,
+        ExtendedOptionShape.Scalar(optionalString),
+        None,
+        required = false,
+        None
+      )
+      val body = emptyBody().copy(
+        positionals = ExtendedPositionals(fixed = List(positional)),
+        options = List(option)
+      )
+      val fields = leafToolWithBody(body).canonicalInputFields(0)
+      assertTrue(
+        fields.map(_.schema.root.body) == List(
+          SchemaTypeBody.OptionType(t.string),
+          SchemaTypeBody.OptionType(t.string)
+        )
+      )
     }
   )
 }
