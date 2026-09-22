@@ -342,9 +342,15 @@ impl RenderFragment for ComponentOwnerPattern {
     }
 }
 
+/// Gives the owner text of an agent leaf. A concrete agent name gets `%`, `/` and `?` written as
+/// `%25`, `%2F` and `%3F`, `%` first, so that the name is one owner segment and holds no slot
+/// variable. `AgentOwnerLeafPattern::parse` percent-decodes the name.
 fn render_agent_leaf(agent: &AgentOwnerLeafPattern) -> String {
     match agent {
-        AgentOwnerLeafPattern::Agent(agent) => agent.clone(),
+        AgentOwnerLeafPattern::Agent(agent) => agent
+            .replace('%', "%25")
+            .replace('/', "%2F")
+            .replace('?', "%3F"),
         AgentOwnerLeafPattern::AgentTypeWildcard(agent_type) => format!("{}(*)", agent_type.0),
     }
 }
