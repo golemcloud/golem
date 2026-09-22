@@ -434,7 +434,7 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
     ] {
         append_session(foreign_oplog.as_ref(), record).await;
     }
-    foreign_oplog.commit(CommitLevel::Always).await;
+    foreign_oplog.commit(CommitLevel::Always).await.unwrap();
     assert_eq!(
         probe
             .status_exact(&foreign_attachment, Some(&mapping))
@@ -724,7 +724,7 @@ async fn recovery_cache_refolds_a_cut_committed_after_its_snapshot() {
     let fingerprint = session_key(&owner, &key).callee_fingerprint;
     let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
     append_session(oplog.as_ref(), prepared_record(&owner, &key)).await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     let mut cache = crate::worker::DurableTopologyRecoveryCache::default();
     cache
         .refresh(
@@ -758,7 +758,8 @@ async fn recovery_cache_refolds_a_cut_committed_after_its_snapshot() {
     .into_inline_entry();
     oplog
         .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
-        .await;
+        .await
+        .unwrap();
     // An uncommitted cut must fail closed, rather than repeatedly reloading an old index.
     assert!(
         cache
@@ -772,7 +773,7 @@ async fn recovery_cache_refolds_a_cut_committed_after_its_snapshot() {
             .await
             .is_err()
     );
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     cache
         .refresh(
             oplog.as_ref(),
@@ -844,7 +845,7 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
         for _ in 0..2050 {
             append_noop(oplog.as_ref()).await;
         }
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
         let end = oplog.current_oplog_index().await;
         if warm {
             assert!(
@@ -875,8 +876,9 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
             DurableStreamOplogRecord::Session(None, Box::new(cut)).into_inline_entry();
         oplog
             .add_pair(OplogEntry::revert(region), Box::new(move |_| marker_entry))
-            .await;
-        oplog.commit(CommitLevel::Always).await;
+            .await
+            .unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
         let marker = oplog.current_oplog_index().await;
         assert!(
             service
@@ -898,7 +900,7 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
 
         // The same invocation key can be accepted again after its old preparation is deleted.
         let prepared = append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
         let state = service
             .stream_session_index
             .lookup_persisted(&id, AgentMode::Durable, prepared, &key)
@@ -1022,7 +1024,7 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
             .await,
         );
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let region = OplogRegion {
         start: removed[0],
@@ -1058,8 +1060,9 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
     let marker = DurableStreamOplogRecord::Session(None, Box::new(cut)).into_inline_entry();
     oplog
         .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
-        .await;
-    oplog.commit(CommitLevel::Always).await;
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     let expected_second_page = retained[256..].to_vec();
     service
@@ -1105,7 +1108,7 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
         }),
     )
     .await;
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     cold.stream_session_index
         .catch_up(
             &owner,
@@ -1196,7 +1199,7 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
             .await,
         );
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     let horizon = oplog.current_oplog_index().await;
     let (warm_first, warm_second) = tokio::join!(
         first
@@ -1231,7 +1234,7 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
         start: removed[0],
         end: *removed.last().unwrap(),
     };
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     first
         .stream_session_index
         .catch_up(&owner, AgentMode::Durable, region.end)
@@ -1262,8 +1265,9 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
     let marker = DurableStreamOplogRecord::Session(None, Box::new(cut)).into_inline_entry();
     oplog
         .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
-        .await;
-    oplog.commit(CommitLevel::Always).await;
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
     let expected = retained[256..].to_vec();
     let (left_control, right_control) = tokio::join!(
         first.lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &session),
@@ -3137,7 +3141,7 @@ async fn raw_authority_ignores_foreign_results_sharing_an_idempotency_key() {
         .await;
         for committed in [false, true] {
             if committed {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
             }
             let status = oplog
                 .raw_durable_stream_session_status(&first_key)

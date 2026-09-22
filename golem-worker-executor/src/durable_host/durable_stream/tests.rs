@@ -5628,7 +5628,7 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
             let oplog = oplog.clone();
             let commit_reached = commit_reached.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 let _ = committed.unwrap().send(());
                 commit_reached.wait().await;
                 std::future::pending::<()>().await;

@@ -678,7 +678,8 @@ mod tests {
                 .into_inline_entry();
         oplog
             .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
-            .await;
+            .await
+            .unwrap();
         let rebuilt = DurableStreamStore::load(
             oplog.clone(),
             owner.environment_id,
@@ -798,7 +799,7 @@ mod tests {
                 .read_exact(OplogIndex::INITIAL, horizon.as_u64())
                 .await
             {
-                copied.add(entry).await;
+                copied.add(entry).await.unwrap();
             }
             copied
                 .add(OplogEntry::StreamSession {
@@ -806,7 +807,8 @@ mod tests {
                     entity_parent_start_index: None,
                     record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
                 })
-                .await;
+                .await
+                .unwrap();
             let rebuilt = DurableStreamStore::read_complete_index(
                 copied.as_ref(),
                 target.environment_id,
@@ -957,7 +959,7 @@ mod tests {
             .read_exact(OplogIndex::INITIAL, cut_index.as_u64())
             .await
         {
-            copied.add(entry).await;
+            copied.add(entry).await.unwrap();
         }
         copied
             .add(OplogEntry::StreamSession {
@@ -965,7 +967,8 @@ mod tests {
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
             })
-            .await;
+            .await
+            .unwrap();
         let forked = DurableStreamStore::load(
             copied.clone(),
             target.environment_id,
@@ -1075,7 +1078,8 @@ mod tests {
                     )
                     .into_inline_entry(),
                 )
-                .await;
+                .await
+                .unwrap();
             let horizon = copied.current_oplog_index().await;
             let reverted = DurableStreamStore::prepare_fork_cut(
                 copied.as_ref(),
@@ -1181,7 +1185,8 @@ mod tests {
         .into_inline_entry();
         copied
             .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
-            .await;
+            .await
+            .unwrap();
         let historical = DurableStreamStore::prepare_fork_cut(
             copied.as_ref(),
             (&target, fingerprint),
@@ -1218,7 +1223,8 @@ mod tests {
                 )
                 .into_inline_entry(),
             )
-            .await;
+            .await
+            .unwrap();
         let horizon = copied.current_oplog_index().await;
         assert!(matches!(
             DurableStreamStore::prepare_fork_cut(
@@ -1269,8 +1275,9 @@ mod tests {
             .add(entry(StreamSessionRecord::Prepared(prepared(
                 &identity.invocation,
             ))))
-            .await;
-        oplog.add(entry(attached(5))).await;
+            .await
+            .unwrap();
+        oplog.add(entry(attached(5))).await.unwrap();
         let cut = DurableStreamStore::prepare_fork_cut(
             &oplog,
             (&owner, identity.fingerprint),
@@ -1287,14 +1294,15 @@ mod tests {
         let marker = entry(StreamSessionRecord::ForkCut(cut));
         oplog
             .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
-            .await;
+            .await
+            .unwrap();
         let second_cut = oplog
             .add(entry(StreamSessionRecord::Prepared(prepared(
                 &identity.invocation,
             ))))
             .await
             .unwrap();
-        oplog.add(entry(attached(1))).await;
+        oplog.add(entry(attached(1))).await.unwrap();
         let cut = DurableStreamStore::prepare_fork_cut(
             &oplog,
             (&owner, identity.fingerprint),
@@ -1352,7 +1360,7 @@ mod tests {
         let identity = identity();
         let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
         let oplog = Arc::new(TestOplog::default());
-        oplog.add(OplogEntry::no_op(None)).await;
+        oplog.add(OplogEntry::no_op(None)).await.unwrap();
         let descriptor = prepared(&identity.invocation);
         let requests: Vec<_> = (0..2)
             .map(|path| {
@@ -1447,7 +1455,8 @@ mod tests {
             .into_inline_entry();
             oplog
                 .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
-                .await;
+                .await
+                .unwrap();
         }
     }
 
@@ -1468,7 +1477,7 @@ mod tests {
         let fingerprint = AgentFingerprint(Uuid::from_u128(422));
         let oplog = TestOplog::default();
         for _ in 0..3 {
-            oplog.add(OplogEntry::no_op(None)).await;
+            oplog.add(OplogEntry::no_op(None)).await.unwrap();
         }
         let horizon = oplog
             .add(OplogEntry::revert(OplogRegion::from_range(2..=3)))
@@ -1508,7 +1517,8 @@ mod tests {
                 )
                 .into_inline_entry(),
             )
-            .await;
+            .await
+            .unwrap();
         let cut = DurableStreamStore::prepare_fork_cut(
             &oplog,
             (&target, fingerprint),
@@ -2340,7 +2350,7 @@ mod tests {
                         entity_parent_start_index: None,
                     },
                 };
-                oplog.add(entry).await;
+                oplog.add(entry).await.unwrap();
             }
             let rebuilt = DurableStreamStore::read_complete_index(
                 &oplog,

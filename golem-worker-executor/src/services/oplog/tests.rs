@@ -1649,9 +1649,9 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         .create_staged(&owned, AgentMode::Durable, orphan_id, metadata.clone())
         .await
         .unwrap();
-    orphan.add(create.clone()).await;
-    orphan.add(OplogEntry::no_op(None).rounded()).await;
-    orphan.commit(CommitLevel::Always).await;
+    orphan.add(create.clone()).await.unwrap();
+    orphan.add(OplogEntry::no_op(None).rounded()).await.unwrap();
+    orphan.commit(CommitLevel::Always).await.unwrap();
     drop(orphan);
     let entries = [
         create.clone(),
@@ -1659,8 +1659,8 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         OplogEntry::no_op(None).rounded(),
     ];
     for entry in &entries {
-        stage.add(entry.clone()).await;
-        stage.commit(CommitLevel::Always).await;
+        stage.add(entry.clone()).await.unwrap();
+        stage.commit(CommitLevel::Always).await.unwrap();
         assert!(!service.exists(&owned, AgentMode::Durable).await);
         assert_eq!(
             service.get_last_index(&owned, AgentMode::Durable).await,
@@ -1750,8 +1750,8 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
         .create_staged(&owned, AgentMode::Durable, losing_id, metadata)
         .await
         .unwrap();
-    losing.add(create).await;
-    losing.commit(CommitLevel::Always).await;
+    losing.add(create).await.unwrap();
+    losing.commit(CommitLevel::Always).await.unwrap();
     assert_eq!(losing.current_oplog_index().await, OplogIndex::INITIAL);
     assert_eq!(
         reopened.current_oplog_index().await,

@@ -3396,7 +3396,7 @@ mod tests {
                 vec![40, 41],
             ),
         ] {
-            fixture.oplog.add(entry).await;
+            fixture.oplog.add(entry).await.unwrap();
         }
         fixture.persist().await;
         let owner = OwnedAgentId::new(fixture.identity.environment_id, &fixture.identity.agent_id);
@@ -3566,7 +3566,8 @@ mod tests {
                     ),
                 ))),
             })
-            .await;
+            .await
+            .unwrap();
         let producer = fixture.producer().await;
         let original = producer
             .register(None, fixture.registration(0))
@@ -3599,7 +3600,8 @@ mod tests {
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
             })
-            .await;
+            .await
+            .unwrap();
         fixture.persist().await;
         let cold = fixture.producer().await;
         let events = cold.read_segment(&continuation, None, None).await.unwrap();
@@ -3632,7 +3634,8 @@ mod tests {
         let oplog = Arc::new(TestOplog::default());
         oplog
             .add(fixture.oplog.read(OplogIndex::INITIAL).await)
-            .await;
+            .await
+            .unwrap();
         let producer = DurableStreamStore::load(
             oplog.clone(),
             source.environment_id,
@@ -3748,7 +3751,7 @@ mod tests {
             )
             .await
         {
-            copied.add(entry).await;
+            copied.add(entry).await.unwrap();
         }
         let mut cut = fork(Some(root_local_id), copied.current_oplog_index().await);
         cut.creation_fingerprint = target.fingerprint;
@@ -3759,7 +3762,8 @@ mod tests {
                 entity_parent_start_index: None,
                 record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
             })
-            .await;
+            .await
+            .unwrap();
         let oplog = copied;
         for (_, entry) in oplog
             .read_exact(
@@ -3768,7 +3772,7 @@ mod tests {
             )
             .await
         {
-            fixture.oplog.add(entry).await;
+            fixture.oplog.add(entry).await.unwrap();
         }
         fixture.persist().await;
         let raw_producer = DurableStreamStore::load(
@@ -3917,7 +3921,8 @@ mod tests {
                         entity_parent_start_index: None,
                         record: OplogPayload::Inline(Box::new(record)),
                     })
-                    .await;
+                    .await
+                    .unwrap();
                 if prepared {
                     assert!(
                         fixture
@@ -4089,7 +4094,8 @@ mod tests {
                             }),
                         )),
                     })
-                    .await;
+                    .await
+                    .unwrap();
                 fixture.persist().await;
                 assert_eq!(
                     fixture

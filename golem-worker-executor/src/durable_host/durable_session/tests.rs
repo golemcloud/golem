@@ -319,7 +319,8 @@ async fn assert_fork_consumer_payloads(overlay_before_fork: bool) {
             entity_parent_start_index: None,
             record: OplogPayload::Inline(Box::new(StreamSessionRecord::ForkCut(cut))),
         })
-        .await;
+        .await
+        .unwrap();
     let stale = StreamSession::new(
         producer,
         oplog.clone(),
@@ -1273,15 +1274,16 @@ async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix()
         )
         .await
     {
-        fork_oplog.add(entry).await;
+        fork_oplog.add(entry).await.unwrap();
     }
     fork_oplog
         .add(
             DurableStreamOplogRecord::Session(None, Box::new(StreamSessionRecord::ForkCut(cut)))
                 .into_inline_entry(),
         )
-        .await;
-    fork_oplog.commit(CommitLevel::Always).await;
+        .await
+        .unwrap();
+    fork_oplog.commit(CommitLevel::Always).await.unwrap();
     let fork = DurableStreamStore::load(
         fork_oplog.clone(),
         target_owner.environment_id,
@@ -5912,7 +5914,7 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
         consumer.invocation.callee_fingerprint = consumer.fingerprint;
         let owner = OwnedAgentId::new(consumer.environment_id, &consumer.agent_id);
         let oplog = Arc::new(TestOplog::default());
-        oplog.add(OplogEntry::no_op(None)).await;
+        oplog.add(OplogEntry::no_op(None)).await.unwrap();
         let local = DurableStreamStore::load(
             oplog.clone(),
             consumer.environment_id,
@@ -5951,7 +5953,7 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
                 mapping: mapping.clone(),
             }),
         ] {
-            streams.append_record(None, record).await;
+            streams.append_record(None, record).await.unwrap();
         }
         let reader_id = persist_mapping(
             &local,
@@ -5973,7 +5975,8 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
                     recursive_mappings: vec![],
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         let cut_index = oplog.current_oplog_index().await;
         streams
             .append_record(
@@ -5987,7 +5990,8 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
                     terminal: StreamConsumerTerminal::End(StreamEndResult::Ok),
                 }),
             )
-            .await;
+            .await
+            .unwrap();
         if remote_state != "missing" {
             producer.prepare_attachment(old.clone(), 100).await.unwrap();
             if remote_state != "prepared" {
@@ -6026,7 +6030,8 @@ async fn reverted_caller_reestablishes_foreign_reader_without_repeating_invocati
                 .into_inline_entry();
         oplog
             .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
-            .await;
+            .await
+            .unwrap();
         drop(streams);
         drop(local);
         let local = DurableStreamStore::load(
@@ -6159,7 +6164,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
             read_requests: Mutex::default(),
         });
         let oplog = Arc::new(TestOplog::default());
-        oplog.add(OplogEntry::no_op(None)).await;
+        oplog.add(OplogEntry::no_op(None)).await.unwrap();
         let local = DurableStreamStore::load(
             oplog.clone(),
             consumer.environment_id,
@@ -6228,7 +6233,7 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
             target.callee.agent_id = "forked-callee".into();
             target.callee_fingerprint = AgentFingerprint::new();
         } else {
-            oplog.add(OplogEntry::no_op(None)).await;
+            oplog.add(OplogEntry::no_op(None)).await.unwrap();
         }
         let owner = OwnedAgentId::new(target.callee_environment_id, &target.callee);
         let cut = DurableStreamStore::prepare_fork_cut(
@@ -6252,9 +6257,10 @@ async fn detached_continuation_activates_prepared_and_new_foreign_inputs() {
         if let Some(region) = region {
             oplog
                 .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
-                .await;
+                .await
+                .unwrap();
         } else {
-            oplog.add(marker).await;
+            oplog.add(marker).await.unwrap();
         }
         drop(streams);
         drop(local);
@@ -6624,7 +6630,8 @@ async fn mapped_source_unavailable_replays_as_permanent_without_cancelling_sourc
                 },
             }),
         )
-        .await;
+        .await
+        .unwrap();
     let reader_id = LocalStreamReaderId {
         introducing_oplog_index: streams.oplog.current_oplog_index().await,
         binding_slot: 0,
@@ -6762,7 +6769,8 @@ async fn projected_durable_output_rematerializes_system_cancellation_as_permanen
                     mapping: streams.binding(transport_stream_id).unwrap(),
                 }),
             )
-            .await;
+            .await
+            .unwrap();
     }
     let reader_id = streams
         .current_control_metadata()
@@ -6783,7 +6791,8 @@ async fn projected_durable_output_rematerializes_system_cancellation_as_permanen
                 },
             ),
         )
-        .await;
+        .await
+        .unwrap();
 
     let source_schema = SchemaGraph::anonymous(SchemaType::record(vec![NamedFieldType {
         name: "value".into(),

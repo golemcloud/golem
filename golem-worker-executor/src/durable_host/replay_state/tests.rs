@@ -3581,7 +3581,7 @@ async fn reverted_completion_marker_can_be_replaced_and_reconstructed() {
             for grow_target in [false, true] {
                 let oplog: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
                 for entry in [noop(), start_now(), end_for(2, 42)] {
-                    oplog.add(entry).await;
+                    oplog.add(entry).await.unwrap();
                 }
                 let dropped_region = OplogRegion {
                     start: OplogIndex::from_u64(4),
@@ -3598,7 +3598,7 @@ async fn reverted_completion_marker_can_be_replaced_and_reconstructed() {
                 ];
                 if !grow_target {
                     for entry in &suffix {
-                        oplog.add(entry.clone()).await;
+                        oplog.add(entry.clone()).await.unwrap();
                     }
                 }
                 let rs = test_replay_state(
@@ -3611,7 +3611,7 @@ async fn reverted_completion_marker_can_be_replaced_and_reconstructed() {
                 .expect("a deleted marker must not conflict with its replacement");
                 if grow_target {
                     for entry in suffix {
-                        oplog.add(entry).await;
+                        oplog.add(entry).await.unwrap();
                     }
                     rs.set_replay_target(OplogIndex::from_u64(6))
                         .await
@@ -4763,7 +4763,7 @@ async fn entity_atomic_rollback_recovers_descendants_after_partial_jump_commit()
             OplogRegion::from_range(4..=4),
         ),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let rs = test_replay_state(
         test_agent_id(),
