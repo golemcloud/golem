@@ -181,13 +181,13 @@ impl FilesystemStorageError {
 const MAX_SHORT_TRANSFER_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NativeStorageProfile {
+pub(crate) enum NativeStorageProfile {
     KnownLocal,
     Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NativeOperation {
+pub(crate) enum NativeOperation {
     Metadata,
     Open,
     Namespace,
@@ -236,7 +236,7 @@ fn select_native_execution(
 }
 
 #[derive(Debug)]
-struct NativeExecutionError {
+pub(crate) struct NativeExecutionError {
     message: String,
 }
 
@@ -262,7 +262,7 @@ impl Display for NativeExecutionError {
 
 impl std::error::Error for NativeExecutionError {}
 
-async fn execute_native<F, R>(
+pub(crate) async fn execute_native<F, R>(
     profile: NativeStorageProfile,
     operation: NativeOperation,
     task: F,

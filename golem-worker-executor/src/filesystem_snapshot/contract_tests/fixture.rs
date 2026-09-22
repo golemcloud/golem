@@ -25,14 +25,14 @@ use tempfile::TempDir;
 
 /// A temporary directory that goes away with all that is in it, also when a directory or a file
 /// below it is read-only.
-pub(super) struct Scratch(TempDir);
+pub(in crate::filesystem_snapshot) struct Scratch(TempDir);
 
 impl Scratch {
-    pub(super) fn new() -> Self {
+    pub(in crate::filesystem_snapshot) fn new() -> Self {
         Self(tempfile::tempdir().unwrap())
     }
 
-    pub(super) fn path(&self) -> &Path {
+    pub(in crate::filesystem_snapshot) fn path(&self) -> &Path {
         self.0.path()
     }
 }
@@ -79,7 +79,7 @@ fn writable(mut permissions: std::fs::Permissions) -> std::fs::Permissions {
 /// One entry of a listing: its path below the root, what it is, its permission bits and its
 /// modification time.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Listed {
+pub(in crate::filesystem_snapshot) struct Listed {
     pub(super) path: Box<Path>,
     pub(super) kind: ListedKind,
     pub(super) mode: u32,
@@ -89,14 +89,14 @@ pub(super) struct Listed {
 /// What an entry of a listing is. A file is its size and the hash of its content, so a
 /// difference in a large file gives a short message.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum ListedKind {
+pub(in crate::filesystem_snapshot) enum ListedKind {
     Directory,
     File { size: u64, hash: Box<str> },
     Symlink(Box<Path>),
 }
 
 /// Lists each entry below `root`, in the order of the paths. Symlinks are not followed.
-pub(super) fn listing(root: &Path) -> Vec<Listed> {
+pub(in crate::filesystem_snapshot) fn listing(root: &Path) -> Vec<Listed> {
     let mut listed = add_listed(root, Path::new(""), Vec::new());
     listed.sort_by(|left, right| left.path.cmp(&right.path));
     listed
@@ -159,7 +159,7 @@ pub(super) fn files_and_bytes(listed: &[Listed]) -> (u64, u64) {
 }
 
 /// One entry of a tree that the suite writes.
-pub(super) enum Spec {
+pub(in crate::filesystem_snapshot) enum Spec {
     Directory { mode: u32 },
     File { content: Box<[u8]>, mode: u32 },
     Symlink { target: &'static str },
@@ -168,7 +168,7 @@ pub(super) enum Spec {
 /// Writes the entries into `root`, parents before children, and gives each entry its own
 /// modification time with nanoseconds. The directories get their times and permission bits
 /// last, children before parents, so no write changes them after that.
-pub(super) fn write_tree(root: &Path, entries: &[(&str, Spec)]) {
+pub(in crate::filesystem_snapshot) fn write_tree(root: &Path, entries: &[(&str, Spec)]) {
     entries
         .iter()
         .enumerate()
@@ -256,7 +256,7 @@ pub(super) fn pattern(size: usize) -> Box<[u8]> {
 
 /// The fixture that holds each kind of entry and each attribute that a snapshot keeps.
 #[cfg(unix)]
-pub(super) fn fixture() -> Vec<(&'static str, Spec)> {
+pub(in crate::filesystem_snapshot) fn fixture() -> Vec<(&'static str, Spec)> {
     vec![
         (
             "a.txt",
@@ -337,7 +337,7 @@ pub(super) fn fixture() -> Vec<(&'static str, Spec)> {
 
 /// The fixture on a platform without unix permissions and without symlinks for every user.
 #[cfg(not(unix))]
-pub(super) fn fixture() -> Vec<(&'static str, Spec)> {
+pub(in crate::filesystem_snapshot) fn fixture() -> Vec<(&'static str, Spec)> {
     vec![
         (
             "a.txt",

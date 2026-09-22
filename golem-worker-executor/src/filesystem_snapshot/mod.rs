@@ -28,6 +28,7 @@ use std::path::Path;
 #[cfg(test)]
 mod contract_tests;
 mod memory;
+mod rustic;
 
 #[allow(unused_imports)]
 pub(crate) use memory::InMemorySnapshotStore;

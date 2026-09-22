@@ -89,6 +89,7 @@ prost-types = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 ringbuf = { workspace = true }
+rustic_core = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }
 serde = { workspace = true }
