@@ -266,6 +266,8 @@ func (e *UnderlyingError) Error() string {
 }
 
 // underlyingErrorToGo renders the runtime's failure as a Go error.
+//
+//nolint:unused // called from toolmiddleware_wasm.go
 func underlyingErrorToGo(e underlying.UnderlyingError) error {
 	switch e.Tag() {
 	case underlying.UnderlyingErrorToolError:
@@ -286,6 +288,8 @@ func underlyingErrorToGo(e underlying.UnderlyingError) error {
 }
 
 // toolErrorMessage renders a tool error for use inside another error's text.
+//
+//nolint:unused // reached only from the wasip1 build's error rendering
 func toolErrorMessage(e types.ToolError) string {
 	switch e.Tag() {
 	case types.ToolErrorInvalidToolName:
@@ -361,7 +365,10 @@ func (d *definitions) buildScopedTool(e *middlewareEntry, t *ToolDefinition, rol
 // nextStdin is the standard input a middleware forwards to the layer beneath.
 // It is carried opaquely: a middleware may pass it on but cannot rebuild it,
 // since the wire gives no way to construct a stream from the guest.
-type nextStdin struct{ wit any }
+type nextStdin struct {
+	//nolint:unused // set by the wasip1 build's newNextStdin
+	wit any
+}
 
 // nextLayer is the layer beneath a middleware. The interface keeps the
 // dispatcher's logic testable without a host; the wasm build binds the

@@ -605,6 +605,8 @@ func (c *ReflectedToolClient) InvokeAndAwait(path []string, args map[string]any)
 // own error stays structured — it is rendered through the same helper the
 // middleware layer uses — so a caller can still tell a denial from the tool
 // having reported a declared failure.
+//
+//nolint:unused // called from reflection_wasm.go
 func toolRPCErrorMessage(e types.ToolRpcError) string {
 	switch e.Tag() {
 	case types.ToolRpcErrorProtocolError:

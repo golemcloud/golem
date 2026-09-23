@@ -79,8 +79,8 @@ func (f StreamFailure) String() string {
 	return "unknown stream failure"
 }
 
-// Error reports a stream failure that arrived as a value rather than as the end
-// of the stream. Distinguish it from io.EOF with errors.As.
+// StreamError reports a stream failure that arrived as a value rather than as
+// the end of the stream. Distinguish it from io.EOF with errors.As.
 type StreamError struct{ Failure StreamFailure }
 
 func (e *StreamError) Error() string { return "golem: stream " + e.Failure.String() }

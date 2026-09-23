@@ -17,8 +17,6 @@
 package golem
 
 import (
-	"errors"
-
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
@@ -27,8 +25,6 @@ import (
 // itself is target-independent and tested directly against fakes; only these
 // three constructors are not, because binding a generated stream resource to an
 // interface pulls its //go:wasmimport methods into a native link.
-
-var errNoHostStreams = errors.New("golem: agent streams are only available inside a component")
 
 func newStreamPair() (treeSink, treeSource) {
 	return treeSink{

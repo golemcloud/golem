@@ -81,6 +81,7 @@ type treeSource struct {
 	// reader is the host endpoint this source wraps, kept so an unread stream
 	// can be handed straight back. It is nil for a source that did not come
 	// from the host, which therefore cannot be transferred.
+	//nolint:unused // read by the wasip1 build, to hand an unread stream back
 	reader any
 }
 
@@ -91,7 +92,6 @@ type treeSink struct {
 }
 
 func (s treeSource) valid() bool { return s.read != nil }
-func (s treeSink) valid() bool   { return s.write != nil }
 
 // streamCodec converts between items and the value trees on the wire. It is
 // derived from the SOURCE schema rather than from T alone, because a Go type

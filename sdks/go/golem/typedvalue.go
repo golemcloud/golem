@@ -74,7 +74,8 @@ func (v TypedValue) WithJSON(value any) (TypedValue, error) {
 	return TypedValue{wit: types.TypedSchemaValue{Graph: v.wit.Graph, Value: tree}}, nil
 }
 
-// Decode reads the value into a Go value of type T, whose schema must match.
+// DecodeTypedValue reads the value into a Go value of type T, whose schema must
+// match.
 func DecodeTypedValue[T any](v TypedValue) (T, error) {
 	var out T
 	c := defs.compile(reflect.TypeFor[T]())
