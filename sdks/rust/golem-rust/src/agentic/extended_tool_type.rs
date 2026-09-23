@@ -149,6 +149,15 @@ pub async fn encode_direct_tool_value<T: IntoWire + direct::WireSchema + ?Sized>
 #[allow(async_fn_in_trait)]
 #[doc(hidden)]
 pub trait DirectToolError {
+    fn wire_error_cases(builder: &mut direct::WireSchemaBuilder) -> Vec<wire::ErrorCase>;
+
+    fn from_direct_error_payload(
+        name: &str,
+        value: crate::schema::wit::wire::SchemaValueTree,
+    ) -> Result<Option<Self>, String>
+    where
+        Self: Sized;
+
     async fn direct_error_payload(
         &self,
     ) -> Result<(String, crate::schema::wit::wire::TypedSchemaValue), String>;

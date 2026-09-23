@@ -65,6 +65,102 @@ mod tests {
     }
 
     #[test]
+    async fn direct_error_metadata_and_decoding_do_not_call_model_codecs() {
+        use golem_rust::agentic::DirectToolError;
+        use golem_rust::schema::wit::{direct, wire};
+
+        #[derive(Debug, PartialEq, FromWire, IntoWire, WireSchema)]
+        struct Payload {
+            code: u16,
+            notes: Vec<Option<Result<String, bool>>>,
+        }
+
+        impl IntoSchema for Payload {
+            fn type_id() -> golem_rust::schema::TypeId {
+                panic!("direct metadata must not request a model type id")
+            }
+
+            fn register_in(_: &mut golem_rust::schema::SchemaBuilder) -> golem_rust::SchemaType {
+                panic!("direct metadata must not construct a model")
+            }
+
+            fn to_value(&self) -> golem_rust::SchemaValue {
+                panic!("direct encoding must not construct a model")
+            }
+        }
+
+        impl FromSchema for Payload {
+            fn from_value(
+                _: &golem_rust::SchemaValue,
+            ) -> Result<Self, golem_rust::schema::FromSchemaError> {
+                panic!("direct decoding must not construct a model")
+            }
+        }
+
+        #[derive(Debug, PartialEq, ToolError)]
+        enum Failure {
+            /// Retry with a different input.
+            #[tool_error(kind = "usage-error", exit_code = 17)]
+            Rejected(Payload),
+            #[tool_error(kind = "runtime-error", exit_code = 29)]
+            Delayed { details: Payload },
+            #[tool_error(kind = "runtime-error", exit_code = 31)]
+            Empty,
+        }
+
+        let mut builder = direct::WireSchemaBuilder::default();
+        let cases = Failure::wire_error_cases(&mut builder);
+        assert_eq!(
+            cases
+                .iter()
+                .map(|case| case.name.as_str())
+                .collect::<Vec<_>>(),
+            ["rejected", "delayed", "empty"]
+        );
+        assert_eq!(cases[0].exit_code, 17);
+        assert!(matches!(
+            cases[0].kind,
+            golem_rust::schema::tool::wit::wire::ErrorKind::UsageError
+        ));
+        assert_eq!(cases[0].doc.summary, "Retry with a different input.");
+        assert!(cases[2].payload.is_none());
+        let graph = builder.finish(cases[0].payload.unwrap());
+        assert_eq!(graph.defs.len(), 1);
+        for case in &cases[..2] {
+            assert!(matches!(
+                graph.type_nodes[case.payload.unwrap() as usize].body,
+                wire::SchemaTypeBody::RefType(0)
+            ));
+        }
+        let payload = Payload {
+            code: 513,
+            notes: vec![Some(Err(true)), None, Some(Ok("retry".into()))],
+        };
+        let failure = Failure::Delayed { details: payload };
+        let (name, encoded) = failure.direct_error_payload().await.unwrap();
+        assert_eq!(name, "delayed");
+        assert_eq!(encoded.graph.defs.len(), 1);
+        assert_eq!(
+            Failure::from_direct_error_payload(&name, encoded.value).unwrap(),
+            Some(failure)
+        );
+        assert_eq!(
+            Failure::from_direct_error_payload("empty", direct::encode(&()).unwrap()).unwrap(),
+            Some(Failure::Empty)
+        );
+        assert!(
+            Failure::from_direct_error_payload("empty", direct::encode(&false).unwrap()).is_err()
+        );
+        assert!(
+            Failure::from_direct_error_payload("rejected", direct::encode(&()).unwrap()).is_err()
+        );
+        assert_eq!(
+            Failure::from_direct_error_payload("unknown", direct::encode(&()).unwrap()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
     fn direct_input_consumes_named_record_and_unbound_globals_without_model_traits() {
         use golem_rust::agentic::DirectToolInput;
         use golem_rust::schema::wit::{direct, wire};

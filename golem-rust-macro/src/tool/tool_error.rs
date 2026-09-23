@@ -24,7 +24,7 @@ use crate::tool::helpers::{
 use crate::tool::ir::{
     ErrorKindIr, ToolErrorIr, ToolErrorNoPayloadStyleIr, ToolErrorPayloadIr, ToolErrorVariantIr,
 };
-use crate::tool::synthesis::{doc_tokens, error_kind_tokens};
+use crate::tool::synthesis::{doc_tokens, error_kind_tokens, wire_doc_tokens};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
@@ -257,8 +257,68 @@ fn synthesize_tool_error(ir: &ToolErrorIr, guest: bool) -> proc_macro2::TokenStr
     });
     let variant_count = ir.variants.len() as u32;
     let direct_error_impl = guest.then(|| {
+        let cases = ir.variants.iter().map(|variant| {
+            let name = to_kebab_case(&variant.variant_ident.to_string());
+            let doc = wire_doc_tokens(&variant.doc);
+            let kind = match variant.kind {
+                ErrorKindIr::UsageError => quote! { golem_rust::schema::tool::wit::wire::ErrorKind::UsageError },
+                ErrorKindIr::RuntimeError => quote! { golem_rust::schema::tool::wit::wire::ErrorKind::RuntimeError },
+            };
+            let exit_code = variant.exit_code;
+            let payload = match &variant.payload {
+                ToolErrorPayloadIr::None { .. } => quote! { ::std::option::Option::None },
+                ToolErrorPayloadIr::Single { ty, .. } => quote! {
+                    ::std::option::Option::Some(<#ty as golem_rust::WireSchema>::append_schema(__builder))
+                },
+            };
+            quote! {
+                golem_rust::schema::tool::wit::wire::ErrorCase {
+                    name: #name.to_string(), doc: #doc, kind: #kind,
+                    exit_code: #exit_code, payload: #payload,
+                }
+            }
+        });
+        let decode_arms = ir.variants.iter().map(|variant| {
+            let name = to_kebab_case(&variant.variant_ident.to_string());
+            let ident = &variant.variant_ident;
+            let (ty, constructor) = match &variant.payload {
+                ToolErrorPayloadIr::None { style } => (
+                    quote! { () },
+                    no_payload_constructor(ident, *style),
+                ),
+                ToolErrorPayloadIr::Single { ty, field_ident: None } => (
+                    quote! { #ty }, quote! { Self::#ident(__payload) },
+                ),
+                ToolErrorPayloadIr::Single { ty, field_ident: Some(field) } => (
+                    quote! { #ty }, quote! { Self::#ident { #field: __payload } },
+                ),
+            };
+            quote! {
+                #name => {
+                    let __payload = golem_rust::schema::wit::direct::decode::<#ty>(__value)
+                        .map_err(|__error| __error.to_string())?;
+                    ::std::result::Result::Ok(::std::option::Option::Some(#constructor))
+                }
+            }
+        });
         quote! {
             impl golem_rust::agentic::DirectToolError for #enum_ident {
+                fn wire_error_cases(
+                    __builder: &mut golem_rust::schema::wit::direct::WireSchemaBuilder,
+                ) -> ::std::vec::Vec<golem_rust::schema::tool::wit::wire::ErrorCase> {
+                    ::std::vec![#(#cases),*]
+                }
+
+                fn from_direct_error_payload(
+                    __name: &str,
+                    __value: golem_rust::schema::wit::wire::SchemaValueTree,
+                ) -> ::std::result::Result<::std::option::Option<Self>, ::std::string::String> {
+                    match __name {
+                        #(#decode_arms),*,
+                        _ => ::std::result::Result::Ok(::std::option::Option::None),
+                    }
+                }
+
                 async fn direct_error_payload(&self) -> ::std::result::Result<
                     (::std::string::String, golem_rust::schema::wit::wire::TypedSchemaValue),
                     ::std::string::String,
