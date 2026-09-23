@@ -24,7 +24,11 @@ pub fn schema_fingerprint_v1(SchemaGraph, SchemaType?) -> SchemaFingerprintV1 ra
 
 pub fn schema_graph_from_wit(@types.SchemaGraph) -> SchemaGraph raise SchemaModelError
 
+pub fn schema_graph_roots_from_wit(@types.SchemaGraph) -> DecodedSchemaGraph raise SchemaModelError
+
 pub fn schema_graph_to_wit(SchemaGraph) -> @types.SchemaGraph raise SchemaModelError
+
+pub fn schema_root_is_option(SchemaGraph) -> Bool
 
 pub fn schema_type(SchemaTypeBody, metadata? : @types.MetadataEnvelope) -> SchemaType
 
@@ -86,6 +90,11 @@ pub suberror SchemaModelError {
 } derive(Eq, @debug.Debug)
 
 // Types and methods
+pub(all) struct DecodedSchemaGraph {
+  graph : SchemaGraph
+  roots : Array[SchemaType]
+} derive(Eq, @debug.Debug)
+
 pub(all) struct EncodedAgentGraph {
   graph : @types.SchemaGraph
   root_indices : Array[Int]
@@ -95,6 +104,7 @@ pub struct GraphDecoder {
   nodes : Array[@types.SchemaTypeNode]
   wit_defs : Array[@types.SchemaTypeDef]
   on_path : Array[Bool]
+  decoded : Array[SchemaType?]
 }
 pub fn GraphDecoder::decode_defs(Self) -> Array[SchemaTypeDef] raise SchemaModelError
 pub fn GraphDecoder::decode_type_at(Self, Int) -> SchemaType raise SchemaModelError
