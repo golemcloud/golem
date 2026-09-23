@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const mockDir = resolve(here, "test/mocks")
+const packageRoot = resolve(here, "src/index.ts")
 
 /**
  * The Golem runtime exposes a number of host modules with WIT-style
@@ -12,6 +13,7 @@ const mockDir = resolve(here, "test/mocks")
  * specifier to a hand-written mock under `test/mocks/`.
  */
 const golemAliases = [
+  { find: /^@golemcloud\/effect-golem$/, replacement: packageRoot },
   {
     find: "golem:agent/durable-streams@2.0.0",
     replacement: resolve(mockDir, "golem-durable-streams.ts"),
