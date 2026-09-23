@@ -19,7 +19,7 @@ function onwarn(warning, warn) {
   warn(warning);
 }
 
-function javascript(input, output) {
+function javascript(input, output, isExternal = external) {
   return {
     input,
     output: {
@@ -27,7 +27,7 @@ function javascript(input, output) {
       format: 'esm',
       sourcemap: true,
     },
-    external,
+    external: isExternal,
     onwarn,
     plugins: [
       resolve({
@@ -77,7 +77,11 @@ export default defineConfig([
   javascript('src/index.ts', 'dist/index.mjs'),
   javascript('src/schema/public.ts', 'dist/schema.mjs'),
   javascript('src/reflection.ts', 'dist/reflection.mjs'),
-  javascript('src/middleware-entry.mjs', 'dist/middleware.mjs'),
+  javascript(
+    'src/middleware-entry.mjs',
+    'dist/middleware.mjs',
+    (id) => id === '@golemcloud/golem-ts-sdk' || external(id),
+  ),
   javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs'),
   declarations('src/index.ts', 'dist/index.d.mts'),
   declarations('src/schema/public.ts', 'dist/schema.d.mts'),
