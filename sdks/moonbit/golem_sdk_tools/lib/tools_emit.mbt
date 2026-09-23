@@ -760,20 +760,27 @@ fn project_command(
 }
 
 ///|
-fn graph(pt : ParamType) -> String {
-  "@schema.into_schema_graph((@schema.TypeTag::{ } : @schema.TypeTag[" +
+fn graph(pt : ParamType, wire? : Bool = false) -> String {
+  (if wire {
+    "@tool.wire_tool_type(__golem_schema, "
+  } else {
+    "@schema.into_schema_graph("
+  }) +
+  "(@schema.TypeTag::{ } : @schema.TypeTag[" +
   emit_type(pt) +
   "]))"
 }
 
 ///|
-fn refined_graph(arg : ProjectedToolArg) -> String {
-  let mut result = graph(arg.value_type.unwrap())
+fn refined_graph(arg : ProjectedToolArg, wire? : Bool = false) -> String {
+  let mut result = graph(arg.value_type.unwrap(), wire~)
+  let prefix = if wire { "@tool.wire_refine_" } else { "@tool.refine_" }
   guard arg.info is Some(info) else { return result }
   if info.regex is Some(_) ||
     info.min_length is Some(_) ||
     info.max_length is Some(_) {
-    result = "@tool.refine_text(" +
+    result = prefix +
+      "text(" +
       result +
       ", " +
       emit_opt_string(info.regex) +
@@ -802,7 +809,8 @@ fn refined_graph(arg : ProjectedToolArg) -> String {
       Some("dir") => "Some(@types.PathKind::DIRECTORY)"
       _ => "None"
     }
-    result = "@tool.refine_path(" +
+    result = prefix +
+      "path(" +
       result +
       ", " +
       direction +
@@ -817,7 +825,8 @@ fn refined_graph(arg : ProjectedToolArg) -> String {
       ")"
   }
   if info.schemes.length() > 0 {
-    result = "@tool.refine_url(" +
+    result = prefix +
+      "url(" +
       result +
       ", Some(" +
       emit_strings(info.schemes) +
@@ -835,7 +844,8 @@ fn refined_graph(arg : ProjectedToolArg) -> String {
     }
   }
   if minimum is Some(_) || maximum is Some(_) || info.unit is Some(_) {
-    result = "@tool.refine_numeric(" +
+    result = prefix +
+      "numeric(" +
       result +
       ", " +
       emit_opt_string(minimum) +
@@ -849,7 +859,7 @@ fn refined_graph(arg : ProjectedToolArg) -> String {
 }
 
 ///|
-fn emit_default(arg : ProjectedToolArg) -> String {
+fn emit_default(arg : ProjectedToolArg, wire? : Bool = false) -> String {
   guard arg.info is Some(info) && info.defaults.length() > 0 else {
     return "None"
   }
@@ -878,8 +888,12 @@ fn emit_default(arg : ProjectedToolArg) -> String {
     }
     "@tool.ToolLiteral::Scalar(\"" + escape_string_lit(info.defaults[0]) + "\")"
   }
-  "Some(@tool.literal_to_schema_value(" +
-  refined_graph(arg) +
+  (if wire {
+    "Some(@tool.wire_tool_literal("
+  } else {
+    "Some(@tool.literal_to_schema_value("
+  }) +
+  refined_graph(arg, wire~) +
   ", " +
   literal +
   "))"
@@ -914,24 +928,39 @@ fn emit_arg_doc(arg : ProjectedToolArg) -> String {
 }
 
 ///|
-fn emit_option(arg : ProjectedToolArg) -> String {
+fn emit_option(arg : ProjectedToolArg, wire? : Bool = false) -> String {
   let base = arg.value_type.unwrap()
+  let prefix = if wire {
+    "@toolCommon.OptionShape::"
+  } else {
+    "@tool.OptionShapeDef::"
+  }
+  let schema = arg => {
+    let value = refined_graph(arg, wire~)
+    if wire {
+      "(" + value + ").index"
+    } else {
+      value
+    }
+  }
   let shape = if is_map(base) {
-    "@tool.OptionShapeDef::RepeatableMap({ repetition: " +
+    prefix +
+    "RepeatableMap({ repetition: " +
     emit_repetition(arg.info) +
     ", map_type: " +
-    refined_graph(arg) +
+    schema(arg) +
     ", duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT })"
   } else if list_item(base) is Some(item) {
-    "@tool.OptionShapeDef::RepeatableList({ repetition: " +
+    prefix +
+    "RepeatableList({ repetition: " +
     emit_repetition(arg.info) +
     ", item_type: " +
-    refined_graph({ ..arg, value_type: Some(item), }) +
+    schema({ ..arg, value_type: Some(item), }) +
     " })"
   } else if arg.info.flat_map(i => i.optional_scalar) == Some(true) {
-    "@tool.OptionShapeDef::OptionalScalar(" + refined_graph(arg) + ")"
+    prefix + "OptionalScalar(" + schema(arg) + ")"
   } else {
-    "@tool.OptionShapeDef::Scalar(" + refined_graph(arg) + ")"
+    prefix + "Scalar(" + schema(arg) + ")"
   }
   "{ long: \"" +
   escape_string_lit(arg.canonical) +
@@ -946,7 +975,7 @@ fn emit_option(arg : ProjectedToolArg) -> String {
   ", shape: " +
   shape +
   ", default: " +
-  emit_default(arg) +
+  emit_default(arg, wire~) +
   ", required: " +
   arg.required.to_string() +
   ", env_var: " +
@@ -989,7 +1018,8 @@ fn emit_flag(arg : ProjectedToolArg) -> String {
 }
 
 ///|
-fn emit_positional(arg : ProjectedToolArg) -> String {
+fn emit_positional(arg : ProjectedToolArg, wire? : Bool = false) -> String {
+  let schema = refined_graph(arg, wire~)
   "{ name: \"" +
   escape_string_lit(arg.canonical) +
   "\", doc: " +
@@ -997,9 +1027,9 @@ fn emit_positional(arg : ProjectedToolArg) -> String {
   ", value_name: " +
   emit_opt_string(arg.info.flat_map(i => i.value_name)) +
   ", type_: " +
-  refined_graph(arg) +
+  (if wire { "(" + schema + ").index" } else { schema }) +
   ", default: " +
-  emit_default(arg) +
+  emit_default(arg, wire~) +
   ", required: " +
   arg.required.to_string() +
   ", accepts_stdio: " +
@@ -1008,7 +1038,7 @@ fn emit_positional(arg : ProjectedToolArg) -> String {
 }
 
 ///|
-fn emit_tail(arg : ProjectedToolArg) -> String {
+fn emit_tail(arg : ProjectedToolArg, wire? : Bool = false) -> String {
   let maximum = match arg.info.flat_map(i => i.max) {
     Some(v) => "Some(" + parse_u32_metadata(v).unwrap().to_string() + "U)"
     None => "None"
@@ -1017,6 +1047,7 @@ fn emit_tail(arg : ProjectedToolArg) -> String {
     Some(info) => { ..arg, info: Some({ ..info, min: None, max: None, }), }
     None => arg
   }
+  let schema = refined_graph(item_arg, wire~)
   "Some({ name: \"" +
   escape_string_lit(arg.canonical) +
   "\", doc: " +
@@ -1024,7 +1055,7 @@ fn emit_tail(arg : ProjectedToolArg) -> String {
   ", value_name: " +
   emit_opt_string(arg.info.flat_map(i => i.value_name)) +
   ", item_type: " +
-  refined_graph(item_arg) +
+  (if wire { "(" + schema + ").index" } else { schema }) +
   ", min: " +
   arg.info
   .flat_map(i => i.min)
@@ -1135,7 +1166,7 @@ fn is_unit(pt : ParamType?) -> Bool {
 }
 
 ///|
-fn emit_result(command : ToolCommandInfo) -> String {
+fn emit_result(command : ToolCommandInfo, wire? : Bool = false) -> String {
   if is_unit(command.success_type) {
     return "None"
   }
@@ -1157,8 +1188,9 @@ fn emit_result(command : ToolCommandInfo) -> String {
   let default = command.result
     .map(r => r.defaults.get(0).unwrap_or(r.formatters[0]))
     .unwrap_or("default")
+  let schema = graph(command.success_type.unwrap(), wire~)
   "Some({ type_: " +
-  graph(command.success_type.unwrap()) +
+  (if wire { "(" + schema + ").index" } else { schema }) +
   ", doc: " +
   emit_doc(command.description, command.examples) +
   ", formatters: " +
@@ -1169,7 +1201,10 @@ fn emit_result(command : ToolCommandInfo) -> String {
 }
 
 ///|
-fn emit_error_cases(errors : Array[ToolErrorCaseInfo]) -> String {
+fn emit_error_cases(
+  errors : Array[ToolErrorCaseInfo],
+  wire? : Bool = false,
+) -> String {
   "[" +
   errors
   .map(error => {
@@ -1181,7 +1216,8 @@ fn emit_error_cases(errors : Array[ToolErrorCaseInfo]) -> String {
       },
     )
     let payload = match error.payload {
-      Some(pt) => "Some(" + graph(pt) + ")"
+      Some(pt) =>
+        "Some(" + graph(pt, wire~) + (if wire { ".index)" } else { ")" })
       None => "None"
     }
     "{ name: \"" +
@@ -1234,14 +1270,20 @@ fn emit_stream(command : ToolCommandInfo, hidden : ToolHiddenType) -> String {
 fn emit_body(
   command : ToolCommandInfo,
   args : Array[ProjectedToolArg],
+  wire_fields? : Array[ProjectedToolArg],
 ) -> String {
-  let fixed = args.filter(a => a.placement is Positional).map(emit_positional)
+  let wire = wire_fields is Some(_)
+  let fixed = args
+    .filter(a => a.placement is Positional)
+    .map(a => emit_positional(a, wire~))
   let tail = args
     .iter()
     .find_first(a => a.placement is Tail)
-    .map(emit_tail)
+    .map(a => emit_tail(a, wire~))
     .unwrap_or("None")
-  let options = args.filter(a => a.placement is Option).map(emit_option)
+  let options = args
+    .filter(a => a.placement is Option)
+    .map(a => emit_option(a, wire~))
   let flags = args.filter(a => a.placement is Flag).map(emit_flag)
   let annotations = "Some({ read_only: " +
     command.read_only.unwrap_or(false).to_string() +
@@ -1261,15 +1303,22 @@ fn emit_body(
   "], flags: [" +
   flags.join(", ") +
   "], constraints: " +
-  emit_constraints(command) +
+  (match wire_fields {
+    Some(fields) => emit_wire_constraints(command, fields)
+    None => emit_constraints(command)
+  }) +
   ", stdin: " +
   emit_stream(command, InputStream) +
   ", stdout: " +
   emit_stream(command, OutputStream) +
   ", result: " +
-  emit_result(command) +
+  emit_result(command, wire~) +
   ", errors: " +
-  emit_errors(command) +
+  (if wire {
+    emit_error_cases(command.errors, wire=true)
+  } else {
+    emit_errors(command)
+  }) +
   ", annotations: " +
   annotations +
   " })"
@@ -1569,7 +1618,7 @@ fn validate_constraint_refs(
 fn emit_globals(args : Array[ProjectedToolArg]) -> String {
   let options = args
     .filter(arg => arg.placement is GlobalOption)
-    .map(emit_option)
+    .map(arg => emit_option(arg))
   let flags = args.filter(arg => arg.placement is GlobalFlag).map(emit_flag)
   "{ options: [" + options.join(", ") + "], flags: [" + flags.join(", ") + "] }"
 }
@@ -1680,7 +1729,7 @@ fn emit_descriptor(
   let root_args = root.map(i => plans[i]).unwrap_or([])
   let globals_options = root_args
     .filter(a => a.placement is GlobalOption)
-    .map(emit_option)
+    .map(arg => emit_option(arg))
   let globals_flags = root_args
     .filter(a => a.placement is GlobalFlag)
     .map(emit_flag)
@@ -2394,17 +2443,22 @@ pub fn generate_tool_registration(
 ) -> @list.List[@syntax.Impl] raise ToolEmitError {
   let buf = StringBuilder()
   emit_tool_descriptor_support(buf, tools, "", true, true)
+  let subtree_sources = subtree_tool_sources(tools)
+  for tool in tools {
+    if !subtree_sources.contains(tool.source_name) {
+      emit_wire_tool_descriptor(buf, tool, tools)
+    }
+  }
   if tools.length() > 0 {
-    let subtree_sources = subtree_tool_sources(tools)
     buf.write_string("///|\nfn init {\n  try {\n")
     for tool in tools {
+      if subtree_sources.contains(tool.source_name) {
+        continue
+      }
       buf.write_string(
-        (if subtree_sources.contains(tool.source_name) {
-          "    @tool.register_subtool_def_invoker("
-        } else {
-          "    @tool.register_tool_def_invoker("
-        }) +
-        descriptor_name(tool, "") +
+        "    @tool.register_wire_tool_invoker(" +
+        "__golem_tool_wire_" +
+        tool.source_name +
         "(), __golem_tool_invoke_" +
         tool.source_name +
         ")\n",

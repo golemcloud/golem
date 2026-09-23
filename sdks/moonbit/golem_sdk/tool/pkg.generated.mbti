@@ -99,6 +99,8 @@ pub fn register_tool_def(@tool-core.ToolDef) -> Unit raise @tool-core.ToolBuildE
 
 pub fn register_tool_def_invoker(@tool-core.ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]) -> Unit raise @tool-core.ToolBuildError
 
+pub fn register_wire_subtool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]) -> Unit raise @tool-core.ToolBuildError
+
 pub fn register_wire_tool(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Unit raise @tool-core.ToolBuildError
 
 pub fn register_wire_tool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]) -> Unit raise @tool-core.ToolBuildError
@@ -122,6 +124,20 @@ pub fn[E] tool_protocol_error(String) -> ToolError[E]
 pub fn[T, E] typed_invocation(ToolInvocation[E], (@tool-core.InvocationResult) -> Result[T, ToolError[E]]) -> Result[TypedToolInvocation[T, E], ToolError[E]]
 
 pub fn value_is_literal_to_schema_value(@schema_model.SchemaGraph, @tool-core.ToolLiteral) -> @schema_model.SchemaValue raise @tool-core.ToolBuildError
+
+pub fn wire_refine_numeric(@tool-core.WireToolType, String?, String?, String?) -> @tool-core.WireToolType raise @tool-core.ToolBuildError
+
+pub fn wire_refine_path(@tool-core.WireToolType, @types.PathDirection?, @types.PathKind?, Array[String]?) -> @tool-core.WireToolType raise @tool-core.ToolBuildError
+
+pub fn wire_refine_text(@tool-core.WireToolType, String?, UInt?, UInt?) -> @tool-core.WireToolType raise @tool-core.ToolBuildError
+
+pub fn wire_refine_url(@tool-core.WireToolType, Array[String]?) -> @tool-core.WireToolType raise @tool-core.ToolBuildError
+
+pub fn wire_tool_literal(@tool-core.WireToolType, @tool-core.ToolLiteral) -> @types.SchemaValueTree raise @tool-core.ToolBuildError
+
+pub fn[T : @schema.WireSchema] wire_tool_type(@schema.WireTypeEncoder, @schema.TypeTag[T]) -> @tool-core.WireToolType
+
+pub fn wire_value_is_literal(@tool-core.WireToolType, @tool-core.ToolLiteral) -> @types.SchemaValueTree raise @tool-core.ToolBuildError
 
 // Errors
 
@@ -242,6 +258,8 @@ pub using @tool-core {type ToolStreamError}
 pub using @tool-core {type ValueIsLiteralDef}
 
 pub using @tool-core {type ValueIsRefDef}
+
+pub using @tool-core {type WireToolType}
 
 pub using @tool-core {trait ToolErrorSchema}
 

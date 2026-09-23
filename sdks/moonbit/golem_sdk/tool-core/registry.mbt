@@ -9,15 +9,18 @@ pub fn new_stdout() -> (@async-core.Stream[Byte], @async-core.Sink[Byte]) {
 ///|
 priv struct ToolState {
   tools : Map[String, @toolCommon.Tool]
+  subtools : Map[String, @toolCommon.Tool]
   defs : Map[String, ToolDef]
 }
 
 ///|
-let state : ToolState = { tools: {}, defs: {}, }
+let state : ToolState = { tools: {}, subtools: {}, defs: {}, }
 
 ///|
 fn ensure_tool_name_available(name : String) -> Unit {
-  if state.tools.contains(name) || state.defs.contains(name) {
+  if state.tools.contains(name) ||
+    state.subtools.contains(name) ||
+    state.defs.contains(name) {
     abort("duplicate tool registration for tool name: " + name)
   }
 }
@@ -49,6 +52,18 @@ pub fn register_wire_tool(tool : @toolCommon.Tool) -> Unit raise ToolBuildError 
 }
 
 ///|
+pub fn register_wire_subtool(
+  tool : @toolCommon.Tool,
+) -> Unit raise ToolBuildError {
+  let name = match tool_name(tool) {
+    Ok(name) => name
+    Err(error) => raise error
+  }
+  ensure_tool_name_available(name)
+  state.subtools[name] = tool
+}
+
+///|
 fn register_wire_tool_inner(
   tool : @toolCommon.Tool,
 ) -> Unit raise ToolBuildError {
@@ -77,7 +92,20 @@ pub fn get_registered_tool(
 
 ///|
 pub fn registered_tool_def(name : String) -> ToolDef? {
-  state.defs.get(name)
+  match state.defs.get(name) {
+    Some(def) => Some(def)
+    None => {
+      let wire = match state.tools.get(name) {
+        Some(tool) => Some(tool)
+        None => state.subtools.get(name)
+      }
+      wire.map(tool => {
+        ToolDef::from_wire(tool) catch {
+          error => abort(repr(error))
+        }
+      })
+    }
+  }
 }
 
 ///|

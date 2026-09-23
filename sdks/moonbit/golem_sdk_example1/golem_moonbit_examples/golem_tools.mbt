@@ -5682,30 +5682,1860 @@ async fn __golem_tool_invoke_CanonicalBigBound(
 
 ///|
 ///
+fn __golem_tool_wire_MoonBitStreaming() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "moonbit-streaming",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [1],
+        body: None,
+      },
+      {
+        name: "stream",
+        aliases: [],
+        doc: { summary: "", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "mode",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: Some(
+              {
+                doc: { summary: "", description: "", examples: [] },
+                mime: [],
+                required: true,
+              },
+            ),
+            stdout: Some(
+              {
+                doc: { summary: "", description: "", examples: [] },
+                mime: [],
+                required: true,
+              },
+            ),
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                ).index,
+                doc: { summary: "", description: "", examples: [] },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "1.0.0",
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_wire_CanonicalGrep() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "canonical-grep",
+        aliases: [],
+        doc: {
+          summary: "Search files for a regular expression.",
+          description: "",
+          examples: [],
+        },
+        globals: {
+          options: [
+            {
+              long: "color",
+              short: None,
+              aliases: [],
+              doc: {
+                summary: "when to colorize matches",
+                description: "",
+                examples: [],
+              },
+              value_name: None,
+              shape: @toolCommon.OptionShape::Scalar(
+                @tool.wire_tool_type(
+                  __golem_schema,
+                  (
+                    @schema.TypeTag::{  }
+                    : @schema.TypeTag[CanonicalGrepColorMode]
+                  ),
+                ).index,
+              ),
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[CanonicalGrepColorMode]
+                    ),
+                  ),
+                  @tool.ToolLiteral::Scalar("Auto"),
+                ),
+              ),
+              required: false,
+              env_var: None,
+            },
+          ],
+          flags: [
+            {
+              long: "case-sensitive",
+              short: Some('\u{69}'),
+              aliases: [],
+              doc: {
+                summary: "match case exactly",
+                description: "",
+                examples: [],
+              },
+              shape: @toolCommon.FlagShape::BoolFlag(
+                { default: false, negatable: false }
+              ),
+              env_var: None,
+            },
+          ],
+        },
+        subcommands: [1],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "pattern",
+                  doc: {
+                    summary: "regular expression",
+                    description: "",
+                    examples: [],
+                  },
+                  value_name: None,
+                  type_: @tool.wire_refine_text(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    Some("^.+$"),
+                    None,
+                    None,
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: Some(
+                {
+                  name: "files",
+                  doc: {
+                    summary: "files to search",
+                    description: "",
+                    examples: [],
+                  },
+                  value_name: None,
+                  item_type: @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    Some(@types.PathDirection::INPUT),
+                    Some(@types.PathKind::FILE),
+                    None,
+                  ).index,
+                  min: 0U,
+                  max: None,
+                  separator: None,
+                  verbatim: false,
+                  accepts_stdio: true,
+                },
+              ),
+            },
+            options: [
+              {
+                long: "extra-patterns",
+                short: Some('\u{65}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::RepeatableList(
+                  {
+                    repetition: @toolCommon.Repetition::Either('\u{2c}'),
+                    item_type: @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ).index,
+                  },
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "max-count",
+                short: Some('\u{6e}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_refine_numeric(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                    ),
+                    Some("1"),
+                    None,
+                    None,
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [],
+            constraints: [],
+            stdin: Some(
+              {
+                doc: { summary: "", description: "", examples: [] },
+                mime: [],
+                required: true,
+              },
+            ),
+            stdout: Some(
+              {
+                doc: { summary: "", description: "", examples: [] },
+                mime: [],
+                required: true,
+              },
+            ),
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (
+                    @schema.TypeTag::{  }
+                    : @schema.TypeTag[Array[CanonicalGrepHit]]
+                  ),
+                ).index,
+                doc: {
+                  summary: "Search files for a regular expression. Bare `canonical-grep` runs this body.",
+                  description: "",
+                  examples: [],
+                },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [
+              {
+                name: "invalid-pattern",
+                doc: {
+                  summary: "The supplied pattern is not a valid regular expression.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "no-match",
+                doc: {
+                  summary: "No line matched.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: None,
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "replace",
+        aliases: [],
+        doc: {
+          summary: "Replace matching text in place.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "pattern",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "replacement",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: Some(
+                {
+                  name: "files",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  item_type: @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    Some(@types.PathDirection::IN_OUT),
+                    Some(@types.PathKind::FILE),
+                    None,
+                  ).index,
+                  min: 0U,
+                  max: None,
+                  separator: None,
+                  verbatim: false,
+                  accepts_stdio: false,
+                },
+              ),
+            },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                ).index,
+                doc: {
+                  summary: "Replace matching text in place.",
+                  description: "",
+                  examples: [],
+                },
+                formatters: [
+                  {
+                    name: "default",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "default",
+              },
+            ),
+            errors: [
+              {
+                name: "invalid-pattern",
+                doc: {
+                  summary: "The supplied pattern is not a valid regular expression.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "no-match",
+                doc: {
+                  summary: "No line matched.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: None,
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "2.0.0",
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_wire_CanonicalGit() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "canonical-git",
+        aliases: [],
+        doc: {
+          summary: "Stupid content tracker.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [1, 2, 6, 9],
+        body: None,
+      },
+      {
+        name: "commit",
+        aliases: ["ci"],
+        doc: {
+          summary: "Record changes to the repository.",
+          description: "",
+          examples: [],
+        },
+        globals: {
+          options: [
+            {
+              long: "git-dir",
+              short: None,
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              value_name: None,
+              shape: @toolCommon.OptionShape::Scalar(
+                @tool.wire_refine_path(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                  ),
+                  None,
+                  Some(@types.PathKind::DIRECTORY),
+                  None,
+                ).index,
+              ),
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    None,
+                    Some(@types.PathKind::DIRECTORY),
+                    None,
+                  ),
+                  @tool.ToolLiteral::Scalar(".git"),
+                ),
+              ),
+              required: false,
+              env_var: Some("GIT_DIR"),
+            },
+            {
+              long: "config",
+              short: Some('\u{63}'),
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              value_name: None,
+              shape: @toolCommon.OptionShape::RepeatableMap(
+                {
+                  repetition: @toolCommon.Repetition::Repeated,
+                  map_type: @tool.wire_tool_type(
+                    __golem_schema,
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[Map[String, String]]
+                    ),
+                  ).index,
+                  duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
+                },
+              ),
+              default: None,
+              required: false,
+              env_var: None,
+            },
+          ],
+          flags: [
+            {
+              long: "verbose",
+              short: Some('\u{76}'),
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
+              env_var: None,
+            },
+            {
+              long: "paginate",
+              short: None,
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              shape: @toolCommon.FlagShape::BoolFlag(
+                { default: true, negatable: true }
+              ),
+              env_var: None,
+            },
+          ],
+        },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: { fixed: [], tail: None },
+            options: [
+              {
+                long: "message",
+                short: Some('\u{6d}'),
+                aliases: ["msg"],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+                default: None,
+                required: true,
+                env_var: None,
+              },
+              {
+                long: "author",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_refine_text(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    Some("^.+ <.+@.+>$"),
+                    None,
+                    None,
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: Some("GIT_AUTHOR_NAME"),
+              },
+              {
+                long: "output",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[CanonicalGitOutputMode]
+                    ),
+                  ).index,
+                ),
+                default: Some(
+                  @tool.wire_tool_literal(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (
+                        @schema.TypeTag::{  }
+                        : @schema.TypeTag[CanonicalGitOutputMode]
+                      ),
+                    ),
+                    @tool.ToolLiteral::Scalar("Human"),
+                  ),
+                ),
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [
+              {
+                long: "amend",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: true }
+                ),
+                env_var: None,
+              },
+              {
+                long: "signoff",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: true }
+                ),
+                env_var: None,
+              },
+              {
+                long: "reset-author",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+            ],
+            constraints: [
+              @toolCommon.Constraint::Implies(
+                {
+                  lhs_quant: @toolCommon.Quantifier::ALL,
+                  lhs: [@toolCommon.Ref::Present("reset-author")],
+                  rhs_quant: @toolCommon.Quantifier::ALL,
+                  rhs: [@toolCommon.Ref::Present("amend")],
+                },
+              ),
+              @toolCommon.Constraint::RequiresAll(
+                [
+                  @toolCommon.Ref::ValueIs(
+                    {
+                      name: "output",
+                      value: @tool.wire_value_is_literal(
+                        @tool.wire_tool_type(
+                          __golem_schema,
+                          (
+                            @schema.TypeTag::{  }
+                            : @schema.TypeTag[CanonicalGitOutputMode]
+                          ),
+                        ),
+                        @tool.ToolLiteral::Scalar("Json"),
+                      ),
+                    },
+                  ),
+                ],
+              ),
+            ],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (
+                    @schema.TypeTag::{  }
+                    : @schema.TypeTag[CanonicalCommitResult]
+                  ),
+                ).index,
+                doc: {
+                  summary: "Record changes to the repository.",
+                  description: "",
+                  examples: [],
+                },
+                formatters: [
+                  {
+                    name: "human",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                  {
+                    name: "porcelain",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                  {
+                    name: "json",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "human",
+              },
+            ),
+            errors: [
+              {
+                name: "nothing-staged",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: None,
+              },
+              {
+                name: "dirty-merge",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 128,
+                payload: None,
+              },
+              {
+                name: "bad-author-format",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 129,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "remote",
+        aliases: ["rmt"],
+        doc: {
+          summary: "Manage the set of tracked repositories.",
+          description: "",
+          examples: [],
+        },
+        globals: {
+          options: [
+            {
+              long: "git-dir",
+              short: None,
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              value_name: None,
+              shape: @toolCommon.OptionShape::Scalar(
+                @tool.wire_refine_path(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                  ),
+                  None,
+                  Some(@types.PathKind::DIRECTORY),
+                  None,
+                ).index,
+              ),
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    None,
+                    Some(@types.PathKind::DIRECTORY),
+                    None,
+                  ),
+                  @tool.ToolLiteral::Scalar(".git"),
+                ),
+              ),
+              required: false,
+              env_var: Some("GIT_DIR"),
+            },
+            {
+              long: "config",
+              short: Some('\u{63}'),
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              value_name: None,
+              shape: @toolCommon.OptionShape::RepeatableMap(
+                {
+                  repetition: @toolCommon.Repetition::Repeated,
+                  map_type: @tool.wire_tool_type(
+                    __golem_schema,
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[Map[String, String]]
+                    ),
+                  ).index,
+                  duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
+                },
+              ),
+              default: None,
+              required: false,
+              env_var: None,
+            },
+          ],
+          flags: [
+            {
+              long: "verbose",
+              short: Some('\u{76}'),
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
+              env_var: None,
+            },
+            {
+              long: "paginate",
+              short: None,
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              shape: @toolCommon.FlagShape::BoolFlag(
+                { default: true, negatable: true }
+              ),
+              env_var: None,
+            },
+          ],
+        },
+        subcommands: [3, 4, 5],
+        body: None,
+      },
+      {
+        name: "add",
+        aliases: [],
+        doc: { summary: "Add a remote.", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "name",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_refine_text(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
+                    None,
+                    None,
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "url",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_refine_url(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                    ),
+                    Some(["https"]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [
+              {
+                long: "track",
+                short: Some('\u{74}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::RepeatableList(
+                  {
+                    repetition: @toolCommon.Repetition::Repeated,
+                    item_type: @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ).index,
+                  },
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "master",
+                short: Some('\u{6d}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [
+              {
+                long: "tags",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: true, negatable: true }
+                ),
+                env_var: None,
+              },
+              {
+                long: "fetch",
+                short: Some('\u{66}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+            ],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "no-such-remote",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: false,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "remove",
+        aliases: ["rm"],
+        doc: { summary: "Remove a remote.", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "name",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_refine_text(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
+                    None,
+                    None,
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "no-such-remote",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: true,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "set-url",
+        aliases: [],
+        doc: { summary: "Change a remote URL.", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "name",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "newurl",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_refine_url(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                    ),
+                    Some(["https"]),
+                  ).index,
+                  default: None,
+                  required: true,
+                  accepts_stdio: false,
+                },
+                {
+                  name: "oldurl",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_refine_url(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                    ),
+                    Some(["https"]),
+                  ).index,
+                  default: None,
+                  required: false,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [],
+            flags: [
+              {
+                long: "push",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+              {
+                long: "add",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+              {
+                long: "delete",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+            ],
+            constraints: [
+              @toolCommon.Constraint::MutexGroups(
+                [
+                  { refs: [@toolCommon.Ref::Present("add")], },
+                  { refs: [@toolCommon.Ref::Present("delete")], },
+                ],
+              ),
+            ],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "failed",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "stash",
+        aliases: [],
+        doc: {
+          summary: "Stash changes in a dirty working directory.",
+          description: "",
+          examples: [],
+        },
+        globals: {
+          options: [
+            {
+              long: "git-dir",
+              short: None,
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              value_name: None,
+              shape: @toolCommon.OptionShape::Scalar(
+                @tool.wire_refine_path(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                  ),
+                  None,
+                  Some(@types.PathKind::DIRECTORY),
+                  None,
+                ).index,
+              ),
+              default: Some(
+                @tool.wire_tool_literal(
+                  @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    None,
+                    Some(@types.PathKind::DIRECTORY),
+                    None,
+                  ),
+                  @tool.ToolLiteral::Scalar(".git"),
+                ),
+              ),
+              required: false,
+              env_var: Some("GIT_DIR"),
+            },
+          ],
+          flags: [
+            {
+              long: "verbose",
+              short: Some('\u{76}'),
+              aliases: [],
+              doc: { summary: "", description: "", examples: [] },
+              shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
+              env_var: None,
+            },
+          ],
+        },
+        subcommands: [7, 8],
+        body: Some(
+          {
+            positionals: { fixed: [], tail: None },
+            options: [
+              {
+                long: "message",
+                short: Some('\u{6d}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+                default: None,
+                required: true,
+                env_var: None,
+              },
+            ],
+            flags: [
+              {
+                long: "keep-index",
+                short: Some('\u{6b}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+            ],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "no-such-stash",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "pop",
+        aliases: [],
+        doc: {
+          summary: "Remove and apply a stashed state.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "name",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: false,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [
+              {
+                long: "index",
+                short: Some('\u{69}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "no-such-stash",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "apply",
+        aliases: [],
+        doc: {
+          summary: "Apply a stashed state without removing it.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [
+                {
+                  name: "name",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  type_: @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                  default: None,
+                  required: false,
+                  accepts_stdio: false,
+                },
+              ],
+              tail: None,
+            },
+            options: [
+              {
+                long: "index",
+                short: Some('\u{69}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "no-such-stash",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+      {
+        name: "log",
+        aliases: [],
+        doc: { summary: "Show commit logs.", description: "", examples: [] },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: {
+              fixed: [],
+              tail: Some(
+                {
+                  name: "paths",
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  item_type: @tool.wire_refine_path(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                    ),
+                    Some(@types.PathDirection::INPUT),
+                    Some(@types.PathKind::FILE),
+                    None,
+                  ).index,
+                  min: 0U,
+                  max: None,
+                  separator: Some("--"),
+                  verbatim: false,
+                  accepts_stdio: false,
+                },
+              ),
+            },
+            options: [
+              {
+                long: "max-count",
+                short: Some('\u{6e}'),
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_refine_numeric(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[Int64]),
+                    ),
+                    Some("0"),
+                    Some("9223372036854775807"),
+                    None,
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "since",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "until",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "author",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::RepeatableList(
+                  {
+                    repetition: @toolCommon.Repetition::Delimited('\u{2c}'),
+                    item_type: @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ).index,
+                  },
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+              {
+                long: "grep",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::RepeatableList(
+                  {
+                    repetition: @toolCommon.Repetition::Either('\u{2c}'),
+                    item_type: @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ).index,
+                  },
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [
+              {
+                long: "all-match",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+              {
+                long: "invert-grep",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+              {
+                long: "oneline",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+              {
+                long: "graph",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
+                env_var: None,
+              },
+            ],
+            constraints: [
+              @toolCommon.Constraint::AllOrNone(
+                [
+                  @toolCommon.Ref::Present("all-match"),
+                  @toolCommon.Ref::Present("grep"),
+                ],
+              ),
+            ],
+            stdin: None,
+            stdout: None,
+            result: Some(
+              {
+                type_: @tool.wire_tool_type(
+                  __golem_schema,
+                  (
+                    @schema.TypeTag::{  }
+                    : @schema.TypeTag[Array[CanonicalLogEntry]]
+                  ),
+                ).index,
+                doc: {
+                  summary: "Show commit logs.",
+                  description: "",
+                  examples: [],
+                },
+                formatters: [
+                  {
+                    name: "oneline",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                  {
+                    name: "short",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                  {
+                    name: "medium",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                  {
+                    name: "full",
+                    doc: { summary: "", description: "", examples: [] },
+                  },
+                ],
+                default_formatter: "medium",
+              },
+            ),
+            errors: [
+              {
+                name: "bad-revision",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 128,
+                payload: None,
+              },
+              {
+                name: "not-a-repository",
+                doc: { summary: "", description: "", examples: [] },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 129,
+                payload: None,
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: true,
+                destructive: true,
+                idempotent: true,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "0.0.0",
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
+fn __golem_tool_wire_CanonicalBigBound() -> @toolCommon.Tool {
+  try {
+    let __golem_schema = @schema.WireTypeEncoder::new()
+    let nodes :Array[@toolCommon.CommandNode] = [
+      {
+        name: "canonical-big-bound",
+        aliases: [],
+        doc: {
+          summary: "Numeric-bound parity fixture.",
+          description: "",
+          examples: [],
+        },
+        globals: { options: [], flags: [] },
+        subcommands: [],
+        body: Some(
+          {
+            positionals: { fixed: [], tail: None },
+            options: [
+              {
+                long: "count",
+                short: None,
+                aliases: [],
+                doc: { summary: "", description: "", examples: [] },
+                value_name: None,
+                shape: @toolCommon.OptionShape::Scalar(
+                  @tool.wire_refine_numeric(
+                    @tool.wire_tool_type(
+                      __golem_schema,
+                      (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                    ),
+                    Some("0"),
+                    Some("18446744073709551615"),
+                    None,
+                  ).index,
+                ),
+                default: None,
+                required: false,
+                env_var: None,
+              },
+            ],
+            flags: [],
+            constraints: [],
+            stdin: None,
+            stdout: None,
+            result: None,
+            errors: [
+              {
+                name: "invalid-pattern",
+                doc: {
+                  summary: "The supplied pattern is not a valid regular expression.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::USAGE_ERROR,
+                exit_code: 2,
+                payload: Some(
+                  @tool.wire_tool_type(
+                    __golem_schema,
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ).index,
+                ),
+              },
+              {
+                name: "no-match",
+                doc: {
+                  summary: "No line matched.",
+                  description: "",
+                  examples: [],
+                },
+                kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+                exit_code: 1,
+                payload: None,
+              },
+            ],
+            annotations: Some(
+              {
+                read_only: false,
+                destructive: true,
+                idempotent: false,
+                open_world: true,
+              },
+            ),
+          },
+        ),
+      },
+    ]
+    let root = __golem_schema.push(@types.RecordType([]))
+    {
+      version: "0.0.0",
+      commands: { nodes, },
+      schema: {
+        type_nodes: __golem_schema.nodes,
+        defs: __golem_schema.defs,
+        root,
+      },
+    }
+  } catch{
+    error => abort("invalid generated tool descriptor: " + repr(error))
+  }
+}
+
+///|
+///
 fn init {
   try {
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_MoonBitStreaming(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_MoonBitStreaming(),
       __golem_tool_invoke_MoonBitStreaming,
     )
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_CanonicalGrep(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_CanonicalGrep(),
       __golem_tool_invoke_CanonicalGrep,
     )
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_CanonicalGit(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_CanonicalGit(),
       __golem_tool_invoke_CanonicalGit,
     )
-    @tool.register_subtool_def_invoker(
-      __golem_tool_def_CanonicalRemote(),
-      __golem_tool_invoke_CanonicalRemote,
-    )
-    @tool.register_subtool_def_invoker(
-      __golem_tool_def_CanonicalStash(),
-      __golem_tool_invoke_CanonicalStash,
-    )
-    @tool.register_tool_def_invoker(
-      __golem_tool_def_CanonicalBigBound(),
+    @tool.register_wire_tool_invoker(
+      __golem_tool_wire_CanonicalBigBound(),
       __golem_tool_invoke_CanonicalBigBound,
     )
   } catch{

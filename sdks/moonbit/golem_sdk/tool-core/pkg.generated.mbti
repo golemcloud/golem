@@ -78,6 +78,8 @@ pub fn register_subtool_def(ToolDef) -> Unit raise ToolBuildError
 
 pub fn register_tool_def(ToolDef) -> Unit raise ToolBuildError
 
+pub fn register_wire_subtool(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Unit raise ToolBuildError
+
 pub fn register_wire_tool(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Unit raise ToolBuildError
 
 pub fn registered_tool_def(String) -> ToolDef?
@@ -99,6 +101,20 @@ pub fn resolve_command_path(@golemcloud/golem_sdk/interface/golem/tool/common.To
 pub fn tool_name(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Result[String, ToolBuildError]
 
 pub fn value_is_literal_to_schema_value(@schema_model.SchemaGraph, ToolLiteral) -> @schema_model.SchemaValue raise ToolBuildError
+
+pub fn wire_refine_numeric(WireToolType, String?, String?, String?) -> WireToolType raise ToolBuildError
+
+pub fn wire_refine_path(WireToolType, @types.PathDirection?, @types.PathKind?, Array[String]?) -> WireToolType raise ToolBuildError
+
+pub fn wire_refine_text(WireToolType, String?, UInt?, UInt?) -> WireToolType raise ToolBuildError
+
+pub fn wire_refine_url(WireToolType, Array[String]?) -> WireToolType raise ToolBuildError
+
+pub fn wire_tool_literal(WireToolType, ToolLiteral) -> @types.SchemaValueTree raise ToolBuildError
+
+pub fn[T : @schema.WireSchema] wire_tool_type(@schema.WireTypeEncoder, @schema.TypeTag[T]) -> WireToolType
+
+pub fn wire_value_is_literal(WireToolType, ToolLiteral) -> @types.SchemaValueTree raise ToolBuildError
 
 // Errors
 pub suberror ToolBuildError {
@@ -290,6 +306,7 @@ pub(all) struct ToolDef {
 pub fn ToolDef::canonical_input_fields(Self, Int) -> Array[CanonicalInputField] raise ToolBuildError
 pub fn ToolDef::canonical_input_model(Self, Int) -> CanonicalInputModel raise ToolBuildError
 pub fn ToolDef::command_index_by_path(Self, Array[String]) -> Int?
+pub fn ToolDef::from_wire(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Self raise ToolBuildError
 pub fn ToolDef::graft_subtree(Self, Self, String, GlobalsDef, String?, @golemcloud/golem_sdk/interface/golem/tool/common.Doc?, Array[String]?) -> Self raise ToolBuildError
 pub fn ToolDef::normalize_inherited_globals(Self) -> Self raise ToolBuildError
 pub fn ToolDef::to_tool(Self) -> @golemcloud/golem_sdk/interface/golem/tool/common.Tool raise ToolBuildError
@@ -309,6 +326,11 @@ pub(all) enum ValueIsLiteralDef {
 pub(all) struct ValueIsRefDef {
   name : String
   value : ValueIsLiteralDef
+}
+
+pub(all) struct WireToolType {
+  encoder : @schema.WireTypeEncoder
+  index : Int
 }
 
 // Type aliases

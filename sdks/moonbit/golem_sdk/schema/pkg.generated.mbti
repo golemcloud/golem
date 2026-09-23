@@ -198,6 +198,7 @@ pub(all) struct WireTypeEncoder {
   nodes : Array[@types.SchemaTypeNode]
   defs : Array[@types.SchemaTypeDef]
   ids : Map[String, Int]
+  active : Map[String, Unit]
 }
 pub fn WireTypeEncoder::named(Self, String, () -> Int) -> Int
 pub fn WireTypeEncoder::new() -> Self

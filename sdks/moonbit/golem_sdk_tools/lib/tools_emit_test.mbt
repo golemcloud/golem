@@ -17,7 +17,7 @@ test "tool emitters generate root, leaf, registration, and typed clients" {
     @lib.generate_tool_registration(tools),
   )
   assert_true(registration.contains("fn __golem_tool_def_Grep"))
-  assert_true(registration.contains("@tool.register_tool_def_invoker"))
+  assert_true(registration.contains("@tool.register_wire_tool_invoker"))
   assert_true(registration.contains("Grep::count"))
   assert_true(registration.contains("subcommands: [1]"))
   let clients = @formatter.impls_to_string(
@@ -56,7 +56,8 @@ test "pure dispatcher, subtree authoring, and stdout support" {
   )
   assert_true(subtree_generated.contains("name: \"child\""))
   assert_true(subtree_generated.contains("fn __golem_tool_def_Child"))
-  assert_true(subtree_generated.contains("@tool.register_subtool_def_invoker"))
+  assert_false(subtree_generated.contains("@tool.register_subtool_def_invoker"))
+  assert_true(subtree_generated.contains("__golem_tool_invoke_Root_subtree_0"))
   let subtree_clients = @formatter.impls_to_string(
     @lib.generate_tool_client_code(@lib.parse_tools([("subtree.mbt", subtree)])),
   )
@@ -357,7 +358,8 @@ test "globals declared by a leaf command are emitted on that command node" {
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
   )
-  assert_eq(generated.split("long: \"token\"").count() - 1, 1)
+  let wire = generated.split("fn __golem_tool_wire_Runner").last().unwrap()
+  assert_eq(wire.split("long: \"token\"").count() - 1, 1)
 }
 
 ///|
@@ -1590,11 +1592,8 @@ test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
   let registration = @formatter.impls_to_string(
     @lib.generate_tool_registration(tools),
   )
-  assert_eq(registration.split("@tool.register_tool_def_invoker").length(), 5)
-  assert_eq(
-    registration.split("@tool.register_subtool_def_invoker").length(),
-    3,
-  )
+  assert_eq(registration.split("@tool.register_wire_tool_invoker").length(), 5)
+  assert_false(registration.contains("@tool.register_subtool_def_invoker"))
   let clients = @formatter.impls_to_string(
     @lib.generate_tool_client_code(tools),
   )
@@ -1621,5 +1620,10 @@ test "child constraint resolves parent subtree global" {
       @lib.parse_tools([("ancestor_constraint.mbt", source)]),
     ),
   )
-  assert_true(generated.contains("@tool.RefDef::ValueIs"))
+  let wire = generated.split("fn __golem_tool_wire_Parent").last().unwrap()
+  assert_true(wire.contains("@toolCommon.Ref::ValueIs"))
+  assert_true(wire.contains("long: \"format\""))
+  assert_true(wire.contains("@tool.wire_value_is_literal"))
+  assert_false(wire.contains("SchemaValue"))
+  assert_false(wire.contains("__golem_tool_wire_Child"))
 }

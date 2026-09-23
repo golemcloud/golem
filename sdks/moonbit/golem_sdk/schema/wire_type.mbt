@@ -3,11 +3,12 @@ pub(all) struct WireTypeEncoder {
   nodes : Array[@types.SchemaTypeNode]
   defs : Array[@types.SchemaTypeDef]
   ids : Map[String, Int]
+  active : Map[String, Unit]
 }
 
 ///|
 pub fn WireTypeEncoder::new() -> WireTypeEncoder {
-  { nodes: [], defs: [], ids: Map([]), }
+  { nodes: [], defs: [], ids: Map([]), active: Map([]), }
 }
 
 ///|
@@ -32,15 +33,94 @@ pub fn WireTypeEncoder::named(
   build : () -> Int,
 ) -> Int {
   match self.ids.get(id) {
-    Some(definition) => self.push(@types.SchemaTypeBody::RefType(definition))
+    Some(definition) => {
+      if !self.active.contains(id) {
+        self.active[id] = ()
+        let body = build()
+        ignore(self.active.remove(id))
+        if !self.same_type(self.defs[definition].body, body) {
+          abort("conflicting wire schema definition: " + id)
+        }
+      }
+      self.push(@types.SchemaTypeBody::RefType(definition))
+    }
     None => {
       let definition = self.defs.length()
       self.ids[id] = definition
+      self.active[id] = ()
       self.defs.push({ id, name: Some(id), body: 0, })
       let body = build()
+      ignore(self.active.remove(id))
       self.defs[definition] = { id, name: Some(id), body, }
       self.push(@types.SchemaTypeBody::RefType(definition))
     }
+  }
+}
+
+///|
+fn WireTypeEncoder::same_type(
+  self : WireTypeEncoder,
+  left : Int,
+  right : Int,
+) -> Bool {
+  let left = self.nodes[left]
+  let right = self.nodes[right]
+  if left.metadata != right.metadata {
+    return false
+  }
+  let children : Array[Int] = []
+  let left_body = map_wire_type_children(left.body, index => {
+    let position = children.length()
+    children.push(index)
+    position
+  })
+  let mut position = 0
+  let mut equal = true
+  let right_body = map_wire_type_children(right.body, index => {
+    match children.get(position) {
+      Some(child) => if !self.same_type(child, index) { equal = false }
+      None => equal = false
+    }
+    let result = position
+    position += 1
+    result
+  })
+  equal && position == children.length() && left_body == right_body
+}
+
+///|
+fn map_wire_type_children(
+  body : @types.SchemaTypeBody,
+  f : (Int) -> Int,
+) -> @types.SchemaTypeBody {
+  match body {
+    @types.RecordType(fields) =>
+      @types.RecordType(fields.map(field => { ..field, body: f(field.body), }))
+    @types.VariantType(cases) =>
+      @types.VariantType(
+        cases.map(case => { ..case, payload: case.payload.map(f), }),
+      )
+    @types.TupleType(items) => @types.TupleType(items.map(f))
+    @types.ListType(item) => @types.ListType(f(item))
+    @types.FixedListType(spec) =>
+      @types.FixedListType({ ..spec, element: f(spec.element), })
+    @types.MapType(spec) =>
+      @types.MapType({ key: f(spec.key), value: f(spec.value), })
+    @types.OptionType(item) => @types.OptionType(f(item))
+    @types.ResultType(spec) =>
+      @types.ResultType({ ok: spec.ok.map(f), err: spec.err.map(f), })
+    @types.UnionType(spec) =>
+      @types.UnionType({
+        branches: spec.branches.map(branch => {
+          ..branch,
+          body: f(branch.body),
+        }),
+      })
+    @types.SecretType(spec) =>
+      @types.SecretType({ ..spec, inner: f(spec.inner), })
+    @types.FutureType(item) => @types.FutureType(item.map(f))
+    @types.StreamType(item) => @types.StreamType(item.map(f))
+    _ => body
   }
 }
 
