@@ -189,6 +189,21 @@ fn blob_store_error(err: anyhow::Error) -> BlobStoreError {
     }
 }
 
+fn object_names(paths: Vec<PathBuf>) -> Result<Vec<String>, BlobStoreError> {
+    paths
+        .into_iter()
+        .map(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .ok_or_else(|| {
+                    BlobStoreError::Other(format!(
+                        "Blob storage returned a path without a file name: {path:?}"
+                    ))
+                })
+        })
+        .collect()
+}
+
 #[async_trait]
 impl BlobStoreService for DefaultBlobStoreService {
     async fn clear(
@@ -418,12 +433,7 @@ impl BlobStoreService for DefaultBlobStoreService {
             )
             .await
             .map_err(blob_store_error)
-            .map(|paths| {
-                paths
-                    .iter()
-                    .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
-                    .collect()
-            })
+            .and_then(object_names)
     }
 
     async fn move_object(
@@ -501,14 +511,16 @@ impl BlobStoreService for DefaultBlobStoreService {
 
 #[cfg(test)]
 mod tests {
-    use crate::services::blob_store::{BlobStoreError, BlobStoreService, DefaultBlobStoreService};
+    use crate::services::blob_store::{
+        BlobStoreError, BlobStoreService, DefaultBlobStoreService, object_names,
+    };
     use golem_common::model::environment::EnvironmentId;
     use golem_service_base::db::sqlite::SqlitePool;
     use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
     use sqlx::sqlite::SqlitePoolOptions;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tempfile::TempDir;
     use test_r::test;
@@ -816,6 +828,13 @@ mod tests {
         let pool = SqlitePool::new(sqlx_pool.clone(), sqlx_pool);
         let blob_storage = Arc::new(SqliteBlobStorage::new(pool).await.unwrap());
         DefaultBlobStoreService::new(blob_storage)
+    }
+
+    #[test]
+    fn object_names_rejects_a_path_without_a_name() {
+        let result = object_names(vec![PathBuf::new()]);
+
+        assert!(matches!(result, Err(BlobStoreError::Other(_))));
     }
 
     #[test]
