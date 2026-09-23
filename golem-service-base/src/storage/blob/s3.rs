@@ -144,11 +144,13 @@ impl S3BlobStorage {
     }
 
     fn key_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> Result<String, Error> {
-        Ok(format!(
-            "{}/{}",
-            self.prefix_of(namespace),
-            blob_path_to_string(path)?
-        ))
+        let namespace_root = self.prefix_of(namespace);
+        let path = blob_path_to_string(path)?;
+        if path.is_empty() {
+            Ok(namespace_root)
+        } else {
+            Ok(format!("{namespace_root}/{path}"))
+        }
     }
 
     fn child_key(parent: &str, child: &str) -> String {
@@ -1382,9 +1384,21 @@ mod tests {
             format!("{directory_key}/__dir_marker")
         );
         let root_key = storage.key_of(&namespace, Path::new("")).unwrap();
+        assert_eq!(root_key, namespace_root);
         assert_eq!(
             S3BlobStorage::child_key(&root_key, "__dir_marker"),
             format!("{namespace_root}/__dir_marker")
+        );
+
+        assert_eq!(
+            S3BlobStorage::listed_path(
+                &namespace_root,
+                &root_key,
+                &format!("{namespace_root}/test-file")
+            )
+            .unwrap()
+            .as_os_str(),
+            "test-file"
         );
     }
 }
