@@ -42,15 +42,6 @@ pub trait Schema {
     {
         Err("Principal can only be injected into Principal parameters".to_string())
     }
-
-    #[doc(hidden)]
-    fn into_agent_invocation_result(self) -> Result<super::AgentInvocationResult, String>
-    where
-        Self: Sized,
-    {
-        self.to_schema_value()
-            .map(|value| super::AgentInvocationResult { value: Some(value) })
-    }
 }
 
 fn schema_contains_stream(graph: &SchemaGraph) -> bool {

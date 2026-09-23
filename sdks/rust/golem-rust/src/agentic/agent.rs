@@ -15,9 +15,81 @@
 use crate::golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, Principal};
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::schema::SchemaValue;
+use crate::schema::wit::{direct, wire};
 
 pub struct AgentInvocationResult {
-    pub value: Option<SchemaValue>,
+    pub value: Option<wire::SchemaValueTree>,
+}
+
+#[doc(hidden)]
+pub struct DirectAgentInput {
+    reader: direct::WireReader,
+    fields: std::vec::IntoIter<wire::ValueNodeIndex>,
+}
+
+impl DirectAgentInput {
+    pub fn new(input: wire::SchemaValueTree) -> Result<Self, direct::WireError> {
+        let mut reader = direct::WireReader::new(input.value_nodes);
+        let wire::SchemaValueNode::RecordValue(fields) = reader.take(input.root)? else {
+            return Err(direct::WireError::Shape("agent input record"));
+        };
+        Ok(Self {
+            reader,
+            fields: fields.into_iter(),
+        })
+    }
+
+    pub fn take<T: direct::FromWire>(&mut self) -> Result<T, direct::WireError> {
+        let index = self
+            .fields
+            .next()
+            .ok_or(direct::WireError::Shape("agent argument"))?;
+        T::read_wire(&mut self.reader, index)
+    }
+
+    pub fn finish(self) -> Result<(), direct::WireError> {
+        if self.fields.len() != 0 {
+            return Err(direct::WireError::Shape("extra agent arguments"));
+        }
+        self.reader.finish()
+    }
+}
+
+#[doc(hidden)]
+pub struct AgentParameterProbe<T>(pub std::marker::PhantomData<T>);
+
+#[doc(hidden)]
+pub trait ReadAgentParameter {
+    type Value;
+    fn read_parameter(
+        self,
+        input: &mut DirectAgentInput,
+        principal: &Principal,
+    ) -> Result<Self::Value, direct::WireError>;
+}
+
+impl<T: direct::FromWire> ReadAgentParameter for &&AgentParameterProbe<T> {
+    type Value = T;
+
+    fn read_parameter(
+        self,
+        input: &mut DirectAgentInput,
+        _: &Principal,
+    ) -> Result<T, direct::WireError> {
+        input.take()
+    }
+}
+
+impl ReadAgentParameter for &AgentParameterProbe<Principal> {
+    type Value = Principal;
+
+    fn read_parameter(
+        self,
+        _: &mut DirectAgentInput,
+        principal: &Principal,
+    ) -> Result<Principal, direct::WireError> {
+        Ok(principal.clone())
+    }
 }
 
 #[derive(Debug)]
@@ -46,7 +118,7 @@ pub trait BaseAgent {
     async fn invoke(
         &mut self,
         method_name: String,
-        input: SchemaValue,
+        input: wire::SchemaValueTree,
         principal: Principal,
     ) -> Result<AgentInvocationResult, AgentError>;
 

@@ -1,7 +1,7 @@
-use golem_rust::{FromSchema, IntoSchema, agent_definition, agent_implementation};
+use golem_rust::{FromSchema, IntoSchema, IntoWire, agent_definition, agent_implementation};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire)]
 pub struct Item {
     pub id: String,
     pub description: String,

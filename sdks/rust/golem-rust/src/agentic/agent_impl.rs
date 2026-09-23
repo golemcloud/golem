@@ -19,7 +19,6 @@ use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::agent::host::parse_agent_id;
 use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
 use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
-use crate::schema::wit::{decode_value, encode_value_async};
 use crate::{
     agentic::{
         AgentTypeName, with_agent_initiator, with_agent_instance, with_agent_instance_async,
@@ -211,9 +210,6 @@ impl Guest for AgentRuntime {
             )
             });
 
-        let input = decode_value(input)
-            .map_err(|e| AgentError::InvalidInput(format!("invalid schema value input: {e}")))?;
-
         let commit_principal = principal.clone();
         let resolved = with_agent_initiator(
             |initiator| async move { initiator.initiate(input, principal).await },
@@ -237,9 +233,6 @@ impl Guest for AgentRuntime {
             parse_agent_id(&agent_id).map_err(|e| AgentError::InvalidInput(e.to_string()))?;
         }
 
-        let input = decode_value(input)
-            .map_err(|e| AgentError::InvalidInput(format!("invalid schema value input: {e}")))?;
-
         with_agent_instance_async(|resolved_agent| async move {
             let result = resolved_agent
                 .agent
@@ -247,12 +240,7 @@ impl Guest for AgentRuntime {
                 .as_mut()
                 .invoke(method_name, input, principal)
                 .await?;
-            match result.value {
-                Some(value) => encode_value_async(&value).await.map(Some).map_err(|e| {
-                    AgentError::InvalidInput(format!("invalid schema value output: {e}"))
-                }),
-                None => Ok(None),
-            }
+            Ok(result.value)
         })
         .await
     }
@@ -362,7 +350,7 @@ mod tests {
         async fn invoke(
             &mut self,
             _method_name: String,
-            _input: SchemaValue,
+            _input: crate::schema::wit::wire::SchemaValueTree,
             _principal: Principal,
         ) -> Result<AgentInvocationResult, AgentError> {
             unreachable!()
@@ -386,7 +374,7 @@ mod tests {
     impl AgentInitiator for TestInitiator {
         async fn initiate(
             &self,
-            _params: SchemaValue,
+            _params: crate::schema::wit::wire::SchemaValueTree,
             _principal: Principal,
         ) -> Result<ResolvedAgent, AgentError> {
             INITIALIZE_CALLS.fetch_add(1, Ordering::SeqCst);

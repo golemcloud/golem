@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, golem_rust::IntoWire, Serialize, Deserialize)]
 pub struct StdTimeApisResult {
     pub elapsed1: f64,
     pub elapsed2: f64,

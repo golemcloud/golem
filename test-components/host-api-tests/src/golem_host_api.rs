@@ -43,7 +43,7 @@ mod gated_host_bindings {
 use gated_host_bindings::golem::agent::host as agent_host;
 use gated_host_bindings::golem::api::host as host_api;
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, golem_rust::IntoWire, Serialize, Deserialize)]
 pub struct ResolveComponentResult {
     pub component_found: bool,
     pub worker_found: bool,

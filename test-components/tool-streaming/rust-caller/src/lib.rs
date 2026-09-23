@@ -25,7 +25,7 @@ pub extern "C" fn initialize_component_baseline_clock() {
     }
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire)]
 pub struct StreamEvidence {
     pub output: Vec<u8>,
     pub chunks_read: u32,
@@ -34,14 +34,14 @@ pub struct StreamEvidence {
     pub completion: String,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire)]
 pub struct StreamingBenchmarkResult {
     pub first_chunk_nanos: u64,
     pub total_nanos: u64,
     pub chunks_read: u32,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire)]
 pub struct ClockedStreamEvidence {
     pub before_tool_nanos: u64,
     pub after_tool_nanos: u64,
@@ -122,7 +122,7 @@ struct RawDirectTypedInput {
     input: AgentStream<TypedInputEvidence>,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire)]
 pub struct TypedOutputEvidence {
     pub label: String,
     pub ordinal: u32,

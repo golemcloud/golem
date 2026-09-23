@@ -472,7 +472,9 @@ fn host_environment_id_to_schema(value: host_api::EnvironmentId) -> EnvironmentI
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema,
+)]
 pub enum UpdateMode {
     Automatic,
     SnapshotBased,
@@ -496,7 +498,9 @@ impl From<UpdateMode> for host_api::UpdateMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema,
+)]
 pub enum FilterComparator {
     Equal,
     NotEqual,
@@ -532,7 +536,9 @@ impl From<FilterComparator> for host_api::FilterComparator {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema,
+)]
 pub enum StringFilterComparator {
     Equal,
     NotEqual,
@@ -565,7 +571,9 @@ impl From<StringFilterComparator> for host_api::StringFilterComparator {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema,
+)]
 pub enum AgentStatus {
     Running,
     Idle,
@@ -604,7 +612,7 @@ impl From<AgentStatus> for host_api::AgentStatus {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentNameFilter {
     pub comparator: StringFilterComparator,
     pub value: String,
@@ -628,7 +636,7 @@ impl From<AgentNameFilter> for host_api::AgentNameFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentStatusFilter {
     pub comparator: FilterComparator,
     pub value: AgentStatus,
@@ -652,7 +660,7 @@ impl From<AgentStatusFilter> for host_api::AgentStatusFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentVersionFilter {
     pub comparator: FilterComparator,
     pub value: u64,
@@ -676,7 +684,7 @@ impl From<AgentVersionFilter> for host_api::AgentVersionFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentCreatedAtFilter {
     pub comparator: FilterComparator,
     pub value: u64,
@@ -700,7 +708,7 @@ impl From<AgentCreatedAtFilter> for host_api::AgentCreatedAtFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentEnvFilter {
     pub name: String,
     pub comparator: StringFilterComparator,
@@ -727,7 +735,7 @@ impl From<AgentEnvFilter> for host_api::AgentEnvFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentConfigVarsFilter {
     pub name: String,
     pub comparator: StringFilterComparator,
@@ -754,7 +762,7 @@ impl From<AgentConfigVarsFilter> for host_api::AgentConfigVarsFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum AgentPropertyFilter {
     Name(AgentNameFilter),
     Status(AgentStatusFilter),
@@ -790,7 +798,7 @@ impl From<AgentPropertyFilter> for host_api::AgentPropertyFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentAllFilter {
     pub filters: Vec<AgentPropertyFilter>,
 }
@@ -811,7 +819,7 @@ impl From<AgentAllFilter> for host_api::AgentAllFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentAnyFilter {
     pub filters: Vec<AgentAllFilter>,
 }
@@ -832,7 +840,7 @@ impl From<AgentAnyFilter> for host_api::AgentAnyFilter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct AgentMetadata {
     pub agent_id: AgentId,
     pub args: Vec<String>,
@@ -899,12 +907,12 @@ impl GetAgents {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct ForkDetails {
     pub forked_phantom_id: Uuid,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum ForkResult {
     Original(ForkDetails),
     Forked(ForkDetails),

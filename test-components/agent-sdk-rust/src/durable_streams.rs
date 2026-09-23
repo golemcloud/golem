@@ -12,7 +12,7 @@ static OUTPUT_ERRORS: AtomicU64 = AtomicU64::new(0);
 static CONTINUATIONS: AtomicU64 = AtomicU64::new(0);
 static MARKERS: AtomicU64 = AtomicU64::new(0);
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire)]
 pub struct EchoOutput {
     pub output: AgentStream<String>,
 }

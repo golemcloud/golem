@@ -18,6 +18,13 @@ use crate::agentic::{
 };
 use crate::schema::SchemaGraph;
 use crate::schema::VariantValuePayload;
+use crate::schema::wit::{direct, wire};
+
+#[doc(hidden)]
+pub trait MultimodalWire {
+    fn append_modality_cases(builder: &mut direct::WireSchemaBuilder)
+    -> Vec<wire::VariantCaseType>;
+}
 
 /// Represents Multimodal input data for agent functions.
 /// Note that you cannot mix a multimodal input with other input types
@@ -61,6 +68,44 @@ use crate::schema::VariantValuePayload;
 ///
 pub struct MultimodalAdvanced<T> {
     pub items: Vec<T>,
+}
+
+impl<T: direct::IntoWire> direct::IntoWire for MultimodalAdvanced<T> {
+    fn preflight(&self, resources: &mut direct::WirePreflight) -> Result<(), direct::WireError> {
+        self.items.preflight(resources)
+    }
+
+    async fn prepare_wire(&self) -> Result<(), direct::WireError> {
+        self.items.prepare_wire().await
+    }
+
+    fn write_wire(
+        &self,
+        writer: &mut direct::WireWriter,
+    ) -> Result<wire::ValueNodeIndex, direct::WireError> {
+        self.items.write_wire(writer)
+    }
+}
+
+impl<T: direct::FromWire> direct::FromWire for MultimodalAdvanced<T> {
+    fn read_wire(
+        reader: &mut direct::WireReader,
+        index: wire::ValueNodeIndex,
+    ) -> Result<Self, direct::WireError> {
+        Ok(Self {
+            items: Vec::<T>::read_wire(reader, index)?,
+        })
+    }
+}
+
+impl<T: MultimodalWire> direct::WireSchema for MultimodalAdvanced<T> {
+    fn append_schema(builder: &mut direct::WireSchemaBuilder) -> wire::TypeNodeIndex {
+        let cases = T::append_modality_cases(builder);
+        let element = builder.push(wire::SchemaTypeBody::VariantType(cases));
+        let mut metadata = direct::empty_metadata();
+        metadata.role = Some(wire::Role::Multimodal);
+        builder.push_with_metadata(wire::SchemaTypeBody::ListType(element), metadata)
+    }
 }
 
 impl<T: MultimodalSchema> MultimodalAdvanced<T> {
@@ -232,6 +277,43 @@ pub struct Multimodal {
     value: MultimodalAdvanced<BasicModality>,
 }
 
+macro_rules! wire_wrapper {
+    ($wrapper:ty, $inner:ty $(, $t:ident)?) => {
+        impl<$($t: Schema + direct::IntoWire)?> direct::IntoWire for $wrapper {
+            fn preflight(&self, resources: &mut direct::WirePreflight) -> Result<(), direct::WireError> {
+                direct::IntoWire::preflight(&self.value, resources)
+            }
+
+            async fn prepare_wire(&self) -> Result<(), direct::WireError> {
+                direct::IntoWire::prepare_wire(&self.value).await
+            }
+
+            fn write_wire(&self, writer: &mut direct::WireWriter) -> Result<wire::ValueNodeIndex, direct::WireError> {
+                direct::IntoWire::write_wire(&self.value, writer)
+            }
+        }
+
+        impl<$($t: Schema + direct::FromWire)?> direct::FromWire for $wrapper {
+            fn read_wire(reader: &mut direct::WireReader, index: wire::ValueNodeIndex) -> Result<Self, direct::WireError> {
+                Ok(Self { value: <$inner as direct::FromWire>::read_wire(reader, index)? })
+            }
+        }
+
+        impl<$($t: Schema + direct::WireSchema)?> direct::WireSchema for $wrapper {
+            fn append_schema(builder: &mut direct::WireSchemaBuilder) -> wire::TypeNodeIndex {
+                <$inner as direct::WireSchema>::append_schema(builder)
+            }
+        }
+    };
+}
+
+wire_wrapper!(Multimodal, MultimodalAdvanced<BasicModality>);
+wire_wrapper!(
+    MultimodalCustom<T>,
+    MultimodalAdvanced<CustomModality<T>>,
+    T
+);
+
 impl Multimodal {
     /// Create a Multimodal input data for agent functions with basic types: Text and Binary.
     ///
@@ -291,9 +373,33 @@ impl Schema for Multimodal {
     }
 }
 
+#[derive(crate::FromWire, crate::IntoWire)]
 pub enum BasicModality {
     Text(UnstructuredText),
     Binary(UnstructuredBinary<String>),
+}
+
+impl MultimodalWire for BasicModality {
+    fn append_modality_cases(
+        builder: &mut direct::WireSchemaBuilder,
+    ) -> Vec<wire::VariantCaseType> {
+        vec![
+            wire::VariantCaseType {
+                name: "Text".to_string(),
+                payload: Some(<UnstructuredText as direct::WireSchema>::append_schema(
+                    builder,
+                )),
+                metadata: direct::empty_metadata(),
+            },
+            wire::VariantCaseType {
+                name: "Binary".to_string(),
+                payload: Some(
+                    <UnstructuredBinary<String> as direct::WireSchema>::append_schema(builder),
+                ),
+                metadata: direct::empty_metadata(),
+            },
+        ]
+    }
 }
 
 impl BasicModality {
@@ -433,6 +539,80 @@ impl<T: Schema> Schema for MultimodalCustom<T> {
 pub enum CustomModality<T: Schema> {
     Basic(BasicModality),
     Custom(T),
+}
+
+impl<T: Schema + direct::WireSchema> MultimodalWire for CustomModality<T> {
+    fn append_modality_cases(
+        builder: &mut direct::WireSchemaBuilder,
+    ) -> Vec<wire::VariantCaseType> {
+        let mut cases = BasicModality::append_modality_cases(builder);
+        cases.push(wire::VariantCaseType {
+            name: "Custom".to_string(),
+            payload: Some(T::append_schema(builder)),
+            metadata: direct::empty_metadata(),
+        });
+        cases
+    }
+}
+
+impl<T: Schema + direct::IntoWire> direct::IntoWire for CustomModality<T> {
+    fn preflight(&self, resources: &mut direct::WirePreflight) -> Result<(), direct::WireError> {
+        match self {
+            Self::Basic(value) => value.preflight(resources),
+            Self::Custom(value) => value.preflight(resources),
+        }
+    }
+
+    async fn prepare_wire(&self) -> Result<(), direct::WireError> {
+        match self {
+            Self::Basic(value) => value.prepare_wire().await,
+            Self::Custom(value) => value.prepare_wire().await,
+        }
+    }
+
+    fn write_wire(
+        &self,
+        writer: &mut direct::WireWriter,
+    ) -> Result<wire::ValueNodeIndex, direct::WireError> {
+        match self {
+            Self::Basic(value) => value.write_wire(writer),
+            Self::Custom(value) => {
+                let payload = value.write_wire(writer)?;
+                Ok(writer.push(wire::SchemaValueNode::VariantValue(
+                    wire::VariantValuePayload {
+                        case: 2,
+                        payload: Some(payload),
+                    },
+                )))
+            }
+        }
+    }
+}
+
+impl<T: Schema + direct::FromWire> direct::FromWire for CustomModality<T> {
+    fn read_wire(
+        reader: &mut direct::WireReader,
+        index: wire::ValueNodeIndex,
+    ) -> Result<Self, direct::WireError> {
+        let wire::SchemaValueNode::VariantValue(variant) = reader.take(index)? else {
+            return Err(direct::WireError::Shape("modality variant"));
+        };
+        let payload = variant
+            .payload
+            .ok_or(direct::WireError::Shape("modality payload"))?;
+        match variant.case {
+            0 => Ok(Self::Basic(BasicModality::Text(
+                UnstructuredText::read_wire(reader, payload)?,
+            ))),
+            1 => Ok(Self::Basic(BasicModality::Binary(UnstructuredBinary::<
+                String,
+            >::read_wire(
+                reader, payload
+            )?))),
+            2 => Ok(Self::Custom(T::read_wire(reader, payload)?)),
+            _ => Err(direct::WireError::Shape("modality case")),
+        }
+    }
 }
 
 impl<T: Schema> CustomModality<T> {

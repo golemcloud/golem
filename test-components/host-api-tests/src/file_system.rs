@@ -12,13 +12,13 @@ use std::hash::{Hash, Hasher};
 use wasi::filesystem::types::{Descriptor, DescriptorFlags, OpenFlags, PathFlags};
 use wasi::io::streams::OutputStream;
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, golem_rust::IntoWire, Serialize, Deserialize)]
 pub struct DirEntry {
     pub name: String,
     pub is_dir: bool,
 }
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, golem_rust::IntoWire, Serialize, Deserialize)]
 pub struct DirectoriesResult {
     pub count1: u32,
     pub root_entries: Vec<DirEntry>,
@@ -26,14 +26,14 @@ pub struct DirectoriesResult {
     pub count2: u32,
 }
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, golem_rust::IntoWire, Serialize, Deserialize)]
 pub struct FileWriteReadDeleteResult {
     pub read_nonexisting: Option<String>,
     pub read_existing: Option<String>,
     pub read_after_delete: Option<String>,
 }
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, golem_rust::IntoWire, Serialize, Deserialize)]
 pub struct FileTimestamps {
     pub modified_secs: u64,
     pub modified_nanos: u32,
@@ -41,7 +41,7 @@ pub struct FileTimestamps {
     pub accessed_nanos: u32,
 }
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(Clone, IntoSchema, FromSchema, golem_rust::IntoWire, Serialize, Deserialize)]
 pub struct HashResult {
     pub upper: u64,
     pub lower: u64,
