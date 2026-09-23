@@ -1,0 +1,15 @@
+[workspace]
+members = ["empty", "non-reflective", "reflection"]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+
+[workspace.dependencies]
+golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"

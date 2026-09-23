@@ -43,6 +43,8 @@ fn durable_agents_generate_getters() {
 
     assert!(rendered.contains("pub fn get ("));
     assert!(rendered.contains("get_with_config"));
+    assert!(!rendered.contains("get_agent_type"));
+    assert!(!rendered.contains("component_id"));
 }
 
 #[test]

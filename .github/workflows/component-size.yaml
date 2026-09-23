@@ -36,6 +36,21 @@ jobs:
           echo /tmp/binaryen-version_123/bin >> "$GITHUB_PATH"
       - name: Test binary accounting and rebundling
         run: python3 -m unittest discover -s test-components/size-analysis -v
+      - name: Build reflection retention fixtures
+        run: |
+          for package in retention-empty retention-non-reflective retention-reflection; do
+            python3 test-components/size-analysis/analyze.py \
+              --manifest test-components/size-analysis/fixtures/Cargo.toml \
+              --package "$package" \
+              --out "tmp/$package"
+          done
+      - name: Check reflection retention contracts
+        run: |
+          python3 test-components/size-analysis/retention.py \
+            --negative empty=tmp/retention-empty/current/component.wasm \
+            --negative tool=tmp/retention-non-reflective/current/component.wasm \
+            --positive reflection=tmp/retention-reflection/current/component.wasm \
+            --out tmp/reflection-retention.json
       - name: Build and report independent release choices
         run: |
           python3 test-components/size-analysis/analyze.py \
@@ -55,6 +70,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: component-size-${{ github.sha }}
-          path: tmp/component-size
+          path: |
+            tmp/component-size
+            tmp/retention-*
+            tmp/reflection-retention.json
           retention-days: 14
           if-no-files-found: warn

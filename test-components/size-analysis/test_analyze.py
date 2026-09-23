@@ -17,6 +17,7 @@ from analyze import (
     sections,
     u32,
 )
+from retention import PENDING_B_SYMBOLS, evaluate_retention
 
 
 def section(kind, payload):
@@ -115,6 +116,96 @@ class BinaryTests(unittest.TestCase):
                 dict(json.loads((directory / "crate-estimates.json").read_text())),
                 {"golem_rust": 92, "core": 41, "[unattributed]": 103},
             )
+
+    def test_retention_contract_separates_current_and_option_b_expectations(self):
+        report = evaluate_retention(
+            {
+                "tool": {
+                    "wat": '(import "golem:agent/host" "make-agent-id")',
+                    "symbols": "\n".join(PENDING_B_SYMBOLS),
+                }
+            },
+            {
+                "reflection": {
+                    "wat": '(import "golem:agent/host" "get-agent-type")',
+                    "symbols": "retention_reflection::has_agent_type",
+                }
+            },
+        )
+        self.assertEqual(
+            report["negative"]["tool"]["pendingOptionBSymbolsStillRetained"],
+            list(PENDING_B_SYMBOLS),
+        )
+        self.assertEqual(
+            report["positive"]["reflection"]["expectedReflectionImports"],
+            ["get-agent-type"],
+        )
+
+    def test_retention_contract_rejects_wrong_fixture_polarity(self):
+        with self.assertRaisesRegex(AssertionError, "retains reflection imports"):
+            evaluate_retention(
+                {
+                    "tool": {
+                        "wat": '(import "golem:tool/host" "get-tool-type" (func))',
+                        "symbols": "",
+                    }
+                },
+                {
+                    "reflection": {
+                        "wat": '(import "golem:agent/host" "get-agent-type" (func))',
+                        "symbols": "has_agent_type",
+                    }
+                },
+            )
+        with self.assertRaisesRegex(AssertionError, "does not retain get-agent-type"):
+            evaluate_retention(
+                {"tool": {"wat": "", "symbols": ""}},
+                {"reflection": {"wat": "", "symbols": ""}},
+            )
+        with self.assertRaisesRegex(AssertionError, "retains option B symbols"):
+            evaluate_retention(
+                {"tool": {"wat": "", "symbols": "regex_automata::dfa"}},
+                {
+                    "reflection": {
+                        "wat": '(import "golem:agent/host" "get-agent-type" (func))',
+                        "symbols": "has_agent_type",
+                    }
+                },
+                enforce_option_b=True,
+            )
+
+        report = evaluate_retention(
+            {
+                "tool": {
+                    "wat": '(module (func (export "get-agent-type")))',
+                    "symbols": "",
+                }
+            },
+            {
+                "reflection": {
+                    "wat": '(module (import "golem:agent/host" "get-agent-type" (func)))',
+                    "symbols": "has_agent_type",
+                }
+            },
+        )
+        self.assertEqual(report["negative"]["tool"]["forbiddenReflectionImports"], [])
+
+    def test_retention_contract_ignores_same_named_imports_from_unrelated_interfaces(self):
+        report = evaluate_retention(
+            {
+                "tool": {
+                    "wat": '(module (import "example:unrelated/host" "get-agent-type" (func)))',
+                    "symbols": "",
+                }
+            },
+            {
+                "reflection": {
+                    "wat": '(module (import "golem:agent/host" "get-agent-type" (func)))',
+                    "symbols": "has_agent_type",
+                }
+            },
+        )
+        self.assertEqual(report["negative"]["tool"]["forbiddenReflectionImports"], [])
 
 
 if __name__ == "__main__":

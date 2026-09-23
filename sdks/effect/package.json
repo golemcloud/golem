@@ -1,6 +1,9 @@
 {
   "name": "@golemcloud/effect-golem",
   "version": "0.0.0",
+  "sideEffects": [
+    "./test/fixtures/**"
+  ],
   "publishConfig": {
     "access": "public"
   },

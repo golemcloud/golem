@@ -1,6 +1,21 @@
 {
   "name": "@golemcloud/golem-ts-sdk",
   "type": "module",
+  "sideEffects": [
+    "./dist/index.mjs",
+    "./dist/runtime/index.mjs",
+    "./dist/runtime/middleware.mjs",
+    "./dist/runtime/schema/arktype.mjs",
+    "./dist/runtime/schema/effect.mjs",
+    "./dist/runtime/schema/valibot.mjs",
+    "./dist/runtime/schema/zod.mjs",
+    "./src/index.ts",
+    "./src/schema/arktype.ts",
+    "./src/schema/effect.ts",
+    "./src/schema/valibot.ts",
+    "./src/schema/zod.ts",
+    "./tests/components/**"
+  ],
   "version": "0.0.0",
   "publishConfig": {
     "access": "public"

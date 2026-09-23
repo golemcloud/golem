@@ -8,9 +8,12 @@ import type { RemoteCallError } from "./Client.js"
 import { DurabilityModeClient } from "./host/DurabilityModeClient.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { RpcClient, type RpcConnection } from "./host/RpcClient.js"
+import { AgentIdentityError } from "./internal/agentIdentityError.js"
 import { dynamicMethod } from "./internal/dynamicMethod.js"
 import { wrapHostThrow } from "./internal/rpc.js"
 import { SchemaRef, SchemaRenderError, type JsonValue } from "./SchemaRef.js"
+
+export { AgentIdentityError } from "./internal/agentIdentityError.js"
 
 /** A reflected method and its concrete input/output schema roots. @since 1.6.0 @category models */
 export interface AgentMethod {
@@ -42,12 +45,6 @@ export class UnknownMethodError {
     readonly agentType: string,
     readonly method: string,
   ) {}
-}
-
-/** The host rejected construction of an agent identity. @since 1.6.0 @category errors */
-export class AgentIdentityError {
-  readonly _tag = "AgentIdentityError"
-  constructor(readonly cause: unknown) {}
 }
 
 /** Result and host invocation metadata returned by reflected calls. @since 1.6.0 @category models */

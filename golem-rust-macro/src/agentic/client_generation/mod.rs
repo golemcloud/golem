@@ -70,8 +70,6 @@ pub fn get_remote_client(
     let phantom_id_param_ident = fresh_param_ident(&constructor_param_idents, "phantom_id");
     let rpc_config_params_ident =
         fresh_param_ident(&constructor_param_idents, "__golem_rpc_config_params");
-    let remote_agent_type_ident =
-        fresh_param_ident(&constructor_param_idents, "__golem_agent_type");
     let phantom_uuid_ident = fresh_param_ident(&constructor_param_idents, "phantom_uuid");
     let constructor_value_ident = fresh_param_ident(&constructor_param_idents, "constructor_value");
     let agent_id_ident = fresh_param_ident(&constructor_param_idents, "agent_id");
@@ -110,10 +108,6 @@ pub fn get_remote_client(
 
                 #prelude
 
-                let #remote_agent_type_ident =
-                    golem_rust::golem_agentic::golem::agent::host::get_agent_type(#type_name)
-                        .expect("Internal Error: Agent type not registered");
-
                 let #agent_id_ident = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                     #type_name,
                     golem_rust::encode_schema_value(&#constructor_value_ident)
@@ -133,7 +127,6 @@ pub fn get_remote_client(
                 #remote_client_type_name {
                     agent_id: #agent_id_ident,
                     phantom_id: #phantom_struct,
-                    component_id: #remote_agent_type_ident.implemented_by,
                     wasm_rpc,
                 }
             }
@@ -264,7 +257,6 @@ pub fn get_remote_client(
         quote! {
             agent_id: String,
             phantom_id: Option<golem_rust::Uuid>,
-            component_id: golem_rust::schema::wit::wire::ComponentId,
         }
     });
     let get_phantom_impl = agent_is_durable.then(|| quote! {

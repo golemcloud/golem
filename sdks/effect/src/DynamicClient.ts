@@ -5,11 +5,11 @@ import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { RemoteCallError } from "./Client.js"
 import { AgentHostClient } from "./host/AgentHostClient.js"
 import { RpcClient } from "./host/RpcClient.js"
+import { AgentIdentityError } from "./internal/agentIdentityError.js"
 import { dynamicMethod } from "./internal/dynamicMethod.js"
 import { wrapHostThrow } from "./internal/rpc.js"
-import { AgentIdentityError } from "./Reflection.js"
 
-export { AgentIdentityError }
+export { AgentIdentityError } from "./internal/agentIdentityError.js"
 
 /** @since 1.6.0 @category models */
 export interface DynamicInvocation {
