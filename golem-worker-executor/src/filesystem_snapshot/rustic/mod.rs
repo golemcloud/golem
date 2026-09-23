@@ -604,24 +604,31 @@ fn forget(
 }
 
 /// Opens the repository, or makes it when the scope has none.
+///
+/// When another writer makes the config file of the repository first, the call opens the
+/// repository of that writer.
 fn open_or_create(
     backend: Arc<BlobBackend>,
     key: &RepositoryKey,
     settings: &RepositorySettings,
 ) -> RusticResult<(RusticRepository<OpenStatus>, OperationPhase)> {
-    let repository = unopened(backend)?;
+    let repository = unopened(backend.clone())?;
     let credentials = Credentials::Masterkey(key.master_key());
     match repository.config_id()? {
         Some(_) => repository
             .open(&credentials)
             .map(|repository| (repository, OperationPhase::Open)),
-        None => repository
-            .init(
-                &credentials,
-                &KeyOptions::default(),
-                &config_options(settings),
-            )
-            .map(|repository| (repository, OperationPhase::Create)),
+        None => match repository.init(
+            &credentials,
+            &KeyOptions::default(),
+            &config_options(settings),
+        ) {
+            Ok(repository) => Ok((repository, OperationPhase::Create)),
+            Err(error) if fault::is_config_exists(&*error) => unopened(backend)?
+                .open(&credentials)
+                .map(|repository| (repository, OperationPhase::Open)),
+            Err(error) => Err(error),
+        },
     }
 }
 
