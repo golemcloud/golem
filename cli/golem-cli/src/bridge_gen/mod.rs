@@ -27,6 +27,7 @@
 //! `AnalysedType` / `IntoValue` / `FromValue` surface.
 
 pub mod effect;
+pub mod go;
 pub mod moonbit;
 pub mod parameter_naming;
 pub mod rust;
