@@ -820,6 +820,7 @@ async fn publication_waits_until_admitted_session_lock_is_released() {
                             Ok::<(), StreamStoreError>(())
                         })
                         .await?;
+                    admission.wait_published().await?;
                     written.send(()).unwrap();
                     Ok::<(), StreamStoreError>(())
                 })
@@ -842,6 +843,75 @@ async fn publication_waits_until_admitted_session_lock_is_released() {
         }
         published.send(Ok(())).unwrap();
         operation.await.unwrap().unwrap();
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn guarded_publication_wait_survives_caller_cancellation_after_submit() {
+    for fail_write in [false, true] {
+        let identity = identity();
+        let release = Arc::new(Notify::new());
+        let folded = Arc::new(AtomicBool::new(false));
+        let commit: DurableStreamCommit = Arc::new({
+            let release = release.clone();
+            let folded = folded.clone();
+            move |receipt| {
+                let release = release.clone();
+                let folded = folded.clone();
+                Box::pin(async move {
+                    receipt.unwrap().send(()).unwrap();
+                    release.notified().await;
+                    folded.store(true, Ordering::Release);
+                })
+            }
+        });
+        let live = DurableStreamStore::load_with_commit(
+            Arc::new(TestOplog::default()),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let lock = live.session_lock(&identity.invocation);
+        let (written, write_done) = oneshot::channel();
+        let caller = tokio::spawn({
+            let live = live.clone();
+            let lock = lock.clone();
+            async move {
+                live.run_admitted(None, 0, true, move |_, admission| async move {
+                    let _guard = lock.lock().await;
+                    let outcome = admission
+                        .submit(move |owner, context| async move {
+                            owner.commit(&context).await;
+                            context.finish_durable_effect();
+                            if fail_write {
+                                Err(StreamStoreError::Oplog("write failed after commit".into()))
+                            } else {
+                                Ok(())
+                            }
+                        })
+                        .await;
+                    written.send(()).unwrap();
+                    admission.wait_published().await?;
+                    outcome
+                })
+                .await
+            }
+        });
+        write_done.await.unwrap();
+        assert!(!folded.load(Ordering::Acquire));
+        assert!(lock.try_lock().is_err());
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        assert!(lock.try_lock().is_err());
+        release.notify_one();
+        let _guard = lock.lock().await;
+        assert!(folded.load(Ordering::Acquire));
+        live.wait_durable_drained().await;
     }
 }
 

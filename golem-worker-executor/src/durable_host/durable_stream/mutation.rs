@@ -106,6 +106,32 @@ impl StreamWriteAdmission {
         self.producer.submit(self.clone(), operation).await
     }
 
+    /// Joins status publication for the submissions captured by this call, not live delivery.
+    /// The sequential admitted orchestration must await this outside its write bodies, without
+    /// cancellation or another concurrent drainer. The finalizer joins any remaining submissions.
+    pub(crate) async fn wait_published(&self) -> Result<(), StreamStoreError> {
+        let receipts = std::mem::take(
+            &mut *self
+                .status_receipts
+                .lock()
+                .expect("status receipt list lock poisoned"),
+        );
+        let mut failure = None;
+        for receipt in receipts {
+            if let Err(error) = receipt
+                .await
+                .unwrap_or(Err(StreamStoreError::RecoveryRequired))
+            {
+                self.producer.poison();
+                failure = Some(error);
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     /// Defers live delivery until the operation has released its session lock.
     pub(crate) fn defer_publication(&self, publication: PublicationReceipt) {
         self.publications
@@ -429,20 +455,8 @@ impl DurableStreamStore {
                         )
                     }
                 };
-                let status_receipts = std::mem::take(
-                    &mut *admission
-                        .status_receipts
-                        .lock()
-                        .expect("status receipt list lock poisoned"),
-                );
-                for receipt in status_receipts {
-                    if let Err(error) = receipt
-                        .await
-                        .unwrap_or(Err(StreamStoreError::RecoveryRequired))
-                    {
-                        producer.poison();
-                        outcome = Err(error.into());
-                    }
+                if let Err(error) = admission.wait_published().await {
+                    outcome = Err(error.into());
                 }
                 let mut publications = std::mem::take(
                     &mut *admission
@@ -532,7 +546,7 @@ impl DurableStreamStore {
                     }
                 };
                 let _ = reply.send(outcome);
-                // The session lock covers the write body, not status publication.
+                // Guarded orchestration can join this completion before releasing its session lock.
                 MutationCompletion {
                     finish: async move {
                         let mut status = Ok(());
@@ -597,5 +611,51 @@ impl DurableStreamStore {
     ) {
         self.commit(context).await;
         let _ = committed.send(());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable_host::durable_stream::tests::{TestOplog, identity};
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("30s")]
+    async fn publication_failure_joins_remaining_receipts_before_returning() {
+        let identity = identity();
+        let producer = DurableStreamStore::load(
+            Arc::new(TestOplog::default()),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        producer
+            .run_admitted(None, 0, true, move |owner, admission| async move {
+                let (failed, failure) = oneshot::channel();
+                let (completed, completion) = oneshot::channel();
+                admission
+                    .status_receipts
+                    .lock()
+                    .unwrap()
+                    .extend([failure, completion]);
+                let expected = StreamStoreError::Oplog("status publication failed".into());
+                failed.send(Err(expected.clone())).unwrap();
+                let waiting = admission.wait_published();
+                tokio::pin!(waiting);
+                assert!(futures::poll!(waiting.as_mut()).is_pending());
+                assert_eq!(
+                    owner.ensure_healthy(),
+                    Err(StreamStoreError::RecoveryRequired)
+                );
+                completed.send(Ok(())).unwrap();
+                assert_eq!(waiting.await, Err(expected));
+                Ok::<(), StreamStoreError>(())
+            })
+            .await
+            .unwrap();
     }
 }

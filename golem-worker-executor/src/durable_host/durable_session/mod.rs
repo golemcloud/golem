@@ -4042,7 +4042,7 @@ impl StreamSession {
                 let _session_guard = session.session_lock.lock().await;
                 session.validate_topology_complete().await?;
                 let session_for_write = session.clone();
-                admission
+                let outcome = admission
                     .submit(move |owner, context| async move {
                         owner
                             .finish_session(
@@ -4055,7 +4055,12 @@ impl StreamSession {
                             .await
                             .map_err(|error| error.to_string())
                     })
+                    .await;
+                admission
+                    .wait_published()
                     .await
+                    .map_err(|error| error.to_string())?;
+                outcome
             })
             .await;
         match outcome {
