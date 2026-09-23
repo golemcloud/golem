@@ -99,7 +99,10 @@ export function fromCanonicalJson(
       return {
         tag: 'record',
         fields: body.fields.map((field) => {
-          if (!(field.name in object)) fail([...path, field.name], 'missing field');
+          if (!(field.name in object)) {
+            if (resolve(graph, field.body).body.tag === 'option') return { tag: 'option' };
+            fail([...path, field.name], 'missing field');
+          }
           return fromCanonicalJson(graph, field.body, object[field.name], [...path, field.name]);
         }),
       };
@@ -233,6 +236,7 @@ export function toCanonicalJson(
     fail(path, `expected ${body.tag} schema value, found ${value.tag}`);
   switch (value.tag) {
     case 'bool':
+      return value.value;
     case 's8':
     case 's16':
     case 's32':
@@ -570,7 +574,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
             attachMetadata(renderSchema(graph, field.body), field.metadata),
           ]),
         ),
-        required: body.fields.map((field) => field.name),
+        required: body.fields
+          .filter((field) => resolve(graph, field.body).body.tag !== 'option')
+          .map((field) => field.name),
         additionalProperties: false,
       };
       break;
@@ -658,11 +664,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
     case 'secret':
     case 'quota-token':
     case 'permission-card':
-      rendered = { writeOnly: true, 'x-golem-capability': body.tag };
-      break;
     case 'future':
     case 'stream':
-      rendered = { type: 'null', description: 'WASI P3 placeholder' };
+      rendered = { not: {} };
       break;
   }
   return attachMetadata(rendered, type.metadata);

@@ -28,9 +28,9 @@ function schema(root: SchemaGraph['root']): SchemaRef {
 }
 
 describe('SchemaRef canonical JSON', () => {
-  it('requires an explicit null for an absent option in a record', () => {
+  it('decodes omitted and explicit-null option fields as absent', () => {
     const ref = schema(t.record([field('maybe', t.option(t.string()))]));
-    expect(ref.validateJson({}).success).toBe(false);
+    expect(ref.packJson({})).toEqual(v.record([v.option()]));
     expect(ref.packJson({ maybe: null })).toEqual(v.record([v.option()]));
   });
 
@@ -162,7 +162,7 @@ describe('SchemaRef JSON Schema', () => {
             name: { type: 'string', description: 'Display name', examples: ['Ada'] },
             nickname: { oneOf: [{ type: 'null' }, { type: 'string' }] },
           },
-          required: ['name', 'nickname'],
+          required: ['name'],
           additionalProperties: false,
         },
       },
@@ -225,5 +225,17 @@ describe('SchemaRef JSON Schema', () => {
       'x-golem-minimum': '0',
       'x-golem-maximum': '18446744073709551615',
     });
+  });
+
+  it('makes reflection-only unsupported leaves unsatisfiable', () => {
+    for (const type of [
+      t.secret(t.string()),
+      t.quotaToken({}),
+      t.permissionCard({ polymorphic: false }),
+      schemaType({ tag: 'future', element: t.string() }),
+      t.stream(t.string()),
+    ]) {
+      expect(schema(type).toJsonSchema()).toMatchObject({ not: {} });
+    }
   });
 });

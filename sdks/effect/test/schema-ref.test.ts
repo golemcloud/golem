@@ -35,7 +35,7 @@ describe("SchemaRef", () => {
     })
   })
 
-  it("renders numeric restrictions and required nullable fields", () => {
+  it("renders numeric restrictions and optional nullable fields", () => {
     const schema = ref(
       t.record([
         field(
@@ -46,10 +46,10 @@ describe("SchemaRef", () => {
       ]),
     )
     expect(schema.toJsonSchema()).toMatchObject({
-      required: ["bounded", "nullable"],
+      required: ["bounded"],
       properties: { bounded: { type: "integer", minimum: 10, maximum: 20 } },
     })
-    expect(schema.validateJson({ bounded: 15 }).success).toBe(false)
+    expect(schema.validateJson({ bounded: 15 }).success).toBe(true)
     expect(schema.validateJson({ bounded: 15, nullable: null }).success).toBe(true)
     for (const numeric of [t.f32, t.f64]) {
       expect(
@@ -188,6 +188,18 @@ describe("SchemaRef", () => {
       "x-golem-minimum": "0",
       "x-golem-maximum": "18446744073709551615",
     })
+  })
+
+  it("makes reflection-only unsupported leaves unsatisfiable", () => {
+    for (const type of [
+      t.secret(t.string()),
+      t.quotaToken({}),
+      t.permissionCard({ polymorphic: false }),
+      t.future(t.string()),
+      t.stream(t.string()),
+    ]) {
+      expect(ref(type).toJsonSchema()).toMatchObject({ not: {} })
+    }
   })
 
   it("distinguishes native float membership from canonical JSON representability", () => {
