@@ -174,6 +174,7 @@ impl McpImportsApi {
                 diagnostics: preview
                     .diagnostics
                     .into_iter()
+                    .chain(preview.filtered)
                     .map(|(index, diagnostic)| McpResolvedDiagnostic {
                         import_index: index as u32,
                         upstream_name: diagnostic.upstream_name,

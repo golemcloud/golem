@@ -769,6 +769,31 @@ async fn preview_before_deployment_paginates_merges_and_does_not_cache() {
         .unwrap();
     assert_eq!(fresh.tools[0].1.definition.name().unwrap(), "p-changed");
     assert_eq!(upstream.count(), 4);
+
+    upstream.reply(
+        200,
+        json!({"tools":[tool("visible"),tool("does_not_exist_in_client_request")]}),
+    );
+    let filtered = resolver
+        .preview(
+            fixture.source.environment_id,
+            vec![McpImportDeployment {
+                prefix: Some("p".into()),
+                include: Some(vec!["visible".into()]),
+                ..declaration(&upstream.url)
+            }],
+            vec![],
+            AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    assert_eq!(filtered.tools.len(), 1);
+    assert_eq!(filtered.filtered.len(), 1);
+    assert_eq!(
+        filtered.filtered[0].1.upstream_name,
+        "does_not_exist_in_client_request"
+    );
+    assert_eq!(upstream.count(), 5);
     assert!(
         fixture
             .services

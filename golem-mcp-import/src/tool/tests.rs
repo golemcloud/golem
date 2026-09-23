@@ -40,6 +40,15 @@ fn filtering_collision_exclusions_and_precedence() {
     .unwrap();
     assert_eq!(names(&batch), vec!["fs-read-file"]);
     assert_eq!(batch.diagnostics.len(), 2);
+    assert_eq!(batch.filtered.len(), 1);
+    assert_eq!(batch.filtered[0].upstream_name, "write_file");
+    assert!(is_filter_rejection(&batch.filtered[0].reason));
+    assert!(
+        batch
+            .filtered
+            .iter()
+            .all(|diagnostic| diagnostic.upstream_name != "does-not-exist")
+    );
     assert!(
         batch
             .diagnostics
@@ -77,6 +86,19 @@ fn filtering_collision_exclusions_and_precedence() {
             .map(|(i, d)| (*i, d.upstream_name.as_str()))
             .collect::<Vec<_>>(),
         vec![(0, "native"), (1, "shared")]
+    );
+
+    assert_eq!(
+        filter_rejection("read-file", Some(&["get-*".into()]), None),
+        Some("not selected by the import's include filter")
+    );
+    assert_eq!(
+        filter_rejection("write-file", None, Some(&["write-*".into()])),
+        Some("excluded by the import's exclude filter")
+    );
+    assert_eq!(
+        filter_rejection("read-file", Some(&["read-*".into()]), None),
+        None
     );
 }
 

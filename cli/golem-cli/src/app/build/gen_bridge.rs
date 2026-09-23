@@ -1,7 +1,7 @@
 use crate::app::build::extract_component_metadata::extract_and_store_component_metadata;
 use crate::app::build::task_result_marker::GenerateBridgeSdkMarkerHash;
 use crate::app::build::up_to_date_check::new_task_up_to_date_check;
-use crate::app::context::BuildContext;
+use crate::app::context::{BuildContext, ResolvedEnvironmentTool};
 use crate::bridge_gen::effect::effect_external::EffectExternalBridgeGenerator;
 use crate::bridge_gen::effect::effect_guest::EffectGuestBridgeGenerator;
 use crate::bridge_gen::effect::effect_tool::EffectToolBridgeGenerator;
@@ -651,6 +651,7 @@ async fn collect_tool_manifest_targets_for_entry(
         let mut tools = extract_and_store_component_metadata(ctx, component_name)
             .await?
             .tools;
+        validate_no_ambient_tool_collisions(ctx, component_name, &tools)?;
 
         collect_local_tool_manifest_targets_for_component(
             ctx.application(),
@@ -665,35 +666,44 @@ async fn collect_tool_manifest_targets_for_entry(
         )?;
     }
 
-    for imported in ctx.mcp_tools() {
-        let name = imported.definition.name().context("MCP tool has no name")?;
+    let environment_tool_names = ctx
+        .ambient_tools()
+        .iter()
+        .map(|tool| tool.name.to_string())
+        .chain(
+            ctx.mcp_tools()
+                .iter()
+                .map(|tool| {
+                    tool.definition
+                        .name()
+                        .context("MCP tool has no name")
+                        .map(ToString::to_string)
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        )
+        .collect::<BTreeSet<_>>();
+    for name in environment_tool_names {
         if ctx
             .application()
             .tool_declarations()
             .keys()
-            .any(|declared| declared.as_str() == name)
+            .any(|declared| declared.as_str() == name.as_str())
         {
             continue;
         }
-        let is_matching_name = matchers.remove(name);
+        let is_matching_name = matchers.remove(&name);
         if !is_matching_all && !is_matching_name {
             continue;
         }
-        targets.push(BridgeSdkTarget {
-            source: BridgeSdkTargetSource::McpImport {
-                import_index: imported.import_index,
-                projection_digest: imported.digest.clone(),
-                manifest_source: ctx
-                    .application()
-                    .mcp_imports_source(ctx.application().environment_name())
-                    .context("MCP imports have no declaring manifest")?
-                    .to_path_buf(),
-            },
-            subject: BridgeSdkTargetSubject::Tool(imported.definition.clone()),
+        let tool_name = ToolName::try_from(name.as_str()).map_err(anyhow::Error::msg)?;
+        targets.push(environment_tool_bridge_target(
+            ctx,
+            &tool_name,
             target_language,
             bridge_mode,
-            output_dir: ctx.application().tool_bridge_sdk_dir(name, target_language),
-        });
+            ctx.application()
+                .tool_bridge_sdk_dir(&name, target_language),
+        )?);
     }
 
     if !ignore_unmatched_matchers && !matchers.is_empty() {
@@ -705,6 +715,14 @@ async fn collect_tool_manifest_targets_for_entry(
     }
 
     if !ignore_unmatched_matchers && !matchers.is_empty() {
+        for matcher in &matchers {
+            let Ok(name) = ToolName::try_from(matcher.as_str()) else {
+                continue;
+            };
+            if ctx.environment_tool_diagnostic(&name).is_some() {
+                ctx.environment_tool(&name)?;
+            }
+        }
         logln("");
         log_error(format!(
             "The following tool matchers were not found during {} bridge SDK generation: {}",
@@ -827,6 +845,7 @@ async fn collect_dependency_guest_bridge_targets(
         }
 
         let metadata = extract_and_store_component_metadata(ctx, component_name).await?;
+        validate_no_ambient_tool_collisions(ctx, component_name, &metadata.tools)?;
         for agent_type in &metadata.agent_types {
             let dependency = ComponentDependency::Agent {
                 component_name: component_name.clone(),
@@ -960,7 +979,7 @@ async fn collect_dependency_guest_bridge_targets(
             matches!(
                 dependency,
                 ComponentDependency::Tool {
-                    source: crate::model::app::SubjectSource::McpImport,
+                    source: crate::model::app::SubjectSource::EnvironmentTool,
                     ..
                 }
             )
@@ -970,33 +989,93 @@ async fn collect_dependency_guest_bridge_targets(
         let ComponentDependency::Tool { tool_name, .. } = &dependency else {
             unreachable!()
         };
-        let imported = ctx.mcp_tool(tool_name)?;
         for target_language in dependency_guest_bridge_target_languages(
             ctx,
             &dependency,
             selection_scope_component_names,
         ) {
-            targets.push(BridgeSdkTarget {
-                source: BridgeSdkTargetSource::McpImport {
-                    import_index: imported.import_index,
-                    projection_digest: imported.digest.clone(),
-                    manifest_source: ctx
-                        .application()
-                        .mcp_imports_source(ctx.application().environment_name())
-                        .context("MCP imports have no declaring manifest")?
-                        .to_path_buf(),
-                },
-                subject: BridgeSdkTargetSubject::Tool(imported.definition.clone()),
+            targets.push(environment_tool_bridge_target(
+                ctx,
+                tool_name,
                 target_language,
-                bridge_mode: BridgeMode::Guest,
-                output_dir: ctx
-                    .application()
+                BridgeMode::Guest,
+                ctx.application()
                     .dependency_tool_bridge_sdk_dir(tool_name.as_str(), target_language),
-            });
+            )?);
         }
     }
 
     Ok(targets)
+}
+
+pub(crate) fn validate_no_ambient_tool_collisions(
+    ctx: &BuildContext<'_>,
+    component_name: &ComponentName,
+    tools: &[golem_common::schema::tool::Tool],
+) -> anyhow::Result<()> {
+    let ambient_names = ctx
+        .ambient_tools()
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<BTreeSet<_>>();
+    for tool in tools {
+        if let Some(name) = tool.name()
+            && ambient_names.contains(name)
+        {
+            bail!(
+                "Tool '{name}' is provided both by ambient native metadata and component '{component_name}'"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn environment_tool_bridge_target(
+    ctx: &BuildContext<'_>,
+    tool_name: &ToolName,
+    target_language: GuestLanguage,
+    bridge_mode: BridgeMode,
+    output_dir: std::path::PathBuf,
+) -> anyhow::Result<BridgeSdkTarget> {
+    let (source, definition) = match ctx.environment_tool(tool_name)? {
+        ResolvedEnvironmentTool::Ambient(tool) => (
+            BridgeSdkTargetSource::AmbientNative {
+                environment_id: ctx
+                    .environment_tools_id()
+                    .context("Ambient tool metadata has no selected environment identity")?,
+                release_id: tool.release_id,
+                version: tool.version.0.clone(),
+                metadata_version: tool.metadata_version.0.clone(),
+                metadata_digest: tool.metadata_digest,
+                source_digest: tool.source_digest,
+                manifest_source: ctx
+                    .application()
+                    .selected_environment_source()
+                    .context("Selected environment has no declaring manifest")?
+                    .to_path_buf(),
+            },
+            tool.definition.clone(),
+        ),
+        ResolvedEnvironmentTool::Mcp(tool) => (
+            BridgeSdkTargetSource::McpImport {
+                import_index: tool.import_index,
+                projection_digest: tool.digest.clone(),
+                manifest_source: ctx
+                    .application()
+                    .mcp_imports_source(ctx.application().environment_name())
+                    .context("MCP imports have no declaring manifest")?
+                    .to_path_buf(),
+            },
+            tool.definition.clone(),
+        ),
+    };
+    Ok(BridgeSdkTarget {
+        source,
+        subject: BridgeSdkTargetSubject::Tool(definition),
+        target_language,
+        bridge_mode,
+        output_dir,
+    })
 }
 
 fn dependency_guest_bridge_target_languages(
@@ -1119,6 +1198,9 @@ async fn gen_bridge_sdk_target(
         }
         | BridgeSdkTargetSource::McpImport {
             manifest_source, ..
+        }
+        | BridgeSdkTargetSource::AmbientNative {
+            manifest_source, ..
         } => manifest_source.clone(),
     };
     let target_name = target.subject.display_name().to_string();
@@ -1127,6 +1209,7 @@ async fn gen_bridge_sdk_target(
 
     new_task_up_to_date_check(ctx)
         .with_task_result_marker(GenerateBridgeSdkMarkerHash {
+            output_dir: output_dir.as_std_path(),
             source: &target.source,
             target_name: &target_name,
             kind: target_kind,
@@ -1376,7 +1459,14 @@ tools:
             digest: format!("{name}-digest"),
             definition: tool(name),
         });
-        let ctx = BuildContext::new(&app_ctx, &build_config).with_mcp_tools(&tools);
+        let environment_tools = crate::app::context::ResolvedEnvironmentTools {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            ambient_tools: vec![ambient_tool("clock")],
+            mcp_tools: tools.into(),
+            mcp_diagnostics: Vec::new(),
+        };
+        let ctx =
+            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
         let mut targets = vec![BridgeSdkTarget {
             source: BridgeSdkTargetSource::local(ComponentName("app:second".into())),
             subject: BridgeSdkTargetSubject::Tool(tool("echo")),
@@ -1402,7 +1492,7 @@ tools:
             .await
             .unwrap();
         }
-        assert_eq!(targets.len(), 6);
+        assert_eq!(targets.len(), 11);
         assert!(matches!(
             targets[0].source,
             BridgeSdkTargetSource::Local { .. }
@@ -1414,15 +1504,30 @@ tools:
                 .map(|target| target.subject.display_name())
                 .collect::<BTreeSet<_>>();
             let expected = if language == GuestLanguage::Rust {
-                BTreeSet::from(["echo", "search"])
+                BTreeSet::from(["clock", "echo", "search"])
             } else {
-                BTreeSet::from(["search"])
+                BTreeSet::from(["clock", "search"])
             };
             assert_eq!(names, expected);
         }
-        assert!(targets.iter().skip(1).all(|target| matches!(&target.source,
+        assert_eq!(
+            targets
+                .iter()
+                .filter(|target| matches!(
+                    target.source,
+                    BridgeSdkTargetSource::AmbientNative { .. }
+                ))
+                .count(),
+            GuestLanguage::iter().count()
+        );
+        assert!(
+            targets
+                .iter()
+                .filter(|target| target.subject.display_name() == "search")
+                .all(|target| matches!(&target.source,
             BridgeSdkTargetSource::McpImport { import_index: 2, projection_digest, manifest_source }
-                if projection_digest.ends_with("-digest") && manifest_source.is_file())));
+                if projection_digest.ends_with("-digest") && manifest_source.is_file()))
+        );
         let mut named = vec![];
         collect_tool_manifest_targets_for_entry(
             &ctx,
@@ -1456,6 +1561,216 @@ tools:
             .await
             .is_err()
         );
+    }
+
+    #[test]
+    async fn wildcard_does_not_duplicate_an_mcp_tool_shadowed_by_an_ambient_tool() {
+        let (application, _dir) = application_from_manifest(
+            r#"
+app: environment-tools
+environments:
+  local:
+    server: local
+mcp:
+  imports:
+    local:
+      - url: https://tools.example/mcp
+"#,
+        );
+        let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+        let build_config = crate::model::app::BuildConfig::default();
+        let environment_tools = crate::app::context::ResolvedEnvironmentTools {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            ambient_tools: vec![ambient_tool("search")],
+            mcp_tools: vec![golem_client::model::McpResolvedTool {
+                import_index: 1,
+                upstream_name: "upstream-search".into(),
+                digest: "projection-identity".into(),
+                definition: tool("search"),
+            }],
+            mcp_diagnostics: Vec::new(),
+        };
+        let ctx =
+            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+        let mut targets = Vec::new();
+
+        collect_tool_manifest_targets_for_entry(
+            &ctx,
+            &[],
+            &[],
+            BridgeMode::Guest,
+            GuestLanguage::Rust,
+            BTreeSet::from(["*".into()]),
+            &BTreeSet::new(),
+            false,
+            true,
+            &mut targets,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert!(matches!(
+            targets[0].source,
+            BridgeSdkTargetSource::AmbientNative { .. }
+        ));
+    }
+
+    #[test]
+    async fn explicit_environment_tool_request_reports_mcp_projection_diagnostic() {
+        let (application, _dir) = application_from_manifest(
+            r#"
+app: rejected-import
+environments:
+  local:
+    server: local
+mcp:
+  imports:
+    local:
+      - url: https://tools.example/mcp
+"#,
+        );
+        let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+        let build_config = crate::model::app::BuildConfig::default();
+        let environment_tools = crate::app::context::ResolvedEnvironmentTools {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            ambient_tools: Vec::new(),
+            mcp_tools: Vec::new(),
+            mcp_diagnostics: vec![crate::app::context::ResolvedMcpDiagnostic {
+                canonical_name: "acme-search-files".into(),
+                import_index: 2,
+                upstream_name: "Search Files".into(),
+                reason: "unsupported schema".into(),
+            }],
+        };
+        let ctx =
+            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+
+        let error = collect_tool_manifest_targets_for_entry(
+            &ctx,
+            &[],
+            &[],
+            BridgeMode::Guest,
+            GuestLanguage::Rust,
+            BTreeSet::from(["acme-search-files".into()]),
+            &BTreeSet::new(),
+            false,
+            true,
+            &mut Vec::new(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("acme-search-files"));
+        assert!(error.contains("MCP import 2"));
+        assert!(error.contains("Search Files"));
+        assert!(error.contains("unsupported schema"));
+    }
+
+    #[test]
+    fn discovered_local_and_ambient_tool_names_are_a_collision() {
+        let (application, _dir) = application_from_manifest(
+            r#"
+app: duplicate-tool
+environments:
+  local:
+    server: local
+components:
+  app:provider:
+    componentWasm: provider.wasm
+"#,
+        );
+        let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+        let build_config = crate::model::app::BuildConfig::default();
+        let environment_tools = crate::app::context::ResolvedEnvironmentTools {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            ambient_tools: vec![ambient_tool("search")],
+            mcp_tools: Vec::new(),
+            mcp_diagnostics: Vec::new(),
+        };
+        let ctx =
+            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+
+        let error = validate_no_ambient_tool_collisions(
+            &ctx,
+            &ComponentName("app:provider".into()),
+            &[tool("search")],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("both by ambient native metadata and component 'app:provider'"));
+    }
+
+    #[test]
+    fn ambient_middleware_and_provision_do_not_change_bridge_target_input() {
+        let (application, _dir) = application_from_manifest(
+            r#"
+app: middleware-transparent
+environments:
+  local:
+    server: local
+"#,
+        );
+        let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+        let build_config = crate::model::app::BuildConfig::default();
+        let environment_id = golem_common::model::environment::EnvironmentId::new();
+        let original = ambient_tool("search");
+        let mut configured = original.clone();
+        configured
+            .provision
+            .env
+            .insert("TOOL_MODE".into(), "configured".into());
+        configured.environment_binding.version = Some("deployment-only".into());
+        configured.environment_binding.middleware = Some(Vec::new());
+
+        let original_tools = crate::app::context::ResolvedEnvironmentTools {
+            environment_id,
+            ambient_tools: vec![original],
+            mcp_tools: Vec::new(),
+            mcp_diagnostics: Vec::new(),
+        };
+        let configured_tools = crate::app::context::ResolvedEnvironmentTools {
+            environment_id,
+            ambient_tools: vec![configured],
+            mcp_tools: Vec::new(),
+            mcp_diagnostics: Vec::new(),
+        };
+        let original_ctx =
+            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&original_tools);
+        let configured_ctx =
+            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&configured_tools);
+        let name = ToolName::try_from("search").unwrap();
+        let output_dir = app_ctx
+            .application()
+            .tool_bridge_sdk_dir("search", GuestLanguage::Rust);
+
+        let original_target = environment_tool_bridge_target(
+            &original_ctx,
+            &name,
+            GuestLanguage::Rust,
+            BridgeMode::Guest,
+            output_dir.clone(),
+        )
+        .unwrap();
+        let configured_target = environment_tool_bridge_target(
+            &configured_ctx,
+            &name,
+            GuestLanguage::Rust,
+            BridgeMode::Guest,
+            output_dir,
+        )
+        .unwrap();
+
+        assert_eq!(original_target.source, configured_target.source);
+        let (
+            BridgeSdkTargetSubject::Tool(original_definition),
+            BridgeSdkTargetSubject::Tool(configured_definition),
+        ) = (original_target.subject, configured_target.subject)
+        else {
+            panic!("ambient tool targets must contain tool definitions")
+        };
+        assert_eq!(original_definition, configured_definition);
     }
 
     #[test]
@@ -1494,14 +1809,25 @@ components:
             )
             .await
             .unwrap_err();
-            assert!(error.to_string().contains("MCP tool dependency 'search'"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("Environment tool dependency 'search'")
+            );
             let tools = [golem_client::model::McpResolvedTool {
                 import_index: 1,
                 upstream_name: "upstream-search".into(),
                 digest: "projection-identity".into(),
                 definition: tool("search"),
             }];
-            let ctx = BuildContext::new(&app_ctx, &build_config).with_mcp_tools(&tools);
+            let environment_tools = crate::app::context::ResolvedEnvironmentTools {
+                environment_id: golem_common::model::environment::EnvironmentId::new(),
+                ambient_tools: Vec::new(),
+                mcp_tools: tools.into(),
+                mcp_diagnostics: Vec::new(),
+            };
+            let ctx = BuildContext::new(&app_ctx, &build_config)
+                .with_environment_tools(&environment_tools);
             let plan =
                 plan_dependency_guest_bridge_generation_for_components_lenient(&ctx, &[], &scope)
                     .await
@@ -1515,6 +1841,58 @@ components:
                     .dependency_tool_bridge_sdk_dir("search", language)
             );
         }
+    }
+
+    #[test]
+    async fn ambient_tool_dependencies_use_resolved_environment_metadata() {
+        let (application, _dir) = application_from_manifest(
+            r#"
+app: ambient-tools
+environments:
+  local:
+    server: local
+componentTemplates:
+  rust-test:
+    componentWasm: consumer.wasm
+components:
+  app:consumer:
+    templates: rust-test
+    dependencies:
+      tools: [native-search]
+"#,
+        );
+        let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+        let build_config = crate::model::app::BuildConfig::default();
+        let environment_tools = crate::app::context::ResolvedEnvironmentTools {
+            environment_id: golem_common::model::environment::EnvironmentId::new(),
+            ambient_tools: vec![ambient_tool("native-search")],
+            mcp_tools: Vec::new(),
+            mcp_diagnostics: Vec::new(),
+        };
+        let ctx =
+            BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
+        let scope = [ComponentName("app:consumer".into())];
+
+        let plan =
+            plan_dependency_guest_bridge_generation_for_components_lenient(&ctx, &[], &scope)
+                .await
+                .unwrap();
+
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(plan.targets[0].subject.display_name(), "native-search");
+        assert!(matches!(
+            &plan.targets[0].source,
+            BridgeSdkTargetSource::AmbientNative {
+                environment_id,
+                version,
+                metadata_version,
+                manifest_source,
+                ..
+            } if *environment_id == environment_tools.environment_id
+                && version == "1.0.0"
+                && metadata_version == "1.0.0"
+                && manifest_source.is_file()
+        ));
     }
 
     #[test]
@@ -2006,6 +2384,24 @@ components:
                 }],
             },
             schema: SchemaGraph::empty(),
+        }
+    }
+
+    fn ambient_tool(name: &str) -> golem_common::model::deployment::DeploymentPlanAmbientToolEntry {
+        golem_common::model::deployment::DeploymentPlanAmbientToolEntry {
+            release_id: golem_common::model::tool_release::ToolReleaseId::new(),
+            name: ToolName::try_from(name).unwrap(),
+            version: golem_common::model::deployment::ToolVersion("1.0.0".into()),
+            source_digest: golem_common::model::diff::Hash::default(),
+            owner_account_id: golem_common::model::account::AccountId::new(),
+            owner_account_email: golem_common::model::account::AccountEmail::new(
+                "native@example.com",
+            ),
+            metadata_version: golem_common::model::deployment::ToolMetadataVersion("1.0.0".into()),
+            metadata_digest: golem_common::model::diff::Hash::default(),
+            definition: tool(name),
+            provision: golem_common::model::tool::ToolProvisionConfig::default(),
+            environment_binding: golem_common::model::tool::ToolBindingInput::default(),
         }
     }
 

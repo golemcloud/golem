@@ -42,7 +42,9 @@ use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
+use golem_common::model::deployment::DeploymentPlanAmbientToolEntry;
 use golem_common::model::diff;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment::EnvironmentName;
 use golem_common::model::environment_tool_grant::EnvironmentToolGrantWithDetails;
 use itertools::Itertools;
@@ -51,11 +53,33 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
+#[derive(Clone, Debug)]
+pub struct ResolvedMcpDiagnostic {
+    pub canonical_name: String,
+    pub import_index: u32,
+    pub upstream_name: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedEnvironmentTools {
+    pub environment_id: EnvironmentId,
+    pub ambient_tools: Vec<DeploymentPlanAmbientToolEntry>,
+    pub mcp_tools: Vec<golem_client::model::McpResolvedTool>,
+    pub mcp_diagnostics: Vec<ResolvedMcpDiagnostic>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ResolvedEnvironmentTool<'a> {
+    Ambient(&'a DeploymentPlanAmbientToolEntry),
+    Mcp(&'a golem_client::model::McpResolvedTool),
+}
+
 pub struct BuildContext<'a> {
     application_context: &'a ApplicationContext,
     build_config: &'a BuildConfig,
     resolved_tool_grants: Option<&'a ResolvedToolGrants>,
-    mcp_tools: &'a [golem_client::model::McpResolvedTool],
+    environment_tools: Option<&'a ResolvedEnvironmentTools>,
 }
 
 impl<'a> BuildContext<'a> {
@@ -64,7 +88,7 @@ impl<'a> BuildContext<'a> {
             application_context,
             build_config,
             resolved_tool_grants: None,
-            mcp_tools: &[],
+            environment_tools: None,
         }
     }
 
@@ -77,25 +101,66 @@ impl<'a> BuildContext<'a> {
             application_context,
             build_config,
             resolved_tool_grants: Some(resolved_tool_grants),
-            mcp_tools: &[],
+            environment_tools: None,
         }
     }
 
-    pub fn with_mcp_tools(mut self, tools: &'a [golem_client::model::McpResolvedTool]) -> Self {
-        self.mcp_tools = tools;
+    pub fn with_environment_tools(mut self, tools: &'a ResolvedEnvironmentTools) -> Self {
+        self.environment_tools = Some(tools);
         self
     }
 
     pub fn mcp_tools(&self) -> &[golem_client::model::McpResolvedTool] {
-        self.mcp_tools
+        self.environment_tools
+            .map(|tools| tools.mcp_tools.as_slice())
+            .unwrap_or_default()
     }
 
-    pub fn mcp_tool(
+    pub fn ambient_tools(&self) -> &[DeploymentPlanAmbientToolEntry] {
+        self.environment_tools
+            .map(|tools| tools.ambient_tools.as_slice())
+            .unwrap_or_default()
+    }
+
+    pub fn environment_tools_id(&self) -> Option<EnvironmentId> {
+        self.environment_tools.map(|tools| tools.environment_id)
+    }
+
+    pub fn environment_tool(
         &self,
         name: &golem_common::model::tool::ToolName,
-    ) -> anyhow::Result<&golem_client::model::McpResolvedTool> {
-        self.mcp_tools.iter().find(|tool| tool.definition.name() == Some(name.as_str()))
-            .ok_or_else(|| anyhow!("MCP tool dependency '{name}' was not found in the selected environment's imports; declare it under tools: or check mcp.imports for the selected environment"))
+    ) -> anyhow::Result<ResolvedEnvironmentTool<'_>> {
+        if let Some(tool) = self.ambient_tools().iter().find(|tool| tool.name == *name) {
+            return Ok(ResolvedEnvironmentTool::Ambient(tool));
+        }
+        if let Some(tool) = self
+            .mcp_tools()
+            .iter()
+            .find(|tool| tool.definition.name() == Some(name.as_str()))
+        {
+            return Ok(ResolvedEnvironmentTool::Mcp(tool));
+        }
+        if let Some(diagnostic) = self.environment_tool_diagnostic(name) {
+            bail!(
+                "Environment tool '{name}' was rejected by MCP import {} (upstream '{}'): {}",
+                diagnostic.import_index,
+                diagnostic.upstream_name,
+                diagnostic.reason
+            );
+        }
+        bail!(
+            "Environment tool dependency '{name}' was not found among the selected environment's ambient tools or MCP imports"
+        )
+    }
+
+    pub fn environment_tool_diagnostic(
+        &self,
+        name: &golem_common::model::tool::ToolName,
+    ) -> Option<&ResolvedMcpDiagnostic> {
+        self.environment_tools
+            .into_iter()
+            .flat_map(|tools| &tools.mcp_diagnostics)
+            .find(|diagnostic| diagnostic.canonical_name == name.as_str())
     }
 
     pub fn application_context(&self) -> &ApplicationContext {
@@ -572,13 +637,16 @@ impl ApplicationContext {
         &self,
         build_config: &BuildConfig,
         resolved_tool_grants: &ResolvedToolGrants,
-        mcp_tools: &[golem_client::model::McpResolvedTool],
+        environment_tools: Option<&ResolvedEnvironmentTools>,
     ) -> anyhow::Result<()> {
-        build_app(
-            &BuildContext::new_with_resolved_tool_grants(self, build_config, resolved_tool_grants)
-                .with_mcp_tools(mcp_tools),
-        )
-        .await
+        let ctx =
+            BuildContext::new_with_resolved_tool_grants(self, build_config, resolved_tool_grants);
+        match environment_tools {
+            Some(environment_tools) => {
+                build_app(&ctx.with_environment_tools(environment_tools)).await
+            }
+            None => build_app(&ctx).await,
+        }
     }
 
     pub async fn custom_command(
