@@ -171,18 +171,121 @@ object SchemaRefSpec extends ZIOSpecDefault {
         union.packJson(Json.String("http://host")).isLeft
       )
     },
-    test("requires explicit null for an absent option and renders it as required") {
+    test("decodes omitted and explicit-null option fields as absent") {
       val optional = SchemaRef(
         SchemaGraph(
-          ListMap.empty,
-          SchemaType(RecordType(List(NamedFieldType("maybe", SchemaType(OptionType(SchemaType(StringType)))))))
+          ListMap("maybe-ref" -> SchemaTypeDef(SchemaType(OptionType(SchemaType(StringType))))),
+          SchemaType(
+            RecordType(
+              List(
+                NamedFieldType("maybe", SchemaType(OptionType(SchemaType(StringType)))),
+                NamedFieldType("referenced", SchemaType(RefType("maybe-ref")))
+              )
+            )
+          )
         )
       )
+      val absent = RecordValue(List(OptionValue(None), OptionValue(None)))
       assertTrue(
-        optional.packJson(Json.Object()).isLeft,
-        optional.packJson(Json.Object("maybe" -> Json.Null)) == Right(RecordValue(List(OptionValue(None)))),
-        optional.toJsonSchema().get("required").one == Right(Json.Array(Json.String("maybe")))
+        optional.packJson(Json.Object()) == Right(absent),
+        optional.packJson(Json.Object("maybe" -> Json.Null, "referenced" -> Json.Null)) == Right(absent),
+        optional.toJsonSchema().get("required").one == Right(Json.Array())
       )
+    },
+    test("uses lossless canonical JSON for wide integers, durations, and quantities") {
+      val wide = SchemaRef(
+        SchemaGraph(
+          ListMap.empty,
+          SchemaType(
+            RecordType(
+              List(
+                NamedFieldType("signed", SchemaType(S64Type())),
+                NamedFieldType("unsigned", SchemaType(U64Type())),
+                NamedFieldType("duration", SchemaType(DurationType)),
+                NamedFieldType(
+                  "quantity",
+                  SchemaType(QuantityType(QuantitySpec("m", Nil, None, None)))
+                )
+              )
+            )
+          )
+        )
+      )
+      val json = Json.Object(
+        "signed"   -> Json.String(Long.MinValue.toString),
+        "unsigned" -> Json.String("18446744073709551615"),
+        "duration" -> Json.Object("nanoseconds" -> Json.String(Long.MaxValue.toString)),
+        "quantity" -> Json.Object(
+          "mantissa" -> Json.String(Long.MinValue.toString),
+          "scale"    -> Json.Number(BigDecimal(-2)),
+          "unit"     -> Json.String("m")
+        )
+      )
+      val value = RecordValue(
+        List(
+          S64Value(Long.MinValue),
+          U64Value(-1L),
+          DurationValue(Long.MaxValue),
+          QuantityValueNode(QuantityValue(Long.MinValue, -2, "m"))
+        )
+      )
+      val rendered = wide.toJsonSchema(includeDraftMarker = false)
+      val props    = rendered.get("properties").one.toOption.get
+      assertTrue(
+        wide.packJson(json) == Right(value),
+        wide.unpackJson(value) == Right(json),
+        props.get("signed").one.flatMap(_.get("pattern").one) ==
+          Right(Json.String("^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$")),
+        props.get("unsigned").one.flatMap(_.get("x-golem-maximum").one) ==
+          Right(Json.String("18446744073709551615")),
+        props.get("duration").one.flatMap(_.get("type").one) == Right(Json.String("object")),
+        props
+          .get("quantity")
+          .one
+          .flatMap(_.get("properties").one)
+          .flatMap(_.get("mantissa").one)
+          .flatMap(_.get("type").one) == Right(Json.String("string"))
+      )
+    },
+    test("rejects non-canonical or overflowing wide decimal strings") {
+      val signed   = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(S64Type())))
+      val unsigned = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(U64Type())))
+      val duration = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(DurationType)))
+      val quantity = SchemaRef(
+        SchemaGraph(ListMap.empty, SchemaType(QuantityType(QuantitySpec("m", Nil, None, None))))
+      )
+      assertTrue(
+        List(Json.String("+1"), Json.String("01"), Json.String("-0"), Json.String("9223372036854775808"))
+          .forall(signed.packJson(_).isLeft),
+        List(Json.String("-1"), Json.String("+1"), Json.String("01"), Json.String("18446744073709551616"))
+          .forall(unsigned.packJson(_).isLeft),
+        duration.packJson(Json.String("PT1S")).isLeft,
+        duration.packJson(Json.Object("nanoseconds" -> Json.Number(BigDecimal(1)))).isLeft,
+        quantity
+          .packJson(
+            Json.Object(
+              "mantissa" -> Json.String("-0"),
+              "scale"    -> Json.Number(BigDecimal(0)),
+              "unit"     -> Json.String("m")
+            )
+          )
+          .isLeft
+      )
+    },
+    test("reflection JSON Schema rejects leaves with no JSON representation") {
+      val leaves = List[SchemaTypeBody](
+        SecretType(SecretSpec(SchemaType(StringType), None)),
+        QuotaTokenType(QuotaTokenSpec(None)),
+        PermissionCardType(PermissionCardSpec(polymorphic = false)),
+        FutureType(None),
+        StreamType(None)
+      )
+      assertTrue(leaves.forall { body =>
+        SchemaRef(SchemaGraph(ListMap.empty, SchemaType(body)))
+          .toJsonSchema(includeDraftMarker = false)
+          .get("not")
+          .one == Right(Json.Object())
+      })
     },
     test("rejects numbers that overflow after float narrowing") {
       val f32 = SchemaRef(SchemaGraph(ListMap.empty, SchemaType(F32Type())))
