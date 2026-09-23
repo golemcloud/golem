@@ -152,6 +152,10 @@ object ToolCallProjectionCodegen {
       )
       sb.append(s"    _root_.golem.runtime.macros.ToolDefinitionMacro.tryMetadata[$toolType]\n\n")
       sb.append(
+        "  def __prefixInputModel(commandPath: _root_.scala.List[_root_.scala.Predef.String]): _root_.scala.Either[_root_.scala.Predef.String, _root_.golem.tool.CanonicalInputModel] =\n"
+      )
+      sb.append("    _root_.golem.tool.ToolClientRuntime.prefixInputModel(__descriptor, commandPath)\n\n")
+      sb.append(
         "  def __underlyingBackend(underlying: _root_.golem.tool.RawToolUnderlying): _root_.golem.tool.UnderlyingToolCallBackend =\n"
       )
       sb.append("    new _root_.golem.tool.UnderlyingToolCallBackend(underlying, __descriptor)\n\n")

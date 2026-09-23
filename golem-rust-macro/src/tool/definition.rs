@@ -576,15 +576,15 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                                             format!("missing canonical tool input field `{}`", __field.name)
                                         )
                                     })?;
-                                let __value = __input_fields.remove(__value_index);
-                                if __value.schema != __field.schema {
-                                    return ::std::result::Result::Err(
-                                        golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
-                                            format!("canonical tool input field `{}` has incompatible schema for forwarded field `{}`", __value.name, __field.name)
-                                        )
-                                    );
-                                }
-                                __subtool_record_fields.push(__value.value);
+                                let __value = golem_rust::agentic::adapt_canonical_input_value(
+                                    __input_fields.remove(__value_index),
+                                    &__field.name,
+                                    &__field.schema,
+                                )
+                                .map_err(
+                                    golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput
+                                )?;
+                                __subtool_record_fields.push(__value);
                             }
                             golem_rust::TypedSchemaValue::new(
                                 __subtool_model.record_schema,
@@ -698,9 +698,20 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
                                     golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
                                         format!("missing canonical tool input field `{}`", #value_name)
                                     )
-                                })?;
+                            })?;
                             let __field = __input_fields.remove(__field_index);
-                            <#ty as golem_rust::FromSchema>::from_value(&__field.value)
+                            let __expected_graph = <#ty as golem_rust::agentic::Schema>::get_type()
+                                .get_schema_graph()
+                                .expect("tool parameter must have a concrete schema graph");
+                            let __value = golem_rust::agentic::adapt_canonical_input_value(
+                                __field,
+                                #value_name,
+                                &__expected_graph,
+                            )
+                            .map_err(
+                                golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput
+                            )?;
+                            <#ty as golem_rust::FromSchema>::from_value(&__value)
                                 .map_err(|__err| golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(__err.to_string()))?
                         };
                     }

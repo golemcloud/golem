@@ -94,9 +94,12 @@ object ToolCallPreparation {
 
   private def toolErrorMessage(error: ToolError[Nothing]): String =
     error match {
-      case ToolError.Rpc(rpc)                  => rpc.message
-      case ToolError.Tool(_)                   => "unexpected typed tool error"
-      case ToolError.UnknownToolError(name, _) => s"unexpected tool error `$name`"
+      case ToolError.Rpc(rpc)                       => rpc.message
+      case ToolError.RemoteTool(remote)             => ToolCallBackend.errorMessage(remote)
+      case ToolError.Tool(_)                        => "unexpected typed tool error"
+      case ToolError.UnknownToolError(name, _)      => s"unexpected tool error `$name`"
+      case ToolError.InvalidInput(message)          => message
+      case ToolError.MalformedRemoteOutput(message) => message
     }
 }
 
@@ -276,7 +279,7 @@ final class UnderlyingToolCallBackend(
 }
 
 private object ToolCallBackend {
-  def errorMessage(error: ToolInvokeError[Nothing]): String =
+  def errorMessage[E](error: ToolInvokeError[E]): String =
     error match {
       case ToolInvokeError.InvalidToolName(name)        => s"invalid tool name `$name`"
       case ToolInvokeError.InvalidCommandPath(path)     => s"invalid command path `${path.mkString(" ")}`"

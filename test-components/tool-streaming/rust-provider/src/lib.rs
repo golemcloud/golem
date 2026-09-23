@@ -431,7 +431,8 @@ fn nested_input(bytes: Vec<u8>) -> InputStream {
 }
 
 fn launch_retained_crash_child() {
-    ToolRpc::new("streaming")
+    ToolRpc::create("streaming")
+        .expect("tool RPC creation failed")
         .invoke(
             &["run".to_string()],
             raw_run_input("hold-capable-terminal-child"),
@@ -501,7 +502,7 @@ async fn run_nested_principal(
     use futures_concurrency::prelude::*;
 
     let outer_class = principal_class(principal);
-    let rpc = ToolRpc::new("streaming");
+    let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
     let (nested_target, nested_stdout) = tool_host::create_stdout();
     let nested = rpc.invoke_and_await(
         vec!["run".to_string()],
@@ -538,7 +539,7 @@ async fn run_nested_principal(
 async fn run_nested_capable(bytes: Vec<u8>) -> Vec<u8> {
     use futures_concurrency::prelude::*;
 
-    let rpc = ToolRpc::new("capable-streaming");
+    let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
     let (stdout_target, nested_stdout) = tool_host::create_stdout();
     let nested = rpc.invoke_and_await(
         vec!["run-capable".to_string()],
@@ -566,7 +567,7 @@ async fn run_nested(
 ) -> Result<StreamSummary, StreamingError> {
     use futures_concurrency::prelude::*;
 
-    let rpc = ToolRpc::new("streaming");
+    let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
     let (nested_target, mut nested_stdout) = tool_host::create_stdout();
     let nested = rpc.invoke_and_await(
         vec!["run".to_string()],
@@ -603,7 +604,7 @@ async fn run_nested_capable_parent_end(
     stdin: InputStream,
     mut stdout: OutputStream,
 ) -> Result<StreamSummary, StreamingError> {
-    let rpc = ToolRpc::new("capable-streaming");
+    let rpc = ToolRpc::create("capable-streaming").expect("tool RPC creation failed");
     let (nested_target, nested_stdout) = tool_host::create_stdout();
     let nested = rpc.async_invoke_and_await(
         &["run-capable".to_string()],
@@ -1003,7 +1004,6 @@ impl Streaming for StreamingImpl {
         }
 
         if mode == "declared-error" {
-            let _ = stdout.finish().await;
             return Err(StreamingError::Declared {
                 bytes_read: summary.bytes_read,
             });

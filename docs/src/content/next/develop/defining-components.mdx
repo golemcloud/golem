@@ -79,26 +79,18 @@ golem new . --template moonbit --component-name my:component --yes
     </Tabs.Tab>
 </Tabs>
 
-## Choosing a TypeScript component role
+## TypeScript agents, tools, and middleware
 
-TypeScript components use different prebuilt WASM guests depending on what they export. Select the matching component template in `golem.yaml`:
-
-| Template | Component exports | SDK import |
-| --- | --- | --- |
-| `ts` | Agents, tools, and snapshots | `@golemcloud/golem-ts-sdk` |
-| `ts-tool-middleware` | Tool middleware only | `@golemcloud/golem-ts-sdk/middleware` |
-| `ts-agent-tool-middleware` | Agents, tools, snapshots, and tool middleware | `@golemcloud/golem-ts-sdk` |
-
-For example, select the middleware-only guest with:
+TypeScript components use one default guest world for agents, tools, snapshots, and tool middleware. Select the `ts` component template regardless of which of these categories the component exports:
 
 ```yaml filename="golem.yaml"
 components:
     my:middleware:
         dir: middleware
-        templates: ts-tool-middleware
+        templates: ts
 ```
 
-Then import its authoring APIs from the middleware entry point:
+Standalone middleware components remain supported. Import their authoring APIs from the middleware entry point; unused agent and tool discovery returns empty lists:
 
 ```typescript
 import {
@@ -107,9 +99,8 @@ import {
 } from '@golemcloud/golem-ts-sdk/middleware';
 ```
 
-The middleware-only guest deliberately has no `golem:tool/host` import. Middleware can invoke its runtime-bound next inner layer, but cannot re-enter ambient tool dispatch. Use `ts-agent-tool-middleware` when one component must define agents or tools and middleware together; combined components import every API from the package root so all definitions share one embedded registry.
-
-The `optimized` and `quick` build profiles both select the guest associated with the component template. The TypeScript build reports an actionable error if source imports the wrong SDK entry point or defines middleware under the ordinary `ts` template, rather than producing a component whose declared exports do not match its registrations.
+The default guest imports `golem:tool/host`; ambient calls remain subject to runtime permission
+checks. Invocation-scoped underlying access still advances the pinned middleware chain.
 
 ## Defining agents
 

@@ -154,6 +154,24 @@ describe('public bridge runtime', () => {
     expect(ToolRpc).toHaveBeenCalledWith('git');
   });
 
+  it('keeps tool RPC construction failures recoverable before opening stream attachments', () => {
+    const error = { tag: 'protocol-error', val: 'invalid tool name' } as const;
+    vi.mocked(ToolRpc).mockImplementationOnce(() => {
+      throw error;
+    });
+    const transport = bridge.createToolClientTransport('invalid name');
+
+    let failure: unknown;
+    try {
+      transport.start([], {} as never, undefined, false);
+    } catch (caught) {
+      failure = caught;
+    }
+
+    expect(failure).toBe(error);
+    expect(createStdin).not.toHaveBeenCalled();
+  });
+
   it('stops a blocked stdin source when the host closes consumption', async () => {
     let closeConsumption!: () => void;
     const consumptionClosed = new Promise<void>((resolve) => {
@@ -785,7 +803,10 @@ describe('public bridge runtime', () => {
     rpc.scheduleInvocation.mockReturnValue(receipt);
     const at = { seconds: 1n, nanoseconds: 0 };
 
-    expect(remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]))).toBe(receipt);
+    const scheduled = remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]));
+    expect(scheduled).toStrictEqual(receipt);
+    expect(scheduled).not.toBe(receipt);
+    expect(Object.isFrozen(scheduled.metadata)).toBe(true);
     expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything(), undefined);
   });
 

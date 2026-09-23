@@ -124,11 +124,7 @@ try {
   const publicModules = [...explicitPublicModules, ...wildcardPublicModules]
   const uniquePublicModules = [...new Set(publicModules)].sort()
 
-  for (const world of [
-    "agent_guest.wasm",
-    "tool_middleware_guest.wasm",
-    "agent_tool_middleware_guest.wasm",
-  ]) {
+  for (const world of ["agent_guest.wasm"]) {
     const artifact = join(installed, "wasm", world)
     if (!statSync(artifact).isFile() || statSync(artifact).size < 8)
       throw new Error(`Invalid ${world}`)

@@ -107,7 +107,18 @@ fn validate_constructor_input_value(
         return Err("expected input parameter record".to_string());
     };
 
-    let fields_schema = agent_type.constructor.input_schema.fields();
+    let fields_schema: Vec<_> = agent_type
+        .constructor
+        .input_schema
+        .fields()
+        .iter()
+        .filter(|field| {
+            matches!(
+                field.source,
+                golem_common::schema::agent::FieldSource::UserSupplied
+            )
+        })
+        .collect();
     if fields.len() != fields_schema.len() {
         return Err(format!(
             "expected {} parameters, got {}",
@@ -637,8 +648,27 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     > {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
-        let component_metadata = &self.owner_component_metadata().metadata;
-        match ParsedAgentId::parse(agent_id, component_metadata) {
+        let agent_type_name = match ParsedAgentId::parse_agent_type_name(&agent_id) {
+            Ok(name) => name,
+            Err(error) => return Ok(Err(wire::AgentError::InvalidAgentId(error))),
+        };
+        let local_type = self
+            .owner_component_metadata()
+            .metadata
+            .find_agent_type_by_name(&agent_type_name);
+        let agent_type = if let Some(local_type) = local_type {
+            local_type
+        } else if let Some(registered) = self
+            .get_agent_type_schema_model(agent_type_name.clone())
+            .await?
+        {
+            registered.agent_type
+        } else {
+            return Ok(Err(wire::AgentError::InvalidAgentId(format!(
+                "Agent type not found: {agent_type_name}"
+            ))));
+        };
+        match ParsedAgentId::parse(agent_id, &agent_type) {
             Ok(agent_id) => {
                 let wire_typed = encode_typed(&agent_id.parameters)
                     .map_err(|e| anyhow!("Failed to encode agent id parameters: {e}"))?;

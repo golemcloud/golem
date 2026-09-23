@@ -229,10 +229,7 @@ async fn find_plugin_workers(
     plugin_component_id: &ComponentId,
 ) -> Vec<golem_common::model::AgentId> {
     let mut all_workers = Vec::new();
-    let mut cursor = ScanCursor {
-        cursor: 0,
-        layer: 0,
-    };
+    let mut cursor = ScanCursor::default();
     loop {
         let (next_cursor, workers) = user
             .get_workers_metadata(plugin_component_id, None, cursor, 50, true)

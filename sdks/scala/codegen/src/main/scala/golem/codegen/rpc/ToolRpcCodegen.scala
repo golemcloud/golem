@@ -160,7 +160,7 @@ object ToolRpcCodegen {
     private def valueEntry(tool: Tool, method: Method, param: Param): String =
       ToolProjectionRendering.valueEntry(projected(tool, method, param), AmbientClient)
 
-    private def prefixEntry(tool: Tool, m: Method, p: Param): String = {
+    private def prefixEntry(tool: Tool, m: Method, p: Param, model: String): String = {
       val name        = canonicalValueName(tool, m, p)
       val aliases     = canonicalAliases(tool, m, p)
       val aliasesExpr =
@@ -169,7 +169,7 @@ object ToolRpcCodegen {
       if (isCountFlag(p))
         s"""_root_.golem.tool.ToolClientRuntime.countFlagPrefixValue("$name", $aliasesExpr, ${p.ident})"""
       else
-        s"""_root_.golem.tool.ToolClientRuntime.prefixValue("$name", $aliasesExpr, ${p.ident}, _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[${p.typeExpr}]])"""
+        s"""_root_.golem.tool.ToolClientRuntime.prefixValue("$name", $aliasesExpr, ${p.ident}, _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[${p.typeExpr}]], $model)"""
     }
 
     private def listExpr(entries: List[String], indent: String): String =
@@ -213,6 +213,7 @@ $indent}"""
       child: Tool,
       omitted: List[String],
       pathClasses: List[String],
+      commandPath: List[String],
       visited: Set[String],
       isWrapper: Boolean,
       indent: String
@@ -239,20 +240,30 @@ $indent}"""
           !p.isPrincipal && !isStreamParam(p) && !omittedMatches(tool, m, p, omitted)
         }
       }
-      val prefixEntries = prefixParams.map(prefixEntry(tool, m, _))
+      val prefixEntries = prefixParams.map(prefixEntry(tool, m, _, "__prefixModel"))
 
       val basePrefix = if (isWrapper) "__inheritedPrefix ++ " else ""
       val prefixExpr =
         if (prefixEntries.isEmpty) {
           if (isWrapper) "__inheritedPrefix" else "_root_.scala.Nil"
         } else s"$basePrefix${listExpr(prefixEntries, s"$indent ")}"
-      val childOmitted = childOmittedSurfaces(tool, m, omitted)
-      generateWrapper(child, childOmitted, pathClasses :+ pascalCase(m.name), visited + child.fqn)
+      val fullCommandPath = commandPath ++ m.localCommandPath
+      val childOmitted    = childOmittedSurfaces(tool, m, omitted)
+      generateWrapper(
+        child,
+        childOmitted,
+        pathClasses :+ pascalCase(m.name),
+        fullCommandPath,
+        visited + child.fqn
+      )
 
       val paramDecls = kept.map(paramDecl).mkString(", ")
 
       Some(
         s"""${indent}def ${m.name}($paramDecls): $clientName.$wrapperName = {
+$indent  val __prefixModel = $projectionName.__prefixInputModel(${ToolProjectionRendering.stringList(
+            fullCommandPath
+          )})
 $indent  val __prefix = $prefixExpr
 $indent  new $clientName.$wrapperName(
 $indent    __backend,
@@ -289,6 +300,7 @@ $indent}"""
       tool: Tool,
       omitted: List[String],
       pathClasses: List[String],
+      commandPath: List[String],
       visited: Set[String]
     ): Unit = {
       val wrapperName = pathClasses.mkString + "Client"
@@ -296,7 +308,17 @@ $indent}"""
         m.returnShape match {
           case SubtreeReturn(childFqn) =>
             val child = toolsByFqn(childFqn)
-            subtreeMethod(tool, m, child, omitted, pathClasses, visited, isWrapper = true, indent = "    ")
+            subtreeMethod(
+              tool,
+              m,
+              child,
+              omitted,
+              pathClasses,
+              commandPath,
+              visited,
+              isWrapper = true,
+              indent = "    "
+            )
           case shape: LeafReturn =>
             Some(
               leafMethod(
@@ -331,6 +353,7 @@ ${methods.mkString("\n\n")}
               child = child,
               omitted = Nil,
               pathClasses = Nil,
+              commandPath = Nil,
               visited = Set(root.fqn),
               isWrapper = false,
               indent = "    "

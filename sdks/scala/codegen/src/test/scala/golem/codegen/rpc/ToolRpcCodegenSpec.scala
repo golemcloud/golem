@@ -353,6 +353,34 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     assert(!content.contains("def grand():"))
   }
 
+  test("nested subtree prefix models use paths rooted in the shared projection descriptor") {
+    val source =
+      """package example
+        |
+        |import golem.runtime.annotations._
+        |
+        |@toolDefinition(name = "root")
+        |trait RootTool {
+        |  def group(): ChildTool
+        |}
+        |
+        |@toolDefinition(name = "child")
+        |trait ChildTool {
+        |  def nested(value: Option[String]): GrandChildTool
+        |}
+        |
+        |@toolDefinition(name = "grand-child")
+        |trait GrandChildTool {
+        |  def run(): Unit
+        |}
+        |""".stripMargin
+
+    val result  = generate("RootTool.scala" -> source)
+    val content = result.files.find(_.relativePath == "example/RootToolClient.scala").get.content
+
+    assert(content.contains("RootToolCallProjection.__prefixInputModel(_root_.scala.List(\"group\", \"nested\"))"))
+  }
+
   test("every tool trait also gets its own standalone root client") {
     val result = generate("Git.scala" -> gitSource)
     assert(result.files.exists(_.relativePath == "example/RemoteClient.scala"))

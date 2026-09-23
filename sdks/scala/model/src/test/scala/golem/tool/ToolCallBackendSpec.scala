@@ -112,7 +112,7 @@ object ToolCallBackendSpec extends ZIOSpecDefault {
         .fromFuture(_ => backend.awaitNoStdout(call))
         .map(result => assertTrue(result == Left(ToolError.Tool("bad input"))))
     },
-    test("infallible awaited calls retain the ambient protocol-error policy") {
+    test("infallible awaited calls retain unknown remote tool errors") {
       val payload = implicitly[IntoSchema[String]].toTyped("unexpected")
       val remote  = ToolRpcFailure.RemoteToolError(ToolInvokeError.UnknownToolError("future", payload))
       val backend = new AmbientToolCallBackend(
@@ -120,9 +120,9 @@ object ToolCallBackendSpec extends ZIOSpecDefault {
       )
 
       ZIO.fromFuture(_ => backend.awaitNoStdout(prepared(NoDeclaredErrors, _ => Right(())))).map {
-        case Left(ToolError.Rpc(RpcError.Protocol(message))) =>
-          assertTrue(message.contains("remote tool error: custom error `future`"))
-        case other => assertNever(s"expected protocol error, got $other")
+        case Left(ToolError.RemoteTool(ToolInvokeError.UnknownToolError(name, actualPayload))) =>
+          assertTrue(name == "future", actualPayload == payload)
+        case other => assertNever(s"expected unknown remote tool error, got $other")
       }
     },
     test("stdout-bearing calls expose stdout before terminal completion") {
@@ -178,7 +178,7 @@ object ToolCallBackendSpec extends ZIOSpecDefault {
           val fields = graph.root.body.asInstanceOf[golem.schema.SchemaTypeBody.RecordType].fields.map(_.name)
           assertTrue(
             fields == List("config", "verbose"),
-            values == List(stringSchema.toValue("cfg"), boolSchema.toValue(true))
+            values == List(SchemaValue.OptionValue(Some(stringSchema.toValue("cfg"))), boolSchema.toValue(true))
           )
         case other => assertNever(s"expected canonical record, got $other")
       }
