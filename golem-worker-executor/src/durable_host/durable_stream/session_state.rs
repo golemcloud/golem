@@ -1118,7 +1118,7 @@ mod tests {
     use golem_common::base_model::durable_stream::{
         DurableStreamHandle, StreamCallerAttemptRecord, StreamConsumerCancelAppliedRecord,
         StreamReaderForwardAcceptedRecord, StreamReaderForwardDestination,
-        StreamSessionMappingUpdateRecord,
+        StreamReaderForwardPublication, StreamSessionMappingUpdateRecord,
     };
     use golem_common::model::StreamId;
     use golem_common::model::component::ComponentRevision;
@@ -1274,6 +1274,9 @@ mod tests {
                 destination: StreamReaderForwardDestination::SessionBinding {
                     session_key: reference.clone(),
                     binding: destination.clone(),
+                    publication: StreamReaderForwardPublication::InvocationResult {
+                        handle_index: 0,
+                    },
                 },
             }),
             StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
@@ -1377,6 +1380,9 @@ mod tests {
                 destination: StreamReaderForwardDestination::SessionBinding {
                     session_key: destination,
                     binding,
+                    publication: StreamReaderForwardPublication::InvocationResult {
+                        handle_index: 0,
+                    },
                 },
             }),
         ];
@@ -1443,6 +1449,9 @@ mod tests {
                     destination: StreamReaderForwardDestination::SessionBinding {
                         session_key: reference.clone(),
                         binding: binding(&mapping()),
+                        publication: StreamReaderForwardPublication::InvocationResult {
+                            handle_index: 0,
+                        },
                     },
                 }),
                 StreamSessionRecord::ReaderForwardAccepted(StreamReaderForwardAcceptedRecord {
@@ -1516,6 +1525,7 @@ mod tests {
                     golem_common::model::IdempotencyKey::new("destination".into()),
                 ),
                 binding: sibling,
+                publication: StreamReaderForwardPublication::InvocationResult { handle_index: 0 },
             },
         };
         for bad_reader in [

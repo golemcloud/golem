@@ -9955,6 +9955,7 @@ async fn root_forwarding_records_original_reader_before_local_and_rpc_destinatio
                 StreamReaderForwardDestination::SessionBinding {
                     session_key: destination.session_reference.clone(),
                     binding: StreamBindingRecord::foreign(&mapping),
+                    publication: StreamReaderForwardPublication::InvocationInput,
                 }
             }
         );
@@ -10426,11 +10427,28 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
                 let StreamReaderForwardDestination::SessionBinding {
                     session_key,
                     binding,
+                    publication,
                 } = &intent.destination
                 else {
                     panic!("output forwarding must use an owner-journal binding")
                 };
                 assert_eq!(session_key, &destination_reference);
+                assert_eq!(
+                    publication,
+                    &if nested {
+                        let StreamRecordReference::Local(parent_stream) = parent_binding.source
+                        else {
+                            unreachable!()
+                        };
+                        StreamReaderForwardPublication::ProducerItem {
+                            parent_stream,
+                            sequence: 0,
+                            handle_index: 0,
+                        }
+                    } else {
+                        StreamReaderForwardPublication::InvocationResult { handle_index: 0 }
+                    }
+                );
                 assert_eq!(binding.transport_stream_id, 47);
                 assert_eq!(
                     binding.source,
@@ -11484,6 +11502,9 @@ async fn recovered_forward_reservation_does_not_publish_or_reallocate_its_slot()
                 destination: StreamReaderForwardDestination::SessionBinding {
                     session_key: destination.clone(),
                     binding: StreamBindingRecord::foreign(&mapping),
+                    publication: StreamReaderForwardPublication::InvocationResult {
+                        handle_index: 0,
+                    },
                 },
             }),
         )
@@ -11581,11 +11602,63 @@ async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registra
         [],
     )
     .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
-    let (publisher, endpoint) = test_output_stream_pair(2).unwrap();
+    let parent_binding = producer
+        .local_binding(0, &parent, SessionStreamRole::Output)
+        .await
+        .unwrap();
+    let StreamRecordReference::Local(parent_stream) = parent_binding.source else {
+        unreachable!()
+    };
+    let forwarded_input = forwarded_input(&streams, forwarded.clone()).await;
+    let origin = forwarded_input.origin.clone();
+    let reader_id = forwarded_input.reader_id;
+    let sibling_mapping = StreamSessionMappingRecord {
+        transport_stream_id: 1,
+        handle: forwarded.clone(),
+        role: SessionStreamRole::Input,
+    };
+    producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: origin.session_reference.clone(),
+                mapping: StreamBindingRecord::foreign(&sibling_mapping),
+            }),
+        )
+        .await
+        .unwrap();
+    origin.insert_mapping(sibling_mapping.clone()).unwrap();
+    let sibling_input = origin
+        .endpoint_for_mapping(sibling_mapping, 0)
+        .await
+        .unwrap()
+        .into_forwarded()
+        .unwrap();
+    let sibling_reader = sibling_input.reader_id;
+    assert_ne!(reader_id, sibling_reader);
+    let (owned_publisher, owned_endpoint) = test_output_stream_pair(1).unwrap();
+    owned_publisher.publish_end().await.unwrap();
+    let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
     publisher
-        .publish_item(SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
-            forwarded_input(&streams, forwarded.clone()).await,
-        )))
+        .publish_item(SchemaValue::List { elements: vec![] })
+        .await
+        .unwrap();
+    publisher
+        .publish_item(SchemaValue::List {
+            elements: vec![
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(owned_endpoint)),
+                SchemaValue::Stream(SchemaValueStream::from_host_endpoint(forwarded_input)),
+            ],
+        })
+        .await
+        .unwrap();
+    publisher
+        .publish_item(SchemaValue::List {
+            elements: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                sibling_input,
+            ))],
+        })
         .await
         .unwrap();
     publisher.publish_end().await.unwrap();
@@ -11595,7 +11668,7 @@ async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registra
             PendingOwnedStreamDrain {
                 handle: parent.clone(),
                 endpoint,
-                element_type: SchemaType::stream(Some(element_type)),
+                element_type: SchemaType::list(SchemaType::stream(Some(element_type))),
                 role: SessionStreamRole::Output,
             },
             Arc::new(graph),
@@ -11603,14 +11676,113 @@ async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registra
         )
         .await
         .unwrap();
+    assert!(nested_rx.try_recv().is_ok());
     assert!(nested_rx.try_recv().is_err());
-    assert_eq!(streams.mappings.read().unwrap().len(), 1);
+    assert_eq!(streams.mappings.read().unwrap().len(), 2);
 
+    let metadata = origin.current_control_metadata().await.unwrap();
+    let (_, intent) = metadata.reader_forward_intent(reader_id).unwrap().unwrap();
+    let StreamReaderForwardDestination::SessionBinding {
+        publication,
+        binding,
+        ..
+    } = &intent.destination
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        publication,
+        &StreamReaderForwardPublication::ProducerItem {
+            parent_stream,
+            sequence: 1,
+            handle_index: 1,
+        }
+    );
+    let (_, sibling_intent) = metadata
+        .reader_forward_intent(sibling_reader)
+        .unwrap()
+        .unwrap();
+    let StreamReaderForwardDestination::SessionBinding {
+        publication: sibling_publication,
+        binding: sibling_binding,
+        ..
+    } = &sibling_intent.destination
+    else {
+        unreachable!()
+    };
+    assert_eq!(sibling_binding, binding);
+    assert_eq!(
+        sibling_publication,
+        &StreamReaderForwardPublication::ProducerItem {
+            parent_stream,
+            sequence: 2,
+            handle_index: 0,
+        }
+    );
+    let original_publication = publication.clone();
+    drop(metadata);
+
+    let before_retry = streams.oplog.current_oplog_index().await;
+    for publication in [
+        original_publication.clone(),
+        StreamReaderForwardPublication::ProducerItem {
+            parent_stream,
+            sequence: 2,
+            handle_index: 1,
+        },
+        StreamReaderForwardPublication::ProducerItem {
+            parent_stream,
+            sequence: 1,
+            handle_index: 0,
+        },
+    ] {
+        let same_publication = publication == original_publication;
+        let input = ForwardedDurableInput {
+            handle: forwarded.clone(),
+            origin: origin.clone(),
+            reader_id,
+        };
+        let destination = streams.clone();
+        let result = producer
+            .run_admitted(None, 0, true, move |_, admission| async move {
+                let _guard = destination.session_lock.clone().lock_owned().await;
+                admission
+                    .submit(move |_, context| async move {
+                        input
+                            .prepare_mapping_owned(
+                                &context,
+                                &destination,
+                                SessionStreamRole::Output,
+                                publication,
+                            )
+                            .await
+                    })
+                    .await
+            })
+            .await;
+        if same_publication {
+            result.unwrap();
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("different forwarding destination")
+            );
+        }
+        assert_eq!(streams.oplog.current_oplog_index().await, before_retry);
+    }
     let mut reader = producer.catch_up(parent, None).await.unwrap();
     let event = reader.next().await.unwrap().unwrap();
-    assert_eq!(event.nested_handles, vec![forwarded]);
+    assert!(event.nested_handles.is_empty());
+    let event = reader.next().await.unwrap().unwrap();
+    assert_eq!(event.nested_handles[1], forwarded);
     assert!(matches!(
         event.nested_references.as_slice(),
-        [StreamRecordReference::Foreign(_)]
+        [
+            StreamRecordReference::Local(_),
+            StreamRecordReference::Foreign(_)
+        ]
     ));
+    let event = reader.next().await.unwrap().unwrap();
+    assert_eq!(event.nested_handles, vec![forwarded]);
 }

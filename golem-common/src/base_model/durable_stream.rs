@@ -1187,6 +1187,21 @@ pub struct StreamConsumerTerminalRecord {
     pub terminal: StreamConsumerTerminal,
 }
 
+/// The containing record that must publish an owner-journal forwarding destination.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StreamReaderForwardPublication {
+    InvocationInput,
+    InvocationResult {
+        handle_index: u64,
+    },
+    ProducerItem {
+        parent_stream: LocalStreamId,
+        sequence: u64,
+        handle_index: u64,
+    },
+}
+
 /// The exact binding that must accept an unread reader before its ownership is transferred.
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -1195,6 +1210,7 @@ pub enum StreamReaderForwardDestination {
     SessionBinding {
         session_key: StreamRegistrationInvocation,
         binding: StreamBindingRecord,
+        publication: StreamReaderForwardPublication,
     },
     InvocationInput {
         invocation: StreamInvocationId,
@@ -1663,8 +1679,24 @@ impl StreamSessionRecord {
             Self::ReaderForwardIntent(record) => {
                 record.reader_id.introducing_oplog_index.is_defined()
                     && match &record.destination {
-                        StreamReaderForwardDestination::SessionBinding { binding, .. } => {
+                        StreamReaderForwardDestination::SessionBinding {
+                            binding,
+                            publication,
+                            ..
+                        } => {
                             binding.source.has_supported_format()
+                                && match publication {
+                                    StreamReaderForwardPublication::InvocationInput => {
+                                        binding.role == SessionStreamRole::Input
+                                    }
+                                    StreamReaderForwardPublication::InvocationResult { .. } => {
+                                        binding.role == SessionStreamRole::Output
+                                    }
+                                    StreamReaderForwardPublication::ProducerItem {
+                                        parent_stream,
+                                        ..
+                                    } => parent_stream.0.is_defined(),
+                                }
                         }
                         StreamReaderForwardDestination::InvocationInput {
                             invocation,

@@ -1399,6 +1399,7 @@ async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions()
     use crate::durable_host::durable_stream::DurableStreamStore;
     use golem_common::model::durable_stream::{
         StreamReaderForwardDestination, StreamReaderForwardIntentRecord,
+        StreamReaderForwardPublication,
     };
 
     let (service, kv, oplog_service) = service_with_oplog().await;
@@ -1421,6 +1422,7 @@ async fn forwarding_intent_reservation_is_indexed_in_both_owner_local_sessions()
         destination: StreamReaderForwardDestination::SessionBinding {
             session_key: local_registration(&destination),
             binding,
+            publication: StreamReaderForwardPublication::InvocationInput,
         },
     };
     let index = append_session(

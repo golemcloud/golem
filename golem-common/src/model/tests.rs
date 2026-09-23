@@ -359,7 +359,8 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
     use crate::model::durable_stream::{
         DurableStreamHandle, LocalStreamId, LocalStreamReaderId, StreamBindingRecord,
         StreamReaderForwardAcceptedRecord, StreamReaderForwardDestination,
-        StreamReaderForwardIntentRecord, StreamRecordReference, StreamSessionMappingRecord,
+        StreamReaderForwardIntentRecord, StreamReaderForwardPublication, StreamRecordReference,
+        StreamSessionMappingRecord,
     };
     use golem_schema::schema::SchemaFingerprintV1;
 
@@ -401,6 +402,7 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
         destination: StreamReaderForwardDestination::SessionBinding {
             session_key: StreamRegistrationInvocation::Remote(invocation),
             binding: StreamBindingRecord::foreign(&mapping),
+            publication: StreamReaderForwardPublication::InvocationInput,
         },
         ..intent.clone()
     };
@@ -416,7 +418,53 @@ fn durable_stream_forwarding_records_roundtrip_and_validate() {
             record
         );
     }
+    for publication in [
+        StreamReaderForwardPublication::InvocationResult { handle_index: 3 },
+        StreamReaderForwardPublication::ProducerItem {
+            parent_stream: LocalStreamId(OplogIndex::from_u64(17)),
+            sequence: 41,
+            handle_index: 2,
+        },
+    ] {
+        let mut changed = local.clone();
+        let StreamReaderForwardDestination::SessionBinding {
+            binding,
+            publication: target,
+            ..
+        } = &mut changed.destination
+        else {
+            unreachable!()
+        };
+        binding.role = SessionStreamRole::Output;
+        *target = publication;
+        let record = StreamSessionRecord::ReaderForwardIntent(changed);
+        assert!(record.has_supported_format());
+        let bytes = crate::serialization::serialize(&record).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<StreamSessionRecord>(&bytes).unwrap(),
+            record
+        );
+    }
     let mut invalid = Vec::new();
+    for publication in [
+        StreamReaderForwardPublication::InvocationResult { handle_index: 3 },
+        StreamReaderForwardPublication::ProducerItem {
+            parent_stream: LocalStreamId(OplogIndex::NONE),
+            sequence: 41,
+            handle_index: 2,
+        },
+    ] {
+        let mut changed = local.clone();
+        let StreamReaderForwardDestination::SessionBinding {
+            publication: target,
+            ..
+        } = &mut changed.destination
+        else {
+            unreachable!()
+        };
+        *target = publication;
+        invalid.push(changed);
+    }
     let mut changed = intent.clone();
     changed.format_version = 0;
     invalid.push(changed);
