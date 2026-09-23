@@ -19,6 +19,8 @@
 //! module.
 
 mod backend;
+#[cfg_attr(not(test), allow(dead_code))]
+mod fault;
 
 #[cfg(test)]
 mod holding;
