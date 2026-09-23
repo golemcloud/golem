@@ -16,6 +16,8 @@ package golem
 
 import (
 	"reflect"
+
+	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 )
 
 // Tool arguments.
@@ -80,6 +82,11 @@ type toolArgMeta struct {
 	envVar       string
 	required     bool
 	acceptsStdin bool
+	// valueOptional, repeatable and duplicateKeys select an option's wire shape;
+	// they are meaningless on a positional or a flag.
+	valueOptional bool
+	repeatable    Repetition
+	duplicateKeys DuplicateKeys
 	// def is the declared default, invalid when there is none.
 	def reflect.Value
 }
@@ -133,8 +140,56 @@ func (p Positional[T]) toolArgMeta() toolArgMeta {
 	}
 }
 
+// Repetition describes how a repeatable option may be written on the command
+// line. The zero value means the option is not repeatable; build one with
+// [Repeated], [Delimited] or [RepeatedOrDelimited].
+type Repetition struct {
+	set bool
+	rep toolCommon.Repetition
+}
+
+// Repeated accepts the option once per value: --inc a --inc b.
+func Repeated() Repetition {
+	return Repetition{set: true, rep: toolCommon.MakeRepetitionRepeated()}
+}
+
+// Delimited accepts one occurrence carrying several values: --inc=a,b.
+func Delimited(separator rune) Repetition {
+	return Repetition{set: true, rep: toolCommon.MakeRepetitionDelimited(separator)}
+}
+
+// RepeatedOrDelimited accepts both surface forms.
+func RepeatedOrDelimited(separator rune) Repetition {
+	return Repetition{set: true, rep: toolCommon.MakeRepetitionEither(separator)}
+}
+
+// DuplicateKeys says what a repeatable key-value option does when the same key
+// is supplied twice.
+type DuplicateKeys uint8
+
+const (
+	// RejectDuplicateKeys treats a repeated key as a usage error. This is the
+	// zero value, so a key-value option rejects duplicates unless told not to.
+	RejectDuplicateKeys DuplicateKeys = iota
+	// LastKeyWins keeps the last value supplied for a repeated key.
+	LastKeyWins
+)
+
 // Opt is a named argument carrying a value, written --name value. It is
 // optional unless Required is set.
+//
+// The shape of the value follows from the declaration:
+//
+//   - plain: --name VALUE, and the value is mandatory when the option appears;
+//   - ValueOptional: --name may also be written bare, and then means Default
+//     (git's --decorate, --signed[=mode]);
+//   - Repeatable: the option may be given more than once and the occurrences
+//     collect into T, which must then be a slice (-e a -e b) or a map
+//     (-c a=1 -c b=2).
+//
+// These are three different shapes on the wire, so a declaration may pick only
+// one. Note that ValueOptional is about the *value* being omittable, which is a
+// separate thing from the option itself being optional — that is Required.
 type Opt[T any] struct {
 	Doc string
 	// ValueName is the placeholder shown in help text, e.g. "COUNT". Defaults to
@@ -148,7 +203,17 @@ type Opt[T any] struct {
 	EnvVar string
 	// Required rejects an invocation that omits the option.
 	Required bool
-	// Default supplies the value when the option is absent.
+	// ValueOptional allows the option to be written bare, with no value, in
+	// which case it means Default. Declaring it without a Default leaves bare
+	// presence meaning nothing, so the SDK rejects that.
+	ValueOptional bool
+	// Repeatable allows the option to be supplied more than once, collecting the
+	// occurrences into T.
+	Repeatable Repetition
+	// DuplicateKeys applies to a repeatable option collecting into a map.
+	DuplicateKeys DuplicateKeys
+	// Default supplies the value when the option is absent, and is what bare
+	// presence means when ValueOptional is set.
 	Default Option[T]
 
 	value T
@@ -164,13 +229,16 @@ func (o *Opt[T]) toolArgSet(v reflect.Value) { o.value = v.Interface().(T) }
 
 func (o Opt[T]) toolArgMeta() toolArgMeta {
 	return toolArgMeta{
-		doc:       o.Doc,
-		valueName: o.ValueName,
-		short:     o.Short,
-		aliases:   o.Aliases,
-		envVar:    o.EnvVar,
-		required:  o.Required,
-		def:       optionValue(o.Default),
+		doc:           o.Doc,
+		valueName:     o.ValueName,
+		short:         o.Short,
+		aliases:       o.Aliases,
+		envVar:        o.EnvVar,
+		required:      o.Required,
+		valueOptional: o.ValueOptional,
+		repeatable:    o.Repeatable,
+		duplicateKeys: o.DuplicateKeys,
+		def:           optionValue(o.Default),
 	}
 }
 

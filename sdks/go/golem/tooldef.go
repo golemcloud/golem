@@ -416,7 +416,7 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, fields
 				Aliases:   append([]string(nil), f.meta.aliases...),
 				Doc:       docOf(f.meta.doc, ""),
 				ValueName: someIfSet(f.meta.valueName),
-				Shape:     toolCommon.MakeOptionShapeScalar(g.node(f.codec)),
+				Shape:     d.optionShape(g, ce, f),
 				Default:   defaultTree(f),
 				Required:  f.meta.required,
 				EnvVar:    someIfSet(f.meta.envVar),
@@ -544,4 +544,48 @@ func (d *definitions) invokeCommand(
 		}),
 		Stdout: witTypes.None[*witTypes.StreamReader[uint8]](),
 	})
+}
+
+// optionShape picks the wire shape an option's declaration asks for. The four
+// shapes are mutually exclusive, so a contradictory declaration is a definition
+// error rather than a silently-chosen winner.
+func (d *definitions) optionShape(g *graphBuilder, ce *commandEntry, f toolArgField) toolCommon.OptionShape {
+	meta := f.meta
+	switch {
+	case meta.repeatable.set && meta.valueOptional:
+		d.recordErr("", "", "command %s option %q is both ValueOptional and Repeatable; an option has one shape",
+			commandLabel(ce.path), f.name)
+		return toolCommon.MakeOptionShapeScalar(g.node(f.codec))
+
+	case meta.repeatable.set:
+		switch f.elem.Kind() {
+		case reflect.Map:
+			return toolCommon.MakeOptionShapeRepeatableMap(toolCommon.RepeatableMapShape{
+				Repetition:         meta.repeatable.rep,
+				MapType:            g.node(f.codec),
+				DuplicateKeyPolicy: uint8(meta.duplicateKeys),
+			})
+		case reflect.Slice:
+			return toolCommon.MakeOptionShapeRepeatableList(toolCommon.RepeatableListShape{
+				Repetition: meta.repeatable.rep,
+				ItemType:   g.node(d.compile(f.elem.Elem())),
+			})
+		default:
+			d.recordErr("", "", "command %s option %q is Repeatable but collects into %s; use a slice or a map",
+				commandLabel(ce.path), f.name, f.elem)
+			return toolCommon.MakeOptionShapeScalar(g.node(f.codec))
+		}
+
+	case meta.valueOptional:
+		if !meta.def.IsValid() {
+			// Bare presence means the declared default, so without one there is
+			// nothing for it to mean.
+			d.recordErr("", "", "command %s option %q is ValueOptional but declares no Default",
+				commandLabel(ce.path), f.name)
+		}
+		return toolCommon.MakeOptionShapeOptionalScalar(g.node(f.codec))
+
+	default:
+		return toolCommon.MakeOptionShapeScalar(g.node(f.codec))
+	}
 }

@@ -16,6 +16,7 @@ package golem
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -328,5 +329,146 @@ func TestToolDeclarationErrors(t *testing.T) {
 		handleCommandInto(r, d, cmd, func(*ToolContext, GreetArgs) string { return "" })
 		handleCommandInto(r, d, cmd, func(*ToolContext, GreetArgs) string { return "" })
 		mustDefErr(t, d, "already has a handler")
+	})
+}
+
+// TestOptionShapes — the four wire shapes an option can take, each selected by
+// its declaration rather than inferred from the payload type alone.
+func TestOptionShapes(t *testing.T) {
+	type ShapeArgs struct {
+		// --name VALUE; the value is mandatory when the option appears.
+		Plain Opt[string]
+		// --signed, meaning the default, or --signed=mode.
+		Signed Opt[string]
+		// -e a -e b, collecting into a list.
+		Include Opt[[]string]
+		// -c a=1 -c b=2, collecting into a map.
+		Config Opt[map[string]int32]
+	}
+	proto := ShapeArgs{
+		Signed:  Opt[string]{ValueOptional: true, Default: Some("on")},
+		Include: Opt[[]string]{Short: 'e', Repeatable: Repeated()},
+		Config:  Opt[map[string]int32]{Short: 'c', Repeatable: Delimited(','), DuplicateKeys: LastKeyWins},
+	}
+
+	tool, _, _ := buildToolFor(t, func(r *toolRegistry, d *definitions) {
+		def := defineToolInto(r, d, "shapes", ToolSpec{Version: "0.1.0"})
+		cmd := declareCommand[ShapeArgs, Unit](r, d, def, nil, "", proto, nil)
+		handleCommandInto(r, d, cmd, func(*ToolContext, ShapeArgs) Unit { return Unit{} })
+	})
+
+	body := tool.Commands.Nodes[0].Body.Some()
+	byName := map[string]toolCommon.OptionSpec{}
+	for _, o := range body.Options {
+		byName[o.Long] = o
+	}
+
+	if got := byName["plain"].Shape.Tag(); got != toolCommon.OptionShapeScalar {
+		t.Errorf("plain shape tag %d, want scalar", got)
+	}
+	if got := byName["signed"].Shape.Tag(); got != toolCommon.OptionShapeOptionalScalar {
+		t.Errorf("signed shape tag %d, want optional-scalar", got)
+	}
+
+	include := byName["include"]
+	if got := include.Shape.Tag(); got != toolCommon.OptionShapeRepeatableList {
+		t.Fatalf("include shape tag %d, want repeatable-list", got)
+	}
+	list := include.Shape.RepeatableList()
+	if list.Repetition.Tag() != toolCommon.RepetitionRepeated {
+		t.Errorf("include repetition tag %d, want repeated", list.Repetition.Tag())
+	}
+	// The collected value is a list, so item-type is the *element* type.
+	if tag := tool.Schema.TypeNodes[list.ItemType].Body.Tag(); tag != types.SchemaTypeBodyStringType {
+		t.Errorf("include item type tag %d, want string", tag)
+	}
+
+	config := byName["config"]
+	if got := config.Shape.Tag(); got != toolCommon.OptionShapeRepeatableMap {
+		t.Fatalf("config shape tag %d, want repeatable-map", got)
+	}
+	m := config.Shape.RepeatableMap()
+	if m.Repetition.Tag() != toolCommon.RepetitionDelimited || m.Repetition.Delimited() != ',' {
+		t.Errorf("config repetition is %+v, want delimited by ','", m.Repetition)
+	}
+	if m.DuplicateKeyPolicy != toolCommon.DuplicateKeyPolicyLastWins {
+		t.Errorf("config duplicate-key policy %d, want last-wins", m.DuplicateKeyPolicy)
+	}
+	// map-type points at the map node itself, never a list of tuples.
+	if tag := tool.Schema.TypeNodes[m.MapType].Body.Tag(); tag != types.SchemaTypeBodyMapType {
+		t.Errorf("config map type tag %d, want map", tag)
+	}
+}
+
+// TestRepeatableOptionsRoundTrip — a repeatable option's collected value is
+// just its declared type, so decoding needs no special case.
+func TestRepeatableOptionsRoundTrip(t *testing.T) {
+	type CollectArgs struct {
+		Include Opt[[]string]
+		Config  Opt[map[string]int32]
+	}
+	proto := CollectArgs{
+		Include: Opt[[]string]{Short: 'e', Repeatable: Repeated()},
+		Config:  Opt[map[string]int32]{Short: 'c', Repeatable: Repeated()},
+	}
+	_, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) {
+		def := defineToolInto(r, d, "collect", ToolSpec{Version: "0.1.0"})
+		cmd := declareCommand[CollectArgs, string](r, d, def, nil, "", proto, nil)
+		handleCommandInto(r, d, cmd, func(_ *ToolContext, in CollectArgs) string {
+			return strings.Join(in.Include.Get(), "+") + "/" + strconv.Itoa(int(in.Config.Get()["n"]))
+		})
+	})
+	e, _ := r.get("collect")
+
+	input := encodeToolArgs(t, d, e, nil, []string{"a", "b"}, map[string]int32{"n": 7})
+	got := d.invokeCommand(e, nil, input)
+	if got.Tag() != witTypes.ResultOk {
+		t.Fatalf("invoke failed: %+v", got.Err())
+	}
+	typed := got.Ok().Result.Some()
+	out, err := schema.NewRef(typed.Graph).UnpackJSON(typed.Value)
+	if err != nil {
+		t.Fatalf("result is not readable: %v", err)
+	}
+	if out != "a+b/7" {
+		t.Errorf("result %v, want a+b/7", out)
+	}
+}
+
+func TestOptionShapeDeclarationErrors(t *testing.T) {
+	t.Run("value-optional without a default", func(t *testing.T) {
+		type Args struct{ Signed Opt[string] }
+		r, d := newToolRegistry(), newDefinitions()
+		def := defineToolInto(r, d, "bare", ToolSpec{})
+		cmd := declareCommand[Args, Unit](r, d, def, nil, "", Args{
+			Signed: Opt[string]{ValueOptional: true},
+		}, nil)
+		handleCommandInto(r, d, cmd, func(*ToolContext, Args) Unit { return Unit{} })
+		r.discover(d)
+		mustDefErr(t, d, "ValueOptional but declares no Default")
+	})
+
+	t.Run("repeatable into a scalar", func(t *testing.T) {
+		type Args struct{ Include Opt[string] }
+		r, d := newToolRegistry(), newDefinitions()
+		def := defineToolInto(r, d, "badrep", ToolSpec{})
+		cmd := declareCommand[Args, Unit](r, d, def, nil, "", Args{
+			Include: Opt[string]{Repeatable: Repeated()},
+		}, nil)
+		handleCommandInto(r, d, cmd, func(*ToolContext, Args) Unit { return Unit{} })
+		r.discover(d)
+		mustDefErr(t, d, "use a slice or a map")
+	})
+
+	t.Run("both shapes at once", func(t *testing.T) {
+		type Args struct{ Include Opt[[]string] }
+		r, d := newToolRegistry(), newDefinitions()
+		def := defineToolInto(r, d, "both", ToolSpec{})
+		cmd := declareCommand[Args, Unit](r, d, def, nil, "", Args{
+			Include: Opt[[]string]{ValueOptional: true, Repeatable: Repeated(), Default: Some([]string{"a"})},
+		}, nil)
+		handleCommandInto(r, d, cmd, func(*ToolContext, Args) Unit { return Unit{} })
+		r.discover(d)
+		mustDefErr(t, d, "an option has one shape")
 	})
 }
