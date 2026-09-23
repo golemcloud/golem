@@ -202,7 +202,7 @@ enum StatusJob {
     /// Returns the published status after reattaching it when a jump or revert detached it.
     /// Serialization on the status queue prevents observing an in-flight status transition.
     AttachedStatus {
-        done: oneshot::Sender<Arc<AgentStatusRecord>>,
+        done: oneshot::Sender<Result<Arc<AgentStatusRecord>, WorkerExecutorError>>,
     },
     /// Returns the published status if it is currently attached to the oplog, `None` if it is
     /// detached. Runs on the status queue so it cannot observe the detached window of an
@@ -391,7 +391,14 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         if state.detached.load(Ordering::Acquire) {
                             state.reattach().await;
                         }
-                        let _ = done.send(state.last_known_status.load_full());
+                        let result = if state.detached.load(Ordering::Acquire) {
+                            Err(WorkerExecutorError::runtime(
+                                "Worker status could not be reconstructed",
+                            ))
+                        } else {
+                            Ok(state.last_known_status.load_full())
+                        };
+                        let _ = done.send(result);
                     }
                     StatusJob::NonDetachedStatus { done } => {
                         let status = if state.detached.load(Ordering::Acquire) {
@@ -591,6 +598,24 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         self.commit
             .run_status_job(|done| StatusJob::AttachedStatus { done })
             .await
+            .expect("Worker status could not be reconstructed")
+    }
+
+    /// Observational reads can race retirement. A closed queue or dropped reply means the
+    /// caller must resolve the worker's lifecycle before reading its persisted state.
+    pub async fn observe_attached_status(
+        &self,
+    ) -> Result<Option<Arc<AgentStatusRecord>>, WorkerExecutorError> {
+        let (done, response) = oneshot::channel();
+        if self
+            .commit
+            .status_jobs
+            .send(StatusJob::AttachedStatus { done })
+            .is_err()
+        {
+            return Ok(None);
+        }
+        response.await.ok().transpose()
     }
 
     pub async fn try_attached_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
@@ -1066,7 +1091,8 @@ mod tests {
                         else {
                             panic!("status actor stopped before lifecycle work finished");
                         };
-                        done.send(Arc::new(AgentStatusRecord::default())).unwrap();
+                        done.send(Ok(Arc::new(AgentStatusRecord::default())))
+                            .unwrap();
                         assert!(matches!(status_rx.recv().await, Some(StatusJob::Stop)));
                         if pause_stage == 1 {
                             entered.notify_one();
@@ -1088,7 +1114,7 @@ mod tests {
                         ));
                         let (done, response) = oneshot::channel();
                         assert!(status_jobs.send(StatusJob::AttachedStatus { done }).is_ok());
-                        response.await.unwrap();
+                        response.await.unwrap().unwrap();
                         if pause_stage == 0 {
                             entered.notify_one();
                             release.notified().await;

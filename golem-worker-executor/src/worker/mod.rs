@@ -1525,9 +1525,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
-        if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
-            Ok(Some(worker.get_latest_worker_metadata().await))
-        } else if let Some(GetWorkerMetadataResult {
+        let _retired_lifecycle =
+            if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
+                if let Some(status) = worker.state_actor.observe_attached_status().await? {
+                    let mut metadata = worker.get_initial_worker_metadata();
+                    metadata.last_known_status = status.as_ref().clone();
+                    return Ok(Some(metadata));
+                }
+
+                // A failed deletion can leave a cached worker whose actors have already stopped.
+                // Serialize with retirement/removal before reconstructing from persisted history.
+                let lifecycle = deps
+                    .oplog_service()
+                    .lock_lifecycle(&owned_agent_id.agent_id)
+                    .await;
+                let oplog = worker.oplog();
+                if !oplog.is_retired() {
+                    return Err(WorkerExecutorError::runtime(
+                        "Worker status actor is unavailable",
+                    ));
+                }
+                // Close errors are retained by the deletion attempt. Completion still proves that
+                // the writer has drained; metadata reconstruction reports its own storage errors.
+                let _ = oplog.closed().await;
+                Some(lifecycle)
+            } else {
+                None
+            };
+        if let Some(GetWorkerMetadataResult {
             mut initial_worker_metadata,
             last_known_status,
         }) = deps.worker_service().get(owned_agent_id).await?

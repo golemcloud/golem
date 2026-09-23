@@ -819,17 +819,28 @@ async fn completion_receipt_precedes_fifo_status_fold(
         let idempotency_key = idempotency_key.clone();
         async move { worker.lookup_invocation_result(&idempotency_key).await }
     });
+    let metadata_read = tokio::spawn({
+        let worker = worker.clone();
+        let owned_agent_id = OwnedAgentId::new(metadata.environment_id, &metadata.agent_id);
+        async move { Worker::get_latest_metadata(worker.all(), &owned_agent_id).await }
+    });
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!status.is_finished(), "status read bypassed the FIFO fold");
     assert!(
         !result.is_finished(),
         "result lookup bypassed the FIFO fold"
     );
+    assert!(
+        !metadata_read.is_finished(),
+        "metadata read bypassed the FIFO fold"
+    );
 
     fold.release();
     let status = tokio::time::timeout(Duration::from_secs(20), status).await??;
     assert_eq!(status.status, golem_common::model::AgentStatus::Idle);
     assert_eq!(status.oplog_idx, finished_index);
+    let metadata = tokio::time::timeout(Duration::from_secs(20), metadata_read).await???;
+    assert_eq!(metadata.unwrap().last_known_status, *status);
     let LookupResult::Complete(Ok(output)) =
         tokio::time::timeout(Duration::from_secs(20), result).await??
     else {

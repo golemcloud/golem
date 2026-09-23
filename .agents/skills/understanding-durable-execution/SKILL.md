@@ -184,6 +184,12 @@ Environment and application deletion invalidate component metadata, environment 
 type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
 of admitting requests against a retiring cached owner.
 
+External metadata observation uses a fallible FIFO status read. If the actor has stopped, the
+lookup takes the cold oplog lifecycle guard, verifies retirement, joins writer completion, and
+reconstructs from persisted metadata and the oplog. A failed deletion can therefore leave a
+cached but stopped worker observable until removal is retried. Missing storage means absence;
+failed reconstruction means an error, never a stale cached status or permission to restart work.
+
 Ephemeral response leases delay only normal archival, not Store unloading or explicit retirement.
 The shared gRPC owner lookup acquires the lease before reading session metadata or accepting work.
 If normal archival already fenced the owner, lookup joins archival through cache removal, then
