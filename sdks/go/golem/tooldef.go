@@ -62,6 +62,24 @@ type commandOpts struct {
 	stdin       *StreamSpec
 	stdout      *StreamSpec
 	raises      []*toolErrorInfo
+	constraints []Constraint
+	result      resultOpts
+}
+
+// resultOpts customises how a command's result is documented and rendered.
+type resultOpts struct {
+	doc              string
+	formatters       []Formatter
+	defaultFormatter string
+}
+
+// Formatter is a named rendering of a command's result, such as "json" or
+// "table". The tool declares which it offers; producing them is the surface's
+// job, not the handler's.
+type Formatter struct {
+	Name        string
+	Summary     string
+	Description string
 }
 
 // Summary sets a command's one-line description.
@@ -86,6 +104,24 @@ type StreamSpec struct {
 	Mime []string
 	// Required rejects an invocation that does not supply the stream.
 	Required bool
+}
+
+// ResultDoc documents a command's result. It is optional: a command with a
+// result type publishes it either way.
+func ResultDoc(doc string) CommandOpt {
+	return func(o *commandOpts) { o.result.doc = doc }
+}
+
+// Formats declares the renderings a command's result is offered in. The first
+// is the default unless [DefaultFormat] says otherwise.
+func Formats(formatters ...Formatter) CommandOpt {
+	return func(o *commandOpts) { o.result.formatters = append(o.result.formatters, formatters...) }
+}
+
+// DefaultFormat picks which declared formatter is used when the caller does not
+// choose one.
+func DefaultFormat(name string) CommandOpt {
+	return func(o *commandOpts) { o.result.defaultFormatter = name }
 }
 
 // Stdin declares that the command reads standard input.
@@ -505,9 +541,14 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, fields
 	result := witTypes.None[toolCommon.ResultSpec]()
 	if ce.outType != reflect.TypeFor[Unit]() {
 		result = witTypes.Some(toolCommon.ResultSpec{
-			Type: g.node(d.compile(ce.outType)),
-			Doc:  docOf("", ""),
+			Type:             g.node(d.compile(ce.outType)),
+			Doc:              docOf(ce.opts.result.doc, ""),
+			Formatters:       d.buildFormatters(ce),
+			DefaultFormatter: d.defaultFormatter(ce),
 		})
+	} else if len(ce.opts.result.formatters) > 0 {
+		d.recordErr("", "", "command %s declares formatters but returns no result",
+			commandLabel(ce.path))
 	}
 
 	errorCases := make([]toolCommon.ErrorCase, 0, len(ce.opts.raises))
@@ -532,6 +573,7 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, fields
 		},
 		Options:     options,
 		Flags:       flags,
+		Constraints: d.buildConstraints(ce, fields),
 		Errors:      errorCases,
 		Stdin:       streamSpec(ce.opts.stdin),
 		Stdout:      streamSpec(ce.opts.stdout),
@@ -755,4 +797,43 @@ func panicMessage(r any) string {
 		return e.Error()
 	}
 	return fmt.Sprintf("%v", r)
+}
+
+func (d *definitions) buildFormatters(ce *commandEntry) []toolCommon.Formatter {
+	out := make([]toolCommon.Formatter, 0, len(ce.opts.result.formatters))
+	seen := map[string]bool{}
+	for _, f := range ce.opts.result.formatters {
+		if f.Name == "" {
+			d.recordErr("", "", "command %s declares a formatter with no name", commandLabel(ce.path))
+			continue
+		}
+		if seen[f.Name] {
+			d.recordErr("", "", "command %s declares the formatter %q twice", commandLabel(ce.path), f.Name)
+			continue
+		}
+		seen[f.Name] = true
+		out = append(out, toolCommon.Formatter{Name: f.Name, Doc: docOf(f.Summary, f.Description)})
+	}
+	return out
+}
+
+// defaultFormatter resolves the declared default, which the WIT requires to name
+// one of the declared formatters.
+func (d *definitions) defaultFormatter(ce *commandEntry) string {
+	declared := ce.opts.result.formatters
+	chosen := ce.opts.result.defaultFormatter
+	if chosen == "" {
+		if len(declared) == 0 {
+			return ""
+		}
+		return declared[0].Name
+	}
+	for _, f := range declared {
+		if f.Name == chosen {
+			return chosen
+		}
+	}
+	d.recordErr("", "", "command %s defaults to the formatter %q, which it does not declare",
+		commandLabel(ce.path), chosen)
+	return chosen
 }
