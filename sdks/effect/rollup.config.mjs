@@ -56,7 +56,7 @@ export default defineConfig([
   },
 
   {
-    input: "src/Middleware.ts",
+    input: "src/middleware-entry.mjs",
     output: {
       file: "dist/middleware.mjs",
       format: "esm",

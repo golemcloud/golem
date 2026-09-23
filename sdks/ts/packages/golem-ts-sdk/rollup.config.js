@@ -77,7 +77,7 @@ export default defineConfig([
   javascript('src/index.ts', 'dist/index.mjs'),
   javascript('src/schema/public.ts', 'dist/schema.mjs'),
   javascript('src/reflection.ts', 'dist/reflection.mjs'),
-  javascript('src/middleware.ts', 'dist/middleware.mjs'),
+  javascript('src/middleware-entry.mjs', 'dist/middleware.mjs'),
   javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs'),
   declarations('src/index.ts', 'dist/index.d.mts'),
   declarations('src/schema/public.ts', 'dist/schema.d.mts'),

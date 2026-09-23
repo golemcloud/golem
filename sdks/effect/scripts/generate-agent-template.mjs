@@ -12,6 +12,7 @@ const forkedLine =
   'wit-bindgen-p3 = { package = "wit-bindgen", git = "https://github.com/golemcloud/wit-bindgen", rev = "4407232ead86d9bcbd06cbebd790a52120a4087a", version = "=0.59.0", default-features = false, features = ["async", "async-spawn", "macros", "inter-task-wakeup"], optional = true }'
 
 const sharedModules = [
+  ["@golemcloud/effect-golem/middleware", "dist/middleware.mjs"],
   ["@golemcloud/effect-golem/sqlite", "dist/sqlite.mjs"],
   ["@golemcloud/effect-golem/postgres", "dist/postgres.mjs"],
   ["@golemcloud/effect-golem/mysql", "dist/mysql.mjs"],
