@@ -34,7 +34,8 @@ inherit_test_dep!(
 );
 
 /// A configured Go agent reads a flat config value ("greeting") and a nested one
-/// ("fee"/"cents") set at deploy time.
+/// ("fee"/"cents") set at deploy time. "cents" is declared as an s64, so its
+/// deploy-time value is a canonical base-10 string rather than a JSON number.
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
@@ -58,7 +59,7 @@ async fn go_agent_config_read(
                 },
                 AgentConfigEntryDto {
                     path: vec!["fee".to_string(), "cents".to_string()],
-                    value: serde_json::json!(30).into(),
+                    value: serde_json::json!("30").into(),
                 },
             ],
         )
