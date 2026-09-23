@@ -754,7 +754,14 @@ async fn completion_receipt_precedes_fifo_status_fold(
             trace_id: context.trace_id,
             trace_states: context.trace_states,
             invocation_context,
-            wallet_pin: None,
+            wallet_pin: Box::new(InvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 0,
+                },
+                pinned_card_ids: Vec::new(),
+                scope_card_id: None,
+            }),
         })
         .await;
     let finished_index = worker
