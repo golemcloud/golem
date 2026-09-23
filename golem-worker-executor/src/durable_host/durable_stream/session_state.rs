@@ -941,6 +941,9 @@ impl SessionControlMetadata {
                 | StreamSessionRecord::ConsumerItemValue(_)
         ) {
             for (slot, binding) in bindings.iter().enumerate() {
+                if self.reader_id(binding).is_ok() {
+                    continue;
+                }
                 self.reader_bindings.push((
                     LocalStreamReaderId {
                         introducing_oplog_index: index,
@@ -1092,6 +1095,73 @@ mod tests {
                 element_schema_fingerprint: SchemaFingerprintV1([7; 32]),
             },
         }
+    }
+
+    #[test]
+    fn repeated_binding_evidence_preserves_one_reader_per_binding() {
+        use golem_common::base_model::durable_stream::StreamSessionInvocationResultRecord;
+
+        let owner = identity();
+        let key = owner.invocation.clone();
+        let first = binding(&mapping());
+        let mut second = first.clone();
+        second.transport_stream_id += 1;
+        let third = binding(&mapping_for(&key, 18));
+        let reference = StreamRegistrationInvocation::Local(key.idempotency_key.clone());
+        let mut state = SessionControlMetadata::default();
+        let records = [
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: reference.clone(),
+                mapping: first.clone(),
+            }),
+            StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: reference.clone(),
+                result: Vec::new(),
+                stream_mappings: vec![first.clone(), third.clone()],
+            }),
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: reference,
+                mapping: second.clone(),
+            }),
+        ];
+        for (position, record) in records.iter().enumerate() {
+            assert!(record.has_supported_format());
+            state.apply(
+                OplogIndex::from_u64(position as u64 + 10),
+                &key,
+                record,
+                owner.environment_id,
+                &owner.agent_id,
+                owner.fingerprint,
+            );
+        }
+        state.ensure_valid().unwrap();
+        let first_reader = LocalStreamReaderId {
+            introducing_oplog_index: OplogIndex::from_u64(10),
+            binding_slot: 0,
+        };
+        let second_reader = LocalStreamReaderId {
+            introducing_oplog_index: OplogIndex::from_u64(12),
+            binding_slot: 0,
+        };
+        let third_reader = LocalStreamReaderId {
+            introducing_oplog_index: OplogIndex::from_u64(11),
+            binding_slot: 1,
+        };
+        assert_eq!(state.reader_id(&first).unwrap(), first_reader);
+        assert_eq!(state.reader_id(&second).unwrap(), second_reader);
+        assert_eq!(state.reader_id(&third).unwrap(), third_reader);
+        assert_eq!(
+            state.reader_bindings,
+            vec![
+                (first_reader, first),
+                (third_reader, third),
+                (second_reader, second),
+            ]
+        );
     }
 
     #[test]
