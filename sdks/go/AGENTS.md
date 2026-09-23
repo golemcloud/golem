@@ -153,6 +153,13 @@ wire form. Sending one where the other belongs is accepted by neither side.
 Each module manages its own dependencies in its own `go.mod`; the root Cargo
 workspace's central dependency rule does not apply here.
 
+**`core` and `golem` take no third-party dependency.** `core` is standard library
+only, and `golem`'s only non-generated dependency is the pinned `componentize-go`
+build tool. `bridge` may take one, because it has to: external streaming needs a
+WebSocket client and Go's standard library has none, where Scala gets one from
+`java.net.http`. The TypeScript bridge package does the same, depending on `ws`.
+A dependency added there must not be reachable from `core` or `golem`.
+
 A `replace` in a dependency's `go.mod` is ignored, so a component that resolves the
 guest SDK from a checkout must name `core` itself as well. The CLI does this: it
 derives the core path from the Go SDK path override and reconciles both the `require`

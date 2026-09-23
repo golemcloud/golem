@@ -461,19 +461,3 @@ func QuantitySetParts(ptr any, mantissa int64, scale int32, unit string) bool {
 	q.quantitySetValue(mantissa, scale, unit)
 	return true
 }
-
-// ---------------------------------------------------------------------------
-// Map entries
-// ---------------------------------------------------------------------------
-
-// MapEntry is one key-value pair of a schema map.
-//
-// A schema map travels as an ordered list of pairs, and its keys are not
-// restricted to strings, so it does not become a Go map: a Go map would lose
-// the order and could not hold a key type that is not comparable. A map<K, V>
-// is therefore []MapEntry[K, V], which is also what the Rust bridge does with
-// Vec<(K, V)>.
-type MapEntry[K any, V any] struct {
-	Key   K
-	Value V
-}

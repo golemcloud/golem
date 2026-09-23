@@ -111,13 +111,16 @@ pub fn render<'a>(
             format!("[{length}]{}", render(element, named, resolve, writer)?)
         }
 
-        // A schema map is an ordered list of pairs whose keys need not be
-        // strings, so it is not a Go map: a Go map would lose the order and
-        // could not hold a key type that is not comparable. The Rust bridge
-        // spells the same thing Vec<(K, V)>.
+        // An ordinary Go map. Schema well-formedness restricts a map key to a
+        // primitive — bool, an integer, a float, char or string — and every one
+        // of those is comparable in Go, so a Go map can always hold it. The
+        // Rust bridge spells this Vec<(K, V)> instead only because Rust floats
+        // are neither Hash nor Eq.
+        //
+        // Go randomizes map iteration, but the guest SDK's codec sorts the keys
+        // before encoding, so what travels is still deterministic.
         SchemaType::Map { key, value, .. } => format!(
-            "[]{}.MapEntry[{}, {}]",
-            values(writer),
+            "map[{}]{}",
             render(key, named, resolve, writer)?,
             render(value, named, resolve, writer)?
         ),
@@ -295,17 +298,30 @@ mod tests {
         );
     }
 
-    /// A schema map is an ordered list of pairs with unrestricted keys, so it
-    /// does not become a Go map.
+    /// Schema well-formedness restricts a map key to a primitive, and every
+    /// primitive is comparable in Go, so an ordinary Go map always works.
     #[test]
-    fn a_map_is_a_slice_of_entries() {
+    fn a_map_is_a_go_map() {
         assert_eq!(
             go_type(&SchemaType::Map {
                 key: Box::new(SchemaType::String { metadata: meta() }),
                 value: Box::new(SchemaType::Bool { metadata: meta() }),
                 metadata: meta()
             }),
-            "[]values.MapEntry[string, bool]"
+            "map[string]bool"
+        );
+        // A float key is legal in the schema and legal in Go; it is Rust that
+        // cannot use one as a HashMap key.
+        assert_eq!(
+            go_type(&SchemaType::Map {
+                key: Box::new(SchemaType::F64 {
+                    restrictions: None,
+                    metadata: meta()
+                }),
+                value: Box::new(SchemaType::String { metadata: meta() }),
+                metadata: meta()
+            }),
+            "map[float64]string"
         );
     }
 
