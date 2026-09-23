@@ -118,11 +118,15 @@ fn release_wire_invocation_input(
   input : @types.TypedSchemaValue,
   drops : @model.SchemaValueResourceDrops,
 ) -> Unit {
-  try @model.typed_schema_value_from_wit(input, drops) catch {
-    _ => ()
-  } noraise {
-    decoded => decoded.value.release_resources(drops)
-  }
+  @schema.WireReader::new(input.value, drop_resource=node => {
+    match node {
+      @types.SecretValue(raw) => (drops.drop_secret)(raw)
+      @types.QuotaTokenHandle(raw) => (drops.drop_quota_token)(raw)
+      @types.StreamValue(raw) => (drops.drop_stream)(raw)
+      @types.PermissionCardHandle(raw) => raw.drop()
+      _ => ()
+    }
+  }).abort()
 }
 
 ///|

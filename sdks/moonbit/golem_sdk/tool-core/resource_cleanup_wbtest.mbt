@@ -130,6 +130,33 @@ test "wire invocation rejection drops stream resources" {
 }
 
 ///|
+test "wire rejection releases aliased unreachable resources without decoding the graph" {
+  let dropped = [0, 0, 0, 0]
+  let drops : @model.SchemaValueResourceDrops = {
+    drop_secret: _ => dropped[0] += 1,
+    drop_quota_token: _ => dropped[1] += 1,
+    drop_stream: _ => dropped[2] += 1,
+    drop_native_stream: _ => dropped[3] += 1,
+  }
+  let secret = @types.SecretValue(@types.Secret::Secret(51))
+  let quota = @types.QuotaTokenHandle(@types.QuotaToken::QuotaToken(52))
+  let stream = @types.StreamValue(
+    @types.SchemaValueStream::SchemaValueStream(53),
+  )
+  release_wire_invocation_input(
+    {
+      graph: { type_nodes: [], defs: [], root: 99, },
+      value: {
+        value_nodes: [secret, quota, stream, secret, stream],
+        root: 101,
+      },
+    },
+    drops,
+  )
+  assert_eq(dropped, [1, 1, 1, 0])
+}
+
+///|
 test "decoded invocation rejection calls configured stream drop" {
   let source = @model.GuestSchemaValueStreamHandle::from_wrapped(
     @types.SchemaValueStream::SchemaValueStream(15),
