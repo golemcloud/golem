@@ -1666,3 +1666,419 @@ async fn delete_dir_keeps_blobs_of_other_namespaces(
     assert!(deleted);
     assert_eq!(kept, Some(Bytes::from("payload").to_vec()));
 }
+
+#[test]
+#[tracing::instrument]
+async fn namespace_root_contract_is_consistent(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+
+    for root in ["", ".", "./", "././"] {
+        let path = Path::new(root);
+        assert_eq!(
+            storage
+                .get_raw("namespace_root_contract", "get", namespace.clone(), path)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(
+            storage
+                .get_stream(
+                    "namespace_root_contract",
+                    "get-stream",
+                    namespace.clone(),
+                    path
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            storage
+                .get_metadata(
+                    "namespace_root_contract",
+                    "metadata",
+                    namespace.clone(),
+                    path
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            storage
+                .exists("namespace_root_contract", "exists", namespace.clone(), path)
+                .await
+                .unwrap(),
+            ExistsResult::Directory
+        );
+
+        storage
+            .create_dir("namespace_root_contract", "create", namespace.clone(), path)
+            .await
+            .unwrap();
+        storage
+            .delete("namespace_root_contract", "delete", namespace.clone(), path)
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .delete_dir(
+                    "namespace_root_contract",
+                    "delete-dir",
+                    namespace.clone(),
+                    path
+                )
+                .await
+                .unwrap()
+        );
+
+        let write_error = storage
+            .put_raw(
+                "namespace_root_contract",
+                "put",
+                namespace.clone(),
+                path,
+                b"data",
+            )
+            .await
+            .unwrap_err();
+        assert!(write_error.downcast_ref::<BlobNameError>().is_some());
+
+        let copy_error = storage
+            .copy(
+                "namespace_root_contract",
+                "copy",
+                namespace.clone(),
+                Path::new("source"),
+                path,
+            )
+            .await
+            .unwrap_err();
+        assert!(copy_error.downcast_ref::<BlobNameError>().is_some());
+    }
+
+    storage
+        .put_raw(
+            "namespace_root_contract",
+            "put-named-blob",
+            namespace.clone(),
+            Path::new("named"),
+            b"data",
+        )
+        .await
+        .unwrap();
+    for root in ["", ".", "./", "././"] {
+        assert!(
+            storage
+                .get_metadata(
+                    "namespace_root_contract",
+                    "metadata-after-write",
+                    namespace.clone(),
+                    Path::new(root)
+                )
+                .await
+                .unwrap()
+                .is_none(),
+            "root metadata changed after writing a named blob for {root:?}"
+        );
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn blobs_and_directories_have_a_consistent_representation(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let path = Path::new("~same-path");
+    let child = path.join("child");
+
+    storage
+        .create_dir("blob_directory_contract", "create", namespace.clone(), path)
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .get_raw(
+                "blob_directory_contract",
+                "get-directory",
+                namespace.clone(),
+                path
+            )
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        storage
+            .get_metadata(
+                "blob_directory_contract",
+                "directory-metadata",
+                namespace.clone(),
+                path
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .size,
+        0
+    );
+
+    storage
+        .put_raw(
+            "blob_directory_contract",
+            "put-same-path",
+            namespace.clone(),
+            path,
+            b"parent",
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "blob_directory_contract",
+            "put-below-blob",
+            namespace.clone(),
+            &child,
+            b"child",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .get_raw(
+                "blob_directory_contract",
+                "get-same-path",
+                namespace.clone(),
+                path
+            )
+            .await
+            .unwrap(),
+        Some(b"parent".to_vec())
+    );
+    assert_eq!(
+        storage
+            .get_raw(
+                "blob_directory_contract",
+                "get-below-blob",
+                namespace.clone(),
+                &child
+            )
+            .await
+            .unwrap(),
+        Some(b"child".to_vec())
+    );
+    assert_eq!(
+        storage
+            .exists("blob_directory_contract", "exists", namespace.clone(), path)
+            .await
+            .unwrap(),
+        ExistsResult::File
+    );
+
+    storage
+        .delete(
+            "blob_directory_contract",
+            "delete-blob",
+            namespace.clone(),
+            path,
+        )
+        .await
+        .unwrap();
+    storage
+        .delete(
+            "blob_directory_contract",
+            "delete-missing",
+            namespace.clone(),
+            Path::new("missing"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .exists(
+                "blob_directory_contract",
+                "directory-remains",
+                namespace.clone(),
+                path
+            )
+            .await
+            .unwrap(),
+        ExistsResult::Directory
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn implicit_directories_are_not_listed(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    storage
+        .put_raw(
+            "implicit_directories_are_not_listed",
+            "put",
+            namespace.clone(),
+            Path::new("only/blob"),
+            b"data",
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        storage
+            .list_dir(
+                "implicit_directories_are_not_listed",
+                "list",
+                namespace.clone(),
+                Path::new("")
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn deleting_blobs_does_not_leave_phantom_directories(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let lone_blob = Path::new("lone");
+    storage
+        .put_raw(
+            "deleting_blobs_does_not_leave_phantom_directories",
+            "put-lone",
+            namespace.clone(),
+            lone_blob,
+            b"data",
+        )
+        .await
+        .unwrap();
+    storage
+        .delete(
+            "deleting_blobs_does_not_leave_phantom_directories",
+            "delete-lone",
+            namespace.clone(),
+            lone_blob,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .exists(
+                "deleting_blobs_does_not_leave_phantom_directories",
+                "exists-lone",
+                namespace.clone(),
+                lone_blob,
+            )
+            .await
+            .unwrap(),
+        ExistsResult::DoesNotExist
+    );
+
+    let implicit_directory = Path::new("implicit");
+    let nested_blob = implicit_directory.join("nested");
+    storage
+        .put_raw(
+            "deleting_blobs_does_not_leave_phantom_directories",
+            "put-nested",
+            namespace.clone(),
+            &nested_blob,
+            b"data",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .exists(
+                "deleting_blobs_does_not_leave_phantom_directories",
+                "exists-implicit-before-delete",
+                namespace.clone(),
+                implicit_directory,
+            )
+            .await
+            .unwrap(),
+        ExistsResult::Directory
+    );
+    storage
+        .delete(
+            "deleting_blobs_does_not_leave_phantom_directories",
+            "delete-nested",
+            namespace.clone(),
+            &nested_blob,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .exists(
+                "deleting_blobs_does_not_leave_phantom_directories",
+                "exists-implicit-after-delete",
+                namespace.clone(),
+                implicit_directory,
+            )
+            .await
+            .unwrap(),
+        ExistsResult::DoesNotExist
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[tracing::instrument]
+async fn non_utf8_paths_are_rejected(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let storage = test.get_blob_storage().await;
+    let path = Path::new(OsStr::from_bytes(b"non\xffutf8"));
+    let error = storage
+        .put_raw(
+            "non_utf8_paths_are_rejected",
+            "put",
+            namespace.clone(),
+            path,
+            b"data",
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error.downcast_ref::<BlobNameError>(),
+        Some(BlobNameError::NotUtf8 { .. })
+    ));
+}
+
+#[test]
+#[tracing::instrument]
+async fn filesystem_missing_copy_has_a_typed_error(
+    #[tagged_as("fs")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let error = storage
+        .copy(
+            "filesystem_missing_copy_has_a_typed_error",
+            "copy",
+            namespace.clone(),
+            Path::new("missing"),
+            Path::new("destination"),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.downcast_ref::<BlobMissingError>().is_some());
+}

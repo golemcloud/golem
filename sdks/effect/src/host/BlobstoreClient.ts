@@ -93,18 +93,14 @@ export interface HostContainer {
 }
 
 export interface BlobstoreClientShape {
-  /** Create a new empty container. Fails if a container with the same name already exists. */
+  /** Create a container if it does not exist, or open the existing container. */
   createContainer(name: string): Effect.Effect<HostContainer, BlobstoreHostError, Scope.Scope>
   /** Open an existing container by name. Fails if the container does not exist. */
   getContainer(name: string): Effect.Effect<HostContainer, BlobstoreHostError, Scope.Scope>
   /**
    * Idempotent: open the named container, creating it first if it
-   * does not exist. `wasi:blobstore` has no atomic get-or-create
-   * primitive, so the default Live impl optimistically calls
-   * `createContainer` and, on failure, replays `getContainer` if
-   * `containerExists` reports the container is now present
-   * (collapses the TOCTOU window vs. a raw exists-then-create).
-   * Test fakes can override with a single-call semantic.
+   * does not exist. The host's `createContainer` operation already
+   * has this contract.
    */
   getOrCreateContainer(name: string): Effect.Effect<HostContainer, BlobstoreHostError, Scope.Scope>
   containerExists(name: string): Effect.Effect<boolean, BlobstoreHostError>
@@ -326,25 +322,7 @@ export const BlobstoreLive: Layer.Layer<BlobstoreClient> = Layer.succeed(
   BlobstoreClient.of({
     createContainer: liveCreateContainer,
     getContainer: liveGetContainer,
-    getOrCreateContainer: (name) =>
-      // `wasi:blobstore` exposes no atomic get-or-create primitive.
-      // We minimise the TOCTOU window by attempting `createContainer`
-      // first; if it fails AND the container now exists, treat the
-      // failure as a benign race (another fiber / external actor won
-      // the create) and replay `getContainer`. Otherwise propagate
-      // the original create failure.
-      Effect.matchEffect(liveCreateContainer(name), {
-        onSuccess: Effect.succeed,
-        onFailure: (createErr) =>
-          Effect.gen(function* () {
-            const exists = yield* Effect.matchEffect(liveContainerExists(name), {
-              onSuccess: Effect.succeed,
-              onFailure: () => Effect.succeed(false),
-            })
-            if (exists) return yield* liveGetContainer(name)
-            return yield* Effect.fail(createErr)
-          }),
-      }),
+    getOrCreateContainer: liveCreateContainer,
     containerExists: liveContainerExists,
     deleteContainer: liveDeleteContainer,
     copyObject: liveCopyObject,

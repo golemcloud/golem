@@ -31,21 +31,15 @@ describe("Blobstore.createContainer / getContainer / containerExists", () => {
     }),
   )
 
-  it.effect("createContainer fails when the container already exists", () =>
+  it.effect("createContainer opens a container that already exists", () =>
     Effect.gen(function* () {
       const fake = yield* makeBlobFake
-      const exit = yield* Effect.exit(
-        Effect.gen(function* () {
-          yield* Blobstore.createContainer("dup")
-          return yield* Blobstore.createContainer("dup")
-        }).pipe(Effect.provide(fake.layer)),
-      )
-      expect(exit._tag).toBe("Failure")
-      if (exit._tag === "Failure") {
-        const json = JSON.stringify(exit.cause)
-        expect(json).toContain("BlobstoreHostError")
-        expect(json).toContain("already exists")
-      }
+      yield* Effect.gen(function* () {
+        const first = yield* Blobstore.createContainer("dup")
+        const second = yield* Blobstore.createContainer("dup")
+        expect(first.name).toBe("dup")
+        expect(second.name).toBe("dup")
+      }).pipe(Effect.provide(fake.layer))
     }),
   )
 
@@ -83,12 +77,7 @@ describe("Blobstore.createContainer / getContainer / containerExists", () => {
     }),
   )
 
-  // The Live impl optimistically calls `createContainer` first; on
-  // failure it consults `containerExists` and replays `getContainer`
-  // if the container is now present. This collapses the TOCTOU
-  // window vs. a raw exists-then-create. Pre-seeding the wasi
-  // mock simulates the "another actor won the create" race.
-  it.effect("BlobstoreLive.getOrCreateContainer falls back to getContainer when create races", () =>
+  it.effect("BlobstoreLive.getOrCreateContainer opens an existing container", () =>
     Effect.gen(function* () {
       __deleteContainerEntry("race")
       __ensureContainer("race")

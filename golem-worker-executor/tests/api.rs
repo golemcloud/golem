@@ -5019,7 +5019,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let artifact_fingerprint =
         golem_common::wasmtime_config::wasmtime_artifact_fingerprint(&engine);
     let compiled_component_path = deps.blob_storage_root().join(format!(
-        "compilation_cache/{}/{}/0/{}.cwasm",
+        "compilation_cache/{}/{}/0/{}.cwasm/~blob",
         component.environment_id, component.id, artifact_fingerprint
     ));
 

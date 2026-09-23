@@ -15,7 +15,8 @@
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_file_name_to_string,
-    blob_parent_to_string, blob_path_is_root, blob_path_to_string, validate_relative_blob_path,
+    blob_parent_to_string, blob_path_is_root, blob_path_to_string, reject_root_blob_path,
+    validate_relative_blob_path,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -23,7 +24,6 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, TryStreamExt};
 use golem_common::model::Timestamp;
-use std::collections::HashSet;
 use std::{
     path::{Path, PathBuf},
     pin::Pin,
@@ -39,7 +39,7 @@ struct Key {
 #[derive(Debug, Clone)]
 enum Entry {
     Directory {
-        files: HashSet<String>,
+        created_at: Timestamp,
     },
     File {
         data: Vec<u8>,
@@ -76,6 +76,9 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let dir = blob_parent_to_string(path)?;
         let key = blob_file_name_to_string(path)?;
 
@@ -103,6 +106,9 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let dir = blob_parent_to_string(path)?;
         let file = blob_file_name_to_string(path)?;
 
@@ -135,20 +141,43 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let dir = blob_parent_to_string(path)?;
         let file = blob_file_name_to_string(path)?;
 
         let key = Key {
-            namespace,
+            namespace: namespace.clone(),
             dir,
             file: Some(file),
         };
 
-        Ok(self
+        let blob = self
             .data
             .read_async(&key, |_, entry| match entry {
                 Entry::File { metadata, .. } => Some(metadata.clone()),
                 _ => None,
+            })
+            .await
+            .flatten();
+        if blob.is_some() {
+            return Ok(blob);
+        }
+
+        let directory = Key {
+            namespace,
+            dir: blob_path_to_string(path)?,
+            file: None,
+        };
+        Ok(self
+            .data
+            .read_async(&directory, |_, entry| match entry {
+                Entry::Directory { created_at } => Some(BlobMetadata {
+                    last_modified_at: *created_at,
+                    size: 0,
+                }),
+                Entry::File { .. } => None,
             })
             .await
             .flatten())
@@ -163,6 +192,7 @@ impl BlobStorage for InMemoryBlobStorage {
         data: &[u8],
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
+        reject_root_blob_path(path)?;
         let dir = blob_parent_to_string(path)?;
         let file = blob_file_name_to_string(path)?;
 
@@ -170,12 +200,6 @@ impl BlobStorage for InMemoryBlobStorage {
             namespace: namespace.clone(),
             dir: dir.clone(),
             file: Some(file.clone()),
-        };
-
-        let parent_key = Key {
-            namespace,
-            dir,
-            file: None,
         };
 
         let size = data.len() as u64;
@@ -189,19 +213,6 @@ impl BlobStorage for InMemoryBlobStorage {
 
         self.data.upsert_async(key, entry).await;
 
-        let file2 = file.clone();
-        self.data
-            .entry_async(parent_key)
-            .await
-            .and_modify(|entry| {
-                if let Entry::Directory { files } = entry {
-                    files.insert(file);
-                }
-            })
-            .or_insert_with(|| Entry::Directory {
-                files: HashSet::from_iter(vec![file2]),
-            });
-
         Ok(())
     }
 
@@ -214,6 +225,7 @@ impl BlobStorage for InMemoryBlobStorage {
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
+        reject_root_blob_path(path)?;
         let dir = blob_parent_to_string(path)?;
         let file = blob_file_name_to_string(path)?;
 
@@ -234,26 +246,7 @@ impl BlobStorage for InMemoryBlobStorage {
             file: Some(file.clone()),
         };
 
-        let parent_key = Key {
-            namespace,
-            dir,
-            file: None,
-        };
-
         self.data.upsert_async(key, entry).await;
-
-        let file2 = file.clone();
-        self.data
-            .entry_async(parent_key)
-            .await
-            .and_modify(|entry| {
-                if let Entry::Directory { files } = entry {
-                    files.insert(file);
-                }
-            })
-            .or_insert_with(|| Entry::Directory {
-                files: HashSet::from_iter(vec![file2]),
-            });
 
         Ok(())
     }
@@ -266,6 +259,9 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(());
+        }
         let dir = blob_parent_to_string(path)?;
         let file = blob_file_name_to_string(path)?;
 
@@ -275,19 +271,6 @@ impl BlobStorage for InMemoryBlobStorage {
             file: Some(file.clone()),
         };
 
-        let parent_key = Key {
-            namespace,
-            dir,
-            file: None,
-        };
-
-        self.data
-            .update_async(&parent_key, |_, entry| {
-                if let Entry::Directory { files } = entry {
-                    files.remove(&file);
-                }
-            })
-            .await;
         self.data.remove_async(&key).await;
         Ok(())
     }
@@ -300,6 +283,9 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(());
+        }
         let dir = blob_path_to_string(path)?;
 
         let key = Key {
@@ -309,31 +295,9 @@ impl BlobStorage for InMemoryBlobStorage {
         };
 
         let entry = Entry::Directory {
-            files: HashSet::new(),
+            created_at: Timestamp::now_utc(),
         };
         self.data.upsert_async(key, entry).await;
-
-        let parent = blob_parent_to_string(path)?;
-        let name = blob_file_name_to_string(path)?;
-
-        let parent_key = Key {
-            namespace,
-            dir: parent,
-            file: None,
-        };
-
-        let name2 = name.clone();
-        self.data
-            .entry_async(parent_key)
-            .await
-            .and_modify(|entry| {
-                if let Entry::Directory { files } = entry {
-                    files.insert(name);
-                }
-            })
-            .or_insert_with(|| Entry::Directory {
-                files: HashSet::from_iter(vec![name2]),
-            });
 
         Ok(())
     }
@@ -348,22 +312,26 @@ impl BlobStorage for InMemoryBlobStorage {
         validate_relative_blob_path(path)?;
         let dir = blob_path_to_string(path)?;
 
-        let key = Key {
-            namespace,
-            dir,
-            file: None,
-        };
-
-        let files = self
-            .data
-            .read_async(&key, |_, entry| match entry {
-                Entry::Directory { files, .. } => files.clone(),
-                _ => HashSet::new(),
+        let mut entries = Vec::new();
+        self.data
+            .iter_async(|key, entry| {
+                if key.namespace == namespace {
+                    if key.dir == dir {
+                        if let Some(file) = &key.file {
+                            entries.push(path.join(file));
+                        }
+                    } else if key.file.is_none()
+                        && matches!(entry, Entry::Directory { .. })
+                        && Path::new(&key.dir).parent() == Some(path)
+                    {
+                        entries.push(PathBuf::from(&key.dir));
+                    }
+                }
+                true
             })
-            .await
-            .unwrap_or_default();
+            .await;
 
-        Ok(files.into_iter().map(|f| path.join(f)).collect())
+        Ok(entries)
     }
 
     async fn delete_dir(
@@ -381,27 +349,20 @@ impl BlobStorage for InMemoryBlobStorage {
 
         let dir = blob_path_to_string(path)?;
 
-        let key = Key {
-            namespace,
-            dir: dir.clone(),
-            file: None,
-        };
-
-        let Some((_, Entry::Directory { .. })) = self.data.remove_async(&key).await else {
-            return Ok(false);
-        };
-
-        // A key is below the deleted directory when it is in that directory or in one nested
-        // under it, so the files and the directory entries at any depth go with it.
         let nested = format!("{dir}/");
+        let mut deleted = false;
         self.data
             .retain_async(|below, _| {
-                below.namespace != key.namespace
-                    || (below.dir != dir && !below.dir.starts_with(&nested))
+                let in_directory = below.namespace == namespace
+                    && (below.dir == dir || below.dir.starts_with(&nested));
+                if in_directory {
+                    deleted = true;
+                }
+                !in_directory
             })
             .await;
 
-        Ok(true)
+        Ok(deleted)
     }
 
     async fn exists(
@@ -412,33 +373,28 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
     ) -> Result<ExistsResult, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(ExistsResult::Directory);
+        }
         let path_str = blob_path_to_string(path)?;
-        let dir_key = Key {
+        let file_key = Key {
             namespace: namespace.clone(),
-            dir: path_str,
-            file: None,
+            dir: blob_parent_to_string(path)?,
+            file: Some(blob_file_name_to_string(path)?),
         };
-        if self.data.contains_async(&dir_key).await {
+        if self.data.contains_async(&file_key).await {
+            return Ok(ExistsResult::File);
+        }
+        let nested = format!("{path_str}/");
+        if self
+            .data
+            .any_async(|key, _| {
+                key.namespace == namespace && (key.dir == path_str || key.dir.starts_with(&nested))
+            })
+            .await
+            .is_some()
+        {
             Ok(ExistsResult::Directory)
-        } else if let Some(dir) = path.parent() {
-            let dir = blob_path_to_string(dir)?;
-
-            if path.file_name().is_some() {
-                let file = blob_file_name_to_string(path)?;
-                let file_key = Key {
-                    namespace,
-                    dir,
-                    file: Some(file),
-                };
-
-                if self.data.contains_async(&file_key).await {
-                    Ok(ExistsResult::File)
-                } else {
-                    Ok(ExistsResult::DoesNotExist)
-                }
-            } else {
-                Ok(ExistsResult::DoesNotExist)
-            }
         } else {
             Ok(ExistsResult::DoesNotExist)
         }

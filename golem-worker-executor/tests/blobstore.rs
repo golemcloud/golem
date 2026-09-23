@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::metrics::storage::{
@@ -118,6 +119,111 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
     drop(executor);
 
     assert!(!result);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn blobstore_rejects_root_container_names_without_retrying(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("BlobStore", "root-container-contract");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for root in ["", ".", "./", "././"] {
+        for (operation, source, destination) in [
+            ("create-container", root, "destination"),
+            ("get-container", root, "destination"),
+            ("delete-container", root, "destination"),
+            ("container-exists", root, "destination"),
+            ("copy-object", root, "destination"),
+            ("copy-object", "source", root),
+            ("move-object", root, "destination"),
+            ("move-object", "source", root),
+        ] {
+            let result = executor
+                .invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "blobstore_probe",
+                    data_value!(operation, source, "object", destination, "object"),
+                )
+                .await?
+                .into_typed::<Result<(), String>>()?;
+            let error = result.expect_err("a namespace root is not a container");
+            assert!(
+                error.to_ascii_lowercase().contains("invalid"),
+                "unexpected error for {operation}({root:?}): {error}"
+            );
+        }
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "permanent root-container errors must not produce retry entries: {oplog:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn blobstore_missing_copy_and_move_return_without_retrying(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("BlobStore", "missing-copy-contract");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for operation in ["copy-object", "move-object"] {
+        let result = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "blobstore_probe",
+                data_value!(operation, "source", "missing", "destination", "object"),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        let error = result.expect_err("the source blob does not exist");
+        assert!(
+            error.to_ascii_lowercase().contains("not found"),
+            "unexpected error for {operation}: {error}"
+        );
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "permanent missing-source errors must not produce retry entries: {oplog:?}"
+    );
+
     Ok(())
 }
 

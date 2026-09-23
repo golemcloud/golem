@@ -51,7 +51,7 @@ impl SqliteBlobStorage {
                     last_modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Metadata: Last modified timestamp
                     size INTEGER NOT NULL,                                -- Metadata: Size of the blob
                     is_directory BOOLEAN DEFAULT FALSE NOT NULL,          -- Flag indicating if the row represents a directory
-                    PRIMARY KEY (namespace, parent, name)  -- Composite primary key
+                    PRIMARY KEY (namespace, parent, name, is_directory)
                 );
                 "#)).await?;
         Ok(())
@@ -105,6 +105,9 @@ impl BlobStorage for SqliteBlobStorage {
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let query = sqlx::query_as("SELECT value FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE;")
             .bind(Self::namespace(namespace))
             .bind(blob_parent_to_string(path)?)
@@ -147,8 +150,11 @@ impl BlobStorage for SqliteBlobStorage {
         path: &Path,
     ) -> Result<Option<BlobMetadata>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let query = sqlx::query_as(
-            "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
+            "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? ORDER BY is_directory ASC LIMIT 1;",
         )
             .bind(Self::namespace(namespace))
             .bind(blob_parent_to_string(path)?)
@@ -179,7 +185,7 @@ impl BlobStorage for SqliteBlobStorage {
                     r#"
                         INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
                         VALUES (?, ?, ?, ?, ?, FALSE)
-                        ON CONFLICT(namespace, parent, name) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
+                        ON CONFLICT(namespace, parent, name, is_directory) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
                     "#,
                 )
                     .bind(Self::namespace(namespace))
@@ -224,8 +230,11 @@ impl BlobStorage for SqliteBlobStorage {
         path: &Path,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(());
+        }
         let query = sqlx::query(
-            "DELETE FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
+            "DELETE FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE;",
         )
         .bind(Self::namespace(namespace))
         .bind(blob_parent_to_string(path)?)
@@ -246,11 +255,14 @@ impl BlobStorage for SqliteBlobStorage {
         path: &Path,
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(());
+        }
         let query = sqlx::query(
                     r#"
                         INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
                         VALUES (?, ?, ?, NULL, 0, TRUE)
-                        ON CONFLICT(namespace, parent, name) DO UPDATE SET is_directory = TRUE, value = NULL, size = 0;
+                        ON CONFLICT(namespace, parent, name, is_directory) DO UPDATE SET value = NULL, size = 0, last_modified_at = CURRENT_TIMESTAMP;
                     "#
                 )
                 .bind(Self::namespace(namespace))
@@ -350,12 +362,18 @@ impl BlobStorage for SqliteBlobStorage {
         path: &Path,
     ) -> Result<ExistsResult, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(ExistsResult::Directory);
+        }
+        let namespace = Self::namespace(namespace);
+        let parent = blob_parent_to_string(path)?;
+        let name = blob_file_name_to_string(path)?;
         let query = sqlx::query_as(
-            "SELECT is_directory FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? LIMIT 1;",
+            "SELECT is_directory FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? ORDER BY is_directory ASC LIMIT 1;",
         )
-        .bind(Self::namespace(namespace))
-        .bind(blob_parent_to_string(path)?)
-        .bind(blob_file_name_to_string(path)?);
+        .bind(&namespace)
+        .bind(&parent)
+        .bind(&name);
 
         let result = self
             .pool
@@ -374,7 +392,36 @@ impl BlobStorage for SqliteBlobStorage {
                 }
             })?;
 
-        Ok(result)
+        if result != ExistsResult::DoesNotExist {
+            return Ok(result);
+        }
+
+        let dir = if parent.is_empty() {
+            name
+        } else {
+            format!("{parent}/{name}")
+        };
+        let child = format!("{dir}/");
+        let child_end = format!("{dir}0");
+        let implicit: Option<(i64,)> = self
+            .pool
+            .with_ro(target_label, op_label)
+            .fetch_optional_as(
+                sqlx::query_as(
+                    "SELECT 1 FROM blob_storage WHERE namespace = ? AND (parent = ? OR (parent >= ? AND parent < ?)) LIMIT 1;",
+                )
+                .bind(namespace)
+                .bind(dir)
+                .bind(child)
+                .bind(child_end),
+            )
+            .await?;
+
+        Ok(if implicit.is_some() {
+            ExistsResult::Directory
+        } else {
+            ExistsResult::DoesNotExist
+        })
     }
 }
 
