@@ -117,7 +117,7 @@ message ShardLease {
 
 // Extends the executor's shard lease before it expires. shard_epochs is the
 // set the executor believes it holds. It is what the executor is proving it is
-// alive for, not a condition of the renewal: a claim that does not match the
+// alive for, not a condition of the renewal: a set that does not match the
 // manager's view is renewed all the same, and the response carries the set the
 // manager holds for this executor, which the executor adopts. That makes the
 // renewal a guaranteed second delivery path for a push that was lost, and it

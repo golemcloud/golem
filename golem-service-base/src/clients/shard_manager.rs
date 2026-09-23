@@ -73,7 +73,7 @@ pub trait ShardManager: Send + Sync {
 
     /// Extends this executor's shard lease. `shard_epochs` is the set the
     /// executor believes it holds; it is not a condition of the renewal. A
-    /// claim that does not match the manager's view is renewed all the same,
+    /// set that does not match the manager's view is renewed all the same,
     /// and the returned lease carries the manager's set, which the caller
     /// adopts exactly as it would an `AssignShards` push.
     ///
@@ -742,7 +742,7 @@ impl From<&'static str> for QuotaError {
 
 /// The failure arms of `RenewShardLease` and `Deregister`; the executor
 /// branches on the arm, never on the message string. There is no stale-epoch
-/// arm: a claim that does not match the manager's view is renewed and
+/// arm: a held set that does not match the manager's view is renewed and
 /// corrected in the response, not refused.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ShardLeaseError {

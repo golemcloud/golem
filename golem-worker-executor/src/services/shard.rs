@@ -75,7 +75,7 @@ pub trait ShardService: OplogFenceObserver + Send + Sync {
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError>;
     /// A granted lease renewal: the shard manager's set for this executor, at
     /// a new expiry anchored where the renewal was sent. Normally the set that
-    /// was claimed; when it is not, it is the manager correcting a push this
+    /// was held; when it is not, it is the manager correcting a push this
     /// executor never received, and `set_changed` tells the caller to sweep
     /// and recover agents exactly as it would for a push. The set gates on
     /// `revision`; the lease clock always moves, even when the set is stale.

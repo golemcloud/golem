@@ -705,9 +705,9 @@ impl ShardAssignment {
         self.shard_epochs.get(shard_id).copied()
     }
 
-    /// The claim sent on a lease renewal: exactly the set last received, in a
+    /// The held epochs sent on a lease renewal: exactly the set last received, in a
     /// deterministic order.
-    pub fn claim(&self) -> BTreeMap<ShardId, ShardEpoch> {
+    pub fn held_epochs(&self) -> BTreeMap<ShardId, ShardEpoch> {
         self.shard_epochs
             .iter()
             .map(|(shard_id, epoch)| (*shard_id, *epoch))
@@ -747,7 +747,7 @@ impl ShardAssignment {
     /// set goes through [`Self::apply`]'s revision gate like every other
     /// delivery: the revision orders sets and the request time orders leases,
     /// and the two are independent. Normally the set is exactly what was
-    /// claimed, because a renewal never advances an epoch; when it is not, the
+    /// held, because a renewal never advances an epoch; when it is not, the
     /// manager is correcting a push this executor never received, and the
     /// caller sweeps and recovers agents exactly as it would for a push.
     ///
@@ -3227,7 +3227,7 @@ mod shard_assignment_tests {
     }
 
     /// The corrective delivery: a renewal that answers with a different set
-    /// than was claimed is applied like a push, and reports the set moved so
+    /// than was held is applied like a push, and reports the set moved so
     /// the caller sweeps and recovers.
     #[test]
     fn a_renewal_that_changes_the_set_reports_it() {
