@@ -440,14 +440,10 @@ jobs:
         run: cargo make wit
 
       - name: Restore Scala guest runtime WASMs (built by build-golem-scala)
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            sdks/scala/sbt/src/main/resources/golem/wasm/*.wasm
-            sdks/scala/mill/resources/golem/wasm/*.wasm
-            sdks/scala/wit/dts
-          key: agent-guest-wasm-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: scala-guest-runtime-wasms-${{ github.run_id }}
+          path: sdks/scala
 
       - name: Restore Scala SDK ivy local repo (published by build-golem-scala)
         uses: actions/cache/restore@v5
@@ -745,14 +741,16 @@ jobs:
         run: |
           sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
 
-      - name: Cache Scala guest runtime WASMs for it-cli
-        uses: actions/cache/save@v5
+      - name: Upload Scala guest runtime WASMs for it-cli
+        uses: actions/upload-artifact@v6
         with:
+          name: scala-guest-runtime-wasms-${{ github.run_id }}
           path: |
             sdks/scala/sbt/src/main/resources/golem/wasm/*.wasm
             sdks/scala/mill/resources/golem/wasm/*.wasm
             sdks/scala/wit/dts
-          key: agent-guest-wasm-${{ github.run_id }}
+          retention-days: 1
+          overwrite: true
 
       - name: Cache Scala SDK ivy local repo for it-cli
         uses: actions/cache/save@v5
