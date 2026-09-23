@@ -90,10 +90,7 @@ async fn agent_count(context: &RawHttpProcessLossContext) -> anyhow::Result<usiz
                 FilterComparator::Equal,
                 AgentMode::Ephemeral,
             )),
-            ScanCursor {
-                cursor: 0,
-                layer: 0,
-            },
+            ScanCursor::default(),
             100,
             true,
         )
