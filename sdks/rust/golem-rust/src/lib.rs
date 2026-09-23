@@ -366,10 +366,7 @@ pub mod oplog_processor {
 #[cfg(feature = "export_golem_agentic")]
 pub mod agentic;
 
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub use agentic::reflection::*;
 
 #[cfg(feature = "durability")]
