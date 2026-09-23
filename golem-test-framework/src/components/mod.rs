@@ -34,6 +34,7 @@ pub mod durable_streams_client;
 mod dynamic_span;
 pub mod etcd;
 pub mod jaeger;
+pub mod minio;
 pub mod otel_collector;
 pub mod rdb;
 pub mod redis;
