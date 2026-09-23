@@ -77,30 +77,17 @@ pub fn agent_definition_impl(attrs: TokenStream, item: TokenStream) -> TokenStre
             } = agent_type_with_remote_client;
 
             let registration_function: syn::TraitItem = syn::parse_quote! {
-                fn __register_agent_type() {
-                    let agent_type = #agent_type;
-                    let principal_input_parameters = agent_type.principal_params_in_constructor();
-
-                    if let Some(http_mount) = &agent_type.http_mount {
-                        golem_rust::agentic::validate_http_mount(
-                            &agent_type.type_name,
-                            &http_mount,
-                            &agent_type.constructor,
-                            &principal_input_parameters
-                        ).expect("HTTP mount validation failed");
-                    }
-
-                    for method in &agent_type.methods {
-                        golem_rust::agentic::validate_http_endpoint(
-                            &agent_type.type_name,
-                            method,
-                            agent_type.http_mount.as_ref(),
-                        ).expect("Agent method HTTP endpoint validation failed");
-                    }
-
-                    golem_rust::agentic::register_agent_type(
-                        golem_rust::agentic::AgentTypeName(agent_type.type_name.to_string()),
+                fn __register_agent_type() where Self: Sized {
+                    fn descriptor() -> golem_rust::golem_agentic::golem::agent::common::AgentType {
+                        use golem_rust::agentic::{AgentParameterSchema as _, AgentParameterStreams as _};
+                        let agent_type = #agent_type;
+                        golem_rust::agentic::validate_wire_agent_http(&agent_type)
+                            .expect("Agent HTTP configuration validation failed");
                         agent_type
+                    }
+                    golem_rust::agentic::register_wire_agent_type(
+                        golem_rust::agentic::AgentTypeName(Self::__golem_agent_type_name().to_string()),
+                        descriptor,
                     );
                 }
             };
@@ -353,7 +340,7 @@ fn get_agent_type_with_remote_client(
             };
 
             let output_schema_token = quote! {
-               let mut default_outputs = vec![];
+               let mut output = golem_rust::golem_agentic::golem::agent::common::OutputSchema::Unit;
             };
 
             for input in &trait_fn.sig.inputs {
@@ -377,15 +364,8 @@ fn get_agent_type_with_remote_client(
                     if !has_agent_config_attr(pat_type) {
                         let ty = &pat_type.ty;
                         input_schema_logic.push(quote! {
-                            let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
-                            match schema {
-                                golem_rust::agentic::StructuredSchema::Default(schema) => {
-                                    default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedParameterSchema::Value(schema)));
-                                },
-                                golem_rust::agentic::StructuredSchema::AutoInject(auto_inject_schema) => {
-                                    default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedParameterSchema::AutoInject(auto_inject_schema)));
-                                }
-                            }
+                            default_inputs.push((&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData))
+                                .parameter_schema(#param_name, &mut __golem_schema));
                         });
                     }
                 }
@@ -410,14 +390,10 @@ fn get_agent_type_with_remote_client(
 
                     if !is_unit {
                         output_schema_logic.push(quote! {
-                            let schema = <#ty as golem_rust::agentic::Schema>::get_type();
-                            match schema {
-                                golem_rust::agentic::StructuredSchema::Default(schema) => {
-                                    default_outputs.push(("return_value".to_string(), schema));
-                                },
-                                golem_rust::agentic::StructuredSchema::AutoInject(_) => {
-                                    panic!("Auto-injected types cannot be used as agent method return values");
-                                }
+                            if !<#ty as golem_rust::WireSchema>::IS_UNIT {
+                                output = golem_rust::golem_agentic::golem::agent::common::OutputSchema::Single(
+                                    <#ty as golem_rust::WireSchema>::append_schema(&mut __golem_schema)
+                                );
                             }
                         });
                     }
@@ -428,7 +404,7 @@ fn get_agent_type_with_remote_client(
                 {
                     #input_schema_token
                     #(#input_schema_logic)*
-                    default_inputs
+                    golem_rust::golem_agentic::golem::agent::common::InputSchema::Parameters(default_inputs)
                 }
             };
 
@@ -436,12 +412,12 @@ fn get_agent_type_with_remote_client(
                 {
                     #output_schema_token
                     #(#output_schema_logic)*
-                    default_outputs
+                    output
                 }
             };
 
             Some(quote! {
-                golem_rust::agentic::EnrichedAgentMethod {
+                golem_rust::golem_agentic::golem::agent::common::AgentMethod {
                     name: #method_name.to_string(),
                     description: #method_description.to_string(),
                     prompt_hint: {
@@ -540,18 +516,11 @@ fn get_agent_type_with_remote_client(
                     let ty = &pat_type.ty;
                     constructor_parameters_with_schema.push(quote! {
                         assert!(
-                            !<#ty as golem_rust::agentic::Schema>::contains_stream(),
+                            !(&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData)).parameter_contains_stream(),
                             "AgentStream cannot be used in an agent constructor parameter"
                         );
-                        let schema: golem_rust::agentic::StructuredSchema = <#ty as golem_rust::agentic::Schema>::get_type();
-                        match schema {
-                            golem_rust::agentic::StructuredSchema::Default(schema) => {
-                                constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedParameterSchema::Value(schema)));
-                            },
-                            golem_rust::agentic::StructuredSchema::AutoInject(auto_inject_schema) => {
-                                constructor_default_inputs.push((#param_name.to_string(), golem_rust::agentic::EnrichedParameterSchema::AutoInject(auto_inject_schema)));
-                            }
-                        }
+                        constructor_default_inputs.push((&golem_rust::agentic::AgentParameterProbe::<#ty>(::std::marker::PhantomData))
+                            .parameter_schema(#param_name, &mut __golem_schema));
                     });
                 }
             }
@@ -562,7 +531,7 @@ fn get_agent_type_with_remote_client(
         {
             #constructor_schema_init
             #(#constructor_parameters_with_schema)*
-            constructor_default_inputs
+            golem_rust::golem_agentic::golem::agent::common::InputSchema::Parameters(constructor_default_inputs)
         }
     };
 
@@ -598,7 +567,7 @@ fn get_agent_type_with_remote_client(
         {
          #constructor_data_schema_token
 
-         golem_rust::agentic::ExtendedAgentConstructor {
+         golem_rust::golem_agentic::golem::agent::common::AgentConstructor {
             name: #constructor_name,
             description: #constructor_description.to_string(),
             prompt_hint: #constructor_prompt_hint,
@@ -614,9 +583,9 @@ fn get_agent_type_with_remote_client(
     };
 
     let config_impl = {
-        let add_type_config_entries = agent_config_types
-            .iter()
-            .map(|ct| quote! { result.append(&mut <#ct>::config_entries()); });
+        let add_type_config_entries = agent_config_types.iter().map(
+            |ct| quote! { result.append(&mut <#ct>::wire_config_entries(&mut __golem_schema)); },
+        );
 
         quote! {
             {
@@ -629,18 +598,25 @@ fn get_agent_type_with_remote_client(
 
     Ok(AgentTypeWithRemoteClient {
         agent_type: quote! {
-            golem_rust::agentic::ExtendedAgentType {
+            {
+            let mut __golem_schema = golem_rust::schema::wit::direct::WireSchemaBuilder::default();
+            let methods = vec![#(#methods),*];
+            let constructor = #agent_constructor;
+            let config = #config_impl;
+            let root = __golem_schema.push(golem_rust::schema::wit::wire::SchemaTypeBody::RecordType(vec![]));
+            golem_rust::golem_agentic::golem::agent::common::AgentType {
                 type_name: #agent_trait_name.to_string(),
                 description: #high_level_description_ident.to_string(),
                 source_language: "rust".to_string(),
-                methods: vec![#(#methods),*],
+                methods,
                 dependencies: vec![],
-                constructor: #agent_constructor,
+                constructor,
                 mode: #mode_value,
                 http_mount: #http_options,
                 snapshotting: #snapshotting_value,
-                config: #config_impl,
-                sorted_method_indices: vec![],
+                config,
+                schema: __golem_schema.finish(root),
+            }
             }
         },
         remote_client,

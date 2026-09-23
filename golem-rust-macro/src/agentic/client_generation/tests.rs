@@ -81,7 +81,12 @@ fn awaited_streaming_methods_use_async_value_encoding_only() {
     for durable in [true, false] {
         let rendered = get_remote_client(&item_trait, &[], &[], &[], &[], &[], durable).to_string();
 
-        assert_eq!(rendered.matches("encode_schema_value_async").count(), 1);
+        assert_eq!(rendered.matches("prepare_parameter").count(), 1);
+        assert!(!rendered.contains("encode_schema_value"));
+        assert!(!rendered.contains("from_schema_value"));
+        assert!(!rendered.contains("get_schema_graph"));
+        assert!(!rendered.contains("Schema > :: contains_stream"));
+        assert!(rendered.contains("parameter_contains_stream"));
         assert_eq!(
             rendered
                 .matches(
@@ -501,5 +506,5 @@ fn client_does_not_store_affine_constructor_tree() {
     assert!(rendered.contains("make_agent_id"));
     assert!(rendered.contains("agent_id"));
     // Quota tokens are rejected in constructor parameters before any encode.
-    assert!(rendered.contains("__reject_quota_tokens_in_agent_constructor"));
+    assert!(rendered.contains("reject_quota_tokens"));
 }

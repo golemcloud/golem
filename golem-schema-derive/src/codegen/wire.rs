@@ -34,6 +34,7 @@ pub fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream> {
         Data::Union(_) => Vec::new(),
     };
     let mut described_types = TokenStream::new();
+    let mut stream_types = Vec::new();
     for fields in groups {
         for field in fields {
             let a = parse_item_attrs(&field.attrs)?;
@@ -42,6 +43,9 @@ pub fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream> {
             }
             let ty = &field.ty;
             described_types.extend(quote!(#ty));
+            if a.rich.is_none() {
+                stream_types.push(ty);
+            }
         }
     }
     for param in &mut generics.params {
@@ -78,6 +82,10 @@ pub fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream> {
             impl #impl_generics #direct::WireSchema for #ident #ty_generics #where_clause {
                 const IS_UNIT: bool = <#ty as #direct::WireSchema>::IS_UNIT;
 
+                fn contains_stream(seen: &mut ::std::collections::HashSet<&'static str>) -> bool {
+                    <#ty as #direct::WireSchema>::contains_stream(seen)
+                }
+
                 fn append_schema(builder: &mut #direct::WireSchemaBuilder) -> #wire::TypeNodeIndex {
                     <#ty as #direct::WireSchema>::append_schema(builder)
                 }
@@ -112,6 +120,13 @@ pub fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream> {
     Ok(quote! {
         #[automatically_derived]
         impl #impl_generics #direct::WireSchema for #ident #ty_generics #where_clause {
+            fn contains_stream(seen: &mut ::std::collections::HashSet<&'static str>) -> bool {
+                if !seen.insert(::core::any::type_name::<Self>()) {
+                    return false;
+                }
+                false #(|| <#stream_types as #direct::WireSchema>::contains_stream(seen))*
+            }
+
             fn append_schema(builder: &mut #direct::WireSchemaBuilder) -> #wire::TypeNodeIndex {
                 let id = <Self as #direct::WireSchema>::wire_type_id();
                 let (definition, fresh) = builder.reserve(id, ::core::option::Option::Some(#display.to_string()));

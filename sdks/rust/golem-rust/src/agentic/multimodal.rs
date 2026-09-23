@@ -24,6 +24,10 @@ use crate::schema::wit::{direct, wire};
 pub trait MultimodalWire {
     fn append_modality_cases(builder: &mut direct::WireSchemaBuilder)
     -> Vec<wire::VariantCaseType>;
+
+    fn contains_stream(_: &mut std::collections::HashSet<&'static str>) -> bool {
+        false
+    }
 }
 
 /// Represents Multimodal input data for agent functions.
@@ -99,6 +103,10 @@ impl<T: direct::FromWire> direct::FromWire for MultimodalAdvanced<T> {
 }
 
 impl<T: MultimodalWire> direct::WireSchema for MultimodalAdvanced<T> {
+    fn contains_stream(seen: &mut std::collections::HashSet<&'static str>) -> bool {
+        T::contains_stream(seen)
+    }
+
     fn append_schema(builder: &mut direct::WireSchemaBuilder) -> wire::TypeNodeIndex {
         let cases = T::append_modality_cases(builder);
         let element = builder.push(wire::SchemaTypeBody::VariantType(cases));
@@ -300,6 +308,10 @@ macro_rules! wire_wrapper {
         }
 
         impl<$($t: Schema + direct::WireSchema)?> direct::WireSchema for $wrapper {
+            fn contains_stream(seen: &mut std::collections::HashSet<&'static str>) -> bool {
+                <$inner as direct::WireSchema>::contains_stream(seen)
+            }
+
             fn append_schema(builder: &mut direct::WireSchemaBuilder) -> wire::TypeNodeIndex {
                 <$inner as direct::WireSchema>::append_schema(builder)
             }
@@ -542,6 +554,10 @@ pub enum CustomModality<T: Schema> {
 }
 
 impl<T: Schema + direct::WireSchema> MultimodalWire for CustomModality<T> {
+    fn contains_stream(seen: &mut std::collections::HashSet<&'static str>) -> bool {
+        <T as direct::WireSchema>::contains_stream(seen)
+    }
+
     fn append_modality_cases(
         builder: &mut direct::WireSchemaBuilder,
     ) -> Vec<wire::VariantCaseType> {

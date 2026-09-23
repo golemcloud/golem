@@ -38,7 +38,7 @@ pub struct State {
 
 #[derive(Default)]
 pub struct AgentTypes {
-    pub agent_types: HashMap<AgentTypeName, ExtendedAgentType>,
+    pub agent_types: HashMap<AgentTypeName, Box<dyn Fn() -> AgentType>>,
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -118,27 +118,34 @@ pub fn get_all_agent_types() -> Vec<AgentType> {
         .borrow()
         .agent_types
         .values()
-        .map(|e| e.to_agent_type())
+        .map(|descriptor| descriptor())
         .collect()
 }
 
 pub fn get_enriched_agent_type_by_name(
     agent_type_name: &AgentTypeName,
 ) -> Option<ExtendedAgentType> {
-    let state = get_state();
+    get_agent_type_by_name(agent_type_name).map(|descriptor| {
+        ExtendedAgentType::from_agent_type(descriptor)
+            .expect("registered agent schema must be valid")
+    })
+}
 
-    state
+pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentType> {
+    get_state()
         .agent_types
         .borrow()
         .agent_types
         .get(agent_type_name)
-        .cloned()
+        .map(|descriptor| descriptor())
 }
 
-pub fn get_agent_type_by_name(agent_type_name: &AgentTypeName) -> Option<AgentType> {
-    let enriched = get_enriched_agent_type_by_name(agent_type_name);
-
-    enriched.map(|e| e.to_agent_type())
+pub fn has_registered_agent_type(agent_type_name: &AgentTypeName) -> bool {
+    get_state()
+        .agent_types
+        .borrow()
+        .agent_types
+        .contains_key(agent_type_name)
 }
 
 pub fn get_principal() -> Option<Principal> {
@@ -147,16 +154,20 @@ pub fn get_principal() -> Option<Principal> {
     state.agent_instance.borrow().principal.clone()
 }
 
-pub fn register_agent_type(agent_type_name: AgentTypeName, mut agent_type: ExtendedAgentType) {
-    let mut indices: Vec<usize> = (0..agent_type.methods.len()).collect();
-    indices.sort_by(|&a, &b| agent_type.methods[a].name.cmp(&agent_type.methods[b].name));
-    agent_type.sorted_method_indices = indices;
+pub fn register_agent_type(agent_type_name: AgentTypeName, agent_type: ExtendedAgentType) {
+    get_state().agent_types.borrow_mut().agent_types.insert(
+        agent_type_name,
+        Box::new(move || agent_type.to_agent_type()),
+    );
+}
 
+#[doc(hidden)]
+pub fn register_wire_agent_type(agent_type_name: AgentTypeName, descriptor: fn() -> AgentType) {
     get_state()
         .agent_types
         .borrow_mut()
         .agent_types
-        .insert(agent_type_name, agent_type);
+        .insert(agent_type_name, Box::new(descriptor));
 }
 
 pub fn register_agent_initiator(agent_type_name: &str, initiator: Arc<dyn AgentInitiator>) {
@@ -234,9 +245,7 @@ pub fn get_constructor_parameter_type(
     agent_type_name: &AgentTypeName,
     parameter_index: usize,
 ) -> Option<EnrichedParameterSchema> {
-    let state = get_state();
-    let agent_types = state.agent_types.borrow();
-    let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
+    let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
 
     extract_parameter_schema(&agent_type.constructor.input_schema, parameter_index)
 }
@@ -246,9 +255,7 @@ pub fn get_method_parameter_type(
     method_name: &str,
     parameter_index: usize,
 ) -> Option<EnrichedParameterSchema> {
-    let state = get_state();
-    let agent_types = state.agent_types.borrow();
-    let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
+    let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
 
     let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
 
@@ -258,9 +265,7 @@ pub fn get_method_parameter_type(
 pub fn get_constructor_parameter_types(
     agent_type_name: &AgentTypeName,
 ) -> Option<Vec<EnrichedParameterSchema>> {
-    let state = get_state();
-    let agent_types = state.agent_types.borrow();
-    let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
+    let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
 
     Some(extract_all_parameter_schemas(
         &agent_type.constructor.input_schema,
@@ -271,9 +276,7 @@ pub fn get_method_parameter_types(
     agent_type_name: &AgentTypeName,
     method_name: &str,
 ) -> Option<Vec<EnrichedParameterSchema>> {
-    let state = get_state();
-    let agent_types = state.agent_types.borrow();
-    let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
+    let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
     let method = agent_type.methods.iter().find(|m| m.name == method_name)?;
 
     Some(extract_all_parameter_schemas(&method.input_schema))
@@ -283,9 +286,7 @@ pub fn get_method_parameter_types_by_index(
     agent_type_name: &AgentTypeName,
     sorted_method_index: usize,
 ) -> Option<Vec<EnrichedParameterSchema>> {
-    let state = get_state();
-    let agent_types = state.agent_types.borrow();
-    let agent_type = agent_types.agent_types.get(agent_type_name.0.as_str())?;
+    let agent_type = get_enriched_agent_type_by_name(agent_type_name)?;
     let orig_idx = *agent_type.sorted_method_indices.get(sorted_method_index)?;
     let method = agent_type.methods.get(orig_idx)?;
 

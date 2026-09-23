@@ -94,6 +94,12 @@ pub fn tool_definition_impl(
         Ok(tokens) => resolve_sdk(tokens),
         Err(err) => return err.to_compile_error().into(),
     };
+    let wire_descriptor_fn = match crate::tool::descriptor::synthesize_wire_descriptor_fn(&ir) {
+        Ok(tokens) => resolve_sdk(tokens),
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let wire_fn_ident =
+        crate::tool::descriptor::standalone_wire_descriptor_fn_ident(&ir.trait_ident);
     let client = resolve_sdk(crate::tool::client::synthesize_client(&ir));
     let middleware_surface =
         resolve_sdk(crate::tool::middleware_surface::synthesize_middleware_surface(&ir));
@@ -131,6 +137,27 @@ pub fn tool_definition_impl(
         }
     };
     match syn::parse2::<TraitItem>(resolve_sdk(prepared_item)) {
+        Ok(item) => item_trait.items.push(item),
+        Err(error) => return error.into_compile_error().into(),
+    }
+
+    let tool_name = to_kebab_case(&ir.trait_ident.to_string());
+    item_trait.items.push(syn::parse_quote! {
+        #[doc(hidden)]
+        fn __tool_name() -> &'static str where Self: Sized { #tool_name }
+    });
+    let wire_item = quote! {
+        #[doc(hidden)]
+        fn __tool_wire_descriptor() -> golem_rust::schema::tool::wit::wire::Tool
+        where Self: Sized,
+        {
+            let schema = golem_rust::agentic::WireToolSchema::default();
+            let descriptor = #wire_fn_ident(&schema)
+                .expect("tool descriptor build failed");
+            descriptor.into_wire(schema).expect("tool descriptor lowering failed")
+        }
+    };
+    match syn::parse2::<TraitItem>(resolve_sdk(wire_item)) {
         Ok(item) => item_trait.items.push(item),
         Err(error) => return error.into_compile_error().into(),
     }
@@ -199,6 +226,7 @@ pub fn tool_definition_impl(
         #item_trait
 
         #descriptor_fn
+        #wire_descriptor_fn
 
         #client
 

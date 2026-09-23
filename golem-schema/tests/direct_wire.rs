@@ -482,6 +482,61 @@ fn resource_preflight_failure_preserves_earlier_and_aliased_handles() {
     assert_eq!(secret.take().unwrap().take_handle(), 71);
 }
 
+#[test]
+fn constructor_quota_rejection_preserves_every_handle() {
+    use golem_schema::schema::wit::direct::{IntoWire, WirePreflight};
+
+    let secret = GuestSecretHandle::new(unsafe { wire::Secret::from_handle(71) });
+    let quota = GuestQuotaTokenHandle::new(unsafe { wire::QuotaToken::from_handle(83) });
+    let value = (secret.clone(), vec![None, Some(quota.clone())]);
+    let mut preflight = WirePreflight::default();
+    value.preflight(&mut preflight).unwrap();
+    assert!(matches!(
+        preflight.reject_quota_tokens(),
+        Err(WireError::ForbiddenResource("quota-token"))
+    ));
+    assert_eq!(secret.take().unwrap().take_handle(), 71);
+    assert_eq!(quota.take().unwrap().take_handle(), 83);
+    let mut preflight = WirePreflight::default();
+    ("ordinary".to_string(), vec![1u32, 7])
+        .preflight(&mut preflight)
+        .unwrap();
+    preflight.reject_quota_tokens().unwrap();
+}
+
+#[test]
+fn stream_presence_uses_type_metadata_without_building_a_schema() {
+    use golem_schema::schema::wit::direct::{WireSchema, WireSchemaBuilder};
+    use std::collections::{BTreeMap, HashSet};
+
+    struct Stream;
+    impl WireSchema for Stream {
+        fn contains_stream(_: &mut HashSet<&'static str>) -> bool {
+            true
+        }
+        fn append_schema(_: &mut WireSchemaBuilder) -> i32 {
+            panic!("must not build a schema")
+        }
+    }
+    #[allow(dead_code)]
+    #[derive(WireSchema)]
+    struct Recursive {
+        children: Vec<Recursive>,
+    }
+    #[allow(dead_code)]
+    #[derive(WireSchema)]
+    struct RecursiveStream {
+        children: Vec<RecursiveStream>,
+        stream: Option<Stream>,
+    }
+    assert!(!Recursive::contains_stream(&mut HashSet::new()));
+    assert!(RecursiveStream::contains_stream(&mut HashSet::new()));
+    assert!(
+        <BTreeMap<String, Result<Box<RecursiveStream>, u32>>>::contains_stream(&mut HashSet::new())
+    );
+    assert!(!<(String, Option<Result<Box<Recursive>, u32>>)>::contains_stream(&mut HashSet::new()));
+}
+
 #[derive(Debug, PartialEq, IntoWire, FromWire, WireSchema)]
 struct Rich {
     #[schema(text(language = "hu", regex = "[a-z]+"))]

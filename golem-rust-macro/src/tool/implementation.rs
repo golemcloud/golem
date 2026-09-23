@@ -66,8 +66,9 @@ pub fn tool_implementation_impl(
         #golem_rust::ctor::__support::ctor_parse!(
             #[ctor] fn #register_fn_name() {
                 #golem_rust::agentic::install_tool_exports();
-                #golem_rust::agentic::register_prepared_tool_invoker(
-                    <#self_ty as #trait_path>::__tool_prepared_descriptor(),
+                #golem_rust::agentic::register_wire_tool_invoker(
+                    <#self_ty as #trait_path>::__tool_name(),
+                    <#self_ty as #trait_path>::__tool_wire_descriptor,
                     <#self_ty as #trait_path>::__tool_invoke,
                 );
             }

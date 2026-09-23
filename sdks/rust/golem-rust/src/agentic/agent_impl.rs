@@ -196,10 +196,9 @@ impl Guest for AgentRuntime {
         log::set_max_level(log::LevelFilter::Trace);
 
         let agent_type_name = AgentTypeName(agent_type.clone());
-        let _agent_type = agent_registry::get_enriched_agent_type_by_name(&agent_type_name)
-            .unwrap_or_else(|| {
-                let agent_types = agent_registry::get_all_agent_types();
-                panic!(
+        if !agent_registry::has_registered_agent_type(&agent_type_name) {
+            let agent_types = agent_registry::get_all_agent_types();
+            panic!(
                 "Agent definition not found for agent name: {}. Available agents in this app is {}",
                 agent_type,
                 agent_types
@@ -208,7 +207,7 @@ impl Guest for AgentRuntime {
                     .collect::<Vec<_>>()
                     .join(", ")
             )
-            });
+        }
 
         let commit_principal = principal.clone();
         let resolved = with_agent_initiator(

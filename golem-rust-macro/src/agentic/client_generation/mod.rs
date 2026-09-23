@@ -14,9 +14,8 @@
 
 use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_return_type_error};
 use crate::rpc_client_common::{
-    FunctionOutputInfo, collect_kept_args, collect_typed_params, decode_result_value,
-    encode_value_only_carrier, find_generic_param_in_inputs, find_generic_param_in_return,
-    is_principal_param, is_static_method, positional_record_schema_value,
+    FunctionOutputInfo, collect_kept_args, collect_typed_params, find_generic_param_in_inputs,
+    find_generic_param_in_return, is_principal_param, is_static_method,
 };
 use quote::{format_ident, quote};
 use std::collections::{HashMap, HashSet};
@@ -110,16 +109,14 @@ pub fn get_remote_client(
 
                 let #agent_id_ident = golem_rust::golem_agentic::golem::agent::host::make_agent_id(
                     #type_name,
-                    golem_rust::encode_schema_value(&#constructor_value_ident)
-                        .expect("Failed to encode constructor parameters for agent id"),
+                    #constructor_value_ident(),
                     #phantom_wire,
                 )
                 .expect("Internal Error: Failed to make agent id");
 
                 let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
                     #type_name,
-                    golem_rust::encode_schema_value(&#constructor_value_ident)
-                        .expect("Failed to encode constructor parameters"),
+                    #constructor_value_ident(),
                     #phantom_wire,
                     #config,
                 );
@@ -308,8 +305,7 @@ fn build_ephemeral_constructor_body(
         #encode_constructor
         let wasm_rpc = golem_rust::golem_agentic::golem::agent::host::WasmRpc::new(
             #type_name,
-            golem_rust::encode_schema_value(&#constructor_value)
-                .expect("Failed to encode constructor parameters"),
+            #constructor_value(),
             None,
             #config,
         );
@@ -324,13 +320,42 @@ fn generate_constructor_data_value_params_encoding(
     param_idents: &[proc_macro2::Ident],
     constructor_value_ident: &proc_macro2::Ident,
 ) -> proc_macro2::TokenStream {
-    let constructor_record =
-        positional_record_schema_value(param_idents, "Failed to convert constructor parameter");
+    let constructor_record = encode_parameters(param_idents, false, true);
     quote! {
-        let #constructor_value_ident = #constructor_record;
-        golem_rust::agentic::__reject_quota_tokens_in_agent_constructor(&#constructor_value_ident)
-            .unwrap_or_else(|err| panic!("Invalid agent constructor parameters: {err}"));
+        let #constructor_value_ident = || #constructor_record;
     }
+}
+
+fn encode_parameters(
+    idents: &[syn::Ident],
+    asynchronous: bool,
+    constructor: bool,
+) -> proc_macro2::TokenStream {
+    let resources = fresh_param_ident(idents, "__golem_resources");
+    let writer = fresh_param_ident(idents, "__golem_writer");
+    let fields = fresh_param_ident(idents, "__golem_fields");
+    let preflight = if asynchronous {
+        quote! { golem_rust::schema::wit::direct::WirePreflight::asynchronous() }
+    } else {
+        quote! { golem_rust::schema::wit::direct::WirePreflight::default() }
+    };
+    let prepare = asynchronous.then(|| quote! {
+        #((&golem_rust::agentic::AgentArgument(&#idents)).prepare_parameter().await.expect("Failed to prepare parameter"));*;
+    });
+    let reject_quota = constructor.then(|| quote! {
+        #resources.reject_quota_tokens().expect("quota tokens are not allowed in agent constructor parameters");
+    });
+    quote! {{
+        use golem_rust::agentic::WriteAgentParameter as _;
+        let mut #resources = #preflight;
+        #((&golem_rust::agentic::AgentArgument(&#idents)).preflight_parameter(&mut #resources).expect("Failed to preflight parameter"));*;
+        #reject_quota
+        #prepare
+        let mut #writer = golem_rust::schema::wit::direct::WireWriter::default();
+        let #fields: Vec<Option<golem_rust::schema::wit::wire::ValueNodeIndex>> = vec![#((&golem_rust::agentic::AgentArgument(&#idents)).write_parameter(&mut #writer).expect("Failed to encode parameter")),*];
+        let root = #writer.push(golem_rust::schema::wit::wire::SchemaValueNode::RecordValue(#fields.into_iter().flatten().collect()));
+        #writer.finish(root)
+    }}
 }
 
 fn get_remote_agent_methods_info(
@@ -440,28 +465,24 @@ fn generate_method_code(
         })
         .collect::<Vec<_>>();
     let reject_non_awaited_stream_invocation = quote! {
-        if false #(|| <#stream_types as golem_rust::agentic::Schema>::contains_stream())* {
+        use golem_rust::agentic::AgentParameterStreams as _;
+        if false #(|| (&golem_rust::agentic::AgentParameterProbe::<#stream_types>(::std::marker::PhantomData)).parameter_contains_stream())* {
             let _ = (#(&#input_idents),*);
             panic!("live streams cannot cross remote or scheduled agent invocation boundaries")
         }
     };
     let process_invoke_result = match &sig.output {
-        syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => decode_result_value(
-            ty,
-            quote! { rpc_result_ok.expect("remote method returned no value") },
-        ),
+        syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => quote! {
+            golem_rust::schema::wit::direct::decode::<#ty>(rpc_result_ok.expect("remote method returned no value"))
+                .expect("Failed to deserialize rpc result to return type")
+        },
         _ => quote! {},
     };
 
-    let input_record = positional_record_schema_value(input_idents, "Failed to encode parameter");
-    let encoded_input = encode_value_only_carrier(input_record.clone());
+    let encoded_input = encode_parameters(input_idents, false, false);
     let encode_input = quote! { let input = #encoded_input; };
-    let encode_input_async = quote! {
-        let input_value = #input_record;
-        let input = golem_rust::encode_schema_value_async(&input_value)
-            .await
-            .expect("Failed to encode parameters");
-    };
+    let encoded_input_async = encode_parameters(input_idents, true, false);
+    let encode_input_async = quote! { let input = #encoded_input_async; };
     let scheduled_time_param = fresh_param_ident(input_idents, "scheduled_time");
     if agent_is_durable {
         return quote! {
@@ -474,8 +495,7 @@ fn generate_method_code(
                 None
             ).future;
 
-            let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
-                golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await;
+            let rpc_result = rpc_result_future.get().await;
 
             let rpc_result_ok =
                 rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
@@ -524,8 +544,7 @@ fn generate_method_code(
             #encode_input_async
             let invocation = self.wasm_rpc.async_invoke_and_await(#remote_token, input, None);
             let metadata = invocation.metadata;
-            let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
-                golem_rust::agentic::await_invoke_schema_value_result(invocation.future).await;
+            let rpc_result = invocation.future.get().await;
             let rpc_result_ok = rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
             let value = { #process_invoke_result };
             golem_rust::agentic::EphemeralInvocationResult { metadata, value }

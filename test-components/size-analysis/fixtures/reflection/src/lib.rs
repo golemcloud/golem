@@ -14,6 +14,7 @@ impl Reflection for ReflectionImpl {
         Self
     }
 
+    #[inline(never)]
     fn has_agent_type(&self, name: String) -> bool {
         golem_rust::golem_agentic::golem::agent::host::get_agent_type(&name).is_some()
     }

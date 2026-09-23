@@ -51,6 +51,42 @@ test_r::enable!();
 mod canonical {
     #[test_r::test]
     #[test_r::never_capture]
+    fn wire_descriptors_match_dynamic_metadata() {
+        use golem_rust::agentic::{ToolBuildCtx, WireToolSchema};
+        let arena = WireToolSchema::default();
+        let wire =
+            grep_canonical::__golem_wire_tool_descriptor_for_Grep(&mut ToolBuildCtx::new(), &arena)
+                .unwrap()
+                .into_wire(arena)
+                .unwrap();
+        let native = golem_rust::schema::tool::wit::decode_tool(wire).unwrap();
+        let dynamic = grep_canonical::__golem_tool_descriptor_for_Grep(&mut ToolBuildCtx::new())
+            .unwrap()
+            .try_to_native_tool()
+            .unwrap();
+        assert_eq!(native, dynamic);
+
+        #[cfg(all(feature = "url", feature = "chrono"))]
+        {
+            let arena = WireToolSchema::default();
+            let wire = git_canonical::__golem_wire_tool_descriptor_for_Git(
+                &mut ToolBuildCtx::new(),
+                &arena,
+            )
+            .unwrap()
+            .into_wire(arena)
+            .unwrap();
+            let native = golem_rust::schema::tool::wit::decode_tool(wire).unwrap();
+            let dynamic = git_canonical::__golem_tool_descriptor_for_Git(&mut ToolBuildCtx::new())
+                .unwrap()
+                .try_to_native_tool()
+                .unwrap();
+            assert_eq!(native, dynamic);
+        }
+    }
+
+    #[test_r::test]
+    #[test_r::never_capture]
     fn prepared_canonical_descriptors_match_reference() {
         use golem_rust::agentic::ToolBuildCtx;
         for (prepared, reference) in [
@@ -91,6 +127,21 @@ mod canonical {
         // Deliberately shadows the standard String: selecting validators by
         // spelling would lose this custom schema (or reject a valid graph).
         struct String;
+
+        impl golem_rust::WireSchema for String {
+            fn append_schema(
+                builder: &mut golem_rust::schema::wit::direct::WireSchemaBuilder,
+            ) -> i32 {
+                builder.push(golem_rust::schema::wit::wire::SchemaTypeBody::TextType(
+                    golem_rust::schema::wit::wire::TextRestrictions {
+                        languages: None,
+                        regex: None,
+                        min_length: None,
+                        max_length: None,
+                    },
+                ))
+            }
+        }
 
         impl golem_rust::FromSchema for String {
             fn from_value(_: &SchemaValue) -> Result<Self, golem_rust::schema::FromSchemaError> {
@@ -213,6 +264,22 @@ mod canonical {
                 .unwrap_err();
             assert_eq!(prepared_error.to_string(), reference_error.to_string());
         }
+
+        #[test]
+        #[test_r::never_capture]
+        fn wire_descriptor_does_not_build_native_schema() {
+            BUILDS.store(0, Ordering::SeqCst);
+            let arena = golem_rust::agentic::WireToolSchema::default();
+            let tool = __golem_wire_tool_descriptor_for_Custom(&mut ToolBuildCtx::new(), &arena)
+                .unwrap()
+                .into_wire(arena)
+                .unwrap();
+            assert_eq!(BUILDS.load(Ordering::SeqCst), 0);
+            assert!(tool.schema.type_nodes.iter().any(|node| matches!(
+                node.body,
+                golem_rust::schema::wit::wire::SchemaTypeBody::TextType(_)
+            )));
+        }
     }
 
     #[allow(
@@ -238,7 +305,7 @@ mod canonical {
         use std::path::PathBuf;
         use test_r::test;
 
-        #[derive(Clone, IntoSchema, FromSchema, FromWire)]
+        #[derive(Clone, IntoSchema, FromSchema, FromWire, WireSchema)]
         #[schema(rename_all = "kebab-case")]
         enum ColorMode {
             Always,
@@ -646,14 +713,17 @@ mod canonical {
             render_help,
         };
         use golem_rust::schema::{SchemaType, SchemaValue};
-        use golem_rust::{FromSchema, IntoSchema, tool_definition, tool_implementation};
+        use golem_rust::{
+            FromSchema, FromWire, IntoSchema, IntoWire, WireSchema, tool_definition,
+            tool_implementation,
+        };
         use golem_rust_macro::ToolError;
         use std::collections::BTreeMap;
         use std::path::PathBuf;
         use test_r::test;
         use url::Url;
 
-        #[derive(Clone, IntoSchema, FromSchema)]
+        #[derive(Clone, IntoSchema, FromSchema, FromWire, WireSchema)]
         #[schema(rename_all = "kebab-case")]
         enum OutputMode {
             Human,
@@ -661,7 +731,7 @@ mod canonical {
             Json,
         }
 
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, WireSchema)]
         struct CommitResult {
             hash: String,
             files_changed: u32,
@@ -669,7 +739,7 @@ mod canonical {
             deletions: u32,
         }
 
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, WireSchema)]
         struct LogEntry {
             hash: String,
             author: String,

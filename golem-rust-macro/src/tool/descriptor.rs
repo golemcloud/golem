@@ -48,6 +48,98 @@ pub fn prepared_descriptor_fn_ident(trait_ident: &Ident) -> Ident {
     format_ident!("__golem_prepared_tool_descriptor_for_{}", trait_ident)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DescriptorRepr {
+    Dynamic,
+    Wire,
+}
+
+pub fn wire_descriptor_fn_ident(trait_ident: &Ident) -> Ident {
+    format_ident!("__golem_wire_tool_descriptor_for_{}", trait_ident)
+}
+
+pub fn standalone_wire_descriptor_fn_ident(trait_ident: &Ident) -> Ident {
+    format_ident!(
+        "__golem_standalone_wire_tool_descriptor_for_{}",
+        trait_ident
+    )
+}
+
+fn needs_composition(ir: &ToolDefinitionIr) -> bool {
+    ir.commands.iter().any(|cmd| {
+        cmd.subtree.is_some()
+            || cmd
+                .args
+                .iter()
+                .any(|arg| arg.placement == Some(ArgPlacement::Global))
+            || cmd.constraints.iter().any(constraint_has_value_is)
+    })
+}
+
+pub fn synthesize_wire_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Error> {
+    let plan = Plan::analyze(ir)?;
+    let ident = wire_descriptor_fn_ident(&ir.trait_ident);
+    let standalone_ident = standalone_wire_descriptor_fn_ident(&ir.trait_ident);
+    let trait_name = ir.trait_ident.to_string();
+    let root = build_root_node(ir, &plan, DescriptorRepr::Wire)?;
+    let links = ir
+        .commands
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != plan.root_idx)
+        .map(|(_, cmd)| {
+            if cmd.subtree.is_some() {
+                build_subtree_link(cmd, &plan, DescriptorRepr::Wire)
+            } else {
+                build_leaf_link(cmd, &plan, DescriptorRepr::Wire)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let version = match &ir.version {
+        Some(v) => quote! { #v.to_string() },
+        None => quote! { env!("CARGO_PKG_VERSION").to_string() },
+    };
+    let standalone = if needs_composition(ir) {
+        quote! { #ident(&mut golem_rust::agentic::ToolBuildCtx::new(), __golem_wire_schema) }
+    } else {
+        quote! {
+            #[allow(unused_mut)]
+            let mut commands = ::std::vec![#root];
+            #(#links)*
+            ::std::result::Result::Ok(golem_rust::agentic::ExtendedToolType { version: #version, commands })
+        }
+    };
+    Ok(quote! {
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        pub fn #standalone_ident(__golem_wire_schema: &golem_rust::agentic::WireToolSchema)
+            -> ::std::result::Result<golem_rust::agentic::ExtendedToolType<golem_rust::agentic::WireTypeRef>, golem_rust::agentic::ToolBuildError> {
+            #standalone
+        }
+
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        pub fn #ident(
+            ctx: &mut golem_rust::agentic::ToolBuildCtx<golem_rust::agentic::WireTypeRef>,
+            __golem_wire_schema: &golem_rust::agentic::WireToolSchema,
+        ) -> ::std::result::Result<golem_rust::agentic::ExtendedToolType<golem_rust::agentic::WireTypeRef>, golem_rust::agentic::ToolBuildError> {
+            ctx.with_descriptor(concat!(module_path!(), "::", #trait_name), |ctx| {
+                #[allow(unused_mut)]
+                let mut commands = vec![#root];
+                ctx.apply_pending_graft_root(&mut commands[0])?;
+                let name = commands[0].name.clone();
+                golem_rust::agentic::reconcile_command_inherited_globals(&mut commands[0], ctx.inherited_globals(), &name)?;
+                #(#links)*
+                let mut tool = golem_rust::agentic::ExtendedToolType { version: #version, commands };
+                if ctx.is_outermost_descriptor() {
+                    golem_rust::agentic::normalize_inherited_globals(&mut tool)?;
+                }
+                Ok(tool)
+            })
+        }
+    })
+}
+
 /// Emits the module-level `__golem_tool_descriptor_for_<Trait>` free function.
 pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Error> {
     let plan = Plan::analyze(ir)?;
@@ -62,7 +154,7 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
     };
 
     // Index 0 is always the root command.
-    let root_node = build_root_node(ir, &plan)?;
+    let root_node = build_root_node(ir, &plan, DescriptorRepr::Dynamic)?;
 
     // Every non-root command becomes either a leaf subcommand or a grafted
     // subtree, linked beneath the root (index 0).
@@ -72,21 +164,13 @@ pub fn synthesize_descriptor_fn(ir: &ToolDefinitionIr) -> Result<TokenStream, Er
             continue;
         }
         if cmd.subtree.is_some() {
-            links.push(build_subtree_link(cmd, &plan)?);
+            links.push(build_subtree_link(cmd, &plan, DescriptorRepr::Dynamic)?);
         } else {
-            links.push(build_leaf_link(cmd, &plan)?);
+            links.push(build_leaf_link(cmd, &plan, DescriptorRepr::Dynamic)?);
         }
     }
 
-    let needs_composition = ir.commands.iter().any(|cmd| {
-        cmd.subtree.is_some()
-            || cmd
-                .args
-                .iter()
-                .any(|arg| arg.placement == Some(ArgPlacement::Global))
-            || cmd.constraints.iter().any(constraint_has_value_is)
-    });
-    let standalone = if needs_composition {
+    let standalone = if needs_composition(ir) {
         quote! { #fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new()) }
     } else {
         quote! {
@@ -374,10 +458,14 @@ fn repeats_inherited_global(
 
 /// Builds the index-0 root command node. With an implicit-body method the root
 /// is a full command (its globals + body); otherwise it is a pure dispatcher.
-fn build_root_node(ir: &ToolDefinitionIr, plan: &Plan) -> Result<TokenStream, Error> {
+fn build_root_node(
+    ir: &ToolDefinitionIr,
+    plan: &Plan,
+    repr: DescriptorRepr,
+) -> Result<TokenStream, Error> {
     if let Some(i) = plan.root_idx {
         let cmd = &ir.commands[i];
-        build_command_node(cmd, &plan.tool_name, true, &BTreeSet::new())
+        build_command_node(cmd, &plan.tool_name, true, &BTreeSet::new(), repr)
     } else {
         let name = &plan.tool_name;
         let doc = doc_tokens(&ir.doc);
@@ -395,8 +483,12 @@ fn build_root_node(ir: &ToolDefinitionIr, plan: &Plan) -> Result<TokenStream, Er
 }
 
 /// Emits the block that pushes a leaf subcommand node and links it under root.
-fn build_leaf_link(cmd: &CommandIr, plan: &Plan) -> Result<TokenStream, Error> {
-    let node = build_command_node(cmd, &plan.tool_name, false, &plan.root_global_names)?;
+fn build_leaf_link(
+    cmd: &CommandIr,
+    plan: &Plan,
+    repr: DescriptorRepr,
+) -> Result<TokenStream, Error> {
+    let node = build_command_node(cmd, &plan.tool_name, false, &plan.root_global_names, repr)?;
     Ok(quote! {
         {
             let __idx = commands.len() as i32;
@@ -410,9 +502,21 @@ fn build_leaf_link(cmd: &CommandIr, plan: &Plan) -> Result<TokenStream, Error> {
 /// links it. The subtree method's params are passed as `parent_globals` so
 /// `graft_subtree` reconciles the grafted root's body/globals against them and
 /// prepends them as propagating globals for descendant subcommands.
-fn build_subtree_link(cmd: &CommandIr, plan: &Plan) -> Result<TokenStream, Error> {
+fn build_subtree_link(
+    cmd: &CommandIr,
+    plan: &Plan,
+    repr: DescriptorRepr,
+) -> Result<TokenStream, Error> {
     let subtree = cmd.subtree.as_ref().expect("subtree present");
     let call_path = subtree_call_path(&subtree.path)?;
+    let call = if repr == DescriptorRepr::Wire {
+        let mut path = subtree.path.clone();
+        path.segments.last_mut().unwrap().ident =
+            wire_descriptor_fn_ident(&path.segments.last().unwrap().ident);
+        quote! { #path(ctx, __golem_wire_schema) }
+    } else {
+        quote! { #call_path(ctx) }
+    };
     let expected_name = command_name(cmd, &plan.tool_name, false);
     let grafted_name = subtree
         .name_override
@@ -450,7 +554,7 @@ fn build_subtree_link(cmd: &CommandIr, plan: &Plan) -> Result<TokenStream, Error
         let arg = arg_for(cmd, &param.ident);
         // Subtree-method params only contribute propagating globals, never a tail
         // positional, so tail inference is disabled (`emit_as_tail = false`).
-        match classify(&param.ident, &param.ty, arg, true, false)? {
+        match classify(&param.ident, &param.ty, arg, true, false, repr)? {
             Projection::Option(spec) => opts.push(spec),
             Projection::Flag(spec) => flags.push(spec),
             _ => {
@@ -495,7 +599,7 @@ fn build_subtree_link(cmd: &CommandIr, plan: &Plan) -> Result<TokenStream, Error
                     if let ::std::result::Result::Err(__root_err @ golem_rust::agentic::ToolBuildError::SubtreeRootNameMismatch { .. }) = ctx.with_graft_root(
                         #expected_name.to_string(),
                         #override_name_for_ctx,
-                        |ctx| #call_path(ctx),
+                        |ctx| #call,
                     ) {
                         return ::std::result::Result::Err(__root_err);
                     }
@@ -520,7 +624,7 @@ fn build_subtree_link(cmd: &CommandIr, plan: &Plan) -> Result<TokenStream, Error
             let __child = ctx.with_graft_root(
                 #expected_name.to_string(),
                 #override_name_for_ctx,
-                |ctx| ctx.with_inherited_globals(__child_inherited_globals, |ctx| #call_path(ctx)),
+                |ctx| ctx.with_inherited_globals(__child_inherited_globals, |ctx| #call),
             )?;
             let __graft = golem_rust::agentic::graft_subtree(
                 __child,
@@ -564,6 +668,7 @@ fn build_command_node(
     tool_name: &str,
     is_root: bool,
     inherited_globals: &BTreeSet<String>,
+    repr: DescriptorRepr,
 ) -> Result<TokenStream, Error> {
     let name = command_name(cmd, tool_name, is_root);
     let doc = doc_tokens(&cmd.doc);
@@ -676,7 +781,7 @@ fn build_command_node(
                 && last_non_inherited_idx != last_value_idx
                 && arg.and_then(|a| a.placement).is_none()
                 && vec_tail_representable(&param.ty, arg));
-        match classify(&param.ident, &param.ty, arg, is_global, emit_as_tail)? {
+        match classify(&param.ident, &param.ty, arg, is_global, emit_as_tail, repr)? {
             Projection::Stdin(spec) => {
                 if stdin.is_some() {
                     return Err(Error::new(
@@ -771,7 +876,9 @@ fn build_command_node(
                     })?;
                     let name = to_kebab_case(&param.ident.to_string());
                     body_option_decls.push((idx, name.clone()));
-                    body_options.push(inherited_tail_option_surrogate_tokens(&name, item, arg)?);
+                    body_options.push(inherited_tail_option_surrogate_tokens(
+                        &name, item, arg, repr,
+                    )?);
                     continue;
                 }
                 if tail.is_some() {
@@ -786,9 +893,9 @@ fn build_command_node(
     }
 
     let constraints = build_constraints(cmd)?;
-    let (result_spec, errors) = build_result(cmd)?;
+    let (result_spec, errors) = build_result(cmd, repr)?;
     let annotations = build_annotations(cmd.annotations.as_ref());
-    let positional_plan = build_positional_plan(cmd, &body_option_decls)?;
+    let positional_plan = build_positional_plan(cmd, &body_option_decls, repr)?;
 
     let tail_tokens = match tail {
         Some(t) => quote! { ::std::option::Option::Some(#t) },
@@ -862,6 +969,7 @@ fn build_command_node(
 fn build_positional_plan(
     cmd: &CommandIr,
     body_option_decls: &[(usize, String)],
+    repr: DescriptorRepr,
 ) -> Result<Vec<TokenStream>, Error> {
     let mut plan = Vec::new();
     for (idx, param) in cmd.params.iter().enumerate() {
@@ -918,7 +1026,7 @@ fn build_positional_plan(
         // and use the reconstruct-from-spec path.
         let authored_tail_surrogate_tok = match (explicit_tail, vec_item) {
             (true, Some(item)) => {
-                let tail_spec = tail_tokens(&name, item, arg)?;
+                let tail_spec = tail_tokens(&name, item, arg, repr)?;
                 quote! { ::std::option::Option::Some(::std::boxed::Box::new(#tail_spec)) }
             }
             _ => quote! { ::std::option::Option::None },
@@ -969,7 +1077,7 @@ fn vec_tail_spec(
     if let Some(arg) = arg {
         reject_unconsumed_structural_attrs(arg, SurfaceKind::Tail)?;
     }
-    tail_tokens(name, item, arg)
+    tail_tokens(name, item, arg, DescriptorRepr::Dynamic)
 }
 
 /// Whether a parameter is eligible to become a positional (fixed or tail) in the
@@ -1224,6 +1332,7 @@ fn classify(
     arg: Option<&ArgIr>,
     is_global: bool,
     emit_as_tail: bool,
+    repr: DescriptorRepr,
 ) -> Result<Projection, Error> {
     let name = to_kebab_case(&ident.to_string());
 
@@ -1372,7 +1481,7 @@ fn classify(
         if let Some(arg) = arg {
             reject_unconsumed_structural_attrs(arg, SurfaceKind::Tail)?;
         }
-        return Ok(Projection::Tail(tail_tokens(&name, item, arg)?));
+        return Ok(Projection::Tail(tail_tokens(&name, item, arg, repr)?));
     }
 
     // Options: explicit placement, any non-flag global (globals can only be
@@ -1391,7 +1500,7 @@ fn classify(
             };
             reject_unconsumed_structural_attrs(arg, kind)?;
         }
-        let spec = option_spec_tokens(&name, base_ty, vec_item, map_ty, optional, arg)?;
+        let spec = option_spec_tokens(&name, base_ty, vec_item, map_ty, optional, arg, repr)?;
         return Ok(Projection::Option(spec));
     }
 
@@ -1402,7 +1511,7 @@ fn classify(
     }
     let required = !optional && arg.and_then(|a| a.required).unwrap_or(true);
     Ok(Projection::Positional {
-        tokens: positional_tokens(&name, base_ty, optional, arg)?,
+        tokens: positional_tokens(&name, base_ty, optional, arg, repr)?,
         required,
     })
 }
@@ -1566,6 +1675,7 @@ fn option_spec_tokens(
     map_ty: Option<&Type>,
     optional: bool,
     arg: Option<&ArgIr>,
+    repr: DescriptorRepr,
 ) -> Result<TokenStream, Error> {
     let doc = arg_doc_tokens(arg);
     let short = opt_char(arg.and_then(|a| a.short));
@@ -1575,7 +1685,7 @@ fn option_spec_tokens(
 
     let position = format!("option --{name}");
     let shape = if let Some(item) = vec_item {
-        let graph = value_graph_tokens(item, arg, MinMaxRole::Bound, &position)?;
+        let graph = value_graph_tokens(item, arg, MinMaxRole::Bound, &position, repr)?;
         let rep = repetition_tokens(arg)?;
         quote! {
             golem_rust::agentic::ExtendedOptionShape::RepeatableList(
@@ -1589,7 +1699,7 @@ fn option_spec_tokens(
         if let Some(arg) = arg {
             reject_map_value_refinements(arg)?;
         }
-        let graph = value_graph_tokens(map, arg, MinMaxRole::Forbidden, &position)?;
+        let graph = value_graph_tokens(map, arg, MinMaxRole::Forbidden, &position, repr)?;
         let rep = repetition_tokens(arg)?;
         quote! {
             golem_rust::agentic::ExtendedOptionShape::RepeatableMap(
@@ -1602,7 +1712,7 @@ fn option_spec_tokens(
             )
         }
     } else {
-        let graph = value_graph_tokens(base_ty, arg, MinMaxRole::Bound, &position)?;
+        let graph = value_graph_tokens(base_ty, arg, MinMaxRole::Bound, &position, repr)?;
         if arg.map(|a| a.optional_scalar).unwrap_or(false) {
             quote! { golem_rust::agentic::ExtendedOptionShape::OptionalScalar(#graph) }
         } else {
@@ -1614,6 +1724,10 @@ fn option_spec_tokens(
     let required = !optional && arg.and_then(|a| a.required).unwrap_or(false);
 
     let default = match arg.and_then(|a| a.default.as_ref()) {
+        Some(expr) if repr == DescriptorRepr::Wire => {
+            let lit = tool_literal_tokens(expr)?;
+            quote! { Some(golem_rust::agentic::option_collected_graph(&__shape).literal(&#lit)?) }
+        }
         Some(expr) => {
             let lit = tool_literal_tokens(expr)?;
             quote! {
@@ -1650,6 +1764,7 @@ fn positional_tokens(
     base_ty: &Type,
     optional: bool,
     arg: Option<&ArgIr>,
+    repr: DescriptorRepr,
 ) -> Result<TokenStream, Error> {
     let doc = arg_doc_tokens(arg);
     let value_name = opt_str(arg.and_then(|a| a.value_name.as_ref()));
@@ -1658,6 +1773,7 @@ fn positional_tokens(
         arg,
         MinMaxRole::Bound,
         &format!("positional {name}"),
+        repr,
     )?;
     let accepts_stdio = arg.map(|a| a.accepts_stdio).unwrap_or(false);
     // Positionals are required by default; `Option<T>` or `required = false`
@@ -1665,6 +1781,10 @@ fn positional_tokens(
     let required = !optional && arg.and_then(|a| a.required).unwrap_or(true);
 
     let default = match arg.and_then(|a| a.default.as_ref()) {
+        Some(expr) if repr == DescriptorRepr::Wire => {
+            let lit = tool_literal_tokens(expr)?;
+            quote! { Some(__type.literal(&#lit)?) }
+        }
         Some(expr) => {
             let lit = tool_literal_tokens(expr)?;
             quote! {
@@ -1693,7 +1813,12 @@ fn positional_tokens(
     })
 }
 
-fn tail_tokens(name: &str, item: &Type, arg: Option<&ArgIr>) -> Result<TokenStream, Error> {
+fn tail_tokens(
+    name: &str,
+    item: &Type,
+    arg: Option<&ArgIr>,
+    repr: DescriptorRepr,
+) -> Result<TokenStream, Error> {
     // `ExtendedTailPositional` (and the WIT `tail-positional` record) has no
     // default field: a variadic tail has no single default value. An authored
     // `default` is rejected by `reject_unconsumed_structural_attrs` before this
@@ -1709,6 +1834,7 @@ fn tail_tokens(name: &str, item: &Type, arg: Option<&ArgIr>) -> Result<TokenStre
         arg,
         MinMaxRole::Occurrence,
         &format!("tail positional {name}"),
+        repr,
     )?;
     let min = match arg.and_then(|a| a.raw_min.as_ref()) {
         Some(expr) => quote! { { let __m: u32 = #expr; __m } },
@@ -1750,6 +1876,7 @@ fn inherited_tail_option_surrogate_tokens(
     name: &str,
     item: &Type,
     arg: Option<&ArgIr>,
+    repr: DescriptorRepr,
 ) -> Result<TokenStream, Error> {
     let doc = arg_doc_tokens(arg);
     let aliases = alias_tokens(arg);
@@ -1759,6 +1886,7 @@ fn inherited_tail_option_surrogate_tokens(
         arg,
         MinMaxRole::Occurrence,
         &format!("inherited tail positional {name}"),
+        repr,
     )?;
     Ok(quote! {
         golem_rust::agentic::ExtendedOptionSpec {
@@ -1847,12 +1975,17 @@ fn value_graph_tokens(
     arg: Option<&ArgIr>,
     min_max: MinMaxRole,
     position: &str,
+    repr: DescriptorRepr,
 ) -> Result<TokenStream, Error> {
-    let base = quote! {{
-        use golem_rust::agentic::SelectToolSchemaChecks as _;
-        (&golem_rust::agentic::ToolSchemaProbe::<#inner_ty>(::std::marker::PhantomData))
-            .tool_value_schema(|| golem_rust::agentic::tool_value_schema::<#inner_ty>(#position))?
-    }};
+    let base = if repr == DescriptorRepr::Wire {
+        quote! { __golem_wire_schema.schema::<#inner_ty>() }
+    } else {
+        quote! {{
+            use golem_rust::agentic::SelectToolSchemaChecks as _;
+            (&golem_rust::agentic::ToolSchemaProbe::<#inner_ty>(::std::marker::PhantomData))
+                .tool_value_schema(|| golem_rust::agentic::tool_value_schema::<#inner_ty>(#position))?
+        }}
+    };
     let Some(arg) = arg else {
         return Ok(base);
     };
@@ -1872,8 +2005,14 @@ fn value_graph_tokens(
         let regex = opt_str(arg.regex.as_ref());
         let min_len = opt_u32(arg.min_length);
         let max_len = opt_u32(arg.max_length);
-        steps.push(quote! {
-            __g.root = golem_rust::agentic::refine_text(__g.root, #regex, #min_len, #max_len)?;
+        steps.push(if repr == DescriptorRepr::Wire {
+            quote! {
+                __g = __g.refine_text(#regex, #min_len, #max_len)?;
+            }
+        } else {
+            quote! {
+                __g.root = golem_rust::agentic::refine_text(__g.root, #regex, #min_len, #max_len)?;
+            }
         });
     }
     if arg.path_kind.is_some() || arg.direction.is_some() || arg.mime.is_some() {
@@ -1889,8 +2028,14 @@ fn value_graph_tokens(
         let direction = opt_direction(arg.direction);
         let kind = opt_path_kind(arg.path_kind);
         let mime = opt_str_vec(arg.mime.as_ref());
-        steps.push(quote! {
-            __g.root = golem_rust::agentic::refine_path(__g.root, #direction, #kind, #mime)?;
+        steps.push(if repr == DescriptorRepr::Wire {
+            quote! {
+                __g = __g.refine_path(#direction, #kind, #mime)?;
+            }
+        } else {
+            quote! {
+                __g.root = golem_rust::agentic::refine_path(__g.root, #direction, #kind, #mime)?;
+            }
         });
     }
     if arg.schemes.is_some() {
@@ -1904,8 +2049,14 @@ fn value_graph_tokens(
             ));
         }
         let schemes = opt_str_vec(arg.schemes.as_ref());
-        steps.push(quote! {
-            __g.root = golem_rust::agentic::refine_url(__g.root, #schemes)?;
+        steps.push(if repr == DescriptorRepr::Wire {
+            quote! {
+                __g = __g.refine_url(#schemes)?;
+            }
+        } else {
+            quote! {
+                __g.root = golem_rust::agentic::refine_url(__g.root, #schemes)?;
+            }
         });
     }
     // `bounds`/`unit` always refine the value's numeric schema. `min`/`max`
@@ -1963,8 +2114,14 @@ fn value_graph_tokens(
             (min, max)
         };
         let unit = opt_str(arg.unit.as_ref());
-        steps.push(quote! {
-            __g.root = golem_rust::agentic::refine_numeric(__g.root, #min, #max, #unit)?;
+        steps.push(if repr == DescriptorRepr::Wire {
+            quote! {
+                __g = __g.refine_numeric(#min, #max, #unit)?;
+            }
+        } else {
+            quote! {
+                __g.root = golem_rust::agentic::refine_numeric(__g.root, #min, #max, #unit)?;
+            }
         });
     }
 
@@ -2103,17 +2260,25 @@ fn quantifier_tokens(q: QuantifierIr) -> TokenStream {
 }
 
 /// Builds the `(result_spec, errors)` tokens from the method return type.
-fn build_result(cmd: &CommandIr) -> Result<(TokenStream, TokenStream), Error> {
+fn build_result(
+    cmd: &CommandIr,
+    repr: DescriptorRepr,
+) -> Result<(TokenStream, TokenStream), Error> {
     let (ok_ty, err_ty) = split_result(&cmd.output);
 
     let errors = match err_ty {
+        Some(e) if repr == DescriptorRepr::Wire => quote! {
+            __golem_wire_schema.error_cases(__golem_wire_schema.with_builder(
+                <#e as golem_rust::agentic::DirectToolError>::wire_error_cases
+            ))
+        },
         Some(e) => quote! { <#e as golem_rust::agentic::ToolErrorSchema>::error_cases()? },
         None => quote! { ::std::vec::Vec::new() },
     };
 
     let result_spec = match ok_ty {
         Some(t) => {
-            let graph = value_graph_tokens(t, None, MinMaxRole::Forbidden, "result")?;
+            let graph = value_graph_tokens(t, None, MinMaxRole::Forbidden, "result", repr)?;
             let (formatters, default_formatter) = build_formatters(cmd.result.as_ref());
             let empty_doc = doc_tokens(&DocIr::default());
             quote! {

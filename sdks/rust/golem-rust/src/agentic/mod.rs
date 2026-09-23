@@ -30,6 +30,7 @@ pub use errors::*;
 pub use exports::Component;
 pub use extended_agent_type::*;
 pub use extended_tool_type::*;
+pub use golem_tool_metadata::{WireToolSchema, WireTypeRef};
 pub use http::*;
 pub use multimodal::*;
 pub use resolved_agent::*;
@@ -43,7 +44,7 @@ pub use tool_refinement::*;
 pub use tool_registry::{
     ToolInvokeFuture, ToolInvokeFutureFor, ToolInvoker, get_all_tools, get_extended_tool_by_name,
     get_tool_by_name, get_tool_invoker_by_name, register_prepared_tool_invoker, register_tool,
-    register_tool_invoker,
+    register_tool_invoker, register_wire_tool_invoker,
 };
 pub use unstructured_binary::*;
 pub use unstructured_text::*;

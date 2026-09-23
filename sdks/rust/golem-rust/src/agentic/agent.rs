@@ -59,6 +59,67 @@ impl DirectAgentInput {
 pub struct AgentParameterProbe<T>(pub std::marker::PhantomData<T>);
 
 #[doc(hidden)]
+pub trait AgentParameterSchema {
+    fn parameter_schema(
+        self,
+        name: &str,
+        builder: &mut direct::WireSchemaBuilder,
+    ) -> crate::golem_agentic::golem::agent::common::NamedField;
+}
+
+impl<T: direct::WireSchema> AgentParameterSchema for &&AgentParameterProbe<T> {
+    fn parameter_schema(
+        self,
+        name: &str,
+        builder: &mut direct::WireSchemaBuilder,
+    ) -> crate::golem_agentic::golem::agent::common::NamedField {
+        crate::golem_agentic::golem::agent::common::NamedField {
+            name: name.to_string(),
+            source: crate::golem_agentic::golem::agent::common::FieldSource::UserSupplied,
+            schema: T::append_schema(builder),
+            metadata: direct::empty_metadata(),
+        }
+    }
+}
+
+impl AgentParameterSchema for &AgentParameterProbe<Principal> {
+    fn parameter_schema(
+        self,
+        name: &str,
+        builder: &mut direct::WireSchemaBuilder,
+    ) -> crate::golem_agentic::golem::agent::common::NamedField {
+        use crate::golem_agentic::golem::agent::common::{
+            AutoInjectedKind, FieldSource, NamedField,
+        };
+        NamedField {
+            name: name.to_string(),
+            source: FieldSource::AutoInjected(AutoInjectedKind::Principal),
+            schema: builder.push(crate::schema::wit::wire::SchemaTypeBody::RecordType(
+                Vec::new(),
+            )),
+            metadata: direct::empty_metadata(),
+        }
+    }
+}
+
+#[doc(hidden)]
+pub trait AgentParameterStreams {
+    fn parameter_contains_stream(self) -> bool;
+}
+
+impl<T: direct::WireSchema> AgentParameterStreams for &&AgentParameterProbe<T> {
+    fn parameter_contains_stream(self) -> bool {
+        T::contains_stream(&mut std::collections::HashSet::new())
+    }
+}
+
+impl AgentParameterStreams for &AgentParameterProbe<Principal> {
+    fn parameter_contains_stream(self) -> bool {
+        false
+    }
+}
+
+#[doc(hidden)]
 pub trait ReadAgentParameter {
     type Value;
     fn read_parameter(
@@ -89,6 +150,56 @@ impl ReadAgentParameter for &AgentParameterProbe<Principal> {
         principal: &Principal,
     ) -> Result<Principal, direct::WireError> {
         Ok(principal.clone())
+    }
+}
+
+#[doc(hidden)]
+pub struct AgentArgument<'a, T>(pub &'a T);
+
+#[doc(hidden)]
+#[allow(async_fn_in_trait)]
+pub trait WriteAgentParameter {
+    fn preflight_parameter(
+        self,
+        resources: &mut direct::WirePreflight,
+    ) -> Result<(), direct::WireError>;
+    async fn prepare_parameter(self) -> Result<(), direct::WireError>;
+    fn write_parameter(
+        self,
+        writer: &mut direct::WireWriter,
+    ) -> Result<Option<wire::ValueNodeIndex>, direct::WireError>;
+}
+
+impl<T: direct::IntoWire> WriteAgentParameter for &&AgentArgument<'_, T> {
+    fn preflight_parameter(
+        self,
+        resources: &mut direct::WirePreflight,
+    ) -> Result<(), direct::WireError> {
+        self.0.preflight(resources)
+    }
+    async fn prepare_parameter(self) -> Result<(), direct::WireError> {
+        self.0.prepare_wire().await
+    }
+    fn write_parameter(
+        self,
+        writer: &mut direct::WireWriter,
+    ) -> Result<Option<wire::ValueNodeIndex>, direct::WireError> {
+        self.0.write_wire(writer).map(Some)
+    }
+}
+
+impl WriteAgentParameter for &AgentArgument<'_, Principal> {
+    fn preflight_parameter(self, _: &mut direct::WirePreflight) -> Result<(), direct::WireError> {
+        Ok(())
+    }
+    async fn prepare_parameter(self) -> Result<(), direct::WireError> {
+        Ok(())
+    }
+    fn write_parameter(
+        self,
+        _: &mut direct::WireWriter,
+    ) -> Result<Option<wire::ValueNodeIndex>, direct::WireError> {
+        Ok(None)
     }
 }
 

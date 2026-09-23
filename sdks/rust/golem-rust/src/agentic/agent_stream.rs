@@ -221,6 +221,10 @@ impl<T: FromSchema> FromSchema for AgentStream<T> {
 }
 
 impl<T: WireSchema> WireSchema for AgentStream<T> {
+    fn contains_stream(_: &mut std::collections::HashSet<&'static str>) -> bool {
+        true
+    }
+
     fn append_schema(builder: &mut direct::WireSchemaBuilder) -> i32 {
         let inner = T::append_schema(builder);
         builder.push(crate::schema::wit::wire::SchemaTypeBody::StreamType(Some(

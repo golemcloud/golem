@@ -69,6 +69,23 @@ impl WireSchemaBuilder {
         self.push(wire::SchemaTypeBody::RefType(definition))
     }
 
+    pub fn node(&self, index: wire::TypeNodeIndex) -> Option<&wire::SchemaTypeNode> {
+        self.type_nodes.get(usize::try_from(index).ok()?)
+    }
+
+    pub fn resolve(&self, mut index: wire::TypeNodeIndex) -> Option<&wire::SchemaTypeNode> {
+        for _ in 0..=self.defs.len() {
+            let node = self.node(index)?;
+            match node.body {
+                wire::SchemaTypeBody::RefType(definition) => {
+                    index = self.defs.get(usize::try_from(definition).ok()?)?.body;
+                }
+                _ => return Some(node),
+            }
+        }
+        None
+    }
+
     pub fn finish(self, root: wire::TypeNodeIndex) -> wire::SchemaGraph {
         wire::SchemaGraph {
             type_nodes: self.type_nodes,
@@ -93,6 +110,11 @@ pub trait WireSchema {
     const IS_UNIT: bool = false;
 
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex;
+
+    fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
+        let _ = seen;
+        false
+    }
 
     fn wire_type_id() -> String {
         std::any::type_name::<Self>().replace("::", ".")
@@ -320,23 +342,39 @@ impl IntoWire for std::path::PathBuf {
 impl<T: WireSchema + ?Sized> WireSchema for Box<T> {
     const IS_UNIT: bool = T::IS_UNIT;
 
+    fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
+        T::contains_stream(seen)
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         T::append_schema(builder)
     }
 }
 impl<T: WireSchema> WireSchema for Vec<T> {
+    fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
+        T::contains_stream(seen)
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         let element = T::append_schema(builder);
         builder.push(wire::SchemaTypeBody::ListType(element))
     }
 }
 impl<T: WireSchema> WireSchema for Option<T> {
+    fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
+        T::contains_stream(seen)
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         let inner = T::append_schema(builder);
         builder.push(wire::SchemaTypeBody::OptionType(inner))
     }
 }
 impl<T: WireSchema, E: WireSchema> WireSchema for Result<T, E> {
+    fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
+        T::contains_stream(seen) || E::contains_stream(seen)
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         let ok = if T::IS_UNIT {
             None
@@ -362,6 +400,10 @@ impl WireSchema for () {
     }
 }
 impl<K: WireSchema, V: WireSchema> WireSchema for HashMap<K, V> {
+    fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
+        K::contains_stream(seen) || V::contains_stream(seen)
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         let key = K::append_schema(builder);
         let value = V::append_schema(builder);
@@ -369,6 +411,10 @@ impl<K: WireSchema, V: WireSchema> WireSchema for HashMap<K, V> {
     }
 }
 impl<K: WireSchema, V: WireSchema> WireSchema for BTreeMap<K, V> {
+    fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
+        K::contains_stream(seen) || V::contains_stream(seen)
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         let key = K::append_schema(builder);
         let value = V::append_schema(builder);
@@ -431,6 +477,10 @@ wire_map!(BTreeMap);
 
 macro_rules! wire_schema_tuple {
     ($($ty:ident),+) => { impl<$($ty: WireSchema),+> WireSchema for ($($ty,)+) {
+        fn contains_stream(seen: &mut HashSet<&'static str>) -> bool {
+            false $(|| $ty::contains_stream(seen))+
+        }
+
         fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
             let elements = vec![$($ty::append_schema(builder)),+];
             builder.push(wire::SchemaTypeBody::TupleType(elements))
@@ -460,6 +510,8 @@ pub enum WireError {
     AliasedResource(&'static str),
     #[error("{0} resource has already been transferred")]
     ConsumedResource(&'static str),
+    #[error("{0} resource is not allowed in this input")]
+    ForbiddenResource(&'static str),
     #[error("native streams require asynchronous wire encoding")]
     AsyncStream,
 }
@@ -608,6 +660,21 @@ pub struct WirePreflight {
 }
 
 impl WirePreflight {
+    pub fn asynchronous() -> Self {
+        Self {
+            allow_native_streams: true,
+            ..Self::default()
+        }
+    }
+
+    pub fn reject_quota_tokens(&self) -> Result<(), WireError> {
+        if self.seen.iter().any(|(kind, _)| *kind == "quota-token") {
+            Err(WireError::ForbiddenResource("quota-token"))
+        } else {
+            Ok(())
+        }
+    }
+
     fn resource(
         &mut self,
         kind: &'static str,
@@ -633,10 +700,7 @@ pub fn encode<T: IntoWire + ?Sized>(value: &T) -> Result<wire::SchemaValueTree, 
 pub async fn encode_async<T: IntoWire + ?Sized>(
     value: &T,
 ) -> Result<wire::SchemaValueTree, WireError> {
-    let mut preflight = WirePreflight {
-        allow_native_streams: true,
-        ..Default::default()
-    };
+    let mut preflight = WirePreflight::asynchronous();
     value.preflight(&mut preflight)?;
     value.prepare_wire().await?;
     write(value)
@@ -1024,6 +1088,10 @@ impl IntoWire for SchemaValueStream {
 }
 
 impl WireSchema for SchemaValueStream {
+    fn contains_stream(_: &mut HashSet<&'static str>) -> bool {
+        true
+    }
+
     fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
         builder.push(wire::SchemaTypeBody::StreamType(None))
     }

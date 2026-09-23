@@ -61,8 +61,8 @@ mod tests {
             <u32 as IntoSchema>::type_id()
         }
 
-        fn register_in(builder: &mut golem_rust::schema::SchemaBuilder) -> SchemaType {
-            <u32 as IntoSchema>::register_in(builder)
+        fn register_in(_: &mut golem_rust::schema::SchemaBuilder) -> SchemaType {
+            panic!("generated descriptors must not build the schema model")
         }
 
         fn to_value(&self) -> SchemaValue {
@@ -119,6 +119,38 @@ mod tests {
                         .sum::<u32>(),
             )
         }
+    }
+
+    #[test]
+    fn generated_agent_descriptor_uses_wire_schema_and_preserves_principal_alias() {
+        use golem_rust::golem_agentic::golem::agent::common::{FieldSource, InputSchema};
+        use golem_rust::schema::wit::wire::SchemaTypeBody;
+        let descriptor = golem_rust::agentic::get_agent_type_by_name(&AgentTypeName(
+            "DirectDispatch".to_string(),
+        ))
+        .unwrap();
+        let InputSchema::Parameters(fields) = &descriptor.constructor.input_schema;
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>(),
+            ["seed", "caller"]
+        );
+        assert!(matches!(
+            descriptor.schema.type_nodes[fields[0].schema as usize].body,
+            SchemaTypeBody::U32Type(None)
+        ));
+        assert!(matches!(fields[1].source, FieldSource::AutoInjected(_)));
+        let reflected = golem_rust::agentic::get_enriched_agent_type_by_name(&AgentTypeName(
+            "DirectDispatch".to_string(),
+        ))
+        .unwrap();
+        assert!(
+            reflected
+                .principal_params_in_constructor()
+                .contains("caller")
+        );
     }
 
     #[test]
@@ -225,7 +257,7 @@ mod tests {
         }
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema, FromWire)]
+    #[derive(Clone, Debug, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     struct Config {
         model: String,
     }
@@ -778,13 +810,15 @@ mod tests {
 
         fn rpc_call_schedule(&self, string: String) {
             let client = EchoClient::get(self.id.clone(), self.llm_config.clone());
-            client.schedule_echo(
-                string,
-                ScheduledTime {
-                    seconds: 1,
-                    nanoseconds: 1,
-                },
-            );
+            client
+                .schedule_echo(
+                    string,
+                    ScheduledTime {
+                        seconds: 1,
+                        nanoseconds: 1,
+                    },
+                )
+                .expect("schedule accepts a stream-free input");
         }
     }
 
@@ -849,7 +883,7 @@ mod tests {
         Image(Vec<u8>),
     }
 
-    #[derive(IntoSchema, FromSchema, FromWire, Clone)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema, Clone)]
     struct UserId {
         id: String,
     }
