@@ -4,8 +4,10 @@
 
 Three independently built Go modules, none of them part of the root Cargo workspace:
 
-- `core/` — the schema model, canonical JSON, JSON Schema rendering, validation and
-  the schema-native REST wire form. Standard library only.
+- `core/` — the shared model. `core/schema` holds the schema model, canonical JSON,
+  JSON Schema rendering, validation and the schema-native REST wire form;
+  `core/values` holds the Go vocabulary for schema values — `Option`, `Result`,
+  `TupleN`, `Text`, `Binary`, `Path`, `URL`, `Quantity`. Standard library only.
 - `golem/` — the guest SDK: agents, tools, RPC, durability, host wrappers. Requires
   `core`, and holds the generated WIT bindings under `internal/wit`.
 - `bridge/` — the runtime generated bridge clients use to call an external Golem
@@ -14,6 +16,21 @@ Three independently built Go modules, none of them part of the root Cargo worksp
 `core` exists so there is exactly one implementation of canonical JSON in Go, and so
 an external program does not pull in the guest SDK's WebAssembly bindings to speak the
 wire format. GOL-653 records what happens when two SDKs each write their own.
+
+`core/values` is shared for a different reason: a guest agent and an external client
+generated from the same schema get the *same* Go types, so one domain package serves
+both sides. `golem.Option[T]` is an alias — it **is** `values.Option[T]`, not a copy.
+Go has no alias for a function, so the constructors (`golem.Some`, `golem.Ok`, …)
+forward in one line each.
+
+The value types are built through constructors and keep their fields unexported, so an
+inconsistent value cannot be constructed. A reflective codec reaches into them through
+sealed interfaces in `core/values`, whose methods are unexported — which means another
+module can assert against the interface but cannot call through it. `core/values`
+therefore exposes the plumbing as package-level functions (`OptionGet`, `ResultSetOk`,
+`QuantityParts`, …) rather than as methods, so a reader of `golem.Option` sees
+`IsSome`, `Get` and `Unwrap` and not four reflect-flavoured methods they must never
+call.
 
 ## Prerequisites
 

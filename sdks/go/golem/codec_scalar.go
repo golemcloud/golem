@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/core/values"
 	"reflect"
 
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -108,13 +109,15 @@ func compileOption(c *codec, inner *codec, ops optionOps) {
 func optionValueOps() optionOps {
 	return optionOps{
 		get: func(v reflect.Value) (reflect.Value, bool) {
-			return v.Interface().(optionish).optionGet()
+			elem, some, _ := values.OptionGet(v.Interface())
+			return elem, some
 		},
 		setNone: func(dst reflect.Value) {
-			dst.Addr().Interface().(optionSetter).optionSetNone()
+			values.OptionSetNone(dst.Addr().Interface())
 		},
 		setSome: func(dst reflect.Value) reflect.Value {
-			return dst.Addr().Interface().(optionSetter).optionSetSome()
+			elem, _ := values.OptionSetSome(dst.Addr().Interface())
+			return elem
 		},
 	}
 }

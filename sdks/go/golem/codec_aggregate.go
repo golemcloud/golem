@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/core/values"
 	"reflect"
 	"time"
 
@@ -196,7 +197,7 @@ func compileResult(c *codec, okC, errC *codec) {
 		})
 	}
 	c.encode = func(b *valBuilder, v reflect.Value) int32 {
-		inner, isErr := v.Interface().(resultish).resultGet()
+		inner, isErr, _ := values.ResultGet(v.Interface())
 		if isErr {
 			i := errC.encode(b, inner)
 			return b.push(types.MakeSchemaValueNodeResultValue(
@@ -214,20 +215,22 @@ func compileResult(c *codec, okC, errC *codec) {
 		if n.Tag() != types.SchemaValueNodeResultValue {
 			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
 		}
-		setter := dst.Addr().Interface().(resultSetter)
+		setter := dst.Addr().Interface()
 		payload := n.ResultValue()
 		if payload.Tag() == types.ResultValuePayloadErrValue {
 			child := payload.ErrValue()
 			if child.IsNone() {
 				return fmt.Errorf("%s: err arm carries no value", c.typ)
 			}
-			return errC.decode(d, setter.resultSetErr(), child.Some())
+			elem, _ := values.ResultSetErr(setter)
+			return errC.decode(d, elem, child.Some())
 		}
 		child := payload.OkValue()
 		if child.IsNone() {
 			return fmt.Errorf("%s: ok arm carries no value", c.typ)
 		}
-		return okC.decode(d, setter.resultSetOk(), child.Some())
+		elem, _ := values.ResultSetOk(setter)
+		return okC.decode(d, elem, child.Some())
 	}
 }
 
@@ -450,7 +453,7 @@ func compileQuantity(c *codec, unit QuantityUnit) {
 		})
 	}
 	c.encode = func(b *valBuilder, v reflect.Value) int32 {
-		mantissa, scale, u := v.Interface().(quantityish).quantityValue()
+		mantissa, scale, u, _ := values.QuantityParts(v.Interface())
 		return b.push(types.MakeSchemaValueNodeQuantityValueNode(types.QuantityValue{
 			Mantissa: mantissa,
 			Scale:    scale,
@@ -466,7 +469,7 @@ func compileQuantity(c *codec, unit QuantityUnit) {
 			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
 		}
 		q := n.QuantityValueNode()
-		dst.Addr().Interface().(quantitySetter).quantitySetValue(q.Mantissa, q.Scale, q.Unit)
+		values.QuantitySetParts(dst.Addr().Interface(), q.Mantissa, q.Scale, q.Unit)
 		return nil
 	}
 }

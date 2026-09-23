@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/core/values"
 	"reflect"
 	"sort"
 	"strings"
@@ -301,25 +302,32 @@ func (d *definitions) sdkComposite(c *codec) bool {
 	}
 	zero := reflect.New(c.typ).Elem().Interface()
 
+	// The SDK's own types are recognised first, then the shared ones from the
+	// core module, whose plumbing is reached through package-level functions:
+	// their interfaces are sealed there, so their methods are not callable from
+	// here.
 	switch z := zero.(type) {
 	case secretish:
 		compileSecret(c, d.compile(z.secretElem()))
 		return true
-	case optionish:
-		compileOption(c, d.compile(z.optionElem()), optionValueOps())
-		return true
-	case resultish:
-		okT, errT := z.resultElems()
-		compileResult(c, d.compile(okT), d.compile(errT))
-		return true
-	case quantityish:
-		compileQuantity(c, z.quantityUnit())
-		return true
 	case streamish:
 		compileStream(c, d.compile(z.streamElem()))
 		return true
-	case tupleish:
-		elems := z.tupleElems()
+	}
+
+	if elem, ok := values.OptionElem(zero); ok {
+		compileOption(c, d.compile(elem), optionValueOps())
+		return true
+	}
+	if okT, errT, ok := values.ResultElems(zero); ok {
+		compileResult(c, d.compile(okT), d.compile(errT))
+		return true
+	}
+	if unit, ok := values.QuantityUnitOf(zero); ok {
+		compileQuantity(c, unit)
+		return true
+	}
+	if elems, ok := values.TupleElems(zero); ok {
 		cs := make([]*codec, len(elems))
 		for i, e := range elems {
 			cs[i] = d.compile(e)

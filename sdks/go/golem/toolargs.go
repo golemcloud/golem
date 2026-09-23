@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/core/values"
 	"reflect"
 
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
@@ -270,7 +271,7 @@ func (f Flag) toolArgMeta() toolArgMeta {
 // optionValue turns a declared Option[T] default into a reflect.Value, invalid
 // when the option is empty, so all three markers report defaults the same way.
 func optionValue[T any](o Option[T]) reflect.Value {
-	v, some := o.optionGet()
+	v, some, _ := values.OptionGet(o)
 	if !some {
 		return reflect.Value{}
 	}
