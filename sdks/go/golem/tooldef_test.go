@@ -502,3 +502,129 @@ func TestDefinitionErrorsTravelAsInvalidResult(t *testing.T) {
 		t.Errorf("message does not name the problem: %q", err.InvalidResult())
 	}
 }
+
+// TestNestedSubcommandsFormATree — a tool may nest commands to any depth, and
+// the flattened tree must link parents to children by index.
+func TestNestedSubcommandsFormATree(t *testing.T) {
+	type AddArgs struct {
+		Name Positional[string]
+		URL  Positional[string]
+	}
+	type RemoveArgs struct {
+		Name Positional[string]
+	}
+
+	tool, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) {
+		def := defineToolInto(r, d, "git", ToolSpec{Version: "1.0.0"})
+		// The intermediate node is declared so it can carry documentation.
+		declareGroup(r, d, def, []string{"remote"}, []CommandOpt{
+			Summary("Manage remotes"), Aliases("rmt"),
+		})
+		add := declareCommand[AddArgs, string](r, d, def, []string{"remote", "add"}, "add", AddArgs{}, nil)
+		handleCommandInto(r, d, add, func(ctx *ToolContext, in AddArgs) string {
+			return strings.Join(ctx.CommandPath(), " ") + " " + in.Name.Get() + "=" + in.URL.Get()
+		})
+		rm := declareCommand[RemoveArgs, string](r, d, def, []string{"remote", "remove"}, "remove", RemoveArgs{}, nil)
+		handleCommandInto(r, d, rm, func(_ *ToolContext, in RemoveArgs) string { return "removed " + in.Name.Get() })
+	})
+
+	// root -> remote -> {add, remove}
+	if len(tool.Commands.Nodes) != 4 {
+		t.Fatalf("tree has %d nodes, want 4", len(tool.Commands.Nodes))
+	}
+	root := tool.Commands.Nodes[0]
+	if len(root.Subcommands) != 1 {
+		t.Fatalf("root has %d subcommands, want 1", len(root.Subcommands))
+	}
+	remote := tool.Commands.Nodes[root.Subcommands[0]]
+	if remote.Name != "remote" || remote.Doc.Summary != "Manage remotes" {
+		t.Errorf("intermediate node is %+v, want the declared remote group", remote)
+	}
+	if len(remote.Aliases) != 1 || remote.Aliases[0] != "rmt" {
+		t.Errorf("remote aliases %v, want [rmt]", remote.Aliases)
+	}
+	// A group dispatches only: it has no body of its own.
+	if remote.Body.IsSome() {
+		t.Error("the remote group gained a body")
+	}
+	if len(remote.Subcommands) != 2 {
+		t.Fatalf("remote has %d subcommands, want 2", len(remote.Subcommands))
+	}
+	for _, idx := range remote.Subcommands {
+		if tool.Commands.Nodes[idx].Body.IsNone() {
+			t.Errorf("leaf %q has no body", tool.Commands.Nodes[idx].Name)
+		}
+	}
+
+	// Dispatch walks the same path.
+	e, _ := r.get("git")
+	input := encodeToolArgs(t, d, e, []string{"remote", "add"}, "origin", "git@example.com")
+	got := d.invokeCommand(e, []string{"remote", "add"}, input,
+		newToolStdin(toolExports.Stdin{}), newToolStdout(toolExports.Stdout{}))
+	if got.Tag() != witTypes.ResultOk {
+		t.Fatalf("invoking a nested command failed: %+v", got.Err())
+	}
+	typed := got.Ok().Result.Some()
+	out, err := schema.NewRef(typed.Graph).UnpackJSON(typed.Value)
+	if err != nil {
+		t.Fatalf("result is not readable: %v", err)
+	}
+	if out != "remote add origin=git@example.com" {
+		t.Errorf("result %v", out)
+	}
+}
+
+// TestUndeclaredIntermediateNodesAreCreated — declaring only the leaf is
+// enough; the path in between is materialised as dispatch-only nodes.
+func TestUndeclaredIntermediateNodesAreCreated(t *testing.T) {
+	type Args struct{ Value Positional[string] }
+
+	tool, _, _ := buildToolFor(t, func(r *toolRegistry, d *definitions) {
+		def := defineToolInto(r, d, "deep", ToolSpec{Version: "0.1.0"})
+		cmd := declareCommand[Args, string](r, d, def, []string{"a", "b", "c"}, "c", Args{}, nil)
+		handleCommandInto(r, d, cmd, func(*ToolContext, Args) string { return "" })
+	})
+
+	if len(tool.Commands.Nodes) != 4 {
+		t.Fatalf("tree has %d nodes, want 4", len(tool.Commands.Nodes))
+	}
+	at := tool.Commands.Nodes[0]
+	for _, want := range []string{"a", "b", "c"} {
+		if len(at.Subcommands) != 1 {
+			t.Fatalf("node %q has %d subcommands, want 1", at.Name, len(at.Subcommands))
+		}
+		at = tool.Commands.Nodes[at.Subcommands[0]]
+		if at.Name != want {
+			t.Fatalf("node is %q, want %q", at.Name, want)
+		}
+	}
+	// Only the declared leaf has a body.
+	if at.Body.IsNone() {
+		t.Error("the leaf has no body")
+	}
+}
+
+// TestSiblingsShareTheirParentNode — two commands under one path must attach to
+// the same intermediate node rather than each creating their own.
+func TestSiblingsShareTheirParentNode(t *testing.T) {
+	type Args struct{ Value Positional[string] }
+
+	tool, _, _ := buildToolFor(t, func(r *toolRegistry, d *definitions) {
+		def := defineToolInto(r, d, "siblings", ToolSpec{Version: "0.1.0"})
+		for _, leaf := range []string{"one", "two"} {
+			cmd := declareCommand[Args, string](r, d, def, []string{"group", leaf}, leaf, Args{}, nil)
+			handleCommandInto(r, d, cmd, func(*ToolContext, Args) string { return "" })
+		}
+	})
+
+	if len(tool.Commands.Nodes) != 4 {
+		t.Fatalf("tree has %d nodes, want 4 (root, group, two leaves)", len(tool.Commands.Nodes))
+	}
+	if n := len(tool.Commands.Nodes[0].Subcommands); n != 1 {
+		t.Fatalf("root has %d subcommands, want 1", n)
+	}
+	group := tool.Commands.Nodes[tool.Commands.Nodes[0].Subcommands[0]]
+	if len(group.Subcommands) != 2 {
+		t.Errorf("group has %d subcommands, want 2", len(group.Subcommands))
+	}
+}

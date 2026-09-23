@@ -121,6 +121,9 @@ type commandEntry struct {
 	// invoke is installed by HandleCommand; a command without one is a
 	// definition error.
 	invoke func(*ToolContext, reflect.Value) reflect.Value
+	// group marks a node that only dispatches to subcommands, so it has no
+	// arguments, no result and no handler.
+	group bool
 }
 
 // toolEntry is a registered tool: its spec and its commands in declaration order.
@@ -173,9 +176,49 @@ func Body[Args any, Out any](t *ToolDefinition, proto Args, opts ...CommandOpt) 
 	return declareCommand[Args, Out](toolDefs, defs, t, nil, "", proto, opts)
 }
 
-// Command declares a subcommand of the tool's root.
-func Command[Args any, Out any](t *ToolDefinition, name string, proto Args, opts ...CommandOpt) CommandDef[Args, Out] {
-	return declareCommand[Args, Out](toolDefs, defs, t, []string{name}, name, proto, opts)
+// Command declares a subcommand at the given path below the tool's root. The
+// path may be any depth: intermediate commands that are not declared themselves
+// are created as dispatch-only nodes, and [Group] documents one of those.
+func Command[Args any, Out any](t *ToolDefinition, path []string, proto Args, opts ...CommandOpt) CommandDef[Args, Out] {
+	return declareCommand[Args, Out](toolDefs, defs, t, path, lastSegment(path), proto, opts)
+}
+
+// Group declares a command that only dispatches to subcommands, so that an
+// intermediate node can carry its own documentation and aliases. Declaring it
+// is optional: an undeclared intermediate node is created automatically.
+func Group(t *ToolDefinition, path []string, opts ...CommandOpt) {
+	declareGroup(toolDefs, defs, t, path, opts)
+}
+
+func lastSegment(path []string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	return path[len(path)-1]
+}
+
+// declareGroup registers a dispatch-only node.
+func declareGroup(r *toolRegistry, d *definitions, t *ToolDefinition, path []string, opts []CommandOpt) {
+	e := r.byName[t.name]
+	if e == nil {
+		d.recordErr("", "", "group %s declared on unregistered tool %q", commandLabel(path), t.name)
+		return
+	}
+	if len(path) == 0 {
+		d.recordErr("", "", "tool %s: the root is declared with golem.DefineTool, not golem.Group", t.name)
+		return
+	}
+	if _, dup := e.byPath[pathKey(path)]; dup {
+		d.recordErr("", "", "tool %s: command already declared: %s", t.name, commandLabel(path))
+		return
+	}
+	var co commandOpts
+	for _, o := range opts {
+		o(&co)
+	}
+	ce := &commandEntry{path: path, name: lastSegment(path), opts: co, group: true}
+	e.commands = append(e.commands, ce)
+	e.byPath[pathKey(path)] = ce
 }
 
 func declareCommand[Args any, Out any](
@@ -352,17 +395,48 @@ func (d *definitions) buildTool(e *toolEntry) (toolCommon.Tool, bool) {
 	g := graphBuilder{d: d}
 	ok := true
 
-	// The root is always node 0 of the command tree, and subcommands are
-	// appended, so the root's child indices are known once they are all built.
-	root := toolCommon.CommandNode{
+	// The tree is flattened with the root at index 0 and children referenced by
+	// index, so it is built by walking each declared path and materialising the
+	// nodes along it.
+	nodes := []toolCommon.CommandNode{{
 		Name:    e.def.name,
 		Aliases: append([]string(nil), e.def.spec.Aliases...),
 		Doc:     docOf(e.def.spec.Summary, e.def.spec.Description),
 		Body:    witTypes.None[toolCommon.CommandBody](),
+	}}
+	index := map[string]int32{pathKey(nil): 0}
+
+	// ensure materialises every node along path, creating dispatch-only
+	// intermediates for any segment nothing declared.
+	ensure := func(path []string) int32 {
+		at := int32(0)
+		for i := range path {
+			key := pathKey(path[:i+1])
+			if idx, seen := index[key]; seen {
+				at = idx
+				continue
+			}
+			nodes = append(nodes, toolCommon.CommandNode{
+				Name: path[i],
+				Body: witTypes.None[toolCommon.CommandBody](),
+			})
+			idx := int32(len(nodes) - 1)
+			nodes[at].Subcommands = append(nodes[at].Subcommands, idx)
+			index[key] = idx
+			at = idx
+		}
+		return at
 	}
-	nodes := []toolCommon.CommandNode{root}
 
 	for _, ce := range e.commands {
+		at := ensure(ce.path)
+		if len(ce.path) > 0 {
+			nodes[at].Aliases = append([]string(nil), ce.opts.aliases...)
+			nodes[at].Doc = docOf(ce.opts.summary, ce.opts.description)
+		}
+		if ce.group {
+			continue
+		}
 		if ce.invoke == nil {
 			d.recordErr("", "", "tool %s: command %s has no handler; call golem.HandleCommand",
 				e.def.name, commandLabel(ce.path))
@@ -372,18 +446,7 @@ func (d *definitions) buildTool(e *toolEntry) (toolCommon.Tool, bool) {
 		if !fieldsOK {
 			ok = false
 		}
-		body := d.buildCommandBody(&g, ce, fields)
-		if len(ce.path) == 0 {
-			nodes[0].Body = witTypes.Some(body)
-			continue
-		}
-		nodes = append(nodes, toolCommon.CommandNode{
-			Name:    ce.name,
-			Aliases: append([]string(nil), ce.opts.aliases...),
-			Doc:     docOf(ce.opts.summary, ce.opts.description),
-			Body:    witTypes.Some(body),
-		})
-		nodes[0].Subcommands = append(nodes[0].Subcommands, int32(len(nodes)-1))
+		nodes[at].Body = witTypes.Some(d.buildCommandBody(&g, ce, fields))
 	}
 
 	for typ, why := range g.invalids {
