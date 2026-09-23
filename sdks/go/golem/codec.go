@@ -110,6 +110,10 @@ func (d *definitions) buildCodec(c *codec) {
 		d.compileVariant(c, vd)
 		return
 	}
+	if ud, ok := d.unions[c.typ]; ok {
+		d.compileUnion(c, ud)
+		return
+	}
 	if ed, ok := d.enums[c.typ]; ok {
 		compileEnum(c, ed)
 		return
