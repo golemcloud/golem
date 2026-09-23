@@ -17,6 +17,7 @@
 //! The contract suite runs on the store with the policy of the configuration. The other tests
 //! give the store a short or a long deadline and a prune policy that the test controls.
 
+use super::super::files::SnapshotFiles;
 use super::super::prune::{PruneLedger, read_ledger};
 use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
@@ -145,10 +146,14 @@ async fn blobs(
     paths
 }
 
-async fn ledger(storage: &dyn BlobStorage, scope: &SnapshotScope) -> PruneLedger {
-    read_ledger(storage, &scope.0, Duration::from_secs(2))
-        .await
-        .unwrap()
+async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope) -> PruneLedger {
+    read_ledger(&SnapshotFiles {
+        storage: storage.clone(),
+        namespace: scope.0.clone(),
+        deadline: Duration::from_secs(2),
+    })
+    .await
+    .unwrap()
 }
 
 /// Waits until the condition holds, or until the limit ends. Gives whether the condition holds.
@@ -164,7 +169,7 @@ async fn eventually(condition: impl Fn() -> bool) -> bool {
     .is_ok()
 }
 
-/// Runs the operation until the calls of the storage fulfil the condition, and then drops it.
+/// Runs the operation until the calls of the storage match the condition, and then drops it.
 /// Gives the output of the operation when it ends first.
 async fn drop_when<T>(
     storage: &ScriptedBlobStorage,
@@ -535,7 +540,7 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
     });
     let held = eventually(|| index_writes() > before).await;
     let deleted = store.delete(&scope, &name("p-old")).await;
-    let pruned_while_held = ledger(&*storage, &scope).await.last_prune_millis.is_some();
+    let pruned_while_held = ledger(&storage, &scope).await.last_prune.is_some();
     storage.open_gate();
     let saved = saving.await.unwrap();
     let pruned_again = store.delete(&scope, &name("p-none")).await;
@@ -590,11 +595,14 @@ async fn a_restore_whose_pack_reads_fail_gives_a_retryable_storage_error() {
 async fn a_save_of_a_file_without_read_permission_gives_source_with_permission_denied() {
     use std::os::unix::fs::PermissionsExt;
     // SAFETY: `geteuid` has no preconditions.
-    if unsafe { libc::geteuid() } == 0 {
-        return;
-    }
+    let uid = unsafe { libc::geteuid() };
+    assert_ne!(
+        uid, 0,
+        "this test needs a user other than root, because permissions do not stop root from a read"
+    );
+    let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
-        Arc::new(InMemoryBlobStorage::new()),
+        storage.clone(),
         policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
     );
     let scope = new_scope();
@@ -609,6 +617,10 @@ async fn a_save_of_a_file_without_read_permission_gives_source_with_permission_d
         matches!(&saved, Err(SnapshotStoreError::Source(error)) if error.kind() == std::io::ErrorKind::PermissionDenied),
         "{saved:?}"
     );
+    assert_eq!(
+        blobs(&*storage, &scope.0, "snapshots/").await,
+        Vec::<String>::new()
+    );
 }
 
 #[cfg(target_os = "linux")]
@@ -620,6 +632,7 @@ async fn a_restore_that_cannot_set_an_extended_attribute_gives_destination() {
     let value = vec![b'a'; 6000];
     let set = |path: &Path| xattr_set(path, "user.golem-test", &value);
     let Ok(source) = tempfile::tempdir_in("/dev/shm") else {
+        println!("SKIPPED: /dev/shm has no directory for the source of the test");
         return;
     };
     let file = source.path().join("file.txt");
@@ -627,7 +640,15 @@ async fn a_restore_that_cannot_set_an_extended_attribute_gives_destination() {
     let probe = Scratch::new();
     let probe_file = probe.path().join("probe");
     std::fs::write(&probe_file, b"probe").unwrap();
-    if set(&file).is_err() || set(&probe_file).is_ok() {
+    if let Err(error) = set(&file) {
+        println!("SKIPPED: /dev/shm does not take a user attribute of 6,000 bytes: {error}");
+        return;
+    }
+    if set(&probe_file).is_ok() {
+        println!(
+            "SKIPPED: the destination {} takes a user attribute of 6,000 bytes",
+            probe.path().display()
+        );
         return;
     }
     let store = store(
@@ -731,14 +752,14 @@ async fn a_delete_past_the_threshold_prunes_and_the_packs_go_after_the_grace_per
     let packs_before = blobs(&*storage, &scope.0, "data/").await;
 
     store.delete(&scope, &name("p-deleted")).await.unwrap();
-    let after_first = ledger(&*storage, &scope).await;
+    let after_first = ledger(&storage, &scope).await;
     store.delete(&scope, &name("p-none")).await.unwrap();
     let packs_after = blobs(&*storage, &scope.0, "data/").await;
 
     assert_eq!(
         (
             after_first.freed_bytes,
-            after_first.last_prune_millis.is_some(),
+            after_first.last_prune.is_some(),
             after_first.awaiting_removal,
             packs_after.len() < packs_before.len(),
             packs_after.iter().all(|pack| packs_before.contains(pack)),
@@ -768,12 +789,12 @@ async fn a_delete_below_the_threshold_does_not_prune() {
     let packs_before = blobs(&*storage, &scope.0, "data/").await;
 
     store.delete(&scope, &name("p-deleted")).await.unwrap();
-    let after = ledger(&*storage, &scope).await;
+    let after = ledger(&storage, &scope).await;
 
     assert_eq!(
         (
             after.freed_bytes > 0,
-            after.last_prune_millis,
+            after.last_prune,
             blobs(&*storage, &scope.0, "data/").await,
         ),
         (true, None, packs_before)
@@ -800,14 +821,14 @@ async fn no_second_prune_runs_within_the_grace_period() {
         .await;
 
     store.delete(&scope, &name("p-a")).await.unwrap();
-    let after_first = ledger(&*storage, &scope).await;
+    let after_first = ledger(&storage, &scope).await;
     store.delete(&scope, &name("p-b")).await.unwrap();
-    let after_second = ledger(&*storage, &scope).await;
+    let after_second = ledger(&storage, &scope).await;
 
     assert_eq!(
         (
-            after_first.last_prune_millis.is_some(),
-            after_second.last_prune_millis == after_first.last_prune_millis,
+            after_first.last_prune.is_some(),
+            after_second.last_prune == after_first.last_prune,
             after_second.freed_bytes > 0,
         ),
         (true, true, true)
@@ -844,10 +865,10 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
     refuse.store(true, Ordering::SeqCst);
 
     let failed = store.delete(&scope, &name("p-deleted")).await;
-    let after_failure = ledger(&*storage, &scope).await;
+    let after_failure = ledger(&storage, &scope).await;
     refuse.store(false, Ordering::SeqCst);
     let retried = store.delete(&scope, &name("p-deleted")).await;
-    let after_retry = ledger(&*storage, &scope).await;
+    let after_retry = ledger(&storage, &scope).await;
 
     assert!(
         failed.as_ref().is_err_and(|error| is_storage(error, true)),
@@ -856,10 +877,10 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
     assert_eq!(
         (
             after_failure.freed_bytes > 0,
-            after_failure.last_prune_millis,
+            after_failure.last_prune,
             retried.is_ok(),
             after_retry.freed_bytes,
-            after_retry.last_prune_millis.is_some(),
+            after_retry.last_prune.is_some(),
         ),
         (true, None, true, 0, true)
     );
@@ -1320,7 +1341,7 @@ async fn the_ledger_counts_the_packed_bytes_that_the_deleted_snapshot_added() {
     store.delete(&scope, &name("p-deleted")).await.unwrap();
 
     assert_eq!(
-        (added > 1, ledger(&*storage, &scope).await.freed_bytes),
+        (added > 1, ledger(&storage, &scope).await.freed_bytes),
         (true, added)
     );
 }
@@ -1348,5 +1369,50 @@ async fn a_config_write_that_fails_gives_a_storage_error_with_that_failure() {
                 if format!("{source:#}").contains("the storage refused the call")
         ),
         "{saved:?}"
+    );
+}
+
+#[test]
+async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_retryable() {
+    // Packs of zeros with the sizes of the index give the prune a decryption error, not a failed
+    // storage call. The forget before the prune has succeeded, so the delete gives `Storage`.
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(storage.clone(), policy(LONG_DEADLINE, 1, Duration::ZERO));
+    let scope = new_scope();
+    let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
+    store
+        .save(&scope, &name("p-deleted"), deleted_tree.path())
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-kept"), kept_tree.path())
+        .await
+        .unwrap();
+    let packs = storage
+        .list_blobs_below("test", "test", scope.0.clone(), Path::new("data"))
+        .await
+        .unwrap();
+    futures::future::join_all(packs.iter().map(|pack| {
+        let zeros = vec![0; usize::try_from(pack.size).unwrap()];
+        let storage = storage.clone();
+        let namespace = scope.0.clone();
+        async move {
+            storage
+                .put_raw("test", "test", namespace, &pack.path, &zeros)
+                .await
+        }
+    }))
+    .await
+    .into_iter()
+    .collect::<anyhow::Result<Vec<()>>>()
+    .unwrap();
+
+    let deleted = store.delete(&scope, &name("p-deleted")).await;
+
+    assert!(
+        deleted
+            .as_ref()
+            .is_err_and(|error| is_storage(error, false)),
+        "{deleted:?}"
     );
 }

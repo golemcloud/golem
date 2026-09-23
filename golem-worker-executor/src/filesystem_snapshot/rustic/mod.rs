@@ -20,6 +20,7 @@
 
 mod backend;
 mod fault;
+mod files;
 mod prune;
 mod publish;
 mod scope;

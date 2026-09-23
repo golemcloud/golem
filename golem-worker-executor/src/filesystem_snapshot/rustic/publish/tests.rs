@@ -12,16 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::files::SnapshotFiles;
 use super::super::holding::reached_deadline;
 use super::super::scripted::{Script, ScriptedBlobStorage};
-use super::{SnapshotFiles, SnapshotStage, StagedSnapshot, publish, retract};
+use super::{SnapshotStage, StagedSnapshot, publish, retract};
 use bytes::Bytes;
 use futures::FutureExt;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use pretty_assertions::assert_eq;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::test;
@@ -36,7 +37,7 @@ const SNAPSHOT_PATH: &str =
 
 fn staged() -> StagedSnapshot {
     StagedSnapshot {
-        path: PathBuf::from(SNAPSHOT_PATH).into_boxed_path(),
+        path: Arc::from(Path::new(SNAPSHOT_PATH)),
         content: Bytes::from_static(b"snapshot"),
     }
 }

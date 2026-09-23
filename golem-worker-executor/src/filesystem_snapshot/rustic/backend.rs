@@ -20,6 +20,7 @@
 //! for at most a deadline, and a cancelled operation makes no more calls.
 
 use super::fault::{BlobCallFailed, ConfigExists, FileMissing, OperationCancelled};
+use super::files::TARGET_LABEL;
 use super::publish::{SnapshotStage, StagedSnapshot};
 use bytes::Bytes;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, PutIfAbsent};
@@ -33,9 +34,6 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::task_tracker::TaskTrackerToken;
-
-/// The target label of each blob storage call of the backend.
-const TARGET_LABEL: &str = "filesystem_snapshot";
 
 /// The path of the config file of a repository.
 const CONFIG_PATH: &str = "config";
@@ -139,11 +137,9 @@ impl BlobBackend {
         }
     }
 
-    /// Waits for one call on the blob storage, and gives its result as a rustic result.
-    ///
-    /// Each call of the backend on the blob storage goes through this function. A call that gives
-    /// no answer within the deadline gives an error, the same as a call that failed. So does a
-    /// call of a cancelled operation.
+    /// Waits for one call on the blob storage, which each call of the backend goes through. A call
+    /// without an answer within the deadline, or of a cancelled operation, gives an error, the same
+    /// as a call that failed.
     fn request<T>(
         &self,
         call: StorageCall,
@@ -320,7 +316,10 @@ impl WriteBackend for BlobBackend {
         };
         match (tpe, &self.stage) {
             (FileType::Snapshot, Some(stage)) => stage
-                .keep(StagedSnapshot { path, content })
+                .keep(StagedSnapshot {
+                    path: Arc::from(path),
+                    content,
+                })
                 .map_err(|staged| second_snapshot(&staged.path)),
             (FileType::Config, _) => match self.write_if_absent(&path, &content)? {
                 PutIfAbsent::Written => Ok(()),

@@ -668,7 +668,7 @@ fn a_backend_with_a_stage_keeps_the_snapshot_file_and_does_not_write_it() {
             true,
             true,
             Some(StagedSnapshot {
-                path: PathBuf::from(format!("snapshots/{}", "cd".repeat(32))).into_boxed_path(),
+                path: Arc::from(PathBuf::from(format!("snapshots/{}", "cd".repeat(32)))),
                 content: Bytes::from_static(b"snapshot"),
             }),
             vec![(format!("data/ab/{}", "ab".repeat(32)), 4)]

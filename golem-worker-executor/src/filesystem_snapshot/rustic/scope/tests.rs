@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::files::SnapshotFiles;
 use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::{copy_scope, delete_scope};
 use golem_common::model::environment::EnvironmentId;
@@ -35,6 +36,17 @@ const REPOSITORY: [(&str, &str); 6] = [
     ("keys/efef", "key"),
     ("snapshots/0101", "snapshot"),
 ];
+
+fn files<S: BlobStorage + 'static>(
+    storage: &Arc<S>,
+    namespace: &BlobStorageNamespace,
+) -> SnapshotFiles {
+    SnapshotFiles {
+        storage: storage.clone(),
+        namespace: namespace.clone(),
+        deadline: DEADLINE,
+    }
+}
 
 fn new_namespace() -> BlobStorageNamespace {
     BlobStorageNamespace::InitialAgentFiles {
@@ -96,14 +108,16 @@ fn owned(blobs: &[(&str, &str)]) -> Vec<(String, String)> {
 
 #[test]
 async fn a_copy_gives_the_target_each_blob_of_the_repository_and_not_the_ledger() {
-    let storage = InMemoryBlobStorage::new();
+    let storage = Arc::new(InMemoryBlobStorage::new());
     let (from, to) = (new_namespace(), new_namespace());
-    put_all(&storage, &from, &REPOSITORY).await;
+    put_all(&*storage, &from, &REPOSITORY).await;
 
-    copy_scope(&storage, &from, &to, DEADLINE).await.unwrap();
+    copy_scope(&files(&storage, &from), &files(&storage, &to))
+        .await
+        .unwrap();
 
     assert_eq!(
-        (stored(&storage, &to).await, stored(&storage, &from).await),
+        (stored(&*storage, &to).await, stored(&*storage, &from).await),
         (
             owned(
                 &REPOSITORY
@@ -123,7 +137,9 @@ async fn a_copy_writes_the_packs_the_keys_the_index_files_the_snapshot_files_and
     let (from, to) = (new_namespace(), new_namespace());
     put_all(&*storage, &from, &REPOSITORY).await;
 
-    copy_scope(&*storage, &from, &to, DEADLINE).await.unwrap();
+    copy_scope(&files(&storage, &from), &files(&storage, &to))
+        .await
+        .unwrap();
 
     assert_eq!(
         storage
@@ -149,7 +165,9 @@ async fn a_copy_lists_the_snapshot_files_before_the_index_files_the_keys_and_the
     let (from, to) = (new_namespace(), new_namespace());
     put_all(&*storage, &from, &REPOSITORY).await;
 
-    copy_scope(&*storage, &from, &to, DEADLINE).await.unwrap();
+    copy_scope(&files(&storage, &from), &files(&storage, &to))
+        .await
+        .unwrap();
 
     assert_eq!(
         storage
@@ -164,10 +182,10 @@ async fn a_copy_lists_the_snapshot_files_before_the_index_files_the_keys_and_the
 
 #[test]
 async fn a_copy_of_a_namespace_without_a_config_copies_nothing() {
-    let storage = InMemoryBlobStorage::new();
+    let storage = Arc::new(InMemoryBlobStorage::new());
     let (from, to) = (new_namespace(), new_namespace());
     put_all(
-        &storage,
+        &*storage,
         &from,
         &REPOSITORY
             .into_iter()
@@ -176,9 +194,11 @@ async fn a_copy_of_a_namespace_without_a_config_copies_nothing() {
     )
     .await;
 
-    copy_scope(&storage, &from, &to, DEADLINE).await.unwrap();
+    copy_scope(&files(&storage, &from), &files(&storage, &to))
+        .await
+        .unwrap();
 
-    assert_eq!(stored(&storage, &to).await, Vec::<(String, String)>::new());
+    assert_eq!(stored(&*storage, &to).await, Vec::<(String, String)>::new());
 }
 
 #[test]
@@ -194,7 +214,7 @@ async fn a_copy_that_fails_gives_the_error_and_the_target_has_no_config() {
     let (from, to) = (new_namespace(), new_namespace());
     put_all(&*storage, &from, &REPOSITORY).await;
 
-    let copied = copy_scope(&*storage, &from, &to, DEADLINE).await;
+    let copied = copy_scope(&files(&storage, &from), &files(&storage, &to)).await;
 
     assert_eq!(
         (
@@ -214,17 +234,17 @@ async fn a_copy_that_fails_gives_the_error_and_the_target_has_no_config() {
 
 #[test]
 async fn a_deleted_scope_holds_no_blob_and_another_scope_keeps_its_blobs() {
-    let storage = InMemoryBlobStorage::new();
+    let storage = Arc::new(InMemoryBlobStorage::new());
     let (deleted, kept) = (new_namespace(), new_namespace());
-    put_all(&storage, &deleted, &REPOSITORY).await;
-    put_all(&storage, &kept, &REPOSITORY).await;
+    put_all(&*storage, &deleted, &REPOSITORY).await;
+    put_all(&*storage, &kept, &REPOSITORY).await;
 
-    delete_scope(&storage, &deleted, DEADLINE).await.unwrap();
+    delete_scope(&files(&storage, &deleted)).await.unwrap();
 
     assert_eq!(
         (
-            stored(&storage, &deleted).await,
-            stored(&storage, &kept).await
+            stored(&*storage, &deleted).await,
+            stored(&*storage, &kept).await
         ),
         (Vec::new(), owned(&REPOSITORY))
     );
@@ -237,7 +257,7 @@ async fn a_delete_of_a_scope_deletes_the_config_first() {
     let namespace = new_namespace();
     put_all(&*storage, &namespace, &REPOSITORY).await;
 
-    delete_scope(&*storage, &namespace, DEADLINE).await.unwrap();
+    delete_scope(&files(&storage, &namespace)).await.unwrap();
 
     assert_eq!(
         storage
@@ -252,20 +272,20 @@ async fn a_delete_of_a_scope_deletes_the_config_first() {
 
 #[test]
 async fn a_delete_of_an_unused_scope_succeeds_and_can_run_again() {
-    let storage = InMemoryBlobStorage::new();
+    let storage = Arc::new(InMemoryBlobStorage::new());
     let namespace = new_namespace();
 
-    let first = delete_scope(&storage, &namespace, DEADLINE).await;
-    put_all(&storage, &namespace, &REPOSITORY).await;
-    let second = delete_scope(&storage, &namespace, DEADLINE).await;
-    let third = delete_scope(&storage, &namespace, DEADLINE).await;
+    let first = delete_scope(&files(&storage, &namespace)).await;
+    put_all(&*storage, &namespace, &REPOSITORY).await;
+    let second = delete_scope(&files(&storage, &namespace)).await;
+    let third = delete_scope(&files(&storage, &namespace)).await;
 
     assert_eq!(
         (
             first.is_ok(),
             second.is_ok(),
             third.is_ok(),
-            stored(&storage, &namespace).await
+            stored(&*storage, &namespace).await
         ),
         (true, true, true, Vec::new())
     );

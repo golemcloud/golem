@@ -19,24 +19,20 @@
 //! write is the step that makes the snapshot visible. A publish that fails, or that the caller
 //! drops, deletes the file again, because a write that the storage received can still complete.
 
-use super::backend::answer_within;
+use super::files::SnapshotFiles;
 use bytes::Bytes;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio_util::task::TaskTracker;
 use tracing::warn;
 
-/// The target label of each blob storage call of a publish.
-const TARGET_LABEL: &str = "filesystem_snapshot";
-
 /// A snapshot file that the backend kept and did not write.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct StagedSnapshot {
-    /// The path of the file, relative to the root of the namespace.
-    pub(super) path: Box<Path>,
+    /// The path of the file, relative to the root of the namespace. The drop guard of a publish
+    /// and its delete task share it.
+    pub(super) path: Arc<Path>,
     pub(super) content: Bytes,
 }
 
@@ -63,22 +59,9 @@ impl SnapshotStage {
     }
 }
 
-/// The snapshot files of one scope: the storage, the namespace of the scope, and the deadline of
-/// each call.
-#[derive(Clone, Debug)]
-pub(super) struct SnapshotFiles {
-    pub(super) storage: Arc<dyn BlobStorage>,
-    pub(super) namespace: BlobStorageNamespace,
-    pub(super) deadline: Duration,
-}
-
-/// Writes the staged file, and so makes the snapshot visible.
-///
-/// The file is written only when the path has no blob. The name of a snapshot file is the hash of
-/// its content, so a blob at the path already holds this content, and the call succeeds.
-///
-/// When the write fails, the call deletes the path before it gives the error. When the caller
-/// drops the call during the write, a task of `tracker` deletes the path.
+/// Writes the staged file only when its path has no blob, which makes the snapshot visible. The
+/// name is the hash of the content, so a blob at the path is this file. A failed write deletes the
+/// path before the error returns, and a dropped write deletes it in a task of `tracker`.
 pub(super) async fn publish(
     files: &SnapshotFiles,
     staged: &StagedSnapshot,
@@ -90,17 +73,9 @@ pub(super) async fn publish(
         tracker: tracker.clone(),
         armed: true,
     };
-    let written = answer_within(
-        files.deadline,
-        files.storage.put_raw_if_absent(
-            TARGET_LABEL,
-            "publish",
-            files.namespace.clone(),
-            &staged.path,
-            &staged.content,
-        ),
-    )
-    .await;
+    let written = files
+        .put_if_absent("publish", &staged.path, &staged.content)
+        .await;
     retraction.armed = false;
     match written {
         Ok(_) => Ok(()),
@@ -113,13 +88,7 @@ pub(super) async fn publish(
 
 /// Deletes the snapshot file at the path. A path without a blob gives success.
 pub(super) async fn retract(files: &SnapshotFiles, path: &Path) -> anyhow::Result<()> {
-    answer_within(
-        files.deadline,
-        files
-            .storage
-            .delete(TARGET_LABEL, "retract", files.namespace.clone(), path),
-    )
-    .await
+    files.delete("retract", path).await
 }
 
 async fn retract_or_warn(files: &SnapshotFiles, path: &Path) {
@@ -135,7 +104,7 @@ async fn retract_or_warn(files: &SnapshotFiles, path: &Path) {
 /// Deletes the path in a task of the tracker when it is dropped while it is armed.
 struct RetractOnDrop {
     files: SnapshotFiles,
-    path: Box<Path>,
+    path: Arc<Path>,
     tracker: TaskTracker,
     armed: bool,
 }

@@ -22,8 +22,9 @@
 
 use super::backend::BlobBackend;
 use super::fault::{Operation, classify, is_file_missing, is_storage_failure, storage_failure};
+use super::files::SnapshotFiles;
 use super::prune::{PruneLedger, prune_due, read_ledger, write_ledger};
-use super::publish::{SnapshotFiles, SnapshotStage, StagedSnapshot, publish};
+use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
 use super::{
     ChangeDetection, PruneReport, PruneSettings, RepackLimits, RepositoryKey, RepositorySettings,
@@ -157,10 +158,8 @@ impl RusticSnapshotStore {
     }
 
     /// Stops each operation at its next storage call, and waits until no blocking task and no
-    /// backend of the store remains. After the call, each operation gives `Storage`.
-    ///
-    /// The runtime must not drop before the call returns, because a storage call that waits on the
-    /// runtime after its time driver stops aborts the process.
+    /// backend of the store remains; later operations give `Storage`. The runtime must not drop
+    /// before it returns, because a storage call after its time driver stops aborts the process.
     pub(crate) async fn shut_down(&self) {
         self.root.cancel();
         self.tracker.close();
@@ -239,13 +238,13 @@ impl RusticSnapshotStore {
         token: &CancellationToken,
         freed: u64,
     ) -> Result<(), SnapshotStoreError> {
-        let deadline = self.policy.deadline;
-        let ledger = read_ledger(&*self.storage, &scope.0, deadline)
+        let files = self.files(scope);
+        let ledger = read_ledger(&files)
             .await
             .map_err(storage_failure)?
             .with_deleted(freed);
         if freed > 0 {
-            write_ledger(&*self.storage, &scope.0, deadline, &ledger)
+            write_ledger(&files, &ledger)
                 .await
                 .map_err(storage_failure)?;
         }
@@ -262,19 +261,12 @@ impl RusticSnapshotStore {
         let key = self.key.clone();
         let settings = self.policy.prune;
         let report = self
-            .blocking(Operation::Repository, move || {
-                prune(backend, &key, &settings)
-            })
+            .blocking(Operation::Prune, move || prune(backend, &key, &settings))
             .await?;
         let marked_packs = report.as_ref().is_some_and(leaves_marked_packs);
-        write_ledger(
-            &*self.storage,
-            &scope.0,
-            deadline,
-            &PruneLedger::after_prune(now, marked_packs),
-        )
-        .await
-        .map_err(storage_failure)
+        write_ledger(&files, &PruneLedger::after_prune(now, marked_packs))
+            .await
+            .map_err(storage_failure)
     }
 }
 
@@ -406,7 +398,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
 
     async fn delete_scope(&self, scope: &SnapshotScope) -> Result<(), SnapshotStoreError> {
         let _operation = self.start()?;
-        delete_scope(&*self.storage, &scope.0, self.policy.deadline)
+        delete_scope(&self.files(scope))
             .await
             .map_err(storage_failure)
     }
@@ -417,7 +409,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         to: &SnapshotScope,
     ) -> Result<(), SnapshotStoreError> {
         let _operation = self.start()?;
-        copy_scope(&*self.storage, &from.0, &to.0, self.policy.deadline)
+        copy_scope(&self.files(from), &self.files(to))
             .await
             .map_err(storage_failure)
     }
@@ -564,11 +556,8 @@ fn stage_save(
     )))
 }
 
-/// Reads each snapshot file of the repository.
-///
-/// A failed storage call fails the read. A file that the storage no longer holds is left out,
-/// because a delete removed it after the listing. Each other failure counts as a file that failed
-/// its integrity check.
+/// Reads each snapshot file of the repository. A failed storage call fails the read, a file that a
+/// delete removed after the listing is left out, and each other failure counts as a failed check.
 fn scope_snapshots<S: Open>(repository: &RusticRepository<S>) -> anyhow::Result<ScopeSnapshots> {
     repository.list::<SnapshotId>()?.try_fold(
         ScopeSnapshots {
@@ -655,11 +644,9 @@ fn snapshot_info(snapshot: &SnapshotFile) -> Option<SnapshotInfo> {
     })
 }
 
-/// Tells whether a later prune removes packs that this prune leaves marked.
-///
-/// A prune marks each pack that holds only unused blobs, and each pack that it repacks. A pack that
-/// an earlier prune marked and whose time to stay is not over stays marked. A pack that no index
-/// lists is also marked, but the report does not count it. A later due prune removes that pack.
+/// Tells whether a later prune removes packs that this prune leaves marked: unused packs, repacked
+/// packs, and packs of an earlier prune whose grace period is not over. The report does not count a
+/// marked pack that no index lists, so the next due prune removes it.
 fn leaves_marked_packs(report: &PruneReport) -> bool {
     report.packs_unused > 0 || report.packs_repacked > 0 || report.marked_packs_kept > 0
 }
