@@ -62,6 +62,10 @@ pub(crate) type OpenStore = Arc<dyn Fn() -> Arc<dyn FilesystemSnapshotStore> + S
 
 type Case = fn(OpenStore) -> BoxFuture<'static, ()>;
 
+/// The number of saves that the dropped-save case starts to find one that does not end in its
+/// first poll.
+const DROP_ATTEMPTS: usize = 20;
+
 /// Each case of the contract, with its name.
 const CASES: &[(&str, Case)] = &[
     ("a_saved_tree_comes_back_the_same", |open| {
@@ -958,19 +962,26 @@ async fn a_dropped_save_publishes_nothing_and_leaves_the_name_free(open: OpenSto
     // interrupted save, so it publishes nothing and leaves the name free. This case checks at
     // once after the drop, and it cannot see a publish that comes much later. So an adapter that
     // runs its save in the background also proves in its own tests that a dropped save stops.
+    // A save can end in its first poll when a busy host runs its read before that poll, so the
+    // case tries saves in new scopes until one does not end in its first poll.
     let store = open();
-    let scope = new_scope();
     let dropped_name = name("p-dropped");
     let tree = new_tree(&fixture());
     let other = new_tree(&one_file("other tree"));
 
-    let dropped = store
-        .save(&scope, &dropped_name, tree.path())
-        .now_or_never();
-    assert!(
-        dropped.is_none(),
-        "the save returned in one poll, so the case cannot drop it before it returns: {dropped:?}"
-    );
+    let scope = futures::stream::iter(0..DROP_ATTEMPTS)
+        .filter_map(|_| {
+            let scope = new_scope();
+            let dropped = store
+                .save(&scope, &dropped_name, tree.path())
+                .now_or_never();
+            std::future::ready(dropped.is_none().then_some(scope))
+        })
+        .next()
+        .await
+        .unwrap_or_else(|| {
+            panic!("each of {DROP_ATTEMPTS} saves returned in one poll, so the case cannot drop one before it returns")
+        });
     let stat = store.stat(&scope, &dropped_name).await.unwrap();
     let restore = restored(&*store, &scope, &dropped_name).await;
     let names_after_the_drop = listed_names(&*store, &scope).await;
