@@ -932,6 +932,31 @@ jobs:
         working-directory: sdks/go/golem
         run: go test ./...
 
+      # core and bridge are separate modules with their own go.mod, so the steps
+      # above do not reach them. core is the shared schema model and the one
+      # canonical-JSON implementation in Go; bridge is the external runtime.
+      # Neither builds for wasip1 — core is stdlib-only and bridge is an
+      # ordinary net/http client — so there is no wasm step for them.
+      - name: Lint core (golangci-lint)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+          working-directory: sdks/go/core
+
+      - name: Run core tests
+        working-directory: sdks/go/core
+        run: go test ./...
+
+      - name: Lint bridge (golangci-lint)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+          working-directory: sdks/go/bridge
+
+      - name: Run bridge tests
+        working-directory: sdks/go/bridge
+        run: go test ./...
+
   build-golem-ts:
     runs-on: blacksmith
     env:

@@ -84,26 +84,14 @@ func wireToTypeBody(node wireNode) (SchemaTypeBody, MetadataEnvelope, error) {
 	case "duration":
 		return readType(node, func(wireBareType) SchemaTypeBody { return DurationType{} })
 
-	case "s8":
-		return readType(node, func(p wireNumericType) SchemaTypeBody { return S8Type{Restrictions: p.model()} })
-	case "s16":
-		return readType(node, func(p wireNumericType) SchemaTypeBody { return S16Type{Restrictions: p.model()} })
-	case "s32":
-		return readType(node, func(p wireNumericType) SchemaTypeBody { return S32Type{Restrictions: p.model()} })
-	case "s64":
-		return readType(node, func(p wireNumericType) SchemaTypeBody { return S64Type{Restrictions: p.model()} })
-	case "u8":
-		return readType(node, func(p wireNumericType) SchemaTypeBody { return U8Type{Restrictions: p.model()} })
-	case "u16":
-		return readType(node, func(p wireNumericType) SchemaTypeBody { return U16Type{Restrictions: p.model()} })
-	case "u32":
-		return readType(node, func(p wireNumericType) SchemaTypeBody { return U32Type{Restrictions: p.model()} })
-	case "u64":
-		return readType(node, func(p wireNumericType) SchemaTypeBody { return U64Type{Restrictions: p.model()} })
-	case "f32":
-		return readType(node, func(p wireNumericType) SchemaTypeBody { return F32Type{Restrictions: p.model()} })
-	case "f64":
-		return readType(node, func(p wireNumericType) SchemaTypeBody { return F64Type{Restrictions: p.model()} })
+	case "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32", "f64":
+		return readTypeErr(node, func(p wireNumericType) (SchemaTypeBody, error) {
+			restrictions, err := p.model()
+			if err != nil {
+				return nil, err
+			}
+			return numericBody(node.Kind, restrictions)
+		})
 
 	case "record":
 		return readTypeErr(node, func(p wireRecordType) (SchemaTypeBody, error) {
@@ -265,6 +253,34 @@ func wireToTypeBody(node wireNode) (SchemaTypeBody, MetadataEnvelope, error) {
 	return nil, MetadataEnvelope{}, fmt.Errorf("golem: unsupported schema type kind %q", node.Kind)
 }
 
+// numericBody is the body for one of the ten numeric kinds. They differ only in
+// which type they build, so they share a decode and split here.
+func numericBody(kind string, restrictions *NumericRestrictions) (SchemaTypeBody, error) {
+	switch kind {
+	case "s8":
+		return S8Type{Restrictions: restrictions}, nil
+	case "s16":
+		return S16Type{Restrictions: restrictions}, nil
+	case "s32":
+		return S32Type{Restrictions: restrictions}, nil
+	case "s64":
+		return S64Type{Restrictions: restrictions}, nil
+	case "u8":
+		return U8Type{Restrictions: restrictions}, nil
+	case "u16":
+		return U16Type{Restrictions: restrictions}, nil
+	case "u32":
+		return U32Type{Restrictions: restrictions}, nil
+	case "u64":
+		return U64Type{Restrictions: restrictions}, nil
+	case "f32":
+		return F32Type{Restrictions: restrictions}, nil
+	case "f64":
+		return F64Type{Restrictions: restrictions}, nil
+	}
+	return nil, fmt.Errorf("golem: %q is not a numeric type kind", kind)
+}
+
 // readType decodes a type node's payload and builds its body; readTypeErr does
 // the same for a case that can still reject what it decoded. Both pull the
 // metadata envelope out of the same payload, since every case carries one.
@@ -364,15 +380,19 @@ type wireNumericType struct {
 	Restrictions *wireNumericRestrictions `json:"restrictions"`
 }
 
-func (n wireNumericType) model() *NumericRestrictions {
+func (n wireNumericType) model() (*NumericRestrictions, error) {
 	if n.Restrictions == nil {
-		return nil
+		return nil, nil
 	}
-	return &NumericRestrictions{
-		Min:  n.Restrictions.Min.model(),
-		Max:  n.Restrictions.Max.model(),
-		Unit: n.Restrictions.Unit,
+	min, err := n.Restrictions.Min.model()
+	if err != nil {
+		return nil, err
 	}
+	max, err := n.Restrictions.Max.model()
+	if err != nil {
+		return nil, err
+	}
+	return &NumericRestrictions{Min: min, Max: max, Unit: n.Restrictions.Unit}, nil
 }
 
 type wireNumericRestrictions struct {
@@ -388,23 +408,26 @@ type wireNumericBound struct {
 	Value json.RawMessage `json:"value"`
 }
 
-func (b *wireNumericBound) model() *NumericBound {
+func (b *wireNumericBound) model() (*NumericBound, error) {
 	if b == nil {
-		return nil
+		return nil, nil
 	}
 	out := &NumericBound{}
+	var target any
 	switch b.Kind {
+	case "signed":
+		out.Kind, target = BoundSigned, &out.Signed
 	case "unsigned":
-		out.Kind = BoundUnsigned
-		_ = json.Unmarshal(b.Value, &out.Unsigned)
+		out.Kind, target = BoundUnsigned, &out.Unsigned
 	case "float-bits":
-		out.Kind = BoundFloatBits
-		_ = json.Unmarshal(b.Value, &out.FloatBits)
+		out.Kind, target = BoundFloatBits, &out.FloatBits
 	default:
-		out.Kind = BoundSigned
-		_ = json.Unmarshal(b.Value, &out.Signed)
+		return nil, fmt.Errorf("golem: unknown numeric bound kind %q", b.Kind)
 	}
-	return out
+	if err := json.Unmarshal(b.Value, target); err != nil {
+		return nil, fmt.Errorf("golem: %s numeric bound: %w", b.Kind, err)
+	}
+	return out, nil
 }
 
 type wireNamedField struct {

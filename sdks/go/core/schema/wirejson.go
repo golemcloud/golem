@@ -305,7 +305,7 @@ func wireToValue(node wireNode) (SchemaValue, error) {
 			return VariantValue{Case: p.Case, Payload: payload}, err
 		})
 	case "enum":
-		return readWire(node, func(p wireCase) SchemaValue { return EnumValue{Case: p.Case} })
+		return readWire(node, func(p wireCase) SchemaValue { return EnumValue(p) })
 	case "flags":
 		return readWire(node, func(p wireFlagsValue) SchemaValue { return FlagsValue{Set: p.Bits} })
 	case "tuple":
@@ -363,13 +363,9 @@ func wireToValue(node wireNode) (SchemaValue, error) {
 		})
 
 	case "text":
-		return readWire(node, func(p wireTextValue) SchemaValue {
-			return TextValue{Text: p.Text, Language: p.Language}
-		})
+		return readWire(node, func(p wireTextValue) SchemaValue { return TextValue(p) })
 	case "binary":
-		return readWire(node, func(p wireBinaryValue) SchemaValue {
-			return BinaryValue{Bytes: p.Bytes, MimeType: p.MimeType}
-		})
+		return readWire(node, func(p wireBinaryValue) SchemaValue { return BinaryValue(p) })
 	case "path":
 		return readWire(node, func(p wirePathValue) SchemaValue { return PathValue{Value: p.Path} })
 	case "url":
@@ -386,9 +382,7 @@ func wireToValue(node wireNode) (SchemaValue, error) {
 			}, nil
 		})
 	case "duration":
-		return readWire(node, func(p wireDurationValue) SchemaValue {
-			return DurationValue{Nanoseconds: p.Nanoseconds}
-		})
+		return readWire(node, func(p wireDurationValue) SchemaValue { return DurationValue(p) })
 	case "quantity":
 		return readWire(node, func(p wireQuantityValue) SchemaValue {
 			return QuantityValueNode{Value: QuantityValue(p)}
@@ -554,5 +548,5 @@ func nonNilBools(v []bool) []bool {
 }
 
 func validCodePoint(r rune) bool {
-	return r >= 0 && r <= 0x10ffff && !(r >= 0xd800 && r <= 0xdfff)
+	return r >= 0 && r <= 0x10ffff && (r < 0xd800 || r > 0xdfff)
 }

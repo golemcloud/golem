@@ -131,7 +131,7 @@ func post(
 	if err != nil {
 		return &Error{Endpoint: endpoint, Err: err}
 	}
-	defer httpResponse.Body.Close()
+	defer func() { _ = httpResponse.Body.Close() }()
 
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
 		text, _ := io.ReadAll(io.LimitReader(httpResponse.Body, maxErrorBody))

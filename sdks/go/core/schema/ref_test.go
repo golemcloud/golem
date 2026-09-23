@@ -17,7 +17,6 @@ package schema
 import "testing"
 
 // str is a pointer helper, since optional fields are pointers in this model.
-func str(s string) *string { return &s }
 
 func typ(b SchemaTypeBody) SchemaType { return SchemaType{Body: b} }
 

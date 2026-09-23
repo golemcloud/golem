@@ -290,8 +290,10 @@ func TestNumericRestrictionsKeepTheirWidth(t *testing.T) {
 func TestMalformedTypesAreRejected(t *testing.T) {
 	cases := map[string]string{
 		`{"kind":"nope","value":{}}`: "unsupported schema type kind",
-		`{"kind":"path","value":{"spec":{"direction":"sideways","kind":"file"}}}`: "path direction",
-		`{"kind":"path","value":{"spec":{"direction":"input","kind":"socket"}}}`:  "path kind",
+		`{"kind":"u64","value":{"restrictions":{"min":{"kind":"huge","value":0}}}}`:     "numeric bound kind",
+		`{"kind":"u64","value":{"restrictions":{"min":{"kind":"signed","value":"x"}}}}`: "numeric bound",
+		`{"kind":"path","value":{"spec":{"direction":"sideways","kind":"file"}}}`:       "path direction",
+		`{"kind":"path","value":{"spec":{"direction":"input","kind":"socket"}}}`:        "path kind",
 		`{"kind":"union","value":{"spec":{"branches":[{"tag":"t",` +
 			`"body":{"kind":"string","value":{}},"discriminator":{"rule":"nope"}}]}}}`: "discriminator rule",
 		`{"kind":"list","value":{}}`: "missing type",

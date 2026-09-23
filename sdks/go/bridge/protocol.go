@@ -137,7 +137,7 @@ func configEntriesToDTO(entries []ConfigEntry) []configEntryDTO {
 	// [] rather than null.
 	out := make([]configEntryDTO, 0, len(entries))
 	for _, entry := range entries {
-		out = append(out, configEntryDTO{Path: entry.Path, Value: entry.Value})
+		out = append(out, configEntryDTO(entry))
 	}
 	return out
 }
