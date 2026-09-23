@@ -54,6 +54,10 @@ type codec struct {
 	// markInvalid instead of panicking; the schema builder collects these per
 	// agent so the problem is attributed and reported at discovery.
 	invalid string
+	// containsStream marks a type that carries a stream anywhere inside it.
+	// Trigger and Schedule refuse such a method: both return before the call
+	// completes, so neither can hand the caller a stream endpoint.
+	containsStream bool
 
 	encode func(*valBuilder, reflect.Value) int32
 	decode func(*decoder, reflect.Value, int32) error
@@ -76,13 +80,31 @@ func (d *definitions) compile(t reflect.Type) *codec {
 			// node breaks the cycle for every path through it.
 			c.recursive = true
 		}
+		d.noteStream(c)
 		return c
 	}
 	c := &codec{typ: t, building: true}
 	d.codecs[t] = c
+
+	// Track the enclosing codec so a stream found anywhere inside t marks every
+	// type that contains it. A cycle can hide one from an outer type that
+	// closed before the inner finished; that direction is conservative — it
+	// permits a trigger rather than forbidding a legal call — and a stream
+	// inside a recursive type is not expressible today anyway.
+	prev := d.enclosing
+	d.enclosing = c
 	d.buildCodec(c)
+	d.enclosing = prev
 	c.building = false
+	d.noteStream(c)
 	return c
+}
+
+// noteStream propagates a child's stream-bearing flag to the type being built.
+func (d *definitions) noteStream(child *codec) {
+	if d.enclosing != nil && child.containsStream {
+		d.enclosing.containsStream = true
+	}
 }
 
 // typeID derives the stable, language-independent identifier a named def
@@ -292,6 +314,9 @@ func (d *definitions) sdkComposite(c *codec) bool {
 		return true
 	case quantityish:
 		compileQuantity(c, z.quantityUnit())
+		return true
+	case streamish:
+		compileStream(c, d.compile(z.streamElem()))
 		return true
 	case tupleish:
 		elems := z.tupleElems()

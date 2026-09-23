@@ -82,6 +82,7 @@ func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) InvocationID {
 	if c.rpc == nil {
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
+	m.refuseStreams("Trigger")
 	tree, err := m.encodeInput(in)
 	if err != nil {
 		panic(err)
@@ -99,6 +100,7 @@ func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) *Sch
 	if c.rpc == nil {
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
+	m.refuseStreams("Schedule")
 	tree, err := m.encodeInput(in)
 	if err != nil {
 		panic(err)
@@ -298,4 +300,18 @@ func rpcErrorToGo(target, method string, e host.RpcError) error {
 		err.Kind, err.Message = RemoteProtocol, fmt.Sprintf("unknown rpc-error (tag %d)", e.Tag())
 	}
 	return err
+}
+
+// refuseStreams rejects the fire-and-forget invocation forms for a method that
+// carries a stream. Both return before the call completes, so neither can hand
+// the caller a stream endpoint — including when the only stream is in the
+// output. Await the call instead.
+func (m MethodDef[Id, In, Out]) refuseStreams(form string) {
+	in := defs.compile(reflect.TypeFor[In]())
+	out := defs.compile(reflect.TypeFor[Out]())
+	if in.containsStream || out.containsStream {
+		panic(fmt.Errorf(
+			"golem: %s: %s cannot carry a stream; await the call with Call or CallAsync instead",
+			m.name, form))
+	}
 }
