@@ -41,7 +41,7 @@ use rustic_core::{
     RusticResult, SnapshotGroupCriterion, SnapshotOptions,
 };
 use std::fmt::{Debug, Formatter};
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroI32, NonZeroU32, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -168,13 +168,15 @@ pub(super) enum Chunking {
 /// How a repository compresses the data that it keeps.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Compression {
-    /// The default level of zstd.
+    /// The default level of zstd, which is level 3. The config file of the repository holds no
+    /// compression, and rustic gives zstd the level 0, which zstd reads as its default level.
     #[default]
     Default,
-    /// No compression.
+    /// No compression. The config file of the repository holds the compression 0.
     Off,
-    /// The zstd level. The level 0 is the default level of zstd.
-    Level(i32),
+    /// The zstd level, from 1 to 22 or from -7 to -1. A level of 0 is not a level here, because
+    /// rustic reads the compression 0 as no compression.
+    Level(NonZeroI32),
 }
 
 /// The settings that a repository gets when a save makes it. A repository that exists keeps its
@@ -568,7 +570,7 @@ fn inspect(
             )
         })
     })?;
-    let settings = repository_settings(repository.config());
+    let settings = repository_settings(repository.config())?;
     let (_, index) = timed(OperationPhase::IndexLoad, || repository.to_indexed())?;
     Ok(Some(InspectReport {
         snapshots: u64::try_from(snapshots)?,
@@ -656,7 +658,7 @@ fn config_options(settings: &RepositorySettings) -> ConfigOptions {
     let options = match settings.compression {
         Compression::Default => options,
         Compression::Off => options.set_compression(0),
-        Compression::Level(level) => options.set_compression(level),
+        Compression::Level(level) => options.set_compression(level.get()),
     };
     if settings.extra_verify {
         options
@@ -665,23 +667,32 @@ fn config_options(settings: &RepositorySettings) -> ConfigOptions {
     }
 }
 
-/// Gives the settings of a repository from its config file.
-fn repository_settings(config: &ConfigFile) -> RepositorySettings {
-    RepositorySettings {
+/// Gives the settings of a repository from its config file, or an error when the config file has
+/// fixed chunks whose size is not a size of [`Chunking::Fixed`].
+fn repository_settings(config: &ConfigFile) -> anyhow::Result<RepositorySettings> {
+    Ok(RepositorySettings {
         chunking: match config.chunker() {
             Chunker::Rabin => Chunking::Rabin,
-            Chunker::FixedSize => u32::try_from(config.chunk_size())
-                .ok()
-                .and_then(NonZeroU32::new)
-                .map_or(Chunking::Rabin, Chunking::Fixed),
+            Chunker::FixedSize => Chunking::Fixed(
+                u32::try_from(config.chunk_size())
+                    .ok()
+                    .and_then(NonZeroU32::new)
+                    .with_context(|| {
+                        format!(
+                            "the repository has fixed chunks of {} bytes, which is not 1 to {} bytes",
+                            config.chunk_size(),
+                            u32::MAX
+                        )
+                    })?,
+            ),
         },
-        compression: match config.compression {
+        compression: match config.compression.map(NonZeroI32::new) {
             None => Compression::Default,
-            Some(0) => Compression::Off,
-            Some(level) => Compression::Level(level),
+            Some(None) => Compression::Off,
+            Some(Some(level)) => Compression::Level(level),
         },
         extra_verify: config.extra_verify(),
-    }
+    })
 }
 
 /// The options of a save.

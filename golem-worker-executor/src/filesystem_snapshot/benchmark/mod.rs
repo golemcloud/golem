@@ -50,7 +50,7 @@ use report::{FORMAT, Outcome, PhaseResult, PhaseWall, StepRecord, TreeFacts, mil
 use requests::MeasuredBlobStorage;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroI32, NonZeroU32, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -442,6 +442,14 @@ const SQLITE_CHANGES_PHASES: &[Phase] = &[
     },
 ];
 
+/// The compression with the zstd level, or no compression for the level 0.
+const fn zstd_level(level: i32) -> Compression {
+    match NonZeroI32::new(level) {
+        Some(level) => Compression::Level(level),
+        None => Compression::Off,
+    }
+}
+
 const CPU_DEFAULT: Variant = Variant::new("default", "save-default", Settings::DEFAULT);
 const CPU_VERIFY_OFF: Variant = Variant::new(
     "verify-off",
@@ -463,7 +471,7 @@ const CPU_ZSTD_1: Variant = Variant::new(
     "zstd-1",
     "save-zstd-1",
     Settings::repository(RepositorySettings {
-        compression: Compression::Level(1),
+        compression: zstd_level(1),
         ..RepositorySettings::DEFAULT
     }),
 );
@@ -471,7 +479,7 @@ const CPU_ZSTD_9: Variant = Variant::new(
     "zstd-9",
     "save-zstd-9",
     Settings::repository(RepositorySettings {
-        compression: Compression::Level(9),
+        compression: zstd_level(9),
         ..RepositorySettings::DEFAULT
     }),
 );
@@ -880,24 +888,32 @@ fn with_settings(step: StepRecord, variant: &Variant) -> StepRecord {
 /// Gives the settings as step parameters. A setting that is not set is `null`.
 fn settings_parameters(settings: &Settings) -> Map<String, Value> {
     let repository = &settings.repository;
-    let parameters = json!({
-        "save_threads": settings.save.threads,
-        "change_detection": change_detection_name(settings.save.detection),
-        "chunker": match repository.chunking {
-            Chunking::Rabin => json!("rabin"),
-            Chunking::Fixed(size) => json!(format!("fixed-{size}")),
-        },
-        "compression": match repository.compression {
-            Compression::Default => json!("default"),
-            Compression::Off => json!("off"),
-            Compression::Level(level) => json!(level),
-        },
-        "extra_verify": repository.extra_verify,
-    });
-    match parameters {
-        Value::Object(parameters) => parameters,
-        _ => Map::new(),
-    }
+    [
+        ("save_threads", json!(settings.save.threads)),
+        (
+            "change_detection",
+            json!(change_detection_name(settings.save.detection)),
+        ),
+        (
+            "chunker",
+            match repository.chunking {
+                Chunking::Rabin => json!("rabin"),
+                Chunking::Fixed(size) => json!(format!("fixed-{size}")),
+            },
+        ),
+        (
+            "compression",
+            match repository.compression {
+                Compression::Default => json!("default"),
+                Compression::Off => json!("off"),
+                Compression::Level(level) => json!(level.get()),
+            },
+        ),
+        ("extra_verify", json!(repository.extra_verify)),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value))
+    .collect()
 }
 
 fn change_detection_name(detection: ChangeDetection) -> &'static str {

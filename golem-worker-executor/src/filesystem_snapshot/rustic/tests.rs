@@ -24,6 +24,7 @@ use super::{
     ChangeDetection, Chunking, Compression, OperationPhase, PruneSettings, RepackLimits,
     Repository, RepositoryKey, RepositorySettings, STORAGE_CALL_DEADLINE, SaveSettings,
     backup_options, config_options, open_existing, prune_options, repository_options, run_blocking,
+    unopened,
 };
 use crate::filesystem_snapshot::contract_tests::fixture::{
     Scratch, Spec, fixture, listing, write_tree,
@@ -42,7 +43,7 @@ use golem_service_base::storage::blob::{
 use pretty_assertions::assert_eq;
 use rustic_core::repofile::{BlobType, IndexFile};
 use rustic_core::{OpenStatus, PruneOptions, Repository as RusticRepository, RusticResult};
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroI32, NonZeroU32, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -910,7 +911,7 @@ fn the_default_settings_give_the_options_of_rustic() {
 fn each_setting_goes_into_its_rustic_option() {
     let config = config_options(&RepositorySettings {
         chunking: Chunking::Fixed(NonZeroU32::new(65_536).unwrap()),
-        compression: Compression::Level(9),
+        compression: Compression::Level(NonZeroI32::new(9).unwrap()),
         extra_verify: false,
     });
     let off = config_options(&RepositorySettings {
@@ -1016,6 +1017,43 @@ async fn a_repository_keeps_the_settings_of_its_first_save_and_inspect_gives_the
             default_settings,
         ),
         (5, true, 1, true, settings, RepositorySettings::default())
+    );
+}
+
+#[test]
+async fn inspect_gives_an_error_for_fixed_chunks_that_no_setting_can_hold() {
+    // A repository that rustic makes with fixed chunks of 4 GiB has a chunk size that does not fit
+    // `Chunking::Fixed`. The inspection must not report it as a Rabin repository.
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    let backend = Arc::new(BlobBackend::new(
+        storage.clone(),
+        scope.0.clone(),
+        Handle::current(),
+        STORAGE_CALL_DEADLINE,
+    ));
+    run_blocking(move || {
+        unopened(backend)?.init(
+            &rustic_core::Credentials::Masterkey(key().master_key()),
+            &rustic_core::KeyOptions::default(),
+            &rustic_core::ConfigOptions::default()
+                .set_chunker(rustic_core::repofile::Chunker::FixedSize)
+                .set_chunk_size(bytesize::ByteSize::b(1 << 32)),
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    let inspected = repository(&storage, &scope).inspect(&name("first")).await;
+
+    assert_eq!(
+        inspected.map_err(|error| error.to_string()),
+        Err(format!(
+            "the repository has fixed chunks of {} bytes, which is not 1 to {} bytes",
+            1_u64 << 32,
+            u32::MAX
+        ))
     );
 }
 
