@@ -794,6 +794,92 @@ async fn create_delete_exists_dir_and_file(
 
 #[test]
 #[tracing::instrument]
+async fn in_memory_prefix_sibling_does_not_hide_descendants(
+    #[tagged_as("in_memory")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    storage
+        .put_raw(
+            "in_memory_prefix_sibling_does_not_hide_descendants",
+            "put-sibling",
+            namespace.clone(),
+            Path::new("a-/blob"),
+            b"data",
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "in_memory_prefix_sibling_does_not_hide_descendants",
+            "put-descendant",
+            namespace.clone(),
+            Path::new("a/b/blob"),
+            b"data",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .exists(
+                "in_memory_prefix_sibling_does_not_hide_descendants",
+                "exists",
+                namespace.clone(),
+                Path::new("a"),
+            )
+            .await
+            .unwrap(),
+        ExistsResult::Directory
+    );
+    storage
+        .create_dir(
+            "in_memory_prefix_sibling_does_not_hide_descendants",
+            "create-dir",
+            namespace.clone(),
+            Path::new("a"),
+        )
+        .await
+        .unwrap();
+    assert!(
+        storage
+            .delete_dir(
+                "in_memory_prefix_sibling_does_not_hide_descendants",
+                "delete-dir",
+                namespace.clone(),
+                Path::new("a"),
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        storage
+            .get_raw(
+                "in_memory_prefix_sibling_does_not_hide_descendants",
+                "get-deleted",
+                namespace.clone(),
+                Path::new("a/b/blob"),
+            )
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        storage
+            .get_raw(
+                "in_memory_prefix_sibling_does_not_hide_descendants",
+                "get-sibling",
+                namespace.clone(),
+                Path::new("a-/blob"),
+            )
+            .await
+            .unwrap(),
+        Some(b"data".to_vec())
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn list_dir(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
