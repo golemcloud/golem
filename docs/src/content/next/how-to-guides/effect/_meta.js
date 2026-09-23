@@ -16,7 +16,7 @@ export default {
   "golem-create-agent-instance-effect":
     "Creating an Effect Golem Agent Instance with `golem agent new`",
   "golem-stateless-agent-effect": "Creating Ephemeral Agents with Effect",
-  "golem-streaming-agent-effect": "Effect agent streams",
+  "golem-streaming-agent-effect": "Streaming Agent Methods with Effect",
   "golem-tools-middleware-effect": "Effect tools and middleware",
   "golem-add-http-auth-effect": "Enabling Authentication on Effect HTTP Endpoints",
   "golem-enable-otlp-effect": "Enabling OpenTelemetry for an Effect Agent",
