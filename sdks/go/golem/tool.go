@@ -93,22 +93,24 @@ func init() {
 		toolName string,
 		commandPath []string,
 		input types.TypedSchemaValue,
-		_ toolExports.Stdin,
-		_ toolExports.Stdout,
+		stdin toolExports.Stdin,
+		stdout toolExports.Stdout,
 		_ common.Principal,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 		e, ok := toolDefs.get(toolName)
 		if !ok {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
 		}
-		return defs.invokeCommand(e, commandPath, input)
+		return defs.invokeCommand(e, commandPath, input, newToolStdin(stdin), newToolStdout(stdout))
 	}
 }
 
 // ToolContext is the per-invocation context handed to a command handler.
 type ToolContext struct {
-	tool string
-	path []string
+	tool   string
+	path   []string
+	stdin  *ToolStdin
+	stdout *ToolStdout
 }
 
 // Tool returns the name of the tool being invoked.
@@ -117,6 +119,16 @@ func (c *ToolContext) Tool() string { return c.tool }
 // CommandPath returns the path of the command being invoked, from the tool's
 // root; empty means the root command's own body.
 func (c *ToolContext) CommandPath() []string { return append([]string(nil), c.path...) }
+
+// Stdin returns the command's standard input. It is never nil: a command that
+// did not declare a stdin stream, or that the host invoked without one, gets a
+// reader whose every Read explains that rather than a nil dereference.
+func (c *ToolContext) Stdin() *ToolStdin { return c.stdin }
+
+// Stdout returns the command's standard output. It is never nil, on the same
+// terms as [ToolContext.Stdin]. The stream is finished when the handler returns
+// and failed when it panics.
+func (c *ToolContext) Stdout() *ToolStdout { return c.stdout }
 
 // toolDefinitionError reports a broken tool declaration. The WIT has no variant
 // for "this component's own metadata is wrong"; invalid-result is the closest,

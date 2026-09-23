@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	"github.com/golemcloud/golem/sdks/go/golem/schema"
@@ -36,6 +37,13 @@ var greetProto = GreetArgs{
 	Name:  Positional[string]{Doc: "who to greet", ValueName: "WHO"},
 	Loud:  Flag{Short: 'l', Doc: "shout the greeting"},
 	Times: Opt[int32]{Short: 'n', Doc: "how many times", Default: Some(int32(1))},
+}
+
+// invokeNoStreams invokes a command the way a host would for a body that
+// declared neither stdin nor stdout.
+func invokeNoStreams(d *definitions, e *toolEntry, path []string, input types.TypedSchemaValue) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+	return d.invokeCommand(e, path, input,
+		newToolStdin(toolExports.Stdin{}), newToolStdout(toolExports.Stdout{}))
 }
 
 // buildToolFor registers a tool on an isolated definition set and derives its
@@ -189,7 +197,7 @@ func TestToolInvocationDecodesArgumentsAndEncodesTheResult(t *testing.T) {
 	e, _ := r.get("greeter")
 
 	input := encodeToolArgs(t, d, e, nil, "ada", true, int32(2))
-	got := d.invokeCommand(e, nil, input)
+	got := invokeNoStreams(d, e, nil, input)
 	if got.Tag() != witTypes.ResultOk {
 		t.Fatalf("invoke failed: %+v", got.Err())
 	}
@@ -214,7 +222,7 @@ func TestToolInvocationRejectsAnUnknownCommand(t *testing.T) {
 	_, r, d := buildToolFor(t, func(r *toolRegistry, d *definitions) { declareGreeter(r, d) })
 	e, _ := r.get("greeter")
 
-	got := d.invokeCommand(e, []string{"absent"}, types.TypedSchemaValue{})
+	got := invokeNoStreams(d, e, []string{"absent"}, types.TypedSchemaValue{})
 	if got.Tag() != witTypes.ResultErr {
 		t.Fatal("invoking an unknown command succeeded")
 	}
@@ -230,7 +238,7 @@ func TestToolInvocationRejectsMalformedInput(t *testing.T) {
 	// A bare string where the body expects a record of three arguments.
 	var b valBuilder
 	root := b.push(types.MakeSchemaValueNodeStringValue("ada"))
-	got := d.invokeCommand(e, nil, types.TypedSchemaValue{
+	got := invokeNoStreams(d, e, nil, types.TypedSchemaValue{
 		Value: types.SchemaValueTree{ValueNodes: b.nodes, Root: root},
 	})
 	if got.Tag() != witTypes.ResultErr {
@@ -274,7 +282,7 @@ func TestSubcommandsAreReachable(t *testing.T) {
 
 	e, _ := r.get("multi")
 	input := encodeToolArgs(t, d, e, []string{"echo"}, "hello")
-	got := d.invokeCommand(e, []string{"echo"}, input)
+	got := invokeNoStreams(d, e, []string{"echo"}, input)
 	if got.Tag() != witTypes.ResultOk {
 		t.Fatalf("invoking the subcommand failed: %+v", got.Err())
 	}
@@ -421,7 +429,7 @@ func TestRepeatableOptionsRoundTrip(t *testing.T) {
 	e, _ := r.get("collect")
 
 	input := encodeToolArgs(t, d, e, nil, []string{"a", "b"}, map[string]int32{"n": 7})
-	got := d.invokeCommand(e, nil, input)
+	got := invokeNoStreams(d, e, nil, input)
 	if got.Tag() != witTypes.ResultOk {
 		t.Fatalf("invoke failed: %+v", got.Err())
 	}

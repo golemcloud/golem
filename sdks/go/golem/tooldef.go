@@ -499,6 +499,7 @@ func decodeToolArgs(tree types.SchemaValueTree, fields []toolArgField, dst refle
 // handler, and package the result as a self-contained typed value.
 func (d *definitions) invokeCommand(
 	e *toolEntry, commandPath []string, input types.TypedSchemaValue,
+	stdin *ToolStdin, stdout *ToolStdout,
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	ce, ok := e.byPath[pathKey(commandPath)]
 	if !ok {
@@ -522,8 +523,11 @@ func (d *definitions) invokeCommand(
 		return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidInput(err.Error()))
 	}
 
-	ctx := &ToolContext{tool: e.def.name, path: commandPath}
-	out := ce.invoke(ctx, args)
+	ctx := &ToolContext{tool: e.def.name, path: commandPath, stdin: stdin, stdout: stdout}
+	out, err := runCommandHandler(ce, ctx, args)
+	if err != nil {
+		return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidResult(err.Error()))
+	}
 
 	if ce.outType == reflect.TypeFor[Unit]() {
 		return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
@@ -588,4 +592,36 @@ func (d *definitions) optionShape(g *graphBuilder, ce *commandEntry, f toolArgFi
 	default:
 		return toolCommon.MakeOptionShapeScalar(g.node(f.codec))
 	}
+}
+
+// runCommandHandler calls the handler and selects the output stream's terminal
+// for it: finished when the handler returns, failed when it panics. The wire
+// accepts exactly one terminal and treats a dropped writer as abandoned, so
+// choosing one here is what keeps a panicking handler from silently looking
+// like an abandoned transfer.
+func runCommandHandler(ce *commandEntry, ctx *ToolContext, args reflect.Value) (out reflect.Value, err error) {
+	finished := false
+	defer func() {
+		if r := recover(); r != nil {
+			_ = ctx.stdout.Fail(StreamFailed(panicMessage(r)))
+			panic(r)
+		}
+		if !finished {
+			return
+		}
+		if ferr := ctx.stdout.finish(); ferr != nil && err == nil {
+			err = ferr
+		}
+	}()
+	out = ce.invoke(ctx, args)
+	finished = true
+	return out, nil
+}
+
+// panicMessage renders a recovered panic for the stream failure reason.
+func panicMessage(r any) string {
+	if e, ok := r.(error); ok {
+		return e.Error()
+	}
+	return fmt.Sprintf("%v", r)
 }
