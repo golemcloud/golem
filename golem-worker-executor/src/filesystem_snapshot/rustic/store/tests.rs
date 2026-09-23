@@ -1252,34 +1252,36 @@ fn a_prune_leaves_marked_packs_when_it_marks_repacks_or_keeps_marked_packs() {
 }
 
 #[test]
-async fn a_save_of_a_relative_directory_path_gives_source_and_publishes_nothing() {
+async fn a_save_of_a_relative_directory_path_gives_source_and_writes_nothing() {
     // Cargo runs the tests in the directory of the crate, so the path names a directory.
     let relative = Path::new("src/filesystem_snapshot/contract_tests");
     assert!(
         relative.is_dir(),
         "the test runs in the directory of the crate"
     );
+    let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
-        Arc::new(InMemoryBlobStorage::new()),
+        storage.clone(),
         policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
     );
     let scope = new_scope();
 
     let saved = store.save(&scope, &name("p-relative"), relative).await;
-    let names = listed_names(&store, &scope).await;
 
     assert!(
         matches!(saved, Err(SnapshotStoreError::Source(_))),
         "{saved:?}"
     );
-    assert_eq!(names, Vec::<String>::new());
+    assert_eq!(blobs(&*storage, &scope.0, "").await, Vec::<String>::new());
 }
 
 #[test]
-async fn a_save_of_a_regular_file_gives_source_and_publishes_nothing() {
+async fn a_save_of_a_regular_file_gives_source_and_writes_nothing() {
+    // The store refuses the tree before it makes a repository, so the scope stays unused.
     let tree = one_file_tree("a file, not a tree");
+    let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
-        Arc::new(InMemoryBlobStorage::new()),
+        storage.clone(),
         policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
     );
     let scope = new_scope();
@@ -1287,13 +1289,12 @@ async fn a_save_of_a_regular_file_gives_source_and_publishes_nothing() {
     let saved = store
         .save(&scope, &name("p-file"), &tree.path().join("file.txt"))
         .await;
-    let names = listed_names(&store, &scope).await;
 
     assert!(
         matches!(saved, Err(SnapshotStoreError::Source(_))),
         "{saved:?}"
     );
-    assert_eq!(names, Vec::<String>::new());
+    assert_eq!(blobs(&*storage, &scope.0, "").await, Vec::<String>::new());
 }
 
 #[test]
