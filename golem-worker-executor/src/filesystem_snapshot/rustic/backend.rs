@@ -17,10 +17,12 @@
 //! The backend keeps the files of one repository in one blob storage namespace, with the paths of
 //! the restic repository format. rustic calls the backend from threads outside the async runtime,
 //! and each call waits for the blob storage on the runtime that the backend holds. Each call waits
-//! for at most a deadline.
+//! for at most a deadline, and a cancelled operation makes no more calls.
 
+use super::fault::{BlobCallFailed, ConfigExists, OperationCancelled};
+use super::publish::{SnapshotStage, StagedSnapshot};
 use bytes::Bytes;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, PutIfAbsent};
 use rustic_core::{
     BytesList, ErrorKind, FileType, Id, ReadBackend, RusticError, RusticResult, WriteBackend,
 };
@@ -29,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
+use tokio_util::sync::CancellationToken;
 
 /// The target label of each blob storage call of the backend.
 const TARGET_LABEL: &str = "filesystem_snapshot";
@@ -77,12 +80,17 @@ impl StorageCall {
 /// A call that gets no answer from the blob storage within the deadline gives an error. The
 /// runtime must be a multi-thread runtime, because on a `current_thread` runtime `Handle::block_on`
 /// does not drive the timer of the deadline.
+///
+/// The config file and the index files are written only when their path has no blob. A snapshot
+/// file goes into the stage of the backend when it has one, and the backend does not write it.
 #[derive(Debug)]
 pub(super) struct BlobBackend {
     storage: Arc<dyn BlobStorage>,
     namespace: BlobStorageNamespace,
     runtime: Handle,
     deadline: Duration,
+    cancel: CancellationToken,
+    stage: Option<Arc<SnapshotStage>>,
 }
 
 impl BlobBackend {
@@ -99,22 +107,69 @@ impl BlobBackend {
             namespace,
             runtime,
             deadline,
+            cancel: CancellationToken::new(),
+            stage: None,
+        }
+    }
+
+    /// Gives the backend with the token of its operation. When the token is cancelled, a call that
+    /// has not started gives an error at once, and a call that runs stops and gives an error.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn cancelled_by(self, cancel: CancellationToken) -> Self {
+        Self { cancel, ..self }
+    }
+
+    /// Gives the backend with a stage for the snapshot file of a save.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn staging_in(self, stage: Arc<SnapshotStage>) -> Self {
+        Self {
+            stage: Some(stage),
+            ..self
         }
     }
 
     /// Waits for one call on the blob storage, and gives its result as a rustic result.
     ///
     /// Each call of the backend on the blob storage goes through this function. A call that gives
-    /// no answer within the deadline gives an error, the same as a call that failed.
+    /// no answer within the deadline gives an error, the same as a call that failed. So does a
+    /// call of a cancelled operation.
     fn request<T>(
         &self,
         call: StorageCall,
         path: &Path,
         future: impl Future<Output = anyhow::Result<T>>,
     ) -> RusticResult<T> {
+        if self.cancel.is_cancelled() {
+            return Err(storage_error(
+                call,
+                path,
+                anyhow::Error::new(OperationCancelled),
+            ));
+        }
         self.runtime
-            .block_on(answer_within(self.deadline, future))
+            .block_on(async {
+                tokio::select! {
+                    biased;
+                    answer = answer_within(self.deadline, future) => answer,
+                    () = self.cancel.cancelled() => Err(anyhow::Error::new(OperationCancelled)),
+                }
+            })
             .map_err(|error| storage_error(call, path, error))
+    }
+
+    /// Writes the content at the path only when the path has no blob, and gives whether it wrote.
+    fn write_if_absent(&self, path: &Path, content: &[u8]) -> RusticResult<PutIfAbsent> {
+        self.request(
+            StorageCall::Write,
+            path,
+            self.storage.put_raw_if_absent(
+                TARGET_LABEL,
+                StorageCall::Write.label(),
+                self.namespace.clone(),
+                path,
+                content,
+            ),
+        )
     }
 }
 
@@ -124,7 +179,7 @@ impl BlobBackend {
 /// thread without a runtime context can wait for the result with `Handle::block_on`. A future that
 /// is ready at its first poll always gives its output. At the deadline, the function drops the
 /// future and gives an error whose root cause is tokio's `Elapsed`.
-async fn answer_within<T>(
+pub(super) async fn answer_within<T>(
     deadline: Duration,
     future: impl Future<Output = anyhow::Result<T>>,
 ) -> anyhow::Result<T> {
@@ -248,25 +303,33 @@ impl WriteBackend for BlobBackend {
     ) -> RusticResult<()> {
         let path = file_path(tpe, id)?;
         let parts = content.into_vec();
-        let joined;
-        let data: &[u8] = match parts.as_slice() {
-            [part] => part,
-            parts => {
-                joined = join(parts);
-                &joined
-            }
+        let content = match parts.as_slice() {
+            [part] => part.clone(),
+            parts => Bytes::from(join(parts)),
         };
-        self.request(
-            StorageCall::Write,
-            &path,
-            self.storage.put_raw(
-                TARGET_LABEL,
-                StorageCall::Write.label(),
-                self.namespace.clone(),
+        match (tpe, &self.stage) {
+            (FileType::Snapshot, Some(stage)) => stage
+                .keep(StagedSnapshot { path, content })
+                .map_err(|staged| second_snapshot(&staged.path)),
+            (FileType::Config, _) => match self.write_if_absent(&path, &content)? {
+                PutIfAbsent::Written => Ok(()),
+                PutIfAbsent::AlreadyExists => Err(config_exists(&path)),
+            },
+            // The name of an index file is the hash of its content, so a blob at the path holds
+            // the same content.
+            (FileType::Index, _) => self.write_if_absent(&path, &content).map(|_| ()),
+            _ => self.request(
+                StorageCall::Write,
                 &path,
-                data,
+                self.storage.put_raw(
+                    TARGET_LABEL,
+                    StorageCall::Write.label(),
+                    self.namespace.clone(),
+                    &path,
+                    &content,
+                ),
             ),
-        )
+        }
     }
 
     fn remove(&self, tpe: FileType, id: &Id, _cacheable: bool) -> RusticResult<()> {
@@ -342,12 +405,31 @@ fn missing_file(path: &Path) -> Box<RusticError> {
     .attach_context("path", path.display().to_string())
 }
 
+/// The error of a config file that another writer made first.
+fn config_exists(path: &Path) -> Box<RusticError> {
+    RusticError::with_source(
+        ErrorKind::Backend,
+        "The blob storage already holds the config file `{path}`.",
+        ConfigExists,
+    )
+    .attach_context("path", path.display().to_string())
+}
+
+/// The error of a second snapshot file in one stage.
+fn second_snapshot(path: &Path) -> Box<RusticError> {
+    RusticError::new(
+        ErrorKind::Internal,
+        "The stage already holds a snapshot file, so it cannot keep `{path}`.",
+    )
+    .attach_context("path", path.display().to_string())
+}
+
 /// The error of a blob storage call that failed.
 fn storage_error(call: StorageCall, path: &Path, error: anyhow::Error) -> Box<RusticError> {
     RusticError::with_source(
         ErrorKind::Backend,
         "The blob storage call `{call}` failed at `{path}`.",
-        error,
+        BlobCallFailed::new(error),
     )
     .attach_context("call", call.label())
     .attach_context("path", path.display().to_string())

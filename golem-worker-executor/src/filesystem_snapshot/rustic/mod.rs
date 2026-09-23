@@ -21,9 +21,13 @@
 mod backend;
 #[cfg_attr(not(test), allow(dead_code))]
 mod fault;
+#[cfg_attr(not(test), allow(dead_code))]
+mod publish;
 
 #[cfg(test)]
 mod holding;
+#[cfg(test)]
+mod scripted;
 #[cfg(test)]
 mod tests;
 

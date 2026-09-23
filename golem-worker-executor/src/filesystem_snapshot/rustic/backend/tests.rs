@@ -18,8 +18,12 @@
 //! runtime that the backend holds, as the threads of rustic are not.
 
 use super::super::STORAGE_CALL_DEADLINE;
+use super::super::fault::{Operation, OperationCancelled, classify, is_config_exists};
 use super::super::holding::{holding_storage, reached_deadline};
+use super::super::publish::{SnapshotStage, StagedSnapshot};
+use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::{BlobBackend, file_size};
+use crate::filesystem_snapshot::SnapshotStoreError;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -37,6 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use test_r::test;
 use tokio::runtime::Runtime;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// The longest time that a test waits for the calls on the backend.
@@ -474,6 +479,218 @@ fn a_thread_that_is_not_a_thread_of_the_runtime_can_call_the_backend() {
 }
 
 #[test]
+fn a_cancelled_backend_makes_no_storage_call() {
+    let runtime = Runtime::new().unwrap();
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let cancel = CancellationToken::new();
+    let backend = BlobBackend::new(
+        storage.clone(),
+        new_namespace(),
+        runtime.handle().clone(),
+        STORAGE_CALL_DEADLINE,
+    )
+    .cancelled_by(cancel.clone());
+    cancel.cancel();
+
+    let cancelled = [
+        backend.list_with_size(FileType::Config).err(),
+        backend.list_with_size(FileType::Pack).err(),
+        backend.read_full(FileType::Pack, &id("ab")).err(),
+        backend
+            .read_partial(FileType::Pack, &id("ab"), false, 0, 1)
+            .err(),
+        backend
+            .write_bytes(FileType::Pack, &id("ab"), false, bytes("pack"))
+            .err(),
+        backend.remove(FileType::Pack, &id("ab"), false).err(),
+    ]
+    .map(|error| error.is_some_and(|error| was_cancelled(&error)));
+
+    assert_eq!((cancelled, storage.calls()), ([true; 6], Vec::new()));
+}
+
+#[test]
+fn a_cancel_ends_a_call_that_runs() {
+    let runtime = Runtime::new().unwrap();
+    let (storage, _gate, _dropped) =
+        holding_storage(Arc::new(InMemoryBlobStorage::new()), |_, _| true);
+    let cancel = CancellationToken::new();
+    let backend = BlobBackend::new(
+        storage,
+        new_namespace(),
+        runtime.handle().clone(),
+        Duration::from_secs(60),
+    )
+    .cancelled_by(cancel.clone());
+    runtime.spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancel.cancel();
+    });
+
+    let outcome = within_limit(move || {
+        backend
+            .read_full(FileType::Pack, &id("ab"))
+            .err()
+            .map(|error| (was_cancelled(&error), reached_deadline(&*error)))
+    });
+
+    assert_eq!(outcome, Some(Some((true, false))));
+}
+
+#[test]
+fn a_backend_whose_token_is_not_cancelled_answers() {
+    let fixture = Fixture::new();
+    let backend = BlobBackend::new(
+        fixture.storage.clone(),
+        fixture.namespace.clone(),
+        fixture.runtime.handle().clone(),
+        STORAGE_CALL_DEADLINE,
+    )
+    .cancelled_by(CancellationToken::new());
+
+    let read = backend
+        .write_bytes(FileType::Pack, &id("ab"), false, bytes("pack"))
+        .and_then(|()| backend.read_full(FileType::Pack, &id("ab")));
+
+    assert_eq!(read.ok(), Some(Bytes::from_static(b"pack")));
+}
+
+#[test]
+fn the_config_file_is_written_only_when_the_repository_has_none() {
+    let fixture = Fixture::new();
+
+    let first =
+        fixture
+            .backend
+            .write_bytes(FileType::Config, &Id::default(), false, bytes("first"));
+    let second =
+        fixture
+            .backend
+            .write_bytes(FileType::Config, &Id::default(), false, bytes("second"));
+
+    assert_eq!(
+        (
+            first.is_ok(),
+            second
+                .as_ref()
+                .is_err_and(|error| is_config_exists(&**error)),
+            fixture.stored(),
+        ),
+        (true, true, vec![("config".to_string(), 5)])
+    );
+}
+
+#[test]
+fn an_index_file_that_is_there_is_kept_and_its_write_succeeds() {
+    let fixture = Fixture::new();
+    let path = format!("index/{}", "ab".repeat(32));
+    fixture.put(&path, b"kept");
+
+    let written =
+        fixture
+            .backend
+            .write_bytes(FileType::Index, &id("ab"), false, bytes("replacement"));
+    let read = fixture.backend.read_full(FileType::Index, &id("ab"));
+
+    assert_eq!(
+        (written.is_ok(), read.ok()),
+        (true, Some(Bytes::from_static(b"kept")))
+    );
+}
+
+#[test]
+fn a_pack_file_that_is_there_is_written_again() {
+    let fixture = Fixture::new();
+    fixture.put(&format!("data/ab/{}", "ab".repeat(32)), b"old");
+
+    let written = fixture
+        .backend
+        .write_bytes(FileType::Pack, &id("ab"), false, bytes("new"));
+    let read = fixture.backend.read_full(FileType::Pack, &id("ab"));
+
+    assert_eq!(
+        (written.is_ok(), read.ok()),
+        (true, Some(Bytes::from_static(b"new")))
+    );
+}
+
+#[test]
+fn a_backend_with_a_stage_keeps_the_snapshot_file_and_does_not_write_it() {
+    let fixture = Fixture::new();
+    let stage = Arc::new(SnapshotStage::default());
+    let backend = BlobBackend::new(
+        fixture.storage.clone(),
+        fixture.namespace.clone(),
+        fixture.runtime.handle().clone(),
+        STORAGE_CALL_DEADLINE,
+    )
+    .staging_in(stage.clone());
+    let content = [Bytes::from_static(b"snap"), Bytes::from_static(b"shot")]
+        .into_iter()
+        .fold(BytesList::default(), |mut content, part| {
+            content.add(part);
+            content
+        });
+
+    let kept = backend.write_bytes(FileType::Snapshot, &id("cd"), false, content);
+    let second = backend.write_bytes(FileType::Snapshot, &id("ef"), false, bytes("other"));
+    let pack = backend.write_bytes(FileType::Pack, &id("ab"), false, bytes("pack"));
+
+    assert_eq!(
+        (
+            kept.is_ok(),
+            second.is_err(),
+            pack.is_ok(),
+            stage.take(),
+            fixture.stored(),
+        ),
+        (
+            true,
+            true,
+            true,
+            Some(StagedSnapshot {
+                path: PathBuf::from(format!("snapshots/{}", "cd".repeat(32))).into_boxed_path(),
+                content: Bytes::from_static(b"snapshot"),
+            }),
+            vec![(format!("data/ab/{}", "ab".repeat(32)), 4)]
+        )
+    );
+}
+
+#[test]
+fn each_failed_call_is_a_storage_failure_to_the_classification() {
+    let runtime = Runtime::new().unwrap();
+    let backend = BlobBackend::new(
+        Arc::new(FailingBlobStorage),
+        new_namespace(),
+        runtime.handle().clone(),
+        STORAGE_CALL_DEADLINE,
+    );
+
+    let classified = [
+        backend.list_with_size(FileType::Pack).err(),
+        backend.read_full(FileType::Pack, &id("ab")).err(),
+        backend
+            .write_bytes(FileType::Pack, &id("ab"), false, bytes("pack"))
+            .err(),
+    ]
+    .map(|error| {
+        error.map(|error| {
+            matches!(
+                classify(Operation::Restore, anyhow::Error::new(error)),
+                SnapshotStoreError::Storage {
+                    retryable: true,
+                    ..
+                }
+            )
+        })
+    });
+
+    assert_eq!(classified, [Some(true); 3]);
+}
+
+#[test]
 fn a_size_that_does_not_fit_in_32_bits_is_an_error() {
     let path = Path::new("data/ab/file");
 
@@ -494,14 +711,18 @@ fn error_text<T>(result: RusticResult<T>) -> String {
     }
 }
 
-/// Gives the text of the error, with the text of its source.
+/// Gives the text of the error, with the text of each error in its chain of sources.
 fn text_of(error: &RusticError) -> String {
-    format!(
-        "{error} {}",
-        std::error::Error::source(error)
-            .map(ToString::to_string)
-            .unwrap_or_default()
-    )
+    std::iter::successors(std::error::Error::source(error), |error| error.source())
+        .fold(error.to_string(), |text, source| format!("{text} {source}"))
+}
+
+/// Tells whether the error or an error in its chain of sources is [`OperationCancelled`].
+fn was_cancelled(error: &RusticError) -> bool {
+    std::iter::successors(Some(error as &(dyn std::error::Error + 'static)), |error| {
+        error.source()
+    })
+    .any(|error| error.is::<OperationCancelled>())
 }
 
 /// A blob storage that fails every call.
