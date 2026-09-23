@@ -419,6 +419,13 @@ fn stream_runtime_state_semantics_execute() {
         )
         .unwrap();
     }
+    std::fs::copy(
+        workspace_root()
+            .unwrap()
+            .join("test-data/reflection-conformance/v1.json"),
+        pkg.package_dir().join("reflection-conformance.json"),
+    )
+    .unwrap();
     run_sbt_test(
         pkg.package_dir().as_path(),
         r#"package golem.bridge.runtime
@@ -431,6 +438,15 @@ import golem.bridge.runtime.StreamSessionState.*
 import golem.bridge.runtime.json.Json
 
 class StreamRuntimeTest extends munit.FunSuite {
+  private val reflectionCorpus = Json.parse(
+    java.nio.file.Files.readString(java.nio.file.Path.of("reflection-conformance.json"))
+  ).toOption.get
+
+  private def corpusCase(id: String): Json =
+    Json.asArray(Json.requireField(reflectionCorpus, "cases").toOption.get).toOption.get
+      .find(value => Json.field(value, "id").flatMap(Json.asString(_).toOption).contains(id))
+      .getOrElse(fail(s"missing reflection conformance case $id"))
+
   test("text codec directly consumes frozen canonical and malformed fixtures") {
     val messages = Json.parse(java.nio.file.Files.readString(java.nio.file.Path.of("json-messages.json"))).toOption.get
     Json.asArray(Json.requireField(messages, "vectors").toOption.get).toOption.get.foreach { vector =>
@@ -505,9 +521,49 @@ class StreamRuntimeTest extends munit.FunSuite {
       SchemaValue.BinaryValue(Vector[Byte](0, -1), Some("application/octet-stream"))
     ))
     val encoded = codec.encode(value)
-    assertEquals(encoded.render, """{"count":"-9223372036854775808","data":{"bytes":"AP8=","mimeType":"application/octet-stream"}}""")
+    assertEquals(encoded.render, """{"count":"-9223372036854775808","data":{"bytes":"AP8","mimeType":"application/octet-stream"}}""")
     assertEquals(codec.decode(encoded), value)
     intercept[BridgeException](codec.decode(Json.parse("""{"count":"1","data":{"bytes":"AA==","mimeType":"application/octet-stream"}}""").toOption.get))
+  }
+
+  test("reflection corpus drives tagged binary public binary and config request wires") {
+    val binaryCase = corpusCase("canonical/binary-mime")
+    val binaryExpected = Json.requireField(binaryCase, "expected").toOption.get
+    val mimeType = Json.asString(Json.requireField(binaryExpected, "mimeType").toOption.get).toOption.get
+    val binaryValue = SchemaValue.BinaryValue(Vector[Byte](-5, -1), Some(mimeType))
+    assertEquals(
+      SchemaValueCodec.toJson(binaryValue).render,
+      """{"kind":"binary","value":{"bytes":[251,255],"mimeType":"application/octet-stream"}}"""
+    )
+
+    val binaryCodec = PublicValueCodec.fromSchemaGraphJson(
+      """{"root":{"kind":"binary","value":{"restrictions":{}}}}"""
+    )
+    assertEquals(binaryCodec.encode(binaryValue), binaryExpected)
+    val rejected = Json.asArray(
+      Json.requireField(corpusCase("errors/binary-noncanonical-base64"), "inputs").toOption.get
+    ).toOption.get
+    rejected.foreach(input => intercept[BridgeException](binaryCodec.decode(input)))
+
+    val configCase = corpusCase("config/canonical-entry")
+    val configExpected = Json.requireField(configCase, "expected").toOption.get
+    val path = Json.asArray(Json.requireField(configExpected, "path").toOption.get).toOption.get
+      .map(value => Json.asString(value).toOption.get).toList
+    val s64Codec = PublicValueCodec.fromSchemaGraphJson(
+      """{"root":{"kind":"s64","value":{}}}"""
+    )
+    val request = CreateAgentRequest(
+      "app",
+      "env",
+      "ConfigAgent",
+      SchemaValue.TupleValue(List.empty),
+      None,
+      List(AgentConfigEntry(path, SchemaValue.S64Value(Long.MaxValue), s64Codec))
+    )
+    val envelope = BridgeProtocol.encodeCreateAgentRequest(request)
+    val config = Json.asArray(Json.requireField(envelope, "config").toOption.get).toOption.get
+    assertEquals(config, Vector(configExpected))
+    assertEquals(Json.requireField(config.head, "value").toOption.get, Json.string(Long.MaxValue.toString))
   }
 
   test("public codec enforces quantity bounds restrictions unions and integer boundaries") {
@@ -621,7 +677,6 @@ class StreamRuntimeTest extends munit.FunSuite {
       codec,
       codec,
       None,
-      List.empty,
     )
 
     intercept[Throwable](Await.result(stream.consume(), 1.second))
@@ -1779,10 +1834,10 @@ fn local_config_overrides_compile() {
 
     // Supplied overrides build `AgentConfigEntry` values keyed by the path.
     assert!(client.contains(
-        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"db\", \"host\"), configValue)"
+        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"db\", \"host\"), configValue, _root_.golem.bridge.runtime.PublicValueCodec.fromSchemaGraphJson("
     ));
     assert!(client.contains(
-        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"max-retries\"), configValue)"
+        "_root_.golem.bridge.runtime.AgentConfigEntry(_root_.scala.collection.immutable.List(\"max-retries\"), configValue, _root_.golem.bridge.runtime.PublicValueCodec.fromSchemaGraphJson("
     ));
 
     // The plain constructors pass an empty config list.

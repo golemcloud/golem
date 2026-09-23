@@ -144,8 +144,7 @@ object Bridge {
     methodParameters: () => SchemaValue,
     constructorCodec: PublicValueCodec.Codec,
     inputCodec: PublicValueCodec.Codec,
-    outputCodec: Option[PublicValueCodec.Codec],
-    configCodecs: List[(List[String], PublicValueCodec.Codec)]
+    outputCodec: Option[PublicValueCodec.Codec]
   ): Future[AgentInvocationResult] =
-    StreamSession.invoke(resolved, methodName, methodParameters, constructorCodec, inputCodec, outputCodec, configCodecs)
+    StreamSession.invoke(resolved, methodName, methodParameters, constructorCodec, inputCodec, outputCodec)
 }

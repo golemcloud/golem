@@ -1558,9 +1558,8 @@ impl ScalaBridgeGenerator {
                     || "_root_.scala.None".to_string(),
                     |codec| format!("_root_.scala.Some({codec})"),
                 );
-            let config_codecs = self.public_config_codecs()?;
             writer.line(format!(
-                "{BRIDGE}.invokeStreamingAgent(resolved, {method_name_lit}, () => methodParameters({invoke_args}), {constructor_codec}, {input_codec}, {output_codec}, {config_codecs}).map {{ __result =>"
+                "{BRIDGE}.invokeStreamingAgent(resolved, {method_name_lit}, () => methodParameters({invoke_args}), {constructor_codec}, {input_codec}, {output_codec}).map {{ __result =>"
             ));
         } else {
             writer.line(format!(
@@ -1919,7 +1918,7 @@ impl ScalaBridgeGenerator {
 
     /// Emits `val agentConfig = List(<entry>, …).flatten`, where each `<entry>`
     /// is the matching config parameter mapped (when present) to an
-    /// `AgentConfigEntry(path, encodedValue)`.
+    /// `AgentConfigEntry(path, encodedValue, publicCodec)`.
     fn write_config_list(
         &self,
         writer: &mut ScalaWriter,
@@ -1937,6 +1936,7 @@ impl ScalaBridgeGenerator {
                 .collect::<Vec<_>>()
                 .join(", ");
             let enc = self.encode_expr("value", &config.value_type, 0)?;
+            let codec = self.public_codec(&config.value_type)?;
             let comma = if idx + 1 < local_configs.len() {
                 ","
             } else {
@@ -1946,7 +1946,7 @@ impl ScalaBridgeGenerator {
             writer.indent();
             writer.line(format!("val configValue = {enc}"));
             writer.line(format!(
-                "{AGENT_CONFIG_ENTRY}({LIST}({path_lit}), configValue)"
+                "{AGENT_CONFIG_ENTRY}({LIST}({path_lit}), configValue, {codec})"
             ));
             writer.dedent();
             writer.line(format!("}}{comma}"));
@@ -2034,26 +2034,6 @@ impl ScalaBridgeGenerator {
             "{RUNTIME_PKG}.PublicValueCodec.fromSchemaGraphJson({})",
             scala_string_literal(&json)
         ))
-    }
-
-    fn public_config_codecs(&self) -> anyhow::Result<String> {
-        let entries = self
-            .local_configs()
-            .into_iter()
-            .map(|config| {
-                let path = config
-                    .path
-                    .iter()
-                    .map(|part| scala_string_literal(part))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                Ok(format!(
-                    "{LIST}({path}) -> {}",
-                    self.public_codec(&config.value_type)?
-                ))
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        Ok(format!("{LIST}({})", entries.join(", ")))
     }
 
     /// The `(name, type)` parameter declarations for a constructor or method's

@@ -118,7 +118,7 @@ object PublicValueCodec {
           json.Json.obj(Vector("text" -> json.Json.string(text)) ++ language.map(v => "language" -> json.Json.string(v)))
         case ("binary", BinaryValue(bytes, mimeType)) =>
           validateBinary(schema, bytes, mimeType); budget.add(bytes.length); mimeType.foreach(budget.string)
-          json.Json.obj(Vector("bytes" -> json.Json.string(Base64.getEncoder.encodeToString(bytes.toArray))) ++ mimeType.map(v => "mimeType" -> json.Json.string(v)))
+          json.Json.obj(Vector("bytes" -> json.Json.string(Base64.getUrlEncoder.withoutPadding().encodeToString(bytes.toArray))) ++ mimeType.map(v => "mimeType" -> json.Json.string(v)))
         case ("path", PathValue(v)) => validatePath(schema, v); budget.string(v); json.Json.string(v)
         case ("url", UrlValue(v)) => validateUrl(schema, v); budget.string(v); json.Json.string(v)
         case ("datetime", DatetimeValue(v)) => validateDatetime(v); budget.string(v); json.Json.string(v)
@@ -470,9 +470,9 @@ object PublicValueCodec {
     }
 
     private def decodeBase64(value: String): Vector[Byte] = {
-      if (value.length % 4 != 0 || !Base64Syntax.matcher(value).matches()) fail("binary bytes are not canonical padded base64")
-      val bytes = try Base64.getDecoder.decode(value) catch { case _: IllegalArgumentException => fail("invalid base64") }
-      if (Base64.getEncoder.encodeToString(bytes) != value) fail("binary bytes are not canonical padded base64")
+      if (value.length % 4 == 1 || !Base64UrlSyntax.matcher(value).matches()) fail("binary bytes are not canonical unpadded base64url")
+      val bytes = try Base64.getUrlDecoder.decode(value) catch { case _: IllegalArgumentException => fail("invalid base64url") }
+      if (Base64.getUrlEncoder.withoutPadding().encodeToString(bytes) != value) fail("binary bytes are not canonical unpadded base64url")
       bytes.toVector
     }
 
@@ -605,7 +605,7 @@ object PublicValueCodec {
   private val UnsignedDecimal = Pattern.compile("0|[1-9][0-9]*")
   private val Mime = Pattern.compile("[A-Za-z0-9!#$&^_.+\\-]+/[A-Za-z0-9!#$&^_.+\\-]+")
   private val Language = Pattern.compile("[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*")
-  private val Base64Syntax = Pattern.compile("(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
+  private val Base64UrlSyntax = Pattern.compile("[A-Za-z0-9_-]*")
   private val UuidV4 = Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
   private val Datetime = Pattern.compile("[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,9})?Z")
 }

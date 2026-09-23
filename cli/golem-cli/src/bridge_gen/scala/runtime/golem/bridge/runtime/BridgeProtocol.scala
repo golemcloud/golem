@@ -19,7 +19,7 @@ package golem.bridge.runtime
 import golem.bridge.runtime.json.Json
 
 /** A single agent configuration override entry of a create-agent request. */
-final case class AgentConfigEntry(path: List[String], value: SchemaValue)
+final case class AgentConfigEntry(path: List[String], value: SchemaValue, codec: PublicValueCodec.Codec)
 
 /** Body of a `POST /v1/agents/create-agent` request. */
 final case class CreateAgentRequest(
@@ -118,7 +118,7 @@ object BridgeProtocol {
   private def encodeConfigEntry(entry: AgentConfigEntry): Json =
     Json.obj(
       "path"  -> Json.arr(entry.path.map(Json.string).toVector),
-      "value" -> SchemaValueCodec.toJson(entry.value)
+      "value" -> entry.codec.encode(entry.value)
     )
 
   def decodeCreateAgentResponse(json: Json): Either[String, CreateAgentResponse] =
