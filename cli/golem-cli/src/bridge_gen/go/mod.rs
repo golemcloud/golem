@@ -14,6 +14,7 @@
 
 //! Go bridge SDK generator.
 
+pub mod decl;
 #[allow(clippy::module_inception)]
 pub mod go;
 pub mod go_writer;
