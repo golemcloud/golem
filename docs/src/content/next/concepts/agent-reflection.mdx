@@ -1,0 +1,82 @@
+# Agent reflection
+
+Golem offers Normal RPC plus three reflection approaches for calling agents and
+tools. Choose the simplest approach whose source of schemas matches your
+application.
+
+| Client approach | Use it when | What validates the call |
+| --- | --- | --- |
+| **Normal RPC** | Producer and caller share the same source definition | Generated static codecs validate typed inputs and decode outputs |
+| **Caller-defined static client** | The caller knows a stable interface but does not share the producer's source definition | Caller-owned schemas and codecs validate the fields they describe |
+| **Discovered client** | The caller selects an agent, method, tool, or command from the current environment | An immutable discovery snapshot automatically validates inputs and declared outputs |
+| **Fully dynamic client** | Infrastructure already transports packed schema-native values | The caller explicitly owns packing and validation; the host still validates authorization and the deployed target |
+
+Normal RPC is not reflection. Prefer it for ordinary application code with a
+shared definition: it provides the strongest compile-time experience with the
+least setup.
+
+Caller-defined static clients are useful for integrations that deliberately
+own a typed view of another component. A full agent definition can create and
+identify agents and validate known configuration declarations. A method-only
+definition can bind an existing durable identity, but cannot validate an
+identity or configuration declarations it does not describe. Caller-defined
+tool definitions similarly provide typed access to a selected tool surface.
+
+Discovered clients are the default choice when the deployed environment is the
+source of truth. Discovery reads visible metadata and returns a client backed
+by that snapshot. The snapshot does not change under the caller: rediscover
+explicitly when a newer deployment should be used.
+
+Fully dynamic clients are the lowest-level option. They invoke an existing
+durable agent identity or an explicit tool command using schema-native values.
+Use them for gateways, adapters, and other infrastructure that intentionally
+keeps schema selection, packing, and result validation separate from
+transport.
+
+## Validation boundaries
+
+Static and discovered clients validate what they know before opening RPC.
+Discovered schemas include numeric and text restrictions, nested structures,
+defaults, and tool command constraints. Reflected JSON helpers provide
+canonical JSON conversion, and JSON Schema projections make the same shape
+available to JSON-based integrations. Streams and opaque capabilities cannot
+be represented as JSON and must use schema-native value APIs.
+
+The host remains authoritative for visibility, authorization, effective
+configuration, durable identity resolution, and the deployed target schema.
+Awaited calls also verify whether an output is required and whether the
+returned value matches the declared schema. Remote agent failures, tool
+failures, and custom error payloads remain structured so callers can handle
+them without parsing messages.
+
+Configuration overrides apply when an agent is created. Rebinding an existing
+durable identity does not reconfigure that agent; it keeps its persisted
+initial configuration.
+
+## Composing approaches
+
+The approaches can meet at schemas and identities:
+
+- Discovery can provide schemas to an explicit JSON or JSON Schema adapter.
+- A discovered schema can pack input for a fully dynamic call and validate its
+  result, but moving the value into a dynamic client does not carry the
+  discovered client's automatic validation policy with it.
+- Normal RPC, full caller-defined clients, and discovered factories can
+  produce a durable identity. That identity can later be rebound with a
+  method-only, discovered, or fully dynamic client.
+- Invocation metadata can be stored, parsed, explicitly rediscovered, and
+  rebound when the identity is durable and reusable.
+
+Ephemeral agents form a hard boundary. A known phantom can be invoked once and
+returns its final identity in invocation metadata, but that final ephemeral
+identity cannot be rebound for another call. Started dynamic or reflected
+operations also retain their normal resource rules: consume returned streams,
+and cancel or close work that the caller abandons.
+
+For concrete APIs and language recipes, see the [common reflection
+guide](/next/how-to-guides/common/golem-agent-reflection) and the SDK guides for
+[Rust](/next/how-to-guides/rust/golem-agent-reflection-rust),
+[TypeScript](/next/how-to-guides/ts/golem-agent-reflection-ts),
+[Effect](/next/how-to-guides/effect/golem-agent-reflection-effect),
+[Scala](/next/how-to-guides/scala/golem-agent-reflection-scala), and
+[MoonBit](/next/how-to-guides/moonbit/golem-agent-reflection-moonbit).
