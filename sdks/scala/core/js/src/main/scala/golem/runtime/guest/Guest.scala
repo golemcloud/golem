@@ -37,6 +37,7 @@ import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 import scala.scalajs.js.annotation.{JSExport, JSExportTopLevel}
 import scala.scalajs.js.typedarray.Uint8Array
+import scala.util.{Failure, Success}
 import scala.util.control.NonFatal
 
 /**
@@ -226,30 +227,31 @@ object Guest {
         case NonFatal(error) => Future.failed(error)
       }
 
-    // A `Left` (declared tool error) is surfaced as a rejection carrying the
-    // wire-encoded `tool-error`; a failed Future (user code error) propagates as
-    // an unhandled rejection so it becomes a WASM trap.
-    val encoded = invoked.map {
-      case Right(res) =>
-        JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined)
-      case Left(error) =>
-        throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
-    }
-    val cleanup = List(
-      () => inputOwnership.close(),
-      () => scalaStdin.map(_.close()).getOrElse(Future.successful(())),
-      () =>
-        scalaStdout match {
-          case Some(stream) => stream.close()
-          case None         =>
-            stdout.toOption.foreach(JsToolOutputStream.dispose)
-            Future.successful(())
-        }
-    )
-    val completed = encoded.transformWith { result =>
+    val completed = invoked.transformWith { result =>
+      val cleanup = List(
+        () => inputOwnership.close(),
+        () => scalaStdin.map(_.close()).getOrElse(Future.successful(())),
+        () =>
+          scalaStdout match {
+            case Some(stream) =>
+              result match {
+                case Success(_)     => stream.close()
+                case Failure(error) => stream.failInvocation(error)
+              }
+            case None =>
+              stdout.toOption.foreach(JsToolOutputStream.dispose)
+              Future.successful(())
+          }
+      )
       Future
         .sequence(cleanup.map(action => AgentStreamOwnership.cleanup(action())))
         .flatMap(_ => Future.fromTry(result))
+        .map {
+          case Right(res) =>
+            JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined)
+          case Left(error) =>
+            throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
+        }
     }
 
     FutureInterop.toPromise(completed)
