@@ -4558,20 +4558,21 @@ struct DurableStreamingTaskParams {
 async fn await_streaming_rpc_acceptance(
     streams: &StreamSession,
     mut acceptance: tokio::sync::oneshot::Receiver<
-        Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
+        golem_api_grpc::proto::golem::worker::InvocationAccepted,
     >,
     invocation: impl std::future::Future<
         Output = Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError>,
     >,
 ) -> Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError> {
     tokio::pin!(invocation);
-    let (mappings, result) = tokio::select! {
+    let (accepted, result) = tokio::select! {
         biased;
         result = &mut invocation => (acceptance.try_recv().ok(), Some(result)),
-        mappings = &mut acceptance => (mappings.ok(), None),
+        accepted = &mut acceptance => (accepted.ok(), None),
     };
-    if let Some(mappings) = mappings {
-        let mappings = mappings
+    if let Some(accepted) = accepted {
+        let mappings = accepted
+            .stream_mappings
             .into_iter()
             .map(durable_stream_mapping_from_proto)
             .collect::<Result<Vec<_>, _>>()
