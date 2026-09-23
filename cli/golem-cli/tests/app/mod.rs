@@ -29,6 +29,7 @@ mod remote_releases;
 mod rust_streams;
 mod scala_guest_streams;
 mod scala_tool_middleware;
+mod secrets;
 mod tool_middleware;
 mod typescript_guest_streams;
 
@@ -54,6 +55,7 @@ tag_suite!(plugins, deploy);
 tag_suite!(rust_streams, agents_guest_bridge);
 tag_suite!(scala_guest_streams, agents_guest_bridge);
 tag_suite!(scala_tool_middleware, deploy);
+tag_suite!(secrets, deploy);
 tag_suite!(tool_middleware, deploy);
 tag_suite!(typescript_guest_streams, agents_guest_bridge);
 
@@ -117,6 +119,9 @@ mod cmd {
     pub static PROFILE: &str = "profile";
     pub static REGISTER: &str = "register";
     pub static REPL: &str = "repl";
+    pub static RESOURCE: &str = "resource";
+    pub static RETRY_POLICY: &str = "retry-policy";
+    pub static SECRET: &str = "secret";
     pub static TEMPLATES: &str = "templates";
     pub static TOOL: &str = "tool";
 }
