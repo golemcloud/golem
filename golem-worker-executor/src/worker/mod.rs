@@ -12675,6 +12675,16 @@ pub(crate) fn stream_session_record_key(
             owner,
             owner_fingerprint,
         )),
+        StreamSessionRecord::ReaderForwardIntent(record) => Some(record.session_key.qualify(
+            owner_environment_id,
+            owner,
+            owner_fingerprint,
+        )),
+        StreamSessionRecord::ReaderForwardAccepted(record) => Some(record.session_key.qualify(
+            owner_environment_id,
+            owner,
+            owner_fingerprint,
+        )),
         StreamSessionRecord::InvocationResult(record) => Some(record.session_key.qualify(
             owner_environment_id,
             owner,

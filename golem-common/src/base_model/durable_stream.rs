@@ -1187,6 +1187,42 @@ pub struct StreamConsumerTerminalRecord {
     pub terminal: StreamConsumerTerminal,
 }
 
+/// The exact binding that must accept an unread reader before its ownership is transferred.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum StreamReaderForwardDestination {
+    /// A session journal in this oplog, including caller-side journals for remote invocations.
+    SessionBinding {
+        session_key: StreamRegistrationInvocation,
+        binding: StreamBindingRecord,
+    },
+    InvocationInput {
+        invocation: StreamInvocationId,
+        mapping: StreamSessionMappingRecord,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamReaderForwardIntentRecord {
+    pub format_version: u8,
+    pub session_key: StreamRegistrationInvocation,
+    pub reader_id: LocalStreamReaderId,
+    pub destination: StreamReaderForwardDestination,
+}
+
+/// Proves acceptance of the exact destination recorded by an earlier forwarding intent.
+/// This settles a reader, not its source attachment or a replayable terminal observation.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamReaderForwardAcceptedRecord {
+    pub format_version: u8,
+    pub session_key: StreamRegistrationInvocation,
+    pub intent_oplog_index: OplogIndex,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
@@ -1375,6 +1411,8 @@ pub enum StreamSessionRecord {
     ConsumerCancelIntent(StreamConsumerCancelIntentRecord),
     ConsumerCancelApplied(StreamConsumerCancelAppliedRecord),
     ConsumerTerminal(StreamConsumerTerminalRecord),
+    ReaderForwardIntent(StreamReaderForwardIntentRecord),
+    ReaderForwardAccepted(StreamReaderForwardAcceptedRecord),
     InvocationResult(StreamSessionInvocationResultRecord),
     Finished(StreamSessionFinishedRecord),
     Tombstoned(StreamSlotTombstonedRecord),
@@ -1433,6 +1471,8 @@ impl StreamSessionRecord {
             Self::ConsumerCancelIntent(record) => record.format_version,
             Self::ConsumerCancelApplied(record) => record.format_version,
             Self::ConsumerTerminal(record) => record.format_version,
+            Self::ReaderForwardIntent(record) => record.format_version,
+            Self::ReaderForwardAccepted(record) => record.format_version,
             Self::InvocationResult(record) => record.format_version,
             Self::Finished(record) => record.format_version,
             Self::Tombstoned(record) => record.format_version,
@@ -1597,6 +1637,23 @@ impl StreamSessionRecord {
             Self::ConsumerTerminal(record) => {
                 StreamOffset::from_bytes(record.source_offset.0).is_ok()
             }
+            Self::ReaderForwardIntent(record) => {
+                record.reader_id.introducing_oplog_index.is_defined()
+                    && match &record.destination {
+                        StreamReaderForwardDestination::SessionBinding { binding, .. } => {
+                            binding.source.has_supported_format()
+                        }
+                        StreamReaderForwardDestination::InvocationInput {
+                            invocation,
+                            mapping,
+                        } => {
+                            !invocation.callee_fingerprint.0.is_nil()
+                                && mapping.role == SessionStreamRole::Input
+                                && supported_handle(&mapping.handle)
+                        }
+                    }
+            }
+            Self::ReaderForwardAccepted(record) => record.intent_oplog_index.is_defined(),
             Self::InvocationResult(record) => {
                 let unique_transport_ids = record
                     .stream_mappings
