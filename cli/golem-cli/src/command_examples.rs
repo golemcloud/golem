@@ -78,7 +78,7 @@ pub const REPL: &str = "Examples:
   # Pick a specific component and language
   golem-cli repl my-component --language ts
 
-  # Run a script and exit (script is in the component's language)
+  # Run a TypeScript script and exit
   golem-cli repl --script-file test.ts --yes
 
   # Run a one-liner script
@@ -136,7 +136,7 @@ pub const REDEPLOY_AGENTS: &str = "Examples:
   golem-cli redeploy-agents my-component";
 
 pub const EXEC: &str = "Examples:
-  # Custom commands are defined under `commands:` in the application's golem.yaml.
+  # Custom commands are defined under `customCommands:` in the application's golem.yaml.
   # Discover what is available by running --help inside an application directory:
   golem-cli exec --help
 
@@ -209,7 +209,7 @@ pub const AGENT_INVOKE: &str = "Examples:
   golem-cli agent invoke -i - 'MyAgent()' do_work
 
   # Schedule for the future (RFC 3339 / ISO 8601, UTC)
-  golem-cli agent invoke --schedule-at 2026-03-15T10:30:00Z 'Reporter()' send_report
+  golem-cli agent invoke --trigger --schedule-at 2027-03-15T10:30:00Z 'Reporter()' send_report
 
   # Stream only log entries, no invocation markers
   golem-cli agent invoke --logs-only 'MyAgent()' run

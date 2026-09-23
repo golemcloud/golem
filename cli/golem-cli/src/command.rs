@@ -798,8 +798,8 @@ pub enum GolemCliSubcommand {
         /// version label. Versions are user-defined strings attached to
         /// deployments; if more than one deployment shares the same version,
         /// this command will refuse and ask you to use `--revision` instead.
-        /// List existing deployments with `golem-cli api deployment list`.
-        /// Mutually exclusive with `--revision`.
+        /// If no deployment has the given version, the available deployments
+        /// are listed. Mutually exclusive with `--revision`.
         #[arg(long, conflicts_with_all = ["force_build", "revision", "stage", "approve_staging_steps"])]
         version: Option<String>,
         /// Roll the environment back to the deployment with this revision id.
@@ -1564,7 +1564,7 @@ pub mod worker {
             /// The effective key (whether explicit or auto-generated) is always echoed
             /// back: in `--format text` mode as a `Using ... idempotency key:` log
             /// line on stderr, and in `--format json/yaml/toon` mode as the
-            /// `idempotency_key` field of the result document on stdout.
+            /// `idempotencyKey` field of the result document on stdout.
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
             #[clap(long, short)]
@@ -1621,12 +1621,14 @@ pub mod worker {
 
             /// Filter for agent metadata in form of `property op value`.
             ///
-            /// Supported properties: `name`, `version`, `status`, `mode`, `env.<KEY>`.
+            /// Supported properties: `name`, `revision`, `status`, `mode`, `created_at`,
+            /// `env.<KEY>`, `config.<PATH>`.
             /// Supported operators: `==`/`=`, `!=`, `>=`, `>`, `<=`, `<`
             /// (string properties additionally support `like`, `notlike`, `startswith`).
-            /// Operator and value are case-insensitive; spaces around the operator are required.
+            /// Operator and value are case-insensitive; spaces around the operator are required
+            /// and the value itself must not contain spaces.
             ///
-            /// Filter examples: `name == my-agent(1, 2, 3)`, `version >= 0`,
+            /// Filter examples: `name == CounterAgent("c1")`, `revision >= 0`,
             /// `status == Running`, `env.var1 == value`, `name like %worker%`.
             /// Can be used multiple times (AND condition is applied between them).
             #[arg(long)]
