@@ -15,8 +15,6 @@
 package golem
 
 import (
-	"reflect"
-
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -121,22 +119,10 @@ func (c *ToolContext) Tool() string { return c.tool }
 func (c *ToolContext) CommandPath() []string { return append([]string(nil), c.path...) }
 
 // toolDefinitionError reports a broken tool declaration. The WIT has no variant
-// for "this component's own metadata is wrong", so it travels as a custom error
-// whose payload carries the collected messages — the same information agent
-// discovery reports, in the shape a tool caller can read.
+// for "this component's own metadata is wrong"; invalid-result is the closest,
+// and is what the TypeScript SDK uses for the same case. custom-error would not
+// do: its name field is the tool's own declared error case, and a definition
+// failure is not one of those.
 func toolDefinitionError(d *definitions) types.ToolError {
-	return types.MakeToolErrorCustomError(types.CustomToolError{
-		Name:    "definition-errors",
-		Payload: typedString(d, allDefErrors(d.errs)),
-	})
-}
-
-// typedString packages a plain string as a self-contained typed value.
-func typedString(d *definitions, s string) types.TypedSchemaValue {
-	c := d.compile(reflect.TypeFor[string]())
-	g := graphBuilder{d: d}
-	root := g.node(c)
-	graph := g.build()
-	graph.Root = root
-	return types.TypedSchemaValue{Graph: graph, Value: encodeWith(c, reflect.ValueOf(s))}
+	return types.MakeToolErrorInvalidResult("tool definition errors:\n" + allDefErrors(d.errs))
 }

@@ -472,3 +472,25 @@ func TestOptionShapeDeclarationErrors(t *testing.T) {
 		mustDefErr(t, d, "an option has one shape")
 	})
 }
+
+// TestDefinitionErrorsTravelAsInvalidResult — a broken declaration is reported
+// through the same variant the TypeScript SDK uses, and never as custom-error,
+// whose name field is reserved for a tool's own declared error cases.
+func TestDefinitionErrorsTravelAsInvalidResult(t *testing.T) {
+	type Bad struct{ Name string }
+	r, d := newToolRegistry(), newDefinitions()
+	def := defineToolInto(r, d, "bad", ToolSpec{})
+	cmd := declareCommand[Bad, string](r, d, def, nil, "", Bad{}, nil)
+	handleCommandInto(r, d, cmd, func(*ToolContext, Bad) string { return "" })
+	if _, ok := r.discover(d); ok {
+		t.Fatal("discovery accepted a broken declaration")
+	}
+
+	err := toolDefinitionError(d)
+	if err.Tag() != types.ToolErrorInvalidResult {
+		t.Fatalf("error tag %d, want invalid-result", err.Tag())
+	}
+	if !strings.Contains(err.InvalidResult(), "must be golem.Positional") {
+		t.Errorf("message does not name the problem: %q", err.InvalidResult())
+	}
+}
