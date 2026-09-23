@@ -222,8 +222,12 @@ func Command[Args any, Out any](t *ToolDefinition, path []string, proto Args, op
 // Group declares a command that only dispatches to subcommands, so that an
 // intermediate node can carry its own documentation and aliases. Declaring it
 // is optional: an undeclared intermediate node is created automatically.
-func Group(t *ToolDefinition, path []string, opts ...CommandOpt) {
+//
+// It returns [Registered] so the call can sit in a package-level var alongside
+// the commands it groups.
+func Group(t *ToolDefinition, path []string, opts ...CommandOpt) Registered {
 	declareGroup(toolDefs, defs, t, path, opts)
+	return Registered{}
 }
 
 func lastSegment(path []string) string {
