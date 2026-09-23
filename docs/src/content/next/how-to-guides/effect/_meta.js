@@ -16,7 +16,6 @@ export default {
   "golem-create-agent-instance-effect":
     "Creating an Effect Golem Agent Instance with `golem agent new`",
   "golem-stateless-agent-effect": "Creating Ephemeral Agents with Effect",
-  "golem-streaming-agent-effect": "Streaming Agent Methods with Effect",
   "golem-tools-middleware-effect": "Effect tools and middleware",
   "golem-add-http-auth-effect": "Enabling Authentication on Effect HTTP Endpoints",
   "golem-enable-otlp-effect": "Enabling OpenTelemetry for an Effect Agent",
@@ -38,6 +37,7 @@ export default {
   "golem-schedule-agent-effect": "Scheduling a Future Effect Agent Invocation",
   "golem-snapshot-restoration-effect": "Snapshot restoration",
   "golem-custom-snapshot-effect": "Snapshot-Based Recovery in Effect",
+  "golem-streaming-agent-effect": "Streaming Agent Methods with Effect",
   "golem-trigger-agent-effect": "Triggering a Fire-and-Forget Effect Agent Invocation",
   "golem-add-ignite-effect": "Using Apache Ignite from an Effect Agent",
   "golem-add-mysql-effect": "Using MySQL from an Effect Agent",
