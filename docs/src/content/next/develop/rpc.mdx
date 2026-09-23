@@ -1,4 +1,4 @@
-import { Tabs } from "nextra/components"
+import { Callout, Tabs } from "nextra/components"
 
 # Agent to Agent communication
 
@@ -8,7 +8,7 @@ See the [Agent to Agent communication page](/next/concepts/agent-to-agent-commun
 
 When defining an _agent_ in code, this automatically defines a client interface for calling remote agents as well. This way an agent of an agent type can create other agents and invoke methods on them. The target agent can be of any agent type available for the caller agent in code.
 
-The simplest way to achieve this is to keep all the agent types that need to call each other in the same _component_. Otherwise the agent definition need to be extracted to some shared place and imported to all components involved.
+The simplest way to achieve this is to keep all the agent types that need to call each other in the same _component_. In languages that separate an agent's definition from its implementation, you can instead extract the definition to a shared library imported by both components.
 
 ## Creating a client
 
@@ -201,6 +201,115 @@ pub fn ExampleAgent::run(self : Self) -> String raise @common.AgentError {
 
 Given there is a `WeatherAgent` defined, we have an auto generated client with the name `WeatherAgentClient`,
 Here `weather_in_london` is the client for calling a remote `WeatherAgent` - it exposes the agent methods, such as `current_weather` as its own methods. When creating a client with `get`, call `drop()` when done.
+
+    </Tabs.Tab>
+</Tabs>
+
+## Calling an agent in another component
+
+When the caller and target agents belong to different components, use the pattern for your language:
+
+<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+  <Tabs.Tab>
+Export the agent definition from a shared package. The provider imports and implements that definition, while the caller imports it and uses its client.
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+Put the `#[agent_definition]` trait in a shared crate. The provider crate depends on it to implement the agent, and the caller crate depends on it to use the generated client.
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+Put the `@agentDefinition` trait in a shared module. The provider depends on it to implement the agent, and the caller depends on it to use the generated client.
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+
+MoonBit does not currently support putting an agent definition in a shared package and importing its generated client from separate components. Its `#derive.agent` annotation describes the concrete implementation type, and the MoonBit generator emits registration, dispatch, and client code together in the component package.
+
+Instead, declare an agent dependency and use the generated internal guest bridge. Suppose `WeatherAgent` is defined in the `example:weather` component while `ExampleAgent` is defined in `example:caller`:
+
+```yaml filename="golem.yaml"
+components:
+  example:weather:
+    dir: weather
+    templates: moonbit
+
+  example:caller:
+    dir: caller
+    templates: moonbit
+    dependencies:
+      agents:
+        - example:weather/WeatherAgent
+```
+
+The provider remains an ordinary MoonBit agent and does not contain a separately maintained interface:
+
+```moonbit filename="weather/weather_agent.mbt"
+#derive.agent
+struct WeatherAgent {
+  location : String
+}
+
+fn WeatherAgent::new(location : String) -> WeatherAgent {
+  { location, }
+}
+
+pub fn WeatherAgent::current_weather(self : Self) -> String {
+  "Sunny in \{self.location}"
+}
+```
+
+The dependency makes `golem build` build the provider first and generate an internal MoonBit guest client at `golem-temp/bridge-sdk/moonbit/internal/weather-agent-guest-client`. Add that generated module as a local dependency of the application module:
+
+```json filename="moon.mod.json"
+{
+  "name": "example/weather-app",
+  "preferred-target": "wasm",
+  "deps": {
+    "golemcloud/golem_sdk": "0.5.1",
+    "weather-agent-guest-client": {
+      "path": "golem-temp/bridge-sdk/moonbit/internal/weather-agent-guest-client"
+    }
+  }
+}
+```
+
+Import the generated client package in the caller component:
+
+```moonbit filename="caller/moon.pkg"
+import {
+  "golemcloud/golem_sdk/agents",
+  "weather-agent-guest-client/client" @weather,
+  // ...the caller's other Golem SDK imports
+}
+
+pkgtype(kind: "executable")
+```
+
+The caller can now use the generated typed client without importing the provider component or duplicating its agent definition:
+
+```moonbit filename="caller/example_agent.mbt"
+#derive.agent
+struct ExampleAgent {}
+
+fn ExampleAgent::new() -> ExampleAgent {
+  {}
+}
+
+pub async fn ExampleAgent::weather_in_london(self : Self) -> String {
+  let _ = self
+  @weather.WeatherAgentClient::scoped(
+    "London",
+    async fn(remote) { remote.current_weather() },
+  )
+}
+```
+
+Run `golem build --yes` after changing the provider API. Golem regenerates the guest client from the built provider's discovered agent schema before compiling the caller. The resulting call uses Golem's guest RPC host API directly; unlike an external [bridge library](/next/invoke/bridge-libraries), it does not use the REST API and does not need server configuration.
+
+<Callout type="info">
+  This generated guest bridge provides the same separation needed for a two-component MoonBit application. No shared `#derive.agent` definition package or additional MoonBit SDK feature is required for cross-component RPC.
+</Callout>
 
     </Tabs.Tab>
 </Tabs>
