@@ -1142,11 +1142,15 @@ jobs:
 
       - name: Restore Scala SDK ivy local repo
         if: matrix.chunk.needs-scala
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: ~/.ivy2/local
-          key: scala-sdk-ivy-local-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: scala-sdk-ivy-local
+          path: tmp/sdk-artifacts
+      - name: Extract Scala SDK ivy local repo
+        if: matrix.chunk.needs-scala
+        run: |
+          mkdir -p ~/.ivy2
+          tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
 
       - name: Update MoonBit fixture dependencies
         if: matrix.chunk.needs-moonbit
