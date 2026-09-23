@@ -37,6 +37,7 @@ pub struct JsonSchemaConfig {
     /// Emit the `$schema` JSON Schema draft marker at the document root.
     pub include_draft_marker: bool,
     host_managed: HostManagedSchemaPolicy,
+    unsupported: UnsupportedLeafSchemaPolicy,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -46,12 +47,19 @@ enum HostManagedSchemaPolicy {
     Redact,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum UnsupportedLeafSchemaPolicy {
+    Placeholder,
+    Reject,
+}
+
 impl JsonSchemaConfig {
     /// Canonical standalone JSON Schema document (includes the `$schema`
     /// draft marker).
     pub const CANONICAL: Self = Self {
         include_draft_marker: true,
         host_managed: HostManagedSchemaPolicy::TrustedSnapshot,
+        unsupported: UnsupportedLeafSchemaPolicy::Placeholder,
     };
 
     /// Canonical JSON Schema document without the `$schema` draft marker, for
@@ -59,16 +67,27 @@ impl JsonSchemaConfig {
     pub const WITHOUT_DRAFT_MARKER: Self = Self {
         include_draft_marker: false,
         host_managed: HostManagedSchemaPolicy::TrustedSnapshot,
+        unsupported: UnsupportedLeafSchemaPolicy::Placeholder,
     };
 
     pub(crate) const EXTERNAL_INPUT: Self = Self {
         include_draft_marker: false,
         host_managed: HostManagedSchemaPolicy::Reject,
+        unsupported: UnsupportedLeafSchemaPolicy::Placeholder,
     };
 
     pub(crate) const EXTERNAL_OUTPUT: Self = Self {
         include_draft_marker: false,
         host_managed: HostManagedSchemaPolicy::Redact,
+        unsupported: UnsupportedLeafSchemaPolicy::Placeholder,
+    };
+
+    /// Reflection JSON adapters cannot pack or unpack capabilities, futures,
+    /// or streams, so their projected schemas must reject every JSON value.
+    pub const REFLECTION: Self = Self {
+        include_draft_marker: true,
+        host_managed: HostManagedSchemaPolicy::Reject,
+        unsupported: UnsupportedLeafSchemaPolicy::Reject,
     };
 }
 
@@ -154,6 +173,24 @@ pub fn to_external_output_json_schema(
         JsonSchemaConfig {
             include_draft_marker,
             ..JsonSchemaConfig::EXTERNAL_OUTPUT
+        },
+    )
+}
+
+/// Render the JSON domain accepted by reflection `pack_json`/`unpack_json`.
+/// Capability, future, and stream leaves are unsatisfiable because those
+/// adapters have no JSON representation for them.
+pub fn to_reflection_json_schema(
+    graph: &SchemaGraph,
+    ty: &SchemaType,
+    include_draft_marker: bool,
+) -> Value {
+    to_json_schema_with_config(
+        graph,
+        ty,
+        JsonSchemaConfig {
+            include_draft_marker,
+            ..JsonSchemaConfig::REFLECTION
         },
     )
 }
@@ -809,13 +846,16 @@ pub(super) fn render_type(
             })
         }
 
-        SchemaType::Future { .. } | SchemaType::Stream { .. } => obj([
-            ("type", Value::String("null".to_string())),
-            (
-                "description",
-                Value::String("WASI P3 placeholder".to_string()),
-            ),
-        ]),
+        SchemaType::Future { .. } | SchemaType::Stream { .. } => match config.unsupported {
+            UnsupportedLeafSchemaPolicy::Placeholder => obj([
+                ("type", Value::String("null".to_string())),
+                (
+                    "description",
+                    Value::String("WASI P3 placeholder".to_string()),
+                ),
+            ]),
+            UnsupportedLeafSchemaPolicy::Reject => obj([("not", Value::Object(Map::new()))]),
+        },
     };
 
     // Per-node metadata: attach docs / examples / deprecated for every
