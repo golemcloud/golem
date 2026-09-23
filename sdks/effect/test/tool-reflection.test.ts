@@ -8,7 +8,7 @@ import { compile } from "../src/WitCodec.js"
 import { t } from "../src/internal/schema-model/model.js"
 import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
 import { SchemaRef } from "../src/SchemaRef.js"
-import { Binary, restrict } from "../src/WitTypes.js"
+import { Binary, restrict, Uint8 } from "../src/WitTypes.js"
 
 const definition = toolDefinition("effect-reflection").body((body) =>
   body.positional("name", Schema.String).returns(Schema.String),
@@ -243,6 +243,31 @@ describe("native tool reflection", () => {
       expect(invalid.issues[0]?.path).toEqual(["name"])
     }
     expect(command.result?.toJsonSchema()).toBeDefined()
+  })
+
+  it("preserves command annotations and enforces schema restrictions during validation", () => {
+    const annotated = toolDefinition("annotated-reflection").body((body) =>
+      body.positional("bounded", Uint8.pipe(restrict({ min: 10 }))).annotate({
+        readOnly: true,
+        destructive: false,
+        idempotent: true,
+        openWorld: false,
+      }),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "annotated-reflection",
+      definition: compileDefinition(annotated).wire,
+    }).client.command([])
+
+    expect(command.annotations).toEqual({
+      readOnly: true,
+      destructive: false,
+      idempotent: true,
+      openWorld: false,
+    })
+    expect(command.validateJson({ bounded: 9 }).success).toBe(false)
+    expect(command.validateJson({ bounded: 10 }).success).toBe(true)
   })
 
   it("returns a validated result and releases its scoped invocation", async () => {

@@ -175,13 +175,11 @@ pub async fn MoonBitToolStreamingCaller::declared_error_completion(
   let result_terminal = match invocation.get() {
     Err(@tool.ToolError::Tool(Expected(message))) => "declared:" + message
     Err(@tool.ToolError::Rpc(_)) => "unexpected:rpc"
-    Err(@tool.ToolError::RemoteTool(error)) =>
-      "unexpected:remote-tool:" + repr(error)
+    Err(@tool.ToolError::RemoteTool(_)) => "unexpected:remote-tool"
     Err(@tool.ToolError::UnknownToolError(name, _)) => "unexpected:" + name
-    Err(@tool.ToolError::InvalidInput(message)) =>
-      "unexpected:invalid-input:" + message
-    Err(@tool.ToolError::MalformedRemoteOutput(message)) =>
-      "unexpected:malformed-output:" + message
+    Err(@tool.ToolError::InvalidInput(_)) => "unexpected:invalid-input"
+    Err(@tool.ToolError::MalformedRemoteOutput(_)) =>
+      "unexpected:malformed-output"
     Ok(_) => "ok"
   }
   stdout_terminal + ":" + result_terminal
