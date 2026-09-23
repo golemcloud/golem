@@ -529,6 +529,24 @@ impl OplogService for PrimaryOplogService {
         )))
     }
 
+    async fn staged_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+    ) -> Result<bool, String> {
+        record_oplog_call("staged_exists");
+        let key = Self::staged_oplog_key(&owned_agent_id.agent_id, stage_id);
+        self.indexed_storage
+            .with("oplog", "staged_exists")
+            .exists(
+                Self::staged_namespace(&owned_agent_id.agent_id, agent_mode),
+                &key,
+            )
+            .await
+            .map_err(|error| format!("Failed checking staged oplog {key}: {error}"))
+    }
+
     async fn publish_staged(
         &self,
         owned_agent_id: &OwnedAgentId,

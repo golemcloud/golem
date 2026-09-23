@@ -349,20 +349,20 @@ options(
 )
 ```
 
-Select the pure component template in `golem.yaml`:
+Select the default component template in `golem.yaml`:
 
 ```yaml
 components:
   myorg:message-middlewares:
-    templates: moonbit-tool-middleware
+    templates: moonbit
     dir: message_middlewares
 ```
 
-Then run `golem build`. The build uses the `tool-middleware` code-generation role, embeds the
-`tool-middleware-guest` world, and creates a `.tool-middleware.wasm` component. Generated startup
-code registers every declared middleware when the component loads. Do not import `tool` or use
-`ToolClient` in a pure package: pure middleware has no ambient `golem:tool/host` dispatch, and the
-runtime-provided `underlying` capability is its only path to the next inner layer.
+Then run `golem build`. The build uses the single code-generation path and `agent-guest` world.
+Generated startup code registers every declared middleware when the component loads, while unused
+agent and tool discovery returns empty lists. The world imports ambient `golem:tool/host`, but the
+runtime-provided `underlying` capability remains the only path to the next pinned middleware layer;
+ambient calls remain subject to runtime permissions.
 
 The underlying capability and invocation streams belong to one middleware invocation. Generated
 wrappers enforce once-only transfer, cleanup, and revocation when the handler returns, but MoonBit

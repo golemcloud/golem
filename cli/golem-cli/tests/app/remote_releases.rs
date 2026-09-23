@@ -592,7 +592,7 @@ async fn remote_middleware_release_is_pinned_across_accounts(
         create_app_and_environment(&consumer, "middleware-consumer").await?;
     let middleware_name = ToolMiddlewareName::try_from("audit").unwrap();
     let component_wasm =
-        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/tool_middleware_guest.wasm");
+        workspace_path().join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm");
 
     let publisher_component = publisher
         .client

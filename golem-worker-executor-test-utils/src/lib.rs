@@ -4378,6 +4378,14 @@ impl Oplog for TestOplog {
         self.oplog.retire();
     }
 
+    fn is_retired(&self) -> bool {
+        self.oplog.is_retired()
+    }
+
+    fn closed(&self) -> golem_worker_executor::services::oplog::OplogCloseCompletion {
+        self.oplog.closed()
+    }
+
     fn task_owner(&self) -> Option<&golem_worker_executor::services::oplog::WorkerTasks> {
         self.oplog.task_owner()
     }

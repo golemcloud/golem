@@ -493,8 +493,19 @@ const discriminatorMatches = (rule: UnionBranch["discriminator"], value: unknown
 
 const declarationConstructorTag = (a: SchemaAST.AST): string | undefined => {
   if (a._tag !== "Declaration") return undefined
-  const tc = (a.annotations as { typeConstructor?: { _tag?: string } } | undefined)?.typeConstructor
-  return tc?._tag
+  const id = (a.annotations as { representation?: { id?: string } } | undefined)?.representation?.id
+  switch (id) {
+    case "effect/schema/Option":
+      return "effect/Option"
+    case "effect/schema/Result":
+      return "effect/Result"
+    case "effect/schema/ReadonlyMap":
+      return "ReadonlyMap"
+    case "effect/schema/HashMap":
+      return "effect/HashMap"
+    default:
+      return undefined
+  }
 }
 
 const typedArrayKindOf = (a: SchemaAST.AST): WitTypedArrayKind | undefined =>
@@ -1656,37 +1667,49 @@ export const toWitCodec = <S extends Schema.Top>(
 
     const svToEncoded = SchemaValueCarrier.pipe(
       Schema.decodeTo(EncodedCarrier, {
-        decode: SchemaGetter.transformOrFail((sv: SchemaValue) => {
+        decode: SchemaGetter.transformEffect((sv: SchemaValue, options) => {
           const converted = Effect.try({
             try: () => {
               assertValueShape(graph, root, sv)
               return sv
             },
             catch: (error) =>
-              new SchemaIssue.InvalidValue(Option.some(sv), {
-                message: error instanceof Error ? error.message : String(error),
-              }),
+              new SchemaIssue.InvalidValue(
+                {
+                  message: error instanceof Error ? error.message : String(error),
+                },
+                sv,
+                options,
+              ),
           })
           return Effect.flatMap(converted, (checked) =>
             Effect.flatMap(Effect.context<any>(), (context) =>
               Effect.try({
                 try: () => withConversionContext(context, () => pair.fromValue(checked)),
                 catch: (error) =>
-                  new SchemaIssue.InvalidValue(Option.some(sv), {
-                    message: error instanceof Error ? error.message : String(error),
-                  }),
+                  new SchemaIssue.InvalidValue(
+                    {
+                      message: error instanceof Error ? error.message : String(error),
+                    },
+                    sv,
+                    options,
+                  ),
               }),
             ),
           )
         }),
-        encode: SchemaGetter.transformOrFail((enc: S["Encoded"]) =>
+        encode: SchemaGetter.transformEffect((enc: S["Encoded"], options) =>
           Effect.flatMap(Effect.context<any>(), (context) =>
             Effect.try({
               try: () => withConversionContext(context, () => pair.toValue(enc)),
               catch: (error) =>
-                new SchemaIssue.InvalidValue(Option.some(enc), {
-                  message: error instanceof Error ? error.message : String(error),
-                }),
+                new SchemaIssue.InvalidValue(
+                  {
+                    message: error instanceof Error ? error.message : String(error),
+                  },
+                  enc,
+                  options,
+                ),
             }),
           ),
         ),
@@ -1710,7 +1733,7 @@ export const toWitCodec = <S extends Schema.Top>(
 
 const wireSchemaError = (error: unknown): Schema.SchemaError =>
   new Schema.SchemaError(
-    new SchemaIssue.InvalidValue(Option.none(), {
+    new SchemaIssue.InvalidValue({
       message: error instanceof Error ? error.message : String(error),
     }),
   )

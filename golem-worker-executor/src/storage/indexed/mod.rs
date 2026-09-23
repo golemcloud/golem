@@ -22,6 +22,7 @@ use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::repo::is_transient_sqlx_error;
 
 pub mod memory;
 pub mod multi_sqlite;
@@ -48,6 +49,21 @@ pub enum IndexedStorageError {
 }
 
 impl IndexedStorageError {
+    /// Classifies failures that happen while a lazily-created backend is opened or migrated.
+    /// The indexed operation has not started yet, so a transient cause is safe to retry.
+    pub fn initialization_failed(context: &str, error: anyhow::Error) -> Self {
+        let transient = error
+            .chain()
+            .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+            .any(is_transient_sqlx_error);
+        let message = format!("{context}: {error:#}");
+        if transient {
+            Self::Transient(message)
+        } else {
+            Self::Other(message)
+        }
+    }
+
     pub fn is_retriable(&self) -> bool {
         matches!(self, IndexedStorageError::Transient(_))
     }
@@ -841,11 +857,35 @@ pub fn agent_mode_prefix(mode: AgentMode) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScanResume, scan_prefix_upper_bound, stable_scan_key_bounds};
+    use super::{IndexedStorageError, ScanResume, scan_prefix_upper_bound, stable_scan_key_bounds};
     use proptest::prelude::*;
     use test_r::test;
 
     test_r::enable!();
+
+    #[test]
+    fn transient_indexed_storage_initialization_failure_is_retryable() {
+        let error = IndexedStorageError::initialization_failed(
+            "pool initialization failed",
+            anyhow::Error::from(sqlx::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::WouldBlock,
+            ))),
+        );
+
+        assert!(matches!(error, IndexedStorageError::Transient(_)));
+        assert!(error.is_retriable());
+    }
+
+    #[test]
+    fn permanent_indexed_storage_initialization_failure_is_not_retried() {
+        let error = IndexedStorageError::initialization_failed(
+            "migration failed",
+            anyhow::Error::from(sqlx::Error::RowNotFound),
+        );
+
+        assert!(matches!(error, IndexedStorageError::Other(_)));
+        assert!(!error.is_retriable());
+    }
 
     #[test]
     fn scan_prefix_upper_bound_handles_unicode_boundaries() {
