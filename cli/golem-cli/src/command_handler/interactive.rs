@@ -526,6 +526,40 @@ impl InteractiveHandler {
         }
     }
 
+    /// Prompts (masked) for a secret value when no value option was given. In a
+    /// non-interactive environment it is reported as a usage error listing the
+    /// value options of the target command.
+    pub fn prompt_secret_value(
+        &self,
+        path: &str,
+        target: ShowClapHelpTarget,
+        value_options: &str,
+    ) -> anyhow::Result<String> {
+        let value = Password::new(&format!("Value of secret {path}:"))
+            .with_display_mode(PasswordDisplayMode::Masked)
+            .without_confirmation()
+            .with_help_message(&format!("Or use one of {value_options}"))
+            .with_validator(|value: &str| {
+                if value.is_empty() {
+                    Ok(Validation::Invalid(ErrorMessage::from(
+                        "The value cannot be empty",
+                    )))
+                } else {
+                    Ok(Validation::Valid)
+                }
+            })
+            .prompt()
+            .none_if_not_interactive()?;
+
+        match value {
+            Some(value) => Ok(value),
+            None => bail!(HintError::ShowClapHelp {
+                target,
+                error: format!("In non-interactive mode one of {value_options} is required"),
+            }),
+        }
+    }
+
     pub fn select_repl_language(
         &self,
         repl_languages: Vec<ReplLanguage>,

@@ -471,8 +471,8 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     registry_entry!("SecretListView", "secret.list", arb_secret_list_result),
     registry_entry!(
         "SecretUpdateView",
-        "secret.update-value",
-        arb_secret_update_value_result
+        "secret.update",
+        arb_secret_update_result
     ),
 ];
 
@@ -1251,7 +1251,7 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
             crate::model::secret::SecretUpdateView(secret.clone().into()),
             MaskingConfig::hide_secrets(),
         )
-        .expect("secret.update-value should serialize"),
+        .expect("secret.update should serialize"),
         to_structured_output_value_masked(
             crate::model::secret::SecretListView {
                 secrets: vec![secret.into()],
@@ -6586,7 +6586,7 @@ fn arb_secret_get_result() -> OutputDocumentStrategy {
         .boxed()
 }
 
-fn arb_secret_update_value_result() -> OutputDocumentStrategy {
+fn arb_secret_update_result() -> OutputDocumentStrategy {
     arb_secret()
         .prop_map(|secret| {
             to_structured_output_value_masked(

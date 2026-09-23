@@ -35,6 +35,8 @@ impl Error for PipedExitCode {}
 pub enum ShowClapHelpTarget {
     AppNew,
     ProfileNew,
+    SecretCreate,
+    SecretUpdate,
 }
 
 /// Errors that should be handled by the command handler with showing hints or error messages

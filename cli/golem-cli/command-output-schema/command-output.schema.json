@@ -316,7 +316,7 @@
       "$ref": "#/definitions/secret.list"
     },
     {
-      "$ref": "#/definitions/secret.update-value"
+      "$ref": "#/definitions/secret.update"
     }
   ],
   "definitions": {
@@ -8611,11 +8611,11 @@
       },
       "additionalProperties": false
     },
-    "secret.update-value": {
+    "secret.update": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem secret update-value`.",
+      "description": "Single structured output document emitted by `golem secret update`.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "secret update-value",
+      "x-golem-command": "secret update",
       "required": [
         "$type",
         "id",
@@ -8626,7 +8626,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "secret.update-value"
+          "const": "secret.update"
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -9094,7 +9094,7 @@
       "rustType": "SecretListView"
     },
     {
-      "type": "secret.update-value",
+      "type": "secret.update",
       "rustType": "SecretUpdateView"
     }
   ]

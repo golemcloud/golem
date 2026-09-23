@@ -773,15 +773,21 @@ pub const API_TOKEN_DELETE: &str = "Examples:
 // Secret commands ----------------------------------------------------------------------------------
 
 pub const SECRET_CREATE: &str = "Examples:
-  # Create a string secret in the current environment
-  golem-cli secret create apiKey --secret-type String --secret-value 'sk-abc123'
+  # Create a string secret, prompting for the value (hidden input)
+  golem-cli secret create apiKey --type String
 
   # Nested path (paths are dot-separated; casing is normalized)
-  golem-cli secret create db.password --secret-type String --secret-value 's3cret'
+  golem-cli secret create db.password --type String --value 's3cret'
+
+  # Read the value from STDIN
+  printenv DB_PASSWORD | golem-cli secret create db.password --type String --value-stdin
+
+  # Create the secret without a value
+  golem-cli secret create apiKey --type String --no-value
 
   # Type and value use the project's language syntax (or JSON):
-  #   --secret-type String   for Rust
-  #   --secret-type string   for TypeScript";
+  #   --type String   for Rust
+  #   --type string   for TypeScript";
 
 pub const SECRET_GET: &str = "Examples:
   # Get a secret by path
@@ -790,10 +796,19 @@ pub const SECRET_GET: &str = "Examples:
   # Get a secret by ID
   golem-cli secret get --id sec-12345";
 
-pub const SECRET_UPDATE_VALUE: &str = "Examples:
+pub const SECRET_UPDATE: &str = "Examples:
   # Update a secret's value (path or --id)
-  golem-cli secret update-value apiKey --secret-value 'new-value'
-  golem-cli secret update-value --id sec-12345 --secret-value 'new-value'";
+  golem-cli secret update apiKey --value 'new-value'
+  golem-cli secret update --id sec-12345 --value 'new-value'
+
+  # Prompt for the new value (hidden input)
+  golem-cli secret update apiKey
+
+  # Read the new value from STDIN
+  printenv API_KEY | golem-cli secret update apiKey --value-stdin
+
+  # Remove the value of a secret
+  golem-cli secret update apiKey --unset";
 
 pub const SECRET_DELETE: &str = "Examples:
   # Delete a secret by path or by ID

@@ -148,7 +148,7 @@ impl MessageWithFields for SecretUpdateView {
 }
 
 impl StructuredOutput for SecretUpdateView {
-    const KIND: &'static str = "secret.update-value";
+    const KIND: &'static str = "secret.update";
 
     fn serialize_masked<S>(self, serializer: S, config: MaskingConfig) -> Result<S::Ok, S::Error>
     where

@@ -1937,15 +1937,20 @@ pub mod api {
                 /// languages are tried as a fallback. There is no separate JSON
                 /// schema for this field; it is always a type expression in one of
                 /// the supported source languages.
-                #[arg(long)]
+                #[arg(long = "type")]
                 secret_type: String,
-                /// Value of the secret. Must match `--secret-type` and is parsed
-                /// using the project's source language syntax (e.g. `"my-key"` for
-                /// strings, `42` for integers, `true` for booleans). If omitted,
-                /// the secret is created without a value and must later be set with
-                /// `golem-cli secret update-value`.
-                #[arg(long)]
-                secret_value: Option<String>,
+                /// Value of the secret. Must match `--type` and is parsed using the
+                /// project's source language syntax (e.g. `"my-key"` for strings,
+                /// `42` for integers, `true` for booleans). When no value option is
+                /// given, the value is prompted for with hidden input.
+                #[arg(long, conflicts_with_all = ["value_stdin", "no_value"])]
+                value: Option<String>,
+                /// Read the value of the secret from STDIN (one trailing newline is removed)
+                #[arg(long, conflicts_with_all = ["value", "no_value"])]
+                value_stdin: bool,
+                /// Create the secret without a value
+                #[arg(long, conflicts_with_all = ["value", "value_stdin"])]
+                no_value: bool,
             },
 
             /// Get Secret by path or ID
@@ -1960,17 +1965,25 @@ pub mod api {
             },
 
             /// Update Secret value
-            #[command(after_help = crate::command_examples::SECRET_UPDATE_VALUE)]
-            UpdateValue {
+            #[command(after_help = crate::command_examples::SECRET_UPDATE)]
+            Update {
                 /// Path of the secret (dot-separated). Mutually exclusive with `--id`.
                 #[arg(value_parser = parse_secret_path, required_unless_present = "id", conflicts_with = "id")]
                 path: Option<AgentSecretPath>,
                 /// ID of the secret (alternative to path). Mutually exclusive with the positional `<PATH>`.
                 #[arg(long, required_unless_present = "path", conflicts_with = "path")]
                 id: Option<AgentSecretId>,
-                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the project's language syntax or JSON
-                #[arg(long)]
-                secret_value: Option<String>,
+                /// New value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the
+                /// project's language syntax or JSON. When no value option is given, the value is
+                /// prompted for with hidden input.
+                #[arg(long, conflicts_with_all = ["value_stdin", "unset"])]
+                value: Option<String>,
+                /// Read the new value of the secret from STDIN (one trailing newline is removed)
+                #[arg(long, conflicts_with_all = ["value", "unset"])]
+                value_stdin: bool,
+                /// Remove the value of the secret
+                #[arg(long, conflicts_with_all = ["value", "value_stdin"])]
+                unset: bool,
             },
 
             /// DESTRUCTIVE: Permanently deletes the secret. Any agent or API binding referencing it will start failing. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.
@@ -2969,6 +2982,8 @@ fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static s
     match target {
         ShowClapHelpTarget::AppNew => vec!["new"],
         ShowClapHelpTarget::ProfileNew => vec!["profile", "new"],
+        ShowClapHelpTarget::SecretCreate => vec!["secret", "create"],
+        ShowClapHelpTarget::SecretUpdate => vec!["secret", "update"],
     }
 }
 
@@ -3098,6 +3113,38 @@ mod test {
             ]))
             .is_ok()
         );
+    }
+
+    #[test]
+    fn secret_value_options_are_mutually_exclusive() {
+        let create = ["golem", "secret", "create", "apiKey", "--type", "String"];
+        let update = ["golem", "secret", "update", "apiKey"];
+        for (base, options) in [
+            (&create[..], ["--value=x", "--value-stdin", "--no-value"]),
+            (&update[..], ["--value=x", "--value-stdin", "--unset"]),
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(base.iter().copied()).is_ok(),
+                "unexpectedly rejected {base:?} without a value option"
+            );
+            for option in options {
+                assert!(
+                    GolemCliCommand::try_parse_from(base.iter().copied().chain([option])).is_ok(),
+                    "unexpectedly rejected {base:?} with {option}"
+                );
+            }
+            for (i, first) in options.iter().enumerate() {
+                for second in &options[i + 1..] {
+                    assert!(
+                        GolemCliCommand::try_parse_from(
+                            base.iter().copied().chain([*first, *second])
+                        )
+                        .is_err(),
+                        "unexpectedly accepted {base:?} with {first} and {second}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
