@@ -93,6 +93,17 @@ func GraphToCore(g types.SchemaGraph) (Converted, error) {
 	if err != nil {
 		return Converted{}, err
 	}
+
+	// Convert every node, not only those reachable from the root. An agent
+	// type's graph root is a structural placeholder — the meaningful roots are
+	// the per-parameter and per-output indices — so a walk from the root alone
+	// would leave At() unable to resolve the indices callers actually hold.
+	for i := range g.TypeNodes {
+		if _, err := c.node(int32(i)); err != nil {
+			return Converted{}, err
+		}
+	}
+
 	return Converted{
 		Graph:   core.SchemaGraph{Defs: defs, Root: root},
 		byIndex: c.byIndex,

@@ -21,7 +21,6 @@ import (
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
-	"github.com/golemcloud/golem/sdks/go/golem/schema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -119,7 +118,7 @@ func TestDeclaredErrorTravelsAsCustomErrorWithItsPayload(t *testing.T) {
 	if custom.Name != "not-found" {
 		t.Errorf("error name %q, want not-found", custom.Name)
 	}
-	payload, perr := schema.NewRef(custom.Payload.Graph).UnpackJSON(custom.Payload.Value)
+	payload, perr := TypedValue{wit: custom.Payload}.JSON()
 	if perr != nil {
 		t.Fatalf("payload is not readable: %v", perr)
 	}
@@ -184,7 +183,7 @@ func TestSuccessStillWorksAlongsideDeclaredErrors(t *testing.T) {
 		t.Fatalf("invoke failed: %+v", got.Err())
 	}
 	typed := got.Ok().Result.Some()
-	out, err := schema.NewRef(typed.Graph).UnpackJSON(typed.Value)
+	out, err := TypedValue{wit: typed}.JSON()
 	if err != nil || out != "found ada" {
 		t.Errorf("result %v (%v), want found ada", out, err)
 	}

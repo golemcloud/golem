@@ -16,7 +16,7 @@ use crate::app::template::AppTemplate;
 use crate::app::template::repo::TEMPLATES_DIR;
 use crate::app::template::snippet::{APP_MANIFEST_HEADER, DEP_ENV_VARS_DOC};
 use crate::fs;
-use crate::sdk_overrides::{GO_SDK_MODULE, sdk_overrides};
+use crate::sdk_overrides::{GO_CORE_MODULE, GO_SDK_MODULE, sdk_overrides};
 use crate::versions;
 use anyhow::{anyhow, bail};
 use golem_common::base_model::application::ApplicationName;
@@ -481,6 +481,10 @@ fn transform(
             Transform::GoSdk => {
                 replacements.insert("GOLEM_GO_DEP_SDK_MODULE", GO_SDK_MODULE.to_string());
                 replacements.insert("GOLEM_GO_DEP_SDK_VERSION", sdk_overrides.go_sdk_dep());
+                replacements.insert("GOLEM_GO_DEP_CORE_MODULE", GO_CORE_MODULE.to_string());
+                // Locked to the guest SDK's version: the two are released
+                // together, so there is no compatibility question to answer.
+                replacements.insert("GOLEM_GO_DEP_CORE_VERSION", sdk_overrides.go_sdk_dep());
                 // Empty unless a local SDK checkout is being used.
                 replacements.insert("GOLEM_GO_DEP_SDK_REPLACE", sdk_overrides.go_sdk_replace());
                 replacements.insert(

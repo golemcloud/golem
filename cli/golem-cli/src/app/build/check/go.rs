@@ -17,7 +17,7 @@ use crate::app::context::BuildContext;
 use crate::app::edit;
 use crate::fs;
 use crate::model::language::GuestLanguage;
-use crate::sdk_overrides::{GO_SDK_MODULE, SdkOverrides};
+use crate::sdk_overrides::{GO_CORE_MODULE, GO_SDK_MODULE, SdkOverrides};
 
 /// Reconcile each Go component's `go.mod` SDK dependency with the active SDK
 /// overrides — mirrors the Rust `Cargo.toml` and TS `package.json` fix steps, so
@@ -33,6 +33,12 @@ pub(super) fn plan_go_mod_fix_steps(
 ) -> anyhow::Result<Vec<DependencyFixStep>> {
     let version = overrides.go_sdk_dep();
     let replace_path = overrides.go_sdk_path.as_deref();
+    // The guest SDK depends on the shared core module, and a `replace` in a
+    // dependency's go.mod is ignored — so a component resolving the SDK from a
+    // checkout has to point at core itself too. The path is derived rather
+    // than configured, so one override still points a whole build at a
+    // checkout.
+    let core_replace_path = overrides.go_core_path_override();
 
     let mut steps = Vec::new();
     for component_name in ctx.application_context().selected_component_names() {
@@ -52,6 +58,14 @@ pub(super) fn plan_go_mod_fix_steps(
             GO_SDK_MODULE,
             &version,
             replace_path,
+        );
+        // `go mod tidy` adds the core `require` on the next build, since the
+        // SDK pulls it in; what it cannot infer is where a checkout lives.
+        let new = edit::go_mod::reconcile_sdk_dependency(
+            &new,
+            GO_CORE_MODULE,
+            &version,
+            core_replace_path.as_deref(),
         );
 
         // A trailing-whitespace-only difference is not a semantic dependency

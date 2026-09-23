@@ -32,7 +32,7 @@ func DiscoverAgentTypes() []ReflectedAgentType {
 	registered := host.GetAllAgentTypes()
 	out := make([]ReflectedAgentType, 0, len(registered))
 	for _, r := range registered {
-		out = append(out, ReflectedAgentType{wit: r.AgentType})
+		out = append(out, newReflectedAgentType(r.AgentType))
 	}
 	return out
 }
@@ -44,7 +44,7 @@ func DiscoverAgentType(name string) (ReflectedAgentType, bool) {
 	if found.IsNone() {
 		return ReflectedAgentType{}, false
 	}
-	return ReflectedAgentType{wit: found.Some().AgentType}, true
+	return newReflectedAgentType(found.Some().AgentType), true
 }
 
 // DiscoverAgentTypeByID looks up the agent type behind an existing agent id.
@@ -54,7 +54,7 @@ func DiscoverAgentTypeByID(agentID string) (ReflectedAgentType, bool) {
 	if found.IsNone() {
 		return ReflectedAgentType{}, false
 	}
-	return ReflectedAgentType{wit: found.Some().AgentType}, true
+	return newReflectedAgentType(found.Some().AgentType), true
 }
 
 // witRPC invokes through the host's RPC resource.
@@ -137,7 +137,7 @@ func DiscoverTools() []ReflectedTool {
 	registered := toolHost.GetAllTools()
 	out := make([]ReflectedTool, 0, len(registered))
 	for _, r := range registered {
-		out = append(out, ReflectedTool{lookupName: r.LookupName, wit: r.Definition})
+		out = append(out, newReflectedTool(r.LookupName, r.Definition))
 	}
 	return out
 }
@@ -148,7 +148,7 @@ func DiscoverTool(name string) (ReflectedTool, bool) {
 	if found.IsNone() {
 		return ReflectedTool{}, false
 	}
-	return ReflectedTool{lookupName: found.Some().LookupName, wit: found.Some().Definition}, true
+	return newReflectedTool(found.Some().LookupName, found.Some().Definition), true
 }
 
 // witToolRPC invokes through the host's tool RPC resource.

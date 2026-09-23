@@ -19,8 +19,9 @@ import (
 	"fmt"
 	"reflect"
 
+	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
-	"github.com/golemcloud/golem/sdks/go/golem/schema"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 )
 
 // TypedValue is a value travelling with its own schema. Code that handles other
@@ -29,15 +30,44 @@ import (
 type TypedValue struct{ wit types.TypedSchemaValue }
 
 // Schema returns a reference to the value's type, for validation or rendering.
-func (v TypedValue) Schema() schema.Ref { return schema.NewRef(v.wit.Graph) }
+//
+// The schema crosses into the shared model here: everything a caller does with
+// it — canonical JSON, JSON Schema, validation — lives in
+// github.com/golemcloud/golem/sdks/go/core/schema, so the guest SDK and an
+// external bridge read a value exactly the same way.
+func (v TypedValue) Schema() (core.Ref, error) {
+	converted, err := witschema.GraphToCore(v.wit.Graph)
+	if err != nil {
+		return core.Ref{}, err
+	}
+	return core.NewRef(converted.Graph), nil
+}
 
 // JSON decodes the value into ordinary Go values, in the host's canonical form.
-func (v TypedValue) JSON() (any, error) { return v.Schema().UnpackJSON(v.wit.Value) }
+func (v TypedValue) JSON() (any, error) {
+	ref, err := v.Schema()
+	if err != nil {
+		return nil, err
+	}
+	value, err := witschema.ValueToCore(v.wit.Value)
+	if err != nil {
+		return nil, err
+	}
+	return ref.UnpackJSON(value)
+}
 
 // WithJSON rebuilds the value from canonical JSON against the same schema, which
 // is how a middleware rewrites an argument it does not have a Go type for.
 func (v TypedValue) WithJSON(value any) (TypedValue, error) {
-	tree, err := v.Schema().PackJSON(value)
+	ref, err := v.Schema()
+	if err != nil {
+		return TypedValue{}, err
+	}
+	built, err := ref.PackJSON(value)
+	if err != nil {
+		return TypedValue{}, err
+	}
+	tree, err := witschema.ValueToWit(built)
 	if err != nil {
 		return TypedValue{}, err
 	}

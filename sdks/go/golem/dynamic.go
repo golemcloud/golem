@@ -18,8 +18,9 @@ import (
 	"fmt"
 	"reflect"
 
+	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
-	"github.com/golemcloud/golem/sdks/go/golem/schema"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 )
 
 // Dynamic and method-only clients.
@@ -85,9 +86,13 @@ func (c *DynamicAgentClient) InvokeDynamic(method string, input types.SchemaValu
 // InvokeJSON calls a method with arguments packed against a schema the caller
 // supplies, which is the shape an infrastructure transport already holds.
 func (c *DynamicAgentClient) InvokeJSON(
-	method string, ref schema.Ref, params []schema.Parameter, args map[string]any,
+	method string, ref core.Ref, params []core.Parameter, args map[string]any,
 ) (Option[types.SchemaValueTree], error) {
-	input, err := ref.PackParameters(params, args)
+	built, err := ref.PackParameters(params, args)
+	if err != nil {
+		return None[types.SchemaValueTree](), fmt.Errorf("golem: %s: %w", method, err)
+	}
+	input, err := witschema.ValueToWit(built)
 	if err != nil {
 		return None[types.SchemaValueTree](), fmt.Errorf("golem: %s: %w", method, err)
 	}

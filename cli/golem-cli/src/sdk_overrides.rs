@@ -54,6 +54,12 @@ pub const SDK_OVERRIDES_FILE_NAME: &str = ".golem-sdk-overrides";
 /// Module path of the Go SDK, as required/replaced in a generated `go.mod`.
 pub const GO_SDK_MODULE: &str = "github.com/golemcloud/golem/sdks/go/golem";
 
+/// The shared schema model, which the guest SDK depends on and which an
+/// external bridge can use without pulling in the guest SDK's WebAssembly
+/// bindings. It is released in lockstep with the guest SDK, so it needs no
+/// version of its own.
+pub const GO_CORE_MODULE: &str = "github.com/golemcloud/golem/sdks/go/core";
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum SdkOverridesTestProfile {
     LocalWorkspace,
@@ -196,9 +202,29 @@ impl SdkOverrides {
     pub fn go_sdk_replace(&self) -> String {
         match &self.go_sdk_path {
             Some(path) => {
-                format!("\nreplace {GO_SDK_MODULE} => {path}")
+                // A `replace` in a dependency's go.mod is ignored, so a
+                // component that resolves the SDK from a checkout has to point
+                // at the core module itself as well.
+                let core = Self::go_core_path(path);
+                format!("\nreplace {GO_SDK_MODULE} => {path}\n\nreplace {GO_CORE_MODULE} => {core}")
             }
             None => String::new(),
+        }
+    }
+
+    /// The local path for the core module, when a Go SDK path override is
+    /// active.
+    pub fn go_core_path_override(&self) -> Option<String> {
+        self.go_sdk_path.as_deref().map(Self::go_core_path)
+    }
+
+    /// The core module sits beside the guest SDK in the repository, so its
+    /// path is derived rather than configured separately — one override keeps
+    /// pointing a build at a checkout a single step.
+    fn go_core_path(go_sdk_path: &str) -> String {
+        match go_sdk_path.rsplit_once('/') {
+            Some((parent, _)) => format!("{parent}/core"),
+            None => "core".to_string(),
         }
     }
 

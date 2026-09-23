@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
-	"github.com/golemcloud/golem/sdks/go/golem/schema"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 )
 
 type ExportArgs struct {
@@ -98,7 +98,19 @@ func TestValueIsCarriesAnEncodedLiteral(t *testing.T) {
 	}
 	// The literal is read against the option's declared type node.
 	optType := tool.Commands.Nodes[0].Body.Some().Options[1].Shape.Scalar()
-	got, err := schema.NewRef(tool.Schema).WithRoot(optType).UnpackJSON(vr.Value)
+	conv, err := witschema.GraphToCore(tool.Schema)
+	if err != nil {
+		t.Fatalf("GraphToCore: %v", err)
+	}
+	ref, err := conv.Ref(optType)
+	if err != nil {
+		t.Fatalf("Ref: %v", err)
+	}
+	literal, err := witschema.ValueToCore(vr.Value)
+	if err != nil {
+		t.Fatalf("ValueToCore: %v", err)
+	}
+	got, err := ref.UnpackJSON(literal)
 	if err != nil {
 		t.Fatalf("literal is not readable: %v", err)
 	}

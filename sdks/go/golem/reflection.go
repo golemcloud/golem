@@ -17,10 +17,11 @@ package golem
 import (
 	"fmt"
 
+	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
-	"github.com/golemcloud/golem/sdks/go/golem/schema"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 )
 
 // Reflection.
@@ -42,6 +43,20 @@ import (
 // ReflectedAgentType is an immutable snapshot of a deployed agent type.
 type ReflectedAgentType struct {
 	wit common.AgentType
+	// conv is the snapshot's schema in the shared model, converted once when
+	// the snapshot is taken rather than on every call. It also carries the
+	// index side table, because the wire selects sub-schemas by node index and
+	// the shared model has no indices.
+	conv    witschema.Converted
+	convErr error
+}
+
+// newReflectedAgentType converts a discovered agent type's schema up front. A
+// malformed graph is remembered rather than raised here, so discovery stays a
+// lookup and the failure surfaces where the schema is actually used.
+func newReflectedAgentType(wit common.AgentType) ReflectedAgentType {
+	conv, err := witschema.GraphToCore(wit.Schema)
+	return ReflectedAgentType{wit: wit, conv: conv, convErr: err}
 }
 
 // Name returns the agent type's name.
@@ -55,18 +70,23 @@ func (r ReflectedAgentType) SourceLanguage() string { return r.wit.SourceLanguag
 
 // Schema returns the snapshot's type graph. Its root is a placeholder: the
 // meaningful roots are the per-parameter and per-output nodes.
-func (r ReflectedAgentType) Schema() schema.Ref { return schema.NewRef(r.wit.Schema) }
+func (r ReflectedAgentType) Schema() (core.Ref, error) {
+	if r.convErr != nil {
+		return core.Ref{}, r.convErr
+	}
+	return core.NewRef(r.conv.Graph), nil
+}
 
 // Constructor returns the agent type's constructor.
 func (r ReflectedAgentType) Constructor() ReflectedConstructor {
-	return ReflectedConstructor{graph: r.wit.Schema, wit: r.wit.Constructor}
+	return ReflectedConstructor{conv: r.conv, convErr: r.convErr, wit: r.wit.Constructor}
 }
 
 // Methods returns the agent type's methods in declaration order.
 func (r ReflectedAgentType) Methods() []ReflectedMethod {
 	out := make([]ReflectedMethod, 0, len(r.wit.Methods))
 	for _, m := range r.wit.Methods {
-		out = append(out, ReflectedMethod{graph: r.wit.Schema, wit: m})
+		out = append(out, ReflectedMethod{conv: r.conv, convErr: r.convErr, wit: m})
 	}
 	return out
 }
@@ -75,7 +95,7 @@ func (r ReflectedAgentType) Methods() []ReflectedMethod {
 func (r ReflectedAgentType) Method(name string) (ReflectedMethod, bool) {
 	for _, m := range r.wit.Methods {
 		if m.Name == name {
-			return ReflectedMethod{graph: r.wit.Schema, wit: m}, true
+			return ReflectedMethod{conv: r.conv, convErr: r.convErr, wit: m}, true
 		}
 	}
 	return ReflectedMethod{}, false
@@ -83,8 +103,9 @@ func (r ReflectedAgentType) Method(name string) (ReflectedMethod, bool) {
 
 // ReflectedConstructor is a snapshot of an agent type's constructor.
 type ReflectedConstructor struct {
-	graph types.SchemaGraph
-	wit   common.AgentConstructor
+	conv    witschema.Converted
+	convErr error
+	wit     common.AgentConstructor
 }
 
 // Description returns the constructor's documentation.
@@ -93,25 +114,38 @@ func (c ReflectedConstructor) Description() string { return c.wit.Description }
 // Parameters returns the constructor's caller-supplied parameters. Fields the
 // host injects, such as the principal, are left out: a caller neither supplies
 // nor can override them.
-func (c ReflectedConstructor) Parameters() []schema.Parameter {
-	return userParameters(c.wit.InputSchema)
+func (c ReflectedConstructor) Parameters() ([]core.Parameter, error) {
+	return userParameters(c.conv, c.convErr, c.wit.InputSchema)
 }
 
 // PackJSON builds the constructor's value tree from named arguments, validating
 // each against the snapshot before anything is sent.
 func (c ReflectedConstructor) PackJSON(args map[string]any) (types.SchemaValueTree, error) {
-	return schema.NewRef(c.graph).PackParameters(c.Parameters(), args)
+	params, err := c.Parameters()
+	if err != nil {
+		return types.SchemaValueTree{}, err
+	}
+	built, err := core.NewRef(c.conv.Graph).PackParameters(params, args)
+	if err != nil {
+		return types.SchemaValueTree{}, err
+	}
+	return witschema.ValueToWit(built)
 }
 
 // ToJSONSchema renders the constructor's parameters as a JSON Schema object.
 func (c ReflectedConstructor) ToJSONSchema(includeDraftMarker bool) (any, error) {
-	return schema.NewRef(c.graph).ParametersJSONSchema(c.Parameters(), includeDraftMarker)
+	params, err := c.Parameters()
+	if err != nil {
+		return nil, err
+	}
+	return core.NewRef(c.conv.Graph).ParametersJSONSchema(params, includeDraftMarker)
 }
 
 // ReflectedMethod is a snapshot of one agent method.
 type ReflectedMethod struct {
-	graph types.SchemaGraph
-	wit   common.AgentMethod
+	conv    witschema.Converted
+	convErr error
+	wit     common.AgentMethod
 }
 
 // Name returns the method's name.
@@ -133,21 +167,33 @@ func (m ReflectedMethod) PromptHint() (string, bool) {
 func (m ReflectedMethod) ReadOnly() bool { return m.wit.ReadOnly.IsSome() }
 
 // Parameters returns the method's caller-supplied parameters.
-func (m ReflectedMethod) Parameters() []schema.Parameter {
-	return userParameters(m.wit.InputSchema)
+func (m ReflectedMethod) Parameters() ([]core.Parameter, error) {
+	return userParameters(m.conv, m.convErr, m.wit.InputSchema)
 }
 
 // Output returns the method's result type, or false when it returns nothing.
-func (m ReflectedMethod) Output() (schema.Ref, bool) {
-	if m.wit.OutputSchema.Tag() != common.OutputSchemaSingle {
-		return schema.Ref{}, false
+func (m ReflectedMethod) Output() (core.Ref, bool) {
+	if m.wit.OutputSchema.Tag() != common.OutputSchemaSingle || m.convErr != nil {
+		return core.Ref{}, false
 	}
-	return schema.NewRef(m.graph).WithRoot(m.wit.OutputSchema.Single()), true
+	ref, err := m.conv.Ref(m.wit.OutputSchema.Single())
+	if err != nil {
+		return core.Ref{}, false
+	}
+	return ref, true
 }
 
 // PackJSON builds the method's input tree from named arguments.
 func (m ReflectedMethod) PackJSON(args map[string]any) (types.SchemaValueTree, error) {
-	return schema.NewRef(m.graph).PackParameters(m.Parameters(), args)
+	params, err := m.Parameters()
+	if err != nil {
+		return types.SchemaValueTree{}, err
+	}
+	built, err := core.NewRef(m.conv.Graph).PackParameters(params, args)
+	if err != nil {
+		return types.SchemaValueTree{}, err
+	}
+	return witschema.ValueToWit(built)
 }
 
 // UnpackOutput reads a returned value tree as canonical JSON.
@@ -156,12 +202,20 @@ func (m ReflectedMethod) UnpackOutput(tree types.SchemaValueTree) (any, error) {
 	if !has {
 		return nil, fmt.Errorf("golem: method %q returns nothing", m.wit.Name)
 	}
-	return out.UnpackJSON(tree)
+	value, err := witschema.ValueToCore(tree)
+	if err != nil {
+		return nil, err
+	}
+	return out.UnpackJSON(value)
 }
 
 // ToJSONSchema renders the method's parameters as a JSON Schema object.
 func (m ReflectedMethod) ToJSONSchema(includeDraftMarker bool) (any, error) {
-	return schema.NewRef(m.graph).ParametersJSONSchema(m.Parameters(), includeDraftMarker)
+	params, err := m.Parameters()
+	if err != nil {
+		return nil, err
+	}
+	return core.NewRef(m.conv.Graph).ParametersJSONSchema(params, includeDraftMarker)
 }
 
 // OutputJSONSchema renders the method's result type, or false when it returns
@@ -179,16 +233,23 @@ func (m ReflectedMethod) OutputJSONSchema(includeDraftMarker bool) (any, bool, e
 // the principal, today — is filled in by the host, so asking a caller for it
 // would be wrong twice over: it cannot know the value, and supplying one would
 // not be honoured.
-func userParameters(in common.InputSchema) []schema.Parameter {
+func userParameters(conv witschema.Converted, convErr error, in common.InputSchema) ([]core.Parameter, error) {
+	if convErr != nil {
+		return nil, convErr
+	}
 	fields := in.Parameters()
-	out := make([]schema.Parameter, 0, len(fields))
+	out := make([]core.Parameter, 0, len(fields))
 	for _, f := range fields {
 		if f.Source.Tag() != common.FieldSourceUserSupplied {
 			continue
 		}
-		out = append(out, schema.Parameter{Name: f.Name, Node: f.Schema})
+		t, err := conv.At(f.Schema)
+		if err != nil {
+			return nil, fmt.Errorf("golem: parameter %q: %w", f.Name, err)
+		}
+		out = append(out, core.Parameter{Name: f.Name, Type: t})
 	}
-	return out
+	return out, nil
 }
 
 // ReflectedAgentClient invokes a discovered agent. Every call is packed and
@@ -254,6 +315,15 @@ func (c *ReflectedAgentClient) InvokeAndAwait(method string, args map[string]any
 type ReflectedTool struct {
 	lookupName string
 	wit        toolCommon.Tool
+	conv       witschema.Converted
+	convErr    error
+}
+
+// newReflectedTool converts a discovered tool's schema up front, on the same
+// terms as an agent type.
+func newReflectedTool(lookupName string, wit toolCommon.Tool) ReflectedTool {
+	conv, err := witschema.GraphToCore(wit.Schema)
+	return ReflectedTool{lookupName: lookupName, wit: wit, conv: conv, convErr: err}
 }
 
 // Name returns the name a client binds to, which is stable across adapters.
@@ -264,11 +334,19 @@ func (r ReflectedTool) Version() string { return r.wit.Version }
 
 // Schema returns the tool's type pool. Its root is a placeholder: command
 // bodies index into it.
-func (r ReflectedTool) Schema() schema.Ref { return schema.NewRef(r.wit.Schema) }
+func (r ReflectedTool) Schema() (core.Ref, error) {
+	if r.convErr != nil {
+		return core.Ref{}, r.convErr
+	}
+	return core.NewRef(r.conv.Graph), nil
+}
 
 // Root returns the tool's root command.
 func (r ReflectedTool) Root() ReflectedCommand {
-	return ReflectedCommand{graph: r.wit.Schema, tree: r.wit.Commands, index: 0}
+	return ReflectedCommand{
+		conv: r.conv, convErr: r.convErr, witGraph: r.wit.Schema,
+		tree: r.wit.Commands, index: 0,
+	}
 }
 
 // Command resolves a command path from the root, following subcommand names and
@@ -302,10 +380,15 @@ func (r ReflectedTool) Commands() []ReflectedCommand {
 
 // ReflectedCommand is one node of a tool's command tree.
 type ReflectedCommand struct {
-	graph types.SchemaGraph
-	tree  toolCommon.CommandTree
-	index int32
-	path  []string
+	conv    witschema.Converted
+	convErr error
+	// witGraph is the tool's schema as the wire carries it. An invocation
+	// travels as a typed value, so the graph that goes with it has to be the
+	// wire's own, not the converted one.
+	witGraph types.SchemaGraph
+	tree     toolCommon.CommandTree
+	index    int32
+	path     []string
 }
 
 func (c ReflectedCommand) node() toolCommon.CommandNode { return c.tree.Nodes[c.index] }
@@ -326,7 +409,8 @@ func (c ReflectedCommand) Subcommands() []ReflectedCommand {
 	out := make([]ReflectedCommand, 0, len(kids))
 	for _, idx := range kids {
 		out = append(out, ReflectedCommand{
-			graph: c.graph, tree: c.tree, index: idx,
+			conv: c.conv, convErr: c.convErr, witGraph: c.witGraph,
+			tree: c.tree, index: idx,
 			path: append(append([]string(nil), c.path...), c.tree.Nodes[idx].Name),
 		})
 	}
@@ -356,41 +440,56 @@ func (c ReflectedCommand) Callable() bool { return c.node().Body.IsSome() }
 // Arguments returns the command's arguments as a parameter list, with
 // positionals first, then options, then flags — the order the invocation record
 // carries them in.
-func (c ReflectedCommand) Arguments() ([]schema.Parameter, error) {
+func (c ReflectedCommand) Arguments() ([]core.Parameter, error) {
+	if c.convErr != nil {
+		return nil, c.convErr
+	}
 	if !c.Callable() {
 		return nil, fmt.Errorf("golem: command %q has no body", c.Name())
 	}
 	body := c.node().Body.Some()
-	out := make([]schema.Parameter, 0,
+	out := make([]core.Parameter, 0,
 		len(body.Positionals.Fixed)+len(body.Options)+len(body.Flags))
 	for _, p := range body.Positionals.Fixed {
-		out = append(out, schema.Parameter{Name: p.Name, Node: p.Type})
+		t, err := c.conv.At(p.Type)
+		if err != nil {
+			return nil, fmt.Errorf("golem: positional %q: %w", p.Name, err)
+		}
+		out = append(out, core.Parameter{Name: p.Name, Type: t})
 	}
 	for _, o := range body.Options {
 		node, err := optionValueNode(o.Shape)
 		if err != nil {
 			return nil, fmt.Errorf("golem: option %q: %w", o.Long, err)
 		}
-		out = append(out, schema.Parameter{Name: o.Long, Node: node})
+		t, err := c.conv.At(node)
+		if err != nil {
+			return nil, fmt.Errorf("golem: option %q: %w", o.Long, err)
+		}
+		out = append(out, core.Parameter{Name: o.Long, Type: t})
 	}
 	for _, f := range body.Flags {
-		// A flag has no type index: the WIT fixes its type as bool, so the
-		// graph need not name one.
-		out = append(out, schema.BoolParameter(f.Long))
+		// A flag has no type of its own on the wire: its type can only be
+		// bool, so the graph need not name one.
+		out = append(out, core.BoolParameter(f.Long))
 	}
 	return out, nil
 }
 
 // Result returns the command's result type, or false when it produces none.
-func (c ReflectedCommand) Result() (schema.Ref, bool) {
-	if !c.Callable() {
-		return schema.Ref{}, false
+func (c ReflectedCommand) Result() (core.Ref, bool) {
+	if !c.Callable() || c.convErr != nil {
+		return core.Ref{}, false
 	}
 	body := c.node().Body.Some()
 	if body.Result.IsNone() {
-		return schema.Ref{}, false
+		return core.Ref{}, false
 	}
-	return schema.NewRef(c.graph).WithRoot(body.Result.Some().Type), true
+	ref, err := c.conv.Ref(body.Result.Some().Type)
+	if err != nil {
+		return core.Ref{}, false
+	}
+	return ref, true
 }
 
 // Errors returns the failures the command declares.
@@ -407,11 +506,15 @@ func (c ReflectedCommand) PackJSON(args map[string]any) (types.TypedSchemaValue,
 	if err != nil {
 		return types.TypedSchemaValue{}, err
 	}
-	tree, err := schema.NewRef(c.graph).PackParameters(params, args)
+	built, err := core.NewRef(c.conv.Graph).PackParameters(params, args)
 	if err != nil {
 		return types.TypedSchemaValue{}, err
 	}
-	return types.TypedSchemaValue{Graph: c.graph, Value: tree}, nil
+	tree, err := witschema.ValueToWit(built)
+	if err != nil {
+		return types.TypedSchemaValue{}, err
+	}
+	return types.TypedSchemaValue{Graph: c.witGraph, Value: tree}, nil
 }
 
 // ToJSONSchema renders the command's arguments as a JSON Schema object.
@@ -420,7 +523,7 @@ func (c ReflectedCommand) ToJSONSchema(includeDraftMarker bool) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return schema.NewRef(c.graph).ParametersJSONSchema(params, includeDraftMarker)
+	return core.NewRef(c.conv.Graph).ParametersJSONSchema(params, includeDraftMarker)
 }
 
 // optionValueNode reports the type node an option's value is read against,

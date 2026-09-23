@@ -23,7 +23,6 @@ import (
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
-	"github.com/golemcloud/golem/sdks/go/golem/schema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -207,7 +206,7 @@ func TestToolInvocationDecodesArgumentsAndEncodesTheResult(t *testing.T) {
 	}
 
 	typed := res.Result.Some()
-	out, err := schema.NewRef(typed.Graph).UnpackJSON(typed.Value)
+	out, err := TypedValue{wit: typed}.JSON()
 	if err != nil {
 		t.Fatalf("result is not readable: %v", err)
 	}
@@ -287,7 +286,7 @@ func TestSubcommandsAreReachable(t *testing.T) {
 		t.Fatalf("invoking the subcommand failed: %+v", got.Err())
 	}
 	typed := got.Ok().Result.Some()
-	out, err := schema.NewRef(typed.Graph).UnpackJSON(typed.Value)
+	out, err := TypedValue{wit: typed}.JSON()
 	if err != nil {
 		t.Fatalf("result is not readable: %v", err)
 	}
@@ -434,7 +433,7 @@ func TestRepeatableOptionsRoundTrip(t *testing.T) {
 		t.Fatalf("invoke failed: %+v", got.Err())
 	}
 	typed := got.Ok().Result.Some()
-	out, err := schema.NewRef(typed.Graph).UnpackJSON(typed.Value)
+	out, err := TypedValue{wit: typed}.JSON()
 	if err != nil {
 		t.Fatalf("result is not readable: %v", err)
 	}
@@ -565,7 +564,7 @@ func TestNestedSubcommandsFormATree(t *testing.T) {
 		t.Fatalf("invoking a nested command failed: %+v", got.Err())
 	}
 	typed := got.Ok().Result.Some()
-	out, err := schema.NewRef(typed.Graph).UnpackJSON(typed.Value)
+	out, err := TypedValue{wit: typed}.JSON()
 	if err != nil {
 		t.Fatalf("result is not readable: %v", err)
 	}

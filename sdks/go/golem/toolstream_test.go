@@ -23,7 +23,6 @@ import (
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	streams "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_streams"
-	"github.com/golemcloud/golem/sdks/go/golem/schema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -289,7 +288,7 @@ func TestCommandStreamsCopyAndFinish(t *testing.T) {
 	}
 
 	typed := got.Ok().Result.Some()
-	out, err := schema.NewRef(typed.Graph).UnpackJSON(typed.Value)
+	out, err := TypedValue{wit: typed}.JSON()
 	if err != nil {
 		t.Fatalf("result is not readable: %v", err)
 	}

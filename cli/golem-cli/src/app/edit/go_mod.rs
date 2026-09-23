@@ -178,6 +178,43 @@ mod tests {
     use test_r::test;
 
     const MOD: &str = "github.com/golemcloud/golem/sdks/go/golem";
+    const CORE: &str = "github.com/golemcloud/golem/sdks/go/core";
+
+    /// The guest SDK depends on the shared core module, and a `replace` in a
+    /// dependency's go.mod is ignored — so a component that resolves the SDK
+    /// from a checkout has to name core itself. The two are reconciled by
+    /// separate calls, which must compose.
+    #[test]
+    fn reconciles_the_sdk_and_core_together() {
+        let src =
+            format!("module app\n\ngo 1.27.1\n\nrequire (\n\t{MOD} v0.0.0\n\t{CORE} v0.0.0\n)\n");
+        let out = reconcile_sdk_dependency(&src, MOD, "v0.0.0", Some("/abs/sdks/go/golem"));
+        let out = reconcile_sdk_dependency(&out, CORE, "v0.0.0", Some("/abs/sdks/go/core"));
+
+        assert!(out.contains(&format!("replace {MOD} => /abs/sdks/go/golem")));
+        assert!(out.contains(&format!("replace {CORE} => /abs/sdks/go/core")));
+
+        // Reconciling again changes nothing: a build must not report a go.mod
+        // change every time.
+        let again = reconcile_sdk_dependency(&out, MOD, "v0.0.0", Some("/abs/sdks/go/golem"));
+        let again = reconcile_sdk_dependency(&again, CORE, "v0.0.0", Some("/abs/sdks/go/core"));
+        assert_eq!(again, out);
+    }
+
+    /// Switching back to proxy resolution has to drop both replaces, or the
+    /// build keeps pointing at a checkout that may not exist.
+    #[test]
+    fn switching_to_versions_removes_both_replaces() {
+        let src = format!(
+            "module app\n\nrequire (\n\t{MOD} v0.0.0\n\t{CORE} v0.0.0\n)\n\nreplace {MOD} => /abs/a\n\nreplace {CORE} => /abs/b\n"
+        );
+        let out = reconcile_sdk_dependency(&src, MOD, "v0.1.0", None);
+        let out = reconcile_sdk_dependency(&out, CORE, "v0.1.0", None);
+
+        assert!(!out.contains("replace"));
+        assert!(out.contains(&format!("\t{MOD} v0.1.0")));
+        assert!(out.contains(&format!("\t{CORE} v0.1.0")));
+    }
 
     #[test]
     fn sets_version_in_a_block_and_adds_replace() {

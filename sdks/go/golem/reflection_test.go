@@ -20,9 +20,10 @@ import (
 	"strings"
 	"testing"
 
+	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
-	"github.com/golemcloud/golem/sdks/go/golem/schema"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -55,7 +56,7 @@ func snapshotOf(t *testing.T) ReflectedAgentType {
 	if len(found) != 1 {
 		t.Fatalf("discovered %d agent types, want 1", len(found))
 	}
-	return ReflectedAgentType{wit: found[0]}
+	return newReflectedAgentType(found[0])
 }
 
 // TestSnapshotDescribesTheAgentType — the snapshot is everything a caller gets;
@@ -66,7 +67,10 @@ func TestSnapshotDescribesTheAgentType(t *testing.T) {
 		t.Errorf("snapshot is %q/%q", r.Name(), r.Description())
 	}
 
-	ctor := r.Constructor().Parameters()
+	ctor, err := r.Constructor().Parameters()
+	if err != nil {
+		t.Fatalf("constructor parameters: %v", err)
+	}
 	if len(ctor) != 1 || ctor[0].Name != "name" {
 		t.Fatalf("constructor parameters are %+v, want one named name", ctor)
 	}
@@ -78,7 +82,10 @@ func TestSnapshotDescribesTheAgentType(t *testing.T) {
 	if m.Description() != "Greet someone" {
 		t.Errorf("method description %q", m.Description())
 	}
-	params := m.Parameters()
+	params, err := m.Parameters()
+	if err != nil {
+		t.Fatalf("method parameters: %v", err)
+	}
 	if len(params) != 2 || params[0].Name != "greeting" || params[1].Name != "times" {
 		t.Fatalf("method parameters are %+v", params)
 	}
@@ -146,7 +153,19 @@ func TestPackParametersRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PackJSON: %v", err)
 	}
-	back, err := r.Schema().UnpackParameters(m.Parameters(), tree)
+	ref, err := r.Schema()
+	if err != nil {
+		t.Fatalf("Schema: %v", err)
+	}
+	params, err := m.Parameters()
+	if err != nil {
+		t.Fatalf("Parameters: %v", err)
+	}
+	value, err := witschema.ValueToCore(tree)
+	if err != nil {
+		t.Fatalf("ValueToCore: %v", err)
+	}
+	back, err := ref.UnpackParameters(params, value)
 	if err != nil {
 		t.Fatalf("UnpackParameters: %v", err)
 	}
@@ -192,7 +211,17 @@ func TestAutoInjectedFieldsAreNotAskedOfTheCaller(t *testing.T) {
 		{Name: "name", Source: common.MakeFieldSourceUserSupplied(), Schema: 0},
 		{Name: "principal", Source: common.MakeFieldSourceAutoInjected(common.AutoInjectedKindPrincipal), Schema: 0},
 	})
-	got := userParameters(in)
+	conv, err := witschema.GraphToCore(types.SchemaGraph{
+		TypeNodes: []types.SchemaTypeNode{{Body: types.MakeSchemaTypeBodyStringType()}},
+		Root:      0,
+	})
+	if err != nil {
+		t.Fatalf("GraphToCore: %v", err)
+	}
+	got, err := userParameters(conv, nil, in)
+	if err != nil {
+		t.Fatalf("userParameters: %v", err)
+	}
 	if len(got) != 1 || got[0].Name != "name" {
 		t.Errorf("parameters are %+v, want only the caller-supplied one", got)
 	}
@@ -215,7 +244,7 @@ func TestReflectedClientInvokesAndDecodes(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
 	out, _ := m.Output()
-	result, err := out.PackJSON("hi hi")
+	result, err := packWit(out, "hi hi")
 	if err != nil {
 		t.Fatalf("packing the result: %v", err)
 	}
@@ -312,7 +341,7 @@ func toolSnapshotOf(t *testing.T) ReflectedTool {
 	if !ok {
 		t.Fatalf("tool discovery failed: %s", allDefErrors(d.errs))
 	}
-	return ReflectedTool{lookupName: "files", wit: tools[0]}
+	return newReflectedTool("files", tools[0])
 }
 
 // TestToolSnapshotWalksTheCommandTree — a caller with no Go types for the tool
@@ -377,8 +406,10 @@ func TestToolArgumentsAreOneParameterList(t *testing.T) {
 
 	// A flag's type is fixed rather than named by the graph.
 	for _, p := range params {
-		if p.Name == "force" && p.Node != schema.BoolParameterNode {
-			t.Errorf("the flag names graph node %d instead of being a fixed bool", p.Node)
+		if p.Name == "force" {
+			if _, isBool := p.Type.Body.(core.BoolType); !isBool {
+				t.Errorf("the flag is typed %T instead of a fixed bool", p.Type.Body)
+			}
 		}
 	}
 }
@@ -483,7 +514,7 @@ func TestDynamicAgentClientInvokesWithPackedValues(t *testing.T) {
 		t.Fatalf("PackJSON: %v", err)
 	}
 	out, _ := m.Output()
-	result, err := out.PackJSON("hi")
+	result, err := packWit(out, "hi")
 	if err != nil {
 		t.Fatalf("packing the result: %v", err)
 	}
@@ -501,7 +532,11 @@ func TestDynamicAgentClientInvokesWithPackedValues(t *testing.T) {
 	if got.IsNone() {
 		t.Fatal("the result was dropped")
 	}
-	value, err := out.UnpackJSON(got.Unwrap())
+	decoded, err := witschema.ValueToCore(got.Unwrap())
+	if err != nil {
+		t.Fatalf("ValueToCore: %v", err)
+	}
+	value, err := out.UnpackJSON(decoded)
 	if err != nil || value != "hi" {
 		t.Errorf("result %v (%v)", value, err)
 	}
@@ -513,12 +548,20 @@ func TestDynamicAgentClientInvokeJSON(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
 	out, _ := m.Output()
-	result, _ := out.PackJSON("hi")
+	result, _ := packWit(out, "hi")
 
 	rpc := &fakeRPC{tree: result, has: true}
 	client := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
 
-	got, err := client.InvokeJSON("greet", r.Schema(), m.Parameters(),
+	ref, err := r.Schema()
+	if err != nil {
+		t.Fatalf("Schema: %v", err)
+	}
+	params, err := m.Parameters()
+	if err != nil {
+		t.Fatalf("Parameters: %v", err)
+	}
+	got, err := client.InvokeJSON("greet", ref, params,
 		map[string]any{"greeting": "hi", "times": 1})
 	if err != nil {
 		t.Fatalf("InvokeJSON: %v", err)
@@ -534,7 +577,7 @@ func TestInvokeUsesTheCallersOwnTypes(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
 	out, _ := m.Output()
-	result, _ := out.PackJSON("hi hi")
+	result, _ := packWit(out, "hi hi")
 
 	rpc := &fakeRPC{tree: result, has: true}
 	client := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
@@ -560,7 +603,7 @@ func TestInvokeChecksOutputCardinality(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
 	out, _ := m.Output()
-	result, _ := out.PackJSON("hi")
+	result, _ := packWit(out, "hi")
 	client = &DynamicAgentClient{agentID: "greeter-1", rpc: &fakeRPC{tree: result, has: true}}
 	if _, err := Invoke[GreetIn, Unit](client, "greet", GreetIn{}); err == nil ||
 		!strings.Contains(err.Error(), "golem.Unit") {
@@ -603,4 +646,14 @@ func TestBindingOffTarget(t *testing.T) {
 	if _, err := ParseRawAgentID("anything"); err == nil {
 		t.Error("parsing an agent id succeeded off-target")
 	}
+}
+
+// packWit packs canonical JSON and flattens it the way the wire carries it,
+// which is what the fake transports below expect.
+func packWit(ref core.Ref, value any) (types.SchemaValueTree, error) {
+	built, err := ref.PackJSON(value)
+	if err != nil {
+		return types.SchemaValueTree{}, err
+	}
+	return witschema.ValueToWit(built)
 }
