@@ -21,6 +21,28 @@ use serde_json::{Value, json};
 use test_r::test;
 
 #[test]
+fn union_discriminator_is_combined_with_branch_body() {
+    use crate::schema::{DiscriminatorRule, UnionBranch, UnionSpec};
+
+    let ty = SchemaType::union(UnionSpec {
+        branches: vec![UnionBranch {
+            tag: "matched".to_string(),
+            body: SchemaType::string(),
+            discriminator: DiscriminatorRule::Regex {
+                regex: "^(?:foo|bar)$".to_string(),
+            },
+            metadata: MetadataEnvelope::default(),
+        }],
+    });
+    let schema = to_json_schema(&SchemaGraph::anonymous(ty.clone()), &ty);
+    let branch = schema["$defs"]["Matched"]["allOf"]
+        .as_array()
+        .unwrap_or_else(|| panic!("branch body and discriminator: {schema}"));
+    assert_eq!(branch[0]["type"], "string");
+    assert_eq!(branch[1]["pattern"], "^(?:foo|bar)$");
+}
+
+#[test]
 fn canonical_record_round_trips_through_json() {
     let ty = SchemaType::record(vec![
         NamedFieldType {
@@ -49,7 +71,7 @@ fn canonical_record_round_trips_through_json() {
     assert_eq!(
         rendered,
         json!({
-            "id": u64::MAX,
+            "id": u64::MAX.to_string(),
             "name": { "text": "Ada", "language": "en" }
         })
     );
@@ -57,6 +79,79 @@ fn canonical_record_round_trips_through_json() {
         from_json_value(&graph, &ty, &rendered).expect("decode record"),
         value
     );
+}
+
+#[test]
+fn wide_integer_and_rich_value_schemas_match_canonical_json() {
+    use crate::schema::QuantitySpec;
+
+    let signed = to_json_schema(
+        &SchemaGraph::anonymous(SchemaType::s64()),
+        &SchemaType::s64(),
+    );
+    assert_eq!(signed["type"], "string");
+    assert_eq!(signed["format"], "int64");
+    assert_eq!(signed["x-golem-minimum"], i64::MIN.to_string());
+    assert_eq!(signed["x-golem-maximum"], i64::MAX.to_string());
+
+    let unsigned = to_json_schema(
+        &SchemaGraph::anonymous(SchemaType::u64()),
+        &SchemaType::u64(),
+    );
+    assert_eq!(unsigned["type"], "string");
+    assert_eq!(unsigned["format"], "uint64");
+    assert_eq!(unsigned["x-golem-maximum"], u64::MAX.to_string());
+
+    let duration = SchemaType::duration();
+    let duration_schema = to_json_schema(&SchemaGraph::anonymous(duration.clone()), &duration);
+    assert_eq!(
+        duration_schema["properties"]["nanoseconds"]["type"],
+        "string"
+    );
+
+    let quantity = SchemaType::quantity(QuantitySpec {
+        base_unit: "m".to_string(),
+        allowed_suffixes: Vec::new(),
+        min: None,
+        max: None,
+    });
+    let quantity_schema = to_json_schema(&SchemaGraph::anonymous(quantity.clone()), &quantity);
+    assert_eq!(quantity_schema["properties"]["mantissa"]["type"], "string");
+    assert_eq!(quantity_schema["properties"]["scale"]["type"], "integer");
+}
+
+#[test]
+fn wide_integer_json_rejects_noncanonical_or_out_of_range_strings() {
+    for (ty, invalid) in [
+        (
+            SchemaType::s64(),
+            vec![
+                json!(1),
+                json!("+1"),
+                json!("01"),
+                json!("-0"),
+                json!("9223372036854775808"),
+            ],
+        ),
+        (
+            SchemaType::u64(),
+            vec![
+                json!(1),
+                json!("+1"),
+                json!("01"),
+                json!("-1"),
+                json!("18446744073709551616"),
+            ],
+        ),
+    ] {
+        let graph = SchemaGraph::anonymous(ty.clone());
+        for value in invalid {
+            assert!(
+                from_json_value(&graph, &ty, &value).is_err(),
+                "accepted {value}"
+            );
+        }
+    }
 }
 
 #[test]

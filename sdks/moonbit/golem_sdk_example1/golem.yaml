@@ -76,8 +76,22 @@ components:
 
 tools:
   moonbit-streaming: {}
+  moonbit-reflection-test: {}
+  canonical-big-bound: {}
+  canonical-git: {}
+  canonical-grep: {}
+  middleware:
+    audit:
+      component: golem:tool-middleware-examples
+    message-policy:
+      component: golem:tool-middleware-examples
+    file-adapter:
+      component: golem:tool-middleware-examples
 
 agents:
   MoonBitToolStreamingCaller:
     tools:
       moonbit-streaming: {}
+  MoonBitToolReflectionCaller:
+    tools:
+      moonbit-reflection-test: {}

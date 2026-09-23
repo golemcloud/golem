@@ -8,7 +8,16 @@ QuickJS-backed WASI Preview 3 components.
 - Agent metadata uses `id`, methods use `input`, and `defineAgent` returns a spec with `.client` and
   `.implement(...)`. Do not reintroduce `constructorParams`, `params`, or standalone old clients.
 - Durable agents expose `client.get`, `getPhantom`, and `newPhantom`; ephemeral agents expose
-  `newPhantom`. RPC call/trigger/schedule input is one object. Awaited calls are fiber-interruptible.
+  `getPhantom` and `newPhantom`. RPC call/trigger/schedule input is one object. Awaited calls are
+  fiber-interruptible.
+- `defineAgentClient({ name, id, methods, mode?, config? })` is the recommended full caller-owned
+  client with `agentId` and lifecycle factories. Its method-only `{ methods }` form has neither
+  factory nor identity constructor and binds without discovery using durable results. Unimplemented
+  `defineAgent` specs remain available as shared definitions. `identity.client(clientDefinition)` validates
+  declared names and constructor schemas before opening RPC.
+  `DynamicClient.bind(identity)` uses schema-native values with no client definition or discovery. Full
+  ephemeral specs and reflected ephemeral types reject generic existing-ID binding; use their
+  `getPhantom` or `newPhantom` factories. `identity.dynamicClient()` binds schema-native values.
 - Config secrets are `Schema.Redacted` opaque handles. They are uncached, excluded from overrides,
   and never snapshotted.
 - Implement agents with `{ init, methods, snapshot? }`. `init` determines the state type;
@@ -27,8 +36,9 @@ QuickJS-backed WASI Preview 3 components.
   live resource exactly once; defects, interruption, and encode failures drop it unfinished.
 - Do not add Golem 1.5 compatibility shims or claims. Complete cross-language acceptance is still a
   final parity gate. Runtime discovery is in `Reflection`, immutable schema views in `SchemaRef`,
-  and value-only identity binding in `DynamicClient`. Narrow reflected `mode` before selecting
-  a lifecycle factory; ephemeral clients expose identity only in invocation metadata.
+  and value-only identity binding in `DynamicClient`. Parse strings through `AgentIdentity.parse`
+  once; pass parsed identities to typed, reflected, and dynamic binding. Narrow reflected `mode`
+  before selecting a lifecycle factory; ephemeral clients expose identity only in invocation metadata.
 
 The CLI accepts middleware metadata and attachment. Runtime traversal and invocation gates remain
 separate concerns and must be tested independently.
@@ -49,7 +59,7 @@ separate concerns and must be tested independently.
 - `integration-test/`: real Golem components and harness.
 
 Public code follows Effect package organization: users normally import namespaces (`Snapshot.*`,
-`Tool.*`, `Durability.*`). Only `defineAgent`, `defineConfig`, and `method` are flat DSL aliases.
+`Tool.*`, `Durability.*`). Only `defineAgent`, `defineAgentClient`, `defineConfig`, and `method` are flat DSL aliases.
 Every public export needs JSDoc with `@since` and `@category`. Package exports block `internal/*`
 and `host/*`.
 

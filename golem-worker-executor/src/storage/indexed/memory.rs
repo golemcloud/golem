@@ -14,7 +14,7 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume,
+    ScanResume,
 };
 use async_trait::async_trait;
 use golem_common::model::AgentId;
@@ -159,49 +159,6 @@ impl IndexedStorage for InMemoryIndexedStorage {
     ) -> Result<bool, IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
         Ok(self.data.contains_async(&composite_key).await)
-    }
-
-    async fn scan(
-        &self,
-        _svc_name: &'static str,
-        _api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        cursor: ScanCursor,
-        count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
-        let mut result = Vec::new();
-        let matcher = Self::match_key(namespace, prefix);
-        let mut idx = 0;
-        let mut has_more = false;
-
-        self.data
-            .iter_async(|key, _| {
-                idx += 1;
-                if idx > cursor {
-                    if let Some(matched) = matcher(key) {
-                        result.push(matched);
-
-                        if (result.len() as u64) == count {
-                            has_more = true;
-                            false
-                        } else {
-                            true
-                        }
-                    } else {
-                        true
-                    }
-                } else {
-                    true
-                }
-            })
-            .await;
-
-        if has_more {
-            Ok((idx, result))
-        } else {
-            Ok((0, result))
-        }
     }
 
     async fn scan_stable(
@@ -471,8 +428,8 @@ mod tests {
     use test_r::test;
 
     use crate::storage::indexed::{
-        IndexedStorage, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
-        IndexedStorageNamespace,
+        IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi,
+        IndexedStorageMetaNamespace, IndexedStorageNamespace, ScanResume,
     };
     use assert2::check;
     use golem_common::model::AgentId;
@@ -523,14 +480,14 @@ mod tests {
         }
         assert_eq!(
             storage
-                .scan(
+                .scan_stable(
                     "test",
                     "scan",
                     IndexedStorageMetaNamespace::Oplog {
                         agent_mode: golem_common::model::agent::AgentMode::Durable,
                     },
                     None,
-                    0,
+                    None,
                     100,
                 )
                 .await
@@ -831,6 +788,24 @@ mod tests {
             vec!["k5".to_string()],
         ];
         check!(pages == expected);
+    }
+
+    #[test]
+    async fn scan_stable_rejects_marker_containing_nul() {
+        let storage = super::InMemoryIndexedStorage::new();
+        let result = storage
+            .with("test", "test")
+            .scan_stable(
+                IndexedStorageMetaNamespace::Oplog {
+                    agent_mode: golem_common::model::agent::AgentMode::Durable,
+                },
+                None,
+                Some(ScanResume::Marker("invalid\0marker".to_string())),
+                2,
+            )
+            .await;
+
+        assert!(matches!(result, Err(IndexedStorageError::InvalidResume(_))));
     }
 
     #[test]

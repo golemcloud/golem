@@ -16,7 +16,8 @@
 
 package golem.tool
 
-import golem.schema.{FromSchema, IntoSchema, SchemaEncodeError, SchemaValue, TypedSchemaValue}
+import golem.schema.{FromSchema, IntoSchema, SchemaEncodeError, SchemaTypeBody, SchemaValue, TypedSchemaValue}
+import golem.schema.validation.RefResolution
 
 import scala.collection.mutable
 import scala.concurrent.Future
@@ -46,8 +47,11 @@ object RpcError {
 sealed trait ToolError[+E] extends Product with Serializable
 object ToolError {
   final case class Rpc(error: RpcError)                                      extends ToolError[Nothing]
+  final case class RemoteTool(error: ToolInvokeError[TypedSchemaValue])      extends ToolError[Nothing]
   final case class Tool[E](error: E)                                         extends ToolError[E]
   final case class UnknownToolError(name: String, payload: TypedSchemaValue) extends ToolError[Nothing]
+  final case class InvalidInput(message: String)                             extends ToolError[Nothing]
+  final case class MalformedRemoteOutput(message: String)                    extends ToolError[Nothing]
 }
 
 /**
@@ -177,8 +181,7 @@ object ToolClientRuntime {
       case ToolRpcFailure.RemoteInternalError(m) => ToolError.Rpc(RpcError.RemoteInternal(m))
       case ToolRpcFailure.Cancelled              => ToolError.Rpc(RpcError.Cancelled)
       case ToolRpcFailure.ResourceExhausted(m)   => ToolError.Rpc(RpcError.ResourceExhausted(m))
-      case ToolRpcFailure.RemoteToolError(error) =>
-        ToolError.Rpc(RpcError.Protocol(s"remote tool error: ${remoteToolErrorLabel(error)}"))
+      case ToolRpcFailure.RemoteToolError(error) => ToolError.RemoteTool(error)
     }
 
   private[tool] def mapRemoteToolError[E](
@@ -193,8 +196,7 @@ object ToolClientRuntime {
         }
       case ToolInvokeError.Tool(_) =>
         ToolError.Rpc(RpcError.Protocol("remote custom error was missing its declared case name"))
-      case other =>
-        ToolError.Rpc(RpcError.Protocol(s"remote tool error: ${remoteToolErrorLabel(other)}"))
+      case other => ToolError.RemoteTool(other)
     }
 
   private[tool] def decodeCustomToolError[E](
@@ -257,9 +259,15 @@ object ToolClientRuntime {
     name: String,
     aliases: List[String],
     value: A,
-    into: IntoSchema[A]
-  ): CanonicalInputValue =
-    CanonicalInputValue(name, aliases, into.graph, into.toValue(value))
+    into: IntoSchema[A],
+    model: Either[String, CanonicalInputModel]
+  ): CanonicalInputValue = {
+    val authored = into.toValue(value)
+    model.toOption.flatMap(_.fields.find(_.name == name)) match {
+      case Some(field) => CanonicalInputValue(name, aliases, field.schema, canonicalValue(field, authored))
+      case None        => CanonicalInputValue(name, aliases, into.graph, authored)
+    }
+  }
 
   /** An inherited canonical-prefix entry for a count-flag parameter. */
   def countFlagPrefixValue(name: String, aliases: List[String], count: Int): CanonicalInputValue =
@@ -287,6 +295,17 @@ object ToolClientRuntime {
       }
     }
 
+  def prefixInputModel(
+    descriptor: Either[ToolBuildError, ExtendedToolType],
+    schemaPath: List[String]
+  ): Either[String, CanonicalInputModel] =
+    descriptor.left.map(e => s"tool descriptor build failed: ${e.message}").flatMap { tool =>
+      tool.commandNodeIndexByPath(schemaPath) match {
+        case None        => Left(s"invalid generated tool command path `${schemaPath.mkString(" ")}`")
+        case Some(index) => tool.canonicalInputModel(index).left.map(_.message)
+      }
+    }
+
   /**
    * Builds the invocation input record from a static canonical model: the fast
    * path applies when the generated parameter values already align with the
@@ -305,7 +324,14 @@ object ToolClientRuntime {
               field.name == name
             }
         if (aligned)
-          Right(TypedSchemaValue(m.recordSchema, SchemaValue.RecordValue(paramValues.map(_._2))))
+          Right(
+            TypedSchemaValue(
+              m.recordSchema,
+              SchemaValue.RecordValue(m.fields.zip(paramValues).map { case (field, (_, value)) =>
+                canonicalValue(field, value)
+              })
+            )
+          )
         else
           reorderValues(m.fields, paramValues).map { values =>
             TypedSchemaValue(m.recordSchema, SchemaValue.RecordValue(values))
@@ -368,10 +394,18 @@ object ToolClientRuntime {
       val index = remaining.lastIndexWhere(_._1 == field.name)
       if (index < 0)
         return Left(protocolError(s"missing canonical tool input field `${field.name}`"))
-      out += remaining.remove(index)._2
+      out += canonicalValue(field, remaining.remove(index)._2)
     }
     Right(out.result())
   }
+
+  private def canonicalValue(field: CanonicalInputField, value: SchemaValue): SchemaValue =
+    RefResolution.resolveRef(field.schema, field.schema.root).toOption match {
+      case Some(golem.schema.SchemaType(SchemaTypeBody.OptionType(_), _))
+          if !value.isInstanceOf[SchemaValue.OptionValue] =>
+        SchemaValue.OptionValue(Some(value))
+      case _ => value
+    }
 
   // -------------------------------------------------------------------------
   // Generated-client helpers: invocation entry points

@@ -60,26 +60,26 @@ pub enum ReplayEvent {
     },
     CardInstalled {
         card: StoredCard,
-        wallet_generation: Option<u64>,
+        wallet_generation: u64,
     },
     CardDerived {
         card: StoredCard,
-        wallet_generation: Option<u64>,
+        wallet_generation: u64,
     },
     CardTransferStarted {
         transfer_id: Uuid,
         card_id: CardId,
-        source_holder: Option<CardHolder>,
+        source_holder: CardHolder,
         target_holder: CardHolder,
-        source_wallet_generation: Option<u64>,
+        source_wallet_generation: u64,
     },
     CardTransferred {
         transfer_id: Uuid,
-        source_card_id: Option<CardId>,
+        source_card_id: CardId,
         installed_card_id: CardId,
         target_holder: CardHolder,
         card: StoredCard,
-        target_wallet_generation: Option<u64>,
+        target_wallet_generation: u64,
     },
     CardTransferConfirmed {
         transfer_id: Uuid,
@@ -89,15 +89,15 @@ pub enum ReplayEvent {
     },
     CardRevokedCascade {
         card_ids: Vec<CardId>,
-        local_wallet_generation: Option<u64>,
+        local_wallet_generation: u64,
     },
     CardRevoked {
         card_id: CardId,
-        wallet_generation: Option<u64>,
+        wallet_generation: u64,
     },
     CardExpired {
         card_id: CardId,
-        wallet_generation: Option<u64>,
+        wallet_generation: u64,
     },
 }
 
@@ -107,7 +107,7 @@ pub struct AgentInvocationStartedEntry {
     pub idempotency_key: IdempotencyKey,
     pub invocation_payload: AgentInvocationPayload,
     pub invocation_context: InvocationContextStack,
-    pub wallet_pin: Option<InvocationWalletPin>,
+    pub wallet_pin: InvocationWalletPin,
 }
 
 /// The outcome of [`ReplayState::claim_any_concurrent_start`]: the replay handle for the claimed

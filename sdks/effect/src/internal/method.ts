@@ -61,6 +61,12 @@ export type ParamInputType<P extends MethodParam> =
 export type MethodInput<Input extends MethodParams> = {
   readonly [K in keyof Input]: ParamInputType<Input[K]>
 }
+/** Caller-supplied constructor parameters omit principals injected by the host. @since 1.6.0 @category models */
+export type CallerInput<Input extends MethodParams> = {
+  readonly [K in keyof Input as Input[K] extends PrincipalInputSchema ? never : K]: ParamInputType<
+    Input[K]
+  >
+}
 
 /** @since 1.6.0 @category models */
 export type ReadOnlyOption = {
@@ -361,6 +367,21 @@ export const compileParamBindings = <Input extends MethodParams>(
       decode: (value) => decodeFromWire(codec, value),
     }
   })
+
+/** Compile only caller-supplied constructor fields; principal fields are supplied by the host. @since 1.6.0 @category operations */
+export const compileCallerParamBindings = <Input extends MethodParams>(
+  context: string,
+  input: Input,
+): Effect.Effect<CompiledInputCodec<Input>, UnsupportedSchemaError> =>
+  compileParamBindings(
+    context,
+    Object.fromEntries(
+      Object.entries(input).filter(
+        ([, param]) =>
+          isElementSpec(param) || isMultimodal(param) || !isPrincipal(param as Schema.Top),
+      ),
+    ) as Input,
+  )
 
 /** @since 1.6.0 @category models */
 export interface MethodCodec<

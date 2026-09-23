@@ -183,7 +183,7 @@ describe('external Durable Stream readers', () => {
   });
 
   it('retains the failed item or malformed batch without another read', async () => {
-    read.mockResolvedValueOnce(batch('[17,9007199254740993,29]'));
+    read.mockResolvedValueOnce(batch('["17",9007199254740993,"29"]'));
     const stream = readDurableJsonStream(s.u64(), { url });
     expect((await stream.next()).value).toBe(17n);
     await expect(stream.next()).rejects.toThrow();
@@ -286,9 +286,9 @@ describe('external Durable Stream writers', () => {
 
   it('rejects encoding failures asynchronously without assigning a tuple', async () => {
     const writer = createDurableJsonWriter(s.u64(), { url });
-    const result = writer.append([18446744073709551615n]);
+    const result = writer.append([18446744073709551616n]);
     expect(result).toBeInstanceOf(Promise);
-    await expect(result).rejects.toThrow('losslessly');
+    await expect(result).rejects.toThrow();
     expect(writer.nextSequence).toBe(0n);
     expect(append).not.toHaveBeenCalled();
   });

@@ -82,7 +82,15 @@ declare module 'golem:tool/host@0.1.0' {
   export class ToolStdout {
   }
   export class ToolRpc {
+    /**
+     * Binds an ordinary tool client to its configured tool name.
+     */
     constructor(toolName: string);
+    /**
+     * Creates a tool RPC resource without trapping on invalid caller input.
+     * @throws ToolRpcError
+     */
+    static create(toolName: string): ToolRpc;
     /**
      * Waits for the structured terminal. Callers that supplied stdout must
      * drive this wait and the already-created reader concurrently. Callers

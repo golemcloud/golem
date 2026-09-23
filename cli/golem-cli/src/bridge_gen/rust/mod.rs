@@ -2709,10 +2709,9 @@ impl RustBridgeGenerator {
         } else {
             self.emit_encode_structural_mode(val, typ, box_recursive, depth, streaming)?
         };
-        // Pin the error type to `String` so callers can apply `?` to the
-        // expression regardless of context (a bare `Ok(..)` leaf would
-        // otherwise leave the error type unconstrained).
-        Ok(quote! { { let __r: Result<_, String> = { #inner }; __r } })
+        // Keep nested `?` inside the encoder's String error boundary; a bare
+        // `Ok(..)` leaf would otherwise leave the error type unconstrained.
+        Ok(quote! { { let __r: Result<_, String> = (|| { #inner })(); __r } })
     }
 
     /// `Result<RustType, String>` expression decoding `val` (a `SchemaValue`)

@@ -38,8 +38,38 @@ object ToolRpcClient {
 
   /** A transport bound to one remote tool name. */
   def transport(toolName: String): ToolRpcTransport =
-    new JsToolRpcTransport(new ToolHostApi.RawToolRpc(toolName))
+    tryTransport(toolName) match {
+      case Right(transport) => transport
+      case Left(failure)    => throw new ToolRpcConstructionException(failure)
+    }
+
+  /**
+   * Opens a reflected transport without throwing when the host rejects the
+   * name.
+   */
+  def tryTransport(toolName: String): Either[ToolRpcFailure, ToolRpcTransport] =
+    try Right(new JsToolRpcTransport(ToolHostApi.RawToolRpc.create(toolName)))
+    catch {
+      case js.JavaScriptException(error)      => Left(ToolHostApi.decodeRpcFailure(error))
+      case scala.util.control.NonFatal(error) =>
+        Left(ToolRpcFailure.ProtocolError(String.valueOf(error.getMessage)))
+    }
+
+  def trigger(
+    toolName: String,
+    commandPath: List[String],
+    input: TypedSchemaValue,
+    stdin: Option[ToolInputStream]
+  ): Either[ToolRpcFailure, Unit] =
+    try new JsToolRpcTransport(ToolHostApi.RawToolRpc.create(toolName)).trigger(commandPath, input, stdin)
+    catch {
+      case js.JavaScriptException(error)      => Left(ToolHostApi.decodeRpcFailure(error))
+      case scala.util.control.NonFatal(error) =>
+        Left(ToolRpcFailure.ProtocolError(String.valueOf(error.getMessage)))
+    }
 }
+
+final class ToolRpcConstructionException(val failure: ToolRpcFailure) extends RuntimeException(failure.toString)
 
 /**
  * The Scala.js implementation of [[ToolRpcTransport]] over the
@@ -88,6 +118,24 @@ private[golem] final class JsToolRpcTransport(rpc: ToolHostApi.RawToolRpc) exten
         }
     }
   }
+
+  def trigger(
+    commandPath: List[String],
+    input: TypedSchemaValue,
+    stdin: Option[ToolInputStream]
+  ): Either[ToolRpcFailure, Unit] =
+    encodeInput(input).flatMap { encoded =>
+      try {
+        val endpoints = stdin.map(_ => ToolHostApi.createStdin())
+        endpoints.foreach { case (writer, _, closed) => pump(stdin.get, writer, closed) }
+        rpc.invoke(commandPath.toJSArray, encoded, endpoints.map(_._2).orUndefined)
+        Right(())
+      } catch {
+        case js.JavaScriptException(error)      => Left(ToolHostApi.decodeRpcFailure(error))
+        case scala.util.control.NonFatal(error) =>
+          Left(ToolRpcFailure.ProtocolError(String.valueOf(error.getMessage)))
+      }
+    }
 
   private def encodeInput(input: TypedSchemaValue): Either[ToolRpcFailure, JsTypedSchemaValue] =
     try Right(SchemaWireInterop.typedToJs(SchemaWire.typedSchemaValueToWit(input)))

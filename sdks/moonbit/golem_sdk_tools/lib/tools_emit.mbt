@@ -2593,6 +2593,10 @@ pub fn generate_tool_client_code(
       escape_string_lit(tool.name) +
       "\") } }\n\n///|\npub fn " +
       client +
+      "::new_for(name : String) -> " +
+      client +
+      " { { client: @tool.ToolClient::new(name) } }\n\n///|\npub fn " +
+      client +
       "::drop(self : " +
       client +
       ") -> Unit { self.client.drop() }\n\n",
