@@ -3,6 +3,7 @@ package golem:agent-guest;
 world agent-guest {
   import golem:api/host@1.5.0;
   import golem:agent/host@2.0.0;
+  import golem:tool/host@0.1.0;
 
   import golem:rdbms/ignite2@1.5.0;
   import golem:rdbms/postgres@1.5.0;
@@ -40,9 +41,7 @@ world agent-guest {
   import wasi:http/client@0.3.0;
 
   include golem:agent/agent-guest@2.0.0;
-
-  // TODO(phase 6): export golem:tool/guest@0.1.0 once the tool registry lands.
-  // (The TS runtime omits it due to p3 nested streams; Go has no such limit.)
+  export golem:tool/guest@0.1.0;
 
   export golem:api/save-snapshot@1.5.0;
   export golem:api/load-snapshot@1.5.0;
