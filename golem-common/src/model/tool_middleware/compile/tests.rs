@@ -16,12 +16,13 @@ use super::{
     compile_tool_middleware_chains, effective_installations, synthesize_effective_definition,
 };
 use crate::model::agent::AgentTypeName;
+use crate::model::agent_secret::CanonicalAgentSecretPath;
 use crate::model::component::ComponentRevision;
 use crate::model::deployment::DeploymentRevision;
 use crate::model::json::NormalizedJsonValue;
 use crate::model::tool::{
-    CompiledToolBinding, RegisteredTool, ToolBindingInput, ToolFilesystemAccess, ToolName,
-    ToolSource,
+    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess,
+    ToolName, ToolSource,
 };
 use crate::model::tool_middleware::{
     RegisteredToolMiddleware, ToolMiddlewareInstallation, ToolMiddlewareMergeMode,
@@ -143,6 +144,8 @@ fn installation(name: &str, value: i32) -> ToolMiddlewareInstallation {
         version: Some("2.0.0".to_string()),
         parameters: NormalizedJsonValue::new(serde_json::json!({ "value": value })),
         account: Some("middleware@example.com".into()),
+        secret_keys_readable: None,
+        secret_keys_revealable: None,
         filesystem_access: ToolFilesystemAccess::Denied,
     }
 }
@@ -587,6 +590,117 @@ fn compiler_builds_universal_and_monomorphic_chain_in_order_with_duplicate_param
                 item.middleware.source,
                 ToolMiddlewareSource::Component { .. }
             )
+    }));
+}
+
+#[test]
+fn compiler_narrows_each_occurrence_secret_policy_and_reports_reductions() {
+    let mut fixture = CompilerFixture::new();
+    let scope = |keys: &[&str]| {
+        SecretKeyScope::Keys(
+            keys.iter()
+                .map(|key| CanonicalAgentSecretPath(vec![(*key).to_string()]))
+                .collect(),
+        )
+    };
+    fixture.binding.secret_keys_readable = scope(&["a", "b"]);
+    fixture.binding.secret_keys_revealable = scope(&["a"]);
+
+    let with_scopes = |value, readable, revealable| {
+        let mut result = installation(if value < 3 { "universal" } else { "scoped" }, value);
+        result.secret_keys_readable = readable;
+        result.secret_keys_revealable = revealable;
+        result
+    };
+    let universal = vec![
+        with_scopes(1, None, None),
+        with_scopes(2, Some(SecretKeyScope::All), Some(SecretKeyScope::All)),
+    ];
+    let environment = BTreeMap::from([(
+        fixture.tool_name.clone(),
+        ToolBindingInput {
+            middleware: Some(vec![with_scopes(3, Some(scope(&[])), Some(scope(&[])))]),
+            ..Default::default()
+        },
+    )]);
+    let agent = BTreeMap::from([(
+        fixture.agent.clone(),
+        BTreeMap::from([(
+            fixture.tool_name.clone(),
+            ToolBindingInput {
+                middleware: Some(vec![
+                    with_scopes(
+                        4,
+                        Some(scope(&["a", "b", "outside"])),
+                        Some(scope(&["a", "b", "outside"])),
+                    ),
+                    with_scopes(5, Some(scope(&["b"])), None),
+                ]),
+                middleware_merge_mode: Some(ToolMiddlewareMergeMode::Append),
+                ..Default::default()
+            },
+        )]),
+    )]);
+    let registrations = [
+        registered_middleware("universal", ToolMiddlewareScope::Universal),
+        registered_middleware(
+            "scoped",
+            ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+                presented: simple_tool("leaf"),
+                expected: Some(fixture.tool.definition.clone()),
+            })),
+        ),
+    ];
+
+    let compiled = fixture.compile(
+        &registrations,
+        &universal,
+        &environment,
+        &agent,
+        ToolCompatibilityMode::StructuralSubtype,
+    );
+
+    assert!(compiled.errors.is_empty(), "{:?}", compiled.errors);
+    let policies = compiled.chains[0]
+        .occurrences
+        .iter()
+        .map(|occurrence| {
+            (
+                occurrence.secret_keys_readable.clone(),
+                occurrence.secret_keys_revealable.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        policies,
+        vec![
+            (scope(&["a", "b"]), scope(&["a"])),
+            (scope(&["a", "b"]), scope(&["a"])),
+            (scope(&[]), scope(&[])),
+            (scope(&["a", "b"]), scope(&["a"])),
+            (scope(&["b"]), scope(&[])),
+        ]
+    );
+    assert_eq!(compiled.warnings.len(), 3, "{:?}", compiled.warnings);
+    for warning in &compiled.warnings {
+        assert_eq!(warning.agent_type_name.as_ref(), Some(&fixture.agent));
+        assert_eq!(warning.tool_name.as_ref(), Some(&fixture.tool_name));
+        assert_eq!(warning.middleware_name.as_deref(), Some("scoped"));
+    }
+    assert!(compiled.warnings.iter().any(|warning| {
+        warning
+            .message
+            .contains("occurrence 4 readable secret selector")
+    }));
+    assert!(compiled.warnings.iter().any(|warning| {
+        warning
+            .message
+            .contains("occurrence 4 revealable secret selector")
+    }));
+    assert!(compiled.warnings.iter().any(|warning| {
+        warning
+            .message
+            .contains("occurrence 5 revealable secret scope was reduced")
     }));
 }
 

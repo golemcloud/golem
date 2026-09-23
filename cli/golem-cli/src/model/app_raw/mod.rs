@@ -635,6 +635,10 @@ pub struct ToolMiddlewareInstallationStruct {
     pub parameters: NormalizedJsonValue,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_keys_readable: Option<ManifestSecretKeyScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_keys_revealable: Option<ManifestSecretKeyScope>,
     #[serde(default)]
     pub filesystem_access: ToolFilesystemAccess,
 }
@@ -661,16 +665,50 @@ impl ToolMiddlewareInstallation {
                     version,
                     parameters: empty_normalized_json(),
                     account: None,
+                    secret_keys_readable: None,
+                    secret_keys_revealable: None,
                     filesystem_access: ToolFilesystemAccess::Unset,
                 }
             }
         };
+
+        let into_secret_key_scope = |scope: ManifestSecretKeyScope| {
+            use golem_common::model::agent_secret::CanonicalAgentSecretPath;
+            use golem_common::model::tool::SecretKeyScope;
+
+            match scope {
+                ManifestSecretKeyScope::All(value) if value == "*" => Ok(SecretKeyScope::All),
+                ManifestSecretKeyScope::All(value) => Err(format!(
+                    "expected '*' or a list of secret paths, found '{value}'"
+                )),
+                ManifestSecretKeyScope::Keys(paths) => paths
+                    .into_iter()
+                    .map(|path| {
+                        crate::args::parse_agent_config_path(&path)
+                            .map(|segments| {
+                                CanonicalAgentSecretPath::from_path_in_unknown_casing(&segments)
+                            })
+                            .map_err(|error| format!("invalid secret path '{path}': {error}"))
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()
+                    .map(SecretKeyScope::Keys),
+            }
+        };
+
         Ok(
             golem_common::model::tool_middleware::ToolMiddlewareInstallation {
                 name: value.name,
                 version: value.version,
                 parameters: value.parameters,
                 account: value.account.map(AccountEmail::new),
+                secret_keys_readable: value
+                    .secret_keys_readable
+                    .map(&into_secret_key_scope)
+                    .transpose()?,
+                secret_keys_revealable: value
+                    .secret_keys_revealable
+                    .map(into_secret_key_scope)
+                    .transpose()?,
                 filesystem_access: value.filesystem_access,
             },
         )

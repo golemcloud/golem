@@ -6638,6 +6638,8 @@ mod tests {
             version: Some("1.0.0".to_string()),
             parameters: NormalizedJsonValue::new(serde_json::json!({})),
             account: Some(AccountEmail::new("middleware@example.com")),
+            secret_keys_readable: None,
+            secret_keys_revealable: None,
             filesystem_access: Default::default(),
         };
         let agent = AgentTypeName("Agent".to_string());

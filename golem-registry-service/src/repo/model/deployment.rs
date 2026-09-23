@@ -56,7 +56,7 @@ use golem_common::model::security_scheme::{
     CustomProvider, Provider, SecuritySchemeId, SecuritySchemeName,
 };
 use golem_common::model::tool::{
-    CompiledToolBinding, RegisteredTool, ToolBindingInput, ToolDeploymentState,
+    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolDeploymentState,
     ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::tool_middleware::{
@@ -911,6 +911,8 @@ pub struct DeploymentToolMiddlewareInstallationRecord {
     pub middleware_version: Option<String>,
     pub parameters: Blob<NormalizedJsonValue>,
     pub account_email: Option<String>,
+    pub secret_keys_readable: Option<Blob<SecretKeyScope>>,
+    pub secret_keys_revealable: Option<Blob<SecretKeyScope>>,
     pub filesystem_access: String,
 }
 impl DeploymentToolMiddlewareInstallationRecord {
@@ -921,6 +923,8 @@ impl DeploymentToolMiddlewareInstallationRecord {
             version: self.middleware_version,
             parameters: self.parameters.into_value(),
             account: self.account_email.map(AccountEmail::new),
+            secret_keys_readable: self.secret_keys_readable.map(Blob::into_value),
+            secret_keys_revealable: self.secret_keys_revealable.map(Blob::into_value),
             filesystem_access: filesystem_access(&self.filesystem_access)?,
         })
     }

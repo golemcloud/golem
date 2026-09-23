@@ -115,6 +115,8 @@ pub struct ToolMiddlewareInstallation {
     pub version: Option<String>,
     pub parameters: NormalizedJsonValue,
     pub account: Option<AccountEmail>,
+    pub secret_keys_readable: Option<SecretKeyScope>,
+    pub secret_keys_revealable: Option<SecretKeyScope>,
     #[serde(default)]
     #[cfg_attr(feature = "full", desert(default), oai(default))]
     pub filesystem_access: ToolFilesystemAccess,

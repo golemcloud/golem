@@ -16,7 +16,8 @@ use crate::model::agent::AgentTypeName;
 use crate::model::component::{ComponentId, ComponentName};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::tool::{
-    CompiledToolBinding, RegisteredTool, ToolBindingInput, ToolBindingOwner, ToolName,
+    CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolBindingOwner,
+    ToolName,
 };
 use crate::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
@@ -412,13 +413,62 @@ fn compile_one_chain(
         let Some(parameters) = parameters else {
             continue;
         };
+        let requested_readable = installation
+            .secret_keys_readable
+            .clone()
+            .unwrap_or(SecretKeyScope::All);
+        let requested_revealable = installation
+            .secret_keys_revealable
+            .clone()
+            .unwrap_or(SecretKeyScope::All);
+        if matches!(&requested_readable, SecretKeyScope::Keys(_))
+            && !requested_readable.is_subset_of(binding.secret_keys_readable)
+        {
+            warnings.push(diagnostic(
+                binding,
+                Some(installation.name.to_string()),
+                format!(
+                    "occurrence {} readable secret selector contains keys outside the enclosing binding scope; unavailable keys were removed",
+                    occurrence_index + 1
+                ),
+            ));
+        }
+        if matches!(&requested_revealable, SecretKeyScope::Keys(_))
+            && !requested_revealable.is_subset_of(binding.secret_keys_revealable)
+        {
+            warnings.push(diagnostic(
+                binding,
+                Some(installation.name.to_string()),
+                format!(
+                    "occurrence {} revealable secret selector contains keys outside the enclosing binding scope; unavailable keys were removed",
+                    occurrence_index + 1
+                ),
+            ));
+        }
+        let secret_keys_readable = binding
+            .secret_keys_readable
+            .intersection(&requested_readable);
+        let candidate_revealable = binding
+            .secret_keys_revealable
+            .intersection(&requested_revealable);
+        if !candidate_revealable.is_subset_of(&secret_keys_readable) {
+            warnings.push(diagnostic(
+                binding,
+                Some(installation.name.to_string()),
+                format!(
+                    "occurrence {} revealable secret scope was reduced by its readable scope",
+                    occurrence_index + 1
+                ),
+            ));
+        }
+        let secret_keys_revealable = candidate_revealable.intersection(&secret_keys_readable);
         compiled_reversed.push(CompiledToolMiddlewareOccurrence {
             middleware: (*registration).clone(),
             parameters,
             provision: registration.provision.clone(),
             config_keys_readable: binding.config_keys_readable.clone(),
-            secret_keys_readable: binding.secret_keys_readable.clone(),
-            secret_keys_revealable: binding.secret_keys_revealable.clone(),
+            secret_keys_readable,
+            secret_keys_revealable,
             filesystem_access: installation.filesystem_access,
             expected_definition: expected,
             presented_definition: presented,

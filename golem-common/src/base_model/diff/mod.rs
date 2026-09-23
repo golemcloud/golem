@@ -16,4 +16,4 @@ pub mod hash;
 
 pub use hash::Hash;
 
-pub const DIFF_MODEL_VERSION: u32 = 12;
+pub const DIFF_MODEL_VERSION: u32 = 13;

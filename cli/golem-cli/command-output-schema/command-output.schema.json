@@ -3800,6 +3800,8 @@
             "version": { "type": "string" },
             "parameters": { "$ref": "#/definitions/JsonValue" },
             "account": { "type": "string" },
+            "secretKeysReadable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
+            "secretKeysRevealable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
             "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
           },
           "additionalProperties": false
@@ -4541,12 +4543,32 @@
     },
     "ToolMiddlewareInstallation": {
       "type": "object",
-      "required": ["name", "version", "parameters", "account", "filesystemAccess"],
+      "required": [
+        "name",
+        "version",
+        "parameters",
+        "account",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "filesystemAccess"
+      ],
       "properties": {
         "name": { "type": "string" },
         "version": { "type": ["string", "null"] },
         "parameters": {},
         "account": { "type": ["string", "null"] },
+        "secretKeysReadable": {
+          "oneOf": [
+            { "$ref": "#/definitions/SecretKeyScope" },
+            { "type": "null" }
+          ]
+        },
+        "secretKeysRevealable": {
+          "oneOf": [
+            { "$ref": "#/definitions/SecretKeyScope" },
+            { "type": "null" }
+          ]
+        },
         "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
       },
       "additionalProperties": false

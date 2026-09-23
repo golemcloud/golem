@@ -1273,6 +1273,14 @@ mod protobuf {
                                             .map_err(|error| format!("Invalid ToolMiddlewareInstallation.parameters_json: {error}"))?,
                                     ),
                                     account: installation.account.map(AccountEmail::new),
+                                    secret_keys_readable: installation
+                                        .secret_keys_readable
+                                        .map(TryInto::try_into)
+                                        .transpose()?,
+                                    secret_keys_revealable: installation
+                                        .secret_keys_revealable
+                                        .map(TryInto::try_into)
+                                        .transpose()?,
                                     filesystem_access: filesystem_access.into(),
                                 })
                             })
@@ -1313,6 +1321,12 @@ mod protobuf {
                                 parameters_json: installation.parameters.to_string(),
                                 account: installation.account.map(AccountEmail::into_inner),
                                 filesystem_access: golem_api_grpc::proto::golem::component::ToolFilesystemAccess::from(installation.filesystem_access) as i32,
+                                secret_keys_readable: installation
+                                    .secret_keys_readable
+                                    .map(Into::into),
+                                secret_keys_revealable: installation
+                                    .secret_keys_revealable
+                                    .map(Into::into),
                             }
                         }).collect(),
                     }
@@ -2057,6 +2071,15 @@ mod protobuf {
                         "middleware chain belongs to another deployment revision".to_string()
                     );
                 }
+                let binding = tool_bindings
+                    .get(&chain.owner)
+                    .and_then(|bindings| bindings.get(&chain.tool_name))
+                    .ok_or_else(|| {
+                        format!(
+                            "middleware chain for tool {} has no matching compiled binding",
+                            chain.tool_name
+                        )
+                    })?;
                 for occurrence in &chain.occurrences {
                     let name = crate::model::tool_middleware::ToolMiddlewareName::try_from(
                         occurrence.middleware.definition.name.clone(),
@@ -2068,6 +2091,12 @@ mod protobuf {
                         || !occurrence
                             .secret_keys_revealable
                             .is_subset_of(&occurrence.secret_keys_readable)
+                        || !occurrence
+                            .secret_keys_readable
+                            .is_subset_of(&binding.secret_keys_readable)
+                        || !occurrence
+                            .secret_keys_revealable
+                            .is_subset_of(&binding.secret_keys_revealable)
                     {
                         return Err(format!(
                             "middleware occurrence {name} does not match its registration or policy"
@@ -2133,10 +2162,17 @@ mod tests {
     use crate::model::json::NormalizedJsonValue;
     use crate::model::tool::{
         CompiledToolBinding, RegisteredTool, SecretKeyScope, ToolBindingInput, ToolBindingOwner,
-        ToolDeploymentMetadata, ToolDeploymentState, ToolName, ToolProvisionConfig, ToolSource,
+        ToolDeploymentMetadata, ToolDeploymentState, ToolFilesystemAccess, ToolName,
+        ToolProvisionConfig, ToolSource,
     };
-    use crate::schema::SchemaGraph;
-    use crate::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use crate::model::tool_middleware::{
+        CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
+        ToolMiddlewareInstallation, ToolMiddlewareName, ToolMiddlewareSource,
+    };
+    use crate::schema::tool::{
+        CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
+    };
+    use crate::schema::{SchemaGraph, SchemaValue, TypedSchemaValue};
     use std::collections::BTreeSet;
     use test_r::test;
 
@@ -2332,6 +2368,22 @@ mod tests {
 
     fn metadata_with_tool() -> ComponentMetadata {
         let tool_name = ToolName::try_from("grep").unwrap();
+        let secret_path =
+            CanonicalAgentSecretPath(vec!["credentials".to_string(), "github".to_string()]);
+        let installation =
+            |name: &str,
+             secret_keys_readable: Option<SecretKeyScope>,
+             secret_keys_revealable: Option<SecretKeyScope>| {
+                ToolMiddlewareInstallation {
+                    name: ToolMiddlewareName::try_from(name).unwrap(),
+                    version: Some("1.0.0".to_string()),
+                    parameters: NormalizedJsonValue::new(serde_json::json!({})),
+                    account: None,
+                    secret_keys_readable,
+                    secret_keys_revealable,
+                    filesystem_access: Default::default(),
+                }
+            };
         let binding = ToolBindingInput {
             version: Some("1.2.3".to_string()),
             parameters: NormalizedJsonValue::new(serde_json::json!({ "root": "/workspace" })),
@@ -2339,12 +2391,27 @@ mod tests {
                 "owner@example.com",
             )),
             config_keys_readable: crate::model::tool::ConfigKeyScope::All,
-            secret_keys_readable: SecretKeyScope::Keys(BTreeSet::from([CanonicalAgentSecretPath(
-                vec!["credentials".to_string(), "github".to_string()],
-            )])),
+            secret_keys_readable: SecretKeyScope::Keys(BTreeSet::from([secret_path.clone()])),
             secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::new()),
             filesystem_access: Default::default(),
-            middleware: None,
+            middleware: Some(vec![
+                installation("omitted", None, None),
+                installation(
+                    "wildcard",
+                    Some(SecretKeyScope::All),
+                    Some(SecretKeyScope::All),
+                ),
+                installation(
+                    "empty",
+                    Some(SecretKeyScope::Keys(BTreeSet::new())),
+                    Some(SecretKeyScope::Keys(BTreeSet::new())),
+                ),
+                installation(
+                    "concrete",
+                    Some(SecretKeyScope::Keys(BTreeSet::from([secret_path.clone()]))),
+                    Some(SecretKeyScope::Keys(BTreeSet::from([secret_path]))),
+                ),
+            ]),
             middleware_merge_mode: Default::default(),
         };
         let component_binding = ToolBindingInput {
@@ -2662,6 +2729,148 @@ mod tests {
         let decoded = ToolDeploymentState::try_from(proto.clone()).unwrap();
 
         assert_eq!(decoded, state);
+
+        let mut middleware_state = state.clone();
+        let owner = middleware_state
+            .tool_bindings
+            .keys()
+            .find(|owner| matches!(owner, ToolBindingOwner::AgentType { .. }))
+            .unwrap()
+            .clone();
+        let tool_name = middleware_state.tool_bindings[&owner]
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        let key = CanonicalAgentSecretPath(vec!["allowed".to_string()]);
+        let allowed = SecretKeyScope::Keys(BTreeSet::from([key]));
+        let binding = middleware_state
+            .tool_bindings
+            .get_mut(&owner)
+            .unwrap()
+            .get_mut(&tool_name)
+            .unwrap();
+        binding.secret_keys_readable = allowed.clone();
+        binding.secret_keys_revealable = allowed.clone();
+        let middleware_name = ToolMiddlewareName::try_from("audit").unwrap();
+        let middleware_definition = ToolMiddleware {
+            name: middleware_name.to_string(),
+            version: "1.0.0".to_string(),
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            parameter_schema: SchemaGraph::empty(),
+            scope: ToolMiddlewareScope::Universal,
+        };
+        let middleware = RegisteredToolMiddleware {
+            deployment_revision,
+            release_id: None,
+            metadata_digest:
+                crate::model::tool_middleware_release::tool_middleware_metadata_digest(
+                    "0.1.0",
+                    &middleware_definition,
+                )
+                .unwrap(),
+            definition: middleware_definition,
+            provision: ToolProvisionConfig::default(),
+            source: ToolMiddlewareSource::Component {
+                component_id: ComponentId::new(),
+                component_revision: ComponentRevision::INITIAL,
+                component_name: ComponentName("middleware:audit".to_string()),
+            },
+            owner_account_id: AccountId::new(),
+            owner_account_email: AccountEmail::new("middleware@example.com"),
+            metadata_version: "0.1.0".to_string(),
+        };
+        middleware_state
+            .registered_tool_middlewares
+            .insert(middleware_name, middleware.clone());
+        let effective_definition = middleware_state.registered_tools[&tool_name]
+            .definition
+            .clone();
+        middleware_state.tool_middleware_chains.insert(
+            owner.clone(),
+            BTreeMap::from([(
+                tool_name.clone(),
+                CompiledToolMiddlewareChain {
+                    deployment_revision,
+                    owner: owner.clone(),
+                    tool_name: tool_name.clone(),
+                    effective_definition: effective_definition.clone(),
+                    occurrences: vec![CompiledToolMiddlewareOccurrence {
+                        middleware,
+                        parameters: TypedSchemaValue::new(
+                            SchemaGraph::empty(),
+                            SchemaValue::Record { fields: Vec::new() },
+                        ),
+                        provision: ToolProvisionConfig::default(),
+                        config_keys_readable: Default::default(),
+                        secret_keys_readable: allowed.clone(),
+                        secret_keys_revealable: allowed.clone(),
+                        filesystem_access: ToolFilesystemAccess::Unset,
+                        expected_definition: None,
+                        presented_definition: None,
+                        next_effective_definition: effective_definition,
+                        compatibility: None,
+                    }],
+                },
+            )]),
+        );
+        let valid_middleware_proto: golem_api_grpc::proto::golem::registry::ToolDeploymentState =
+            middleware_state.clone().into();
+        assert!(ToolDeploymentState::try_from(valid_middleware_proto).is_ok());
+
+        let mut excessive_readable = middleware_state.clone();
+        excessive_readable
+            .tool_middleware_chains
+            .get_mut(&owner)
+            .unwrap()
+            .get_mut(&tool_name)
+            .unwrap()
+            .occurrences[0]
+            .secret_keys_readable = SecretKeyScope::All;
+        assert!(
+            ToolDeploymentState::try_from(
+                golem_api_grpc::proto::golem::registry::ToolDeploymentState::from(
+                    excessive_readable
+                )
+            )
+            .is_err()
+        );
+
+        let mut excessive_revealable = middleware_state.clone();
+        excessive_revealable
+            .tool_bindings
+            .get_mut(&owner)
+            .unwrap()
+            .get_mut(&tool_name)
+            .unwrap()
+            .secret_keys_revealable = SecretKeyScope::Keys(BTreeSet::new());
+        assert!(
+            ToolDeploymentState::try_from(
+                golem_api_grpc::proto::golem::registry::ToolDeploymentState::from(
+                    excessive_revealable
+                )
+            )
+            .is_err()
+        );
+
+        let mut revealable_outside_readable = middleware_state;
+        revealable_outside_readable
+            .tool_middleware_chains
+            .get_mut(&owner)
+            .unwrap()
+            .get_mut(&tool_name)
+            .unwrap()
+            .occurrences[0]
+            .secret_keys_readable = SecretKeyScope::Keys(BTreeSet::new());
+        assert!(
+            ToolDeploymentState::try_from(
+                golem_api_grpc::proto::golem::registry::ToolDeploymentState::from(
+                    revealable_outside_readable
+                )
+            )
+            .is_err()
+        );
 
         let mut missing_scope_proto = proto.clone();
         missing_scope_proto.tool_bindings[0].config_keys_readable = None;

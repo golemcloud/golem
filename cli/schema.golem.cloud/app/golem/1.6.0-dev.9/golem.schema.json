@@ -1007,6 +1007,8 @@
           "properties": {
             "name": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
             "version": { "type": "string" }, "parameters": {}, "account": { "type": "string" },
+            "secretKeysReadable": { "$ref": "#/definitions/secretKeyScope" },
+            "secretKeysRevealable": { "$ref": "#/definitions/secretKeyScope" },
             "filesystemAccess": { "$ref": "#/definitions/toolFilesystemAccess" }
           }
         }
