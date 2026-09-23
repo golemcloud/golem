@@ -440,47 +440,42 @@ jobs:
         run: cargo make wit
 
       - name: Restore Scala guest runtime WASMs (built by build-golem-scala)
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            sdks/scala/sbt/src/main/resources/golem/wasm/*.wasm
-            sdks/scala/mill/resources/golem/wasm/*.wasm
-            sdks/scala/wit/dts
-          key: agent-guest-wasm-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: agent-guest-wasm
+          path: tmp/sdk-artifacts
+      - name: Extract Scala guest runtime WASMs
+        run: tar -xzf tmp/sdk-artifacts/agent-guest-wasm.tar.gz
 
       - name: Restore Scala SDK ivy local repo (published by build-golem-scala)
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: ~/.ivy2/local
-          key: scala-sdk-ivy-local-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: scala-sdk-ivy-local
+          path: tmp/sdk-artifacts
+      - name: Extract Scala SDK ivy local repo
+        run: |
+          mkdir -p ~/.ivy2
+          tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
 
       - name: Restore built TS SDK
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: golem-ts-sdk
+          path: tmp/sdk-artifacts
+      - name: Extract built TS SDK
+        run: tar -xzf tmp/sdk-artifacts/golem-ts-sdk.tar.gz
 
       - name: Install TS SDK dependencies
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
 
       - name: Restore built Effect SDK
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            sdks/effect/dist
-            sdks/effect/wasm
-            sdks/effect/golem-types
-          key: golem-effect-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: golem-effect-sdk
+          path: tmp/sdk-artifacts
+      - name: Extract built Effect SDK
+        run: tar -xzf tmp/sdk-artifacts/golem-effect-sdk.tar.gz
 
       - name: Install Effect SDK dependencies
         working-directory: sdks/effect
@@ -616,16 +611,12 @@ jobs:
           copy-to-target: 'true'
 
       - name: Restore built TS SDK
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: golem-ts-sdk
+          path: tmp/sdk-artifacts
+      - name: Extract built TS SDK
+        run: tar -xzf tmp/sdk-artifacts/golem-ts-sdk.tar.gz
 
       - name: Install TS SDK dependencies
         working-directory: sdks/ts
@@ -745,20 +736,31 @@ jobs:
         run: |
           sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
 
-      - name: Cache Scala guest runtime WASMs for it-cli
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            sdks/scala/sbt/src/main/resources/golem/wasm/*.wasm
-            sdks/scala/mill/resources/golem/wasm/*.wasm
+      - name: Package Scala guest runtime WASMs for it-cli
+        run: |
+          tar -czf "$RUNNER_TEMP/agent-guest-wasm.tar.gz" \
+            sdks/scala/sbt/src/main/resources/golem/wasm/*.wasm \
+            sdks/scala/mill/resources/golem/wasm/*.wasm \
             sdks/scala/wit/dts
-          key: agent-guest-wasm-${{ github.run_id }}
-
-      - name: Cache Scala SDK ivy local repo for it-cli
-        uses: actions/cache/save@v5
+      - name: Upload Scala guest runtime WASMs for it-cli
+        uses: actions/upload-artifact@v6
         with:
-          path: ~/.ivy2/local
-          key: scala-sdk-ivy-local-${{ github.run_id }}
+          name: agent-guest-wasm
+          path: ${{ runner.temp }}/agent-guest-wasm.tar.gz
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+      - name: Package Scala SDK ivy local repo for it-cli
+        run: tar -czf "$RUNNER_TEMP/scala-sdk-ivy-local.tar.gz" -C ~/.ivy2 local
+      - name: Upload Scala SDK ivy local repo for it-cli
+        uses: actions/upload-artifact@v6
+        with:
+          name: scala-sdk-ivy-local
+          path: ${{ runner.temp }}/scala-sdk-ivy-local.tar.gz
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   build-golem-moonbit:
     runs-on: blacksmith
@@ -915,16 +917,22 @@ jobs:
         run: |
           pnpm run test
 
-      - name: Save built TS SDK for test component builds
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-bridge/dist
+      - name: Package built TS SDK for dependent jobs
+        run: |
+          tar -czf "$RUNNER_TEMP/golem-ts-sdk.tar.gz" \
+            sdks/ts/packages/golem-ts-sdk/dist \
+            sdks/ts/packages/golem-ts-sdk/types \
+            sdks/ts/packages/golem-ts-sdk/wasm \
+            sdks/ts/packages/golem-ts-bridge/dist \
             sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
+      - name: Upload built TS SDK for dependent jobs
+        uses: actions/upload-artifact@v6
+        with:
+          name: golem-ts-sdk
+          path: ${{ runner.temp }}/golem-ts-sdk.tar.gz
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   build-golem-effect:
     runs-on: blacksmith
@@ -974,14 +982,18 @@ jobs:
           npm run check:artifacts
           npm run check:package
 
-      - name: Save built Effect SDK for CLI integration tests
-        uses: actions/cache/save@v5
+      - name: Package built Effect SDK for CLI integration tests
+        run: |
+          tar -czf "$RUNNER_TEMP/golem-effect-sdk.tar.gz" \
+            sdks/effect/dist sdks/effect/wasm sdks/effect/golem-types
+      - name: Upload built Effect SDK for CLI integration tests
+        uses: actions/upload-artifact@v6
         with:
-          path: |
-            sdks/effect/dist
-            sdks/effect/wasm
-            sdks/effect/golem-types
-          key: golem-effect-sdk-${{ github.run_id }}
+          name: golem-effect-sdk
+          path: ${{ runner.temp }}/golem-effect-sdk.tar.gz
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
       - name: Upload Effect SDK for Windows package checks
         uses: actions/upload-artifact@v4
@@ -1089,16 +1101,13 @@ jobs:
 
       - name: Restore built TS SDK
         if: matrix.chunk.needs-node
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: golem-ts-sdk
+          path: tmp/sdk-artifacts
+      - name: Extract built TS SDK
+        if: matrix.chunk.needs-node
+        run: tar -xzf tmp/sdk-artifacts/golem-ts-sdk.tar.gz
 
       - name: Setup JS and WASM build tools
         if: matrix.chunk.needs-node
