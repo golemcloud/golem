@@ -22,15 +22,15 @@ use super::backend::BlobBackend;
 use super::holding::{holding_storage, reached_deadline};
 use super::{
     ChangeDetection, Chunking, Compression, OperationPhase, PruneSettings, RepackLimits,
-    Repository, RepositoryKey, RepositorySettings, STORAGE_CALL_DEADLINE, SaveSettings,
-    backup_options, config_options, open_existing, prune_options, repository_options, run_blocking,
-    unopened,
+    Repository, RepositoryKey, RepositorySettings, SaveSettings, backup_options, config_options,
+    open_existing, prune_options, repository_options, run_blocking, unopened,
 };
 use crate::filesystem_snapshot::contract_tests::fixture::{
     Scratch, Spec, fixture, listing, write_tree,
 };
 use crate::filesystem_snapshot::contract_tests::new_scope;
 use crate::filesystem_snapshot::{SnapshotName, SnapshotScope};
+use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::Context;
 use async_trait::async_trait;
 use bytes::Bytes;

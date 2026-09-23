@@ -57,15 +57,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::runtime::Handle;
 
-/// The longest time that one call of a repository waits for the blob storage.
-///
-/// A call that gets no answer within this time fails, and its operation fails with it. The value
-/// stops a call that does not return. It is not a limit for a slow call. On S3, with the retries of
-/// the S3 storage, a write of a pack took at most 1.7 s with eight saves at the same time. A ranged
-/// read of a pack took at most 1.5 s under the CPU request of an executor. Keep the value at least
-/// 10 times the longest measured call.
-pub(super) const STORAGE_CALL_DEADLINE: Duration = Duration::from_secs(30);
-
 /// The key that encrypts a repository.
 ///
 /// The key has 64 bytes: 32 bytes of the AES-256 key, then 16 bytes of the number `k` and 16

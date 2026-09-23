@@ -17,13 +17,13 @@
 //! Each test calls the backend from the thread of the test. That thread is not a thread of the
 //! runtime that the backend holds, as the threads of rustic are not.
 
-use super::super::STORAGE_CALL_DEADLINE;
 use super::super::fault::{Operation, OperationCancelled, classify, is_config_exists};
 use super::super::holding::{holding_storage, reached_deadline};
 use super::super::publish::{SnapshotStage, StagedSnapshot};
 use super::super::scripted::{Script, ScriptedBlobStorage};
 use super::{BlobBackend, file_size};
 use crate::filesystem_snapshot::SnapshotStoreError;
+use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
