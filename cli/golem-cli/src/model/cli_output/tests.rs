@@ -4279,11 +4279,21 @@ fn arb_http_api_deployment_agent_options()
         .boxed()
 }
 
+fn arb_created_or_updated() -> impl Strategy<Value = crate::model::create_action::CreateAction> {
+    use crate::model::create_action::CreateAction;
+
+    prop_oneof![Just(CreateAction::Created), Just(CreateAction::Updated)]
+}
+
 fn arb_api_security_scheme_create_result() -> OutputDocumentStrategy {
-    serialized_output(
-        arb_security_scheme()
-            .prop_map(crate::model::http_api::security::HttpSecuritySchemeCreateView),
-    )
+    serialized_output((arb_created_or_updated(), arb_security_scheme()).prop_map(
+        |(action, security_scheme)| {
+            crate::model::http_api::security::HttpSecuritySchemeCreateView {
+                action,
+                security_scheme,
+            }
+        },
+    ))
 }
 
 fn arb_api_security_scheme_delete_result() -> OutputDocumentStrategy {
@@ -6118,8 +6128,14 @@ fn arb_profile_config_set_format_result() -> OutputDocumentStrategy {
 
 fn arb_resource_create_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_resource_definition()
-            .prop_map(crate::model::resource_definition::ResourceDefinitionCreateView),
+        (arb_created_or_updated(), arb_resource_definition()).prop_map(
+            |(action, resource_definition)| {
+                crate::model::resource_definition::ResourceDefinitionCreateView {
+                    action,
+                    resource_definition,
+                }
+            },
+        ),
     )
 }
 
@@ -6489,9 +6505,12 @@ fn arb_api_retry_policy_with_depth(
 }
 
 fn arb_retry_policy_create_result() -> OutputDocumentStrategy {
-    serialized_output(
-        arb_retry_policy().prop_map(crate::model::retry_policy::RetryPolicyCreateView),
-    )
+    serialized_output((arb_created_or_updated(), arb_retry_policy()).prop_map(
+        |(action, retry_policy)| crate::model::retry_policy::RetryPolicyCreateView {
+            action,
+            retry_policy,
+        },
+    ))
 }
 
 fn arb_retry_policy_delete_result() -> OutputDocumentStrategy {

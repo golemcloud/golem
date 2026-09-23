@@ -2404,6 +2404,7 @@
       "x-golem-command": "api security-scheme create",
       "required": [
         "$type",
+        "action",
         "id",
         "revision",
         "name",
@@ -2416,6 +2417,11 @@
       "properties": {
         "$type": {
           "const": "api.security-scheme.create"
+        },
+        "action": {
+          "description": "Whether the security scheme was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": {
           "type": "string"
@@ -7354,6 +7360,7 @@
       "x-golem-command": "resource create",
       "required": [
         "$type",
+        "action",
         "id",
         "revision",
         "environmentId",
@@ -7366,6 +7373,11 @@
       "properties": {
         "$type": {
           "const": "resource.create"
+        },
+        "action": {
+          "description": "Whether the resource definition was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
@@ -7548,6 +7560,7 @@
       "x-golem-command": "retry-policy create",
       "required": [
         "$type",
+        "action",
         "id",
         "environmentId",
         "name",
@@ -7559,6 +7572,11 @@
       "properties": {
         "$type": {
           "const": "retry-policy.create"
+        },
+        "action": {
+          "description": "Whether the retry policy was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },

@@ -483,7 +483,15 @@ pub const API_SECURITY_SCHEME_CREATE: &str = "Examples:
     --custom-issuer-url https://issuer.example.com \\
     --client-id my-client-id \\
     --client-secret my-client-secret \\
-    --redirect-url https://api.example.com/auth/callback";
+    --redirect-url https://api.example.com/auth/callback
+
+  # Create the security scheme, or update it if it already exists
+  golem-cli api security-scheme create my-oidc \\
+    --provider-type google \\
+    --client-id my-client-id \\
+    --client-secret my-client-secret \\
+    --redirect-url https://api.example.com/auth/callback \\
+    --update-existing";
 
 pub const API_SECURITY_SCHEME_GET: &str = "Examples:
   # Show details of a security scheme
@@ -838,7 +846,14 @@ pub const RETRY_POLICY_CREATE: &str = "Examples:
   golem-cli retry-policy create http-transient \\
     --priority 10 \\
     --predicate '{ \"propIn\": { \"property\": \"status-code\", \"values\": [502, 503, 504] } }' \\
-    --policy '{ \"countBox\": { \"maxRetries\": 5, \"inner\": { \"exponential\": { \"baseDelay\": \"200ms\", \"factor\": 2.0 } } } }'";
+    --policy '{ \"countBox\": { \"maxRetries\": 5, \"inner\": { \"exponential\": { \"baseDelay\": \"200ms\", \"factor\": 2.0 } } } }'
+
+  # Create the retry policy, or update it if it already exists
+  golem-cli retry-policy create http-transient \\
+    --priority 20 \\
+    --predicate '{ \"propIn\": { \"property\": \"status-code\", \"values\": [502, 503, 504] } }' \\
+    --policy '{ \"countBox\": { \"maxRetries\": 3, \"inner\": { \"exponential\": { \"baseDelay\": \"200ms\", \"factor\": 2.0 } } } }' \\
+    --update-existing";
 
 pub const RETRY_POLICY_LIST: &str = "Examples:
   # List retry policies in the current environment
@@ -876,7 +891,11 @@ pub const RESOURCE_CREATE: &str = "Examples:
 
   # A concurrency cap that rejects extra requests instead of throttling them
   golem-cli resource create concurrent-jobs \\
-    --limit '{\"type\":\"concurrency\",\"value\":4}' --enforcement-action reject";
+    --limit '{\"type\":\"concurrency\",\"value\":4}' --enforcement-action reject
+
+  # Create the resource definition, or update it if it already exists
+  golem-cli resource create concurrent-jobs \\
+    --limit '{\"type\":\"concurrency\",\"value\":8}' --update-existing";
 
 pub const RESOURCE_UPDATE: &str = "Examples:
   # Raise the limit on an existing rate quota

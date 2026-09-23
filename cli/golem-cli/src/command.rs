@@ -2075,6 +2075,10 @@ pub mod api {
                 #[arg(long)]
                 /// Security Scheme redirect URL
                 redirect_url: String,
+                /// If a security scheme with the same name already exists, update it with the
+                /// given values instead of failing
+                #[arg(long)]
+                update_existing: bool,
             },
 
             /// Get HTTP API Security Scheme
@@ -2247,6 +2251,10 @@ pub mod resource_definition {
             /// Plural unit label (e.g. "tokens")
             #[arg(long, default_value = "units")]
             units: String,
+            /// If a resource definition with the same name already exists, update it with the
+            /// given values instead of failing
+            #[arg(long)]
+            update_existing: bool,
         },
 
         /// Update an existing quota resource definition
@@ -2332,6 +2340,10 @@ pub mod retry_policy {
                 verbatim_doc_comment,
             )]
             policy: String,
+            /// If a retry policy with the same name already exists, update it with the given
+            /// values instead of failing
+            #[arg(long)]
+            update_existing: bool,
         },
 
         /// List retry policies in the environment
