@@ -68,6 +68,7 @@ type definitions struct {
 	idToAgent map[reflect.Type]string // Id type -> agent name, for typed calls (Get)
 	variants  map[reflect.Type]*variantDef
 	enums     map[reflect.Type]*enumDef
+	flags     map[reflect.Type]*flagsDef
 	pins      map[reflect.Type]string // NameType type-id overrides
 	codecs    map[reflect.Type]*codec // compile() memoization
 	errs      []definitionError       // registration-phase errors (derivation adds more)
@@ -79,6 +80,7 @@ func newDefinitions() *definitions {
 		idToAgent: map[reflect.Type]string{},
 		variants:  map[reflect.Type]*variantDef{},
 		enums:     map[reflect.Type]*enumDef{},
+		flags:     map[reflect.Type]*flagsDef{},
 		pins:      map[reflect.Type]string{},
 		codecs:    map[reflect.Type]*codec{},
 	}
@@ -87,7 +89,7 @@ func newDefinitions() *definitions {
 // defs is the process-wide definition state the public API builds into.
 //
 // INVARIANT — keep the wrappers logic-free: the public registration functions
-// (DefineAgent, Implement, DefineVariant, DefineEnum, NameType) MUST be one-line
+// (DefineAgent, Implement, DefineVariant, DefineEnum, DefineFlags, NameType) MUST be one-line
 // wrappers that forward to their `…Into(defs, …)` helper and nothing more. All
 // logic — validation, error recording, codec compilation, discovery — lives in
 // the instance-scoped helpers/methods so it runs against an explicit

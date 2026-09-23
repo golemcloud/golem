@@ -259,6 +259,77 @@ type Char rune
 // URL is a string constrained to a URL, lowering to the WIT url type.
 type URL string
 
+// Text is human-language prose, lowering to the WIT text type. A plain string
+// lowers to string; this named type is what marks the value as natural language
+// so a reader (or a model) is told it is prose rather than an identifier.
+type Text string
+
+// Binary is an opaque byte payload, lowering to the WIT binary type. A plain
+// []byte stays a list<u8>; this named type is the opt-in.
+type Binary []byte
+
+// Path is a filesystem path exchanged with the host, lowering to the WIT path
+// type. It is unconstrained: any direction, file or directory.
+type Path string
+
+// QuantityUnit describes the unit constraints of a [Quantity]. Implement it on a
+// marker type; the SDK reads it from the type parameter's zero value, so the
+// methods must not depend on any state.
+type QuantityUnit interface {
+	// BaseUnit is the canonical unit, such as "kg", "m", "s" or "B".
+	BaseUnit() string
+	// AllowedSuffixes are the units accepted in addition to the base unit. An
+	// empty list accepts only the base unit; a non-empty list replaces it, so
+	// include the base unit to keep it valid.
+	AllowedSuffixes() []string
+}
+
+// Quantity is a fixed-point measurement carrying its unit, lowering to the WIT
+// quantity type. The numeric value is Mantissa x 10^-Scale.
+//
+//	type Bytes struct{}
+//
+//	func (Bytes) BaseUnit() string          { return "B" }
+//	func (Bytes) AllowedSuffixes() []string { return nil }
+//
+//	type ByteQuantity = golem.Quantity[Bytes]
+//
+//	ByteQuantity{Mantissa: 1500, Scale: 0, Unit: "B"} // 1500 B
+type Quantity[U QuantityUnit] struct {
+	Mantissa int64
+	Scale    int32
+	// Unit this value is expressed in. An empty Unit means the base unit.
+	Unit string
+}
+
+// quantityish exposes the unit marker's constraints without the caller having to
+// know U, mirroring the other codec-plumbing interfaces.
+type quantityish interface {
+	quantityUnit() QuantityUnit
+	quantityValue() (mantissa int64, scale int32, unit string)
+}
+
+func (q Quantity[U]) quantityUnit() QuantityUnit {
+	var u U
+	return u
+}
+
+func (q Quantity[U]) quantityValue() (int64, int32, string) {
+	unit := q.Unit
+	if unit == "" {
+		unit = q.quantityUnit().BaseUnit()
+	}
+	return q.Mantissa, q.Scale, unit
+}
+
+type quantitySetter interface {
+	quantitySetValue(mantissa int64, scale int32, unit string)
+}
+
+func (q *Quantity[U]) quantitySetValue(mantissa int64, scale int32, unit string) {
+	q.Mantissa, q.Scale, q.Unit = mantissa, scale, unit
+}
+
 // Secret is a handle to a declared config secret, obtained from the agent's
 // config ([Config] / [InitContext.Config]). It lowers to the WIT secret
 // type. [Secret.Get] reads the CURRENT plaintext from the host on each call, so a

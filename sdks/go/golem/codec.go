@@ -114,6 +114,11 @@ func (d *definitions) buildCodec(c *codec) {
 		compileEnum(c, ed)
 		return
 	}
+	// A flag set is a struct of bools, which would otherwise compile as a record.
+	if fd, ok := d.flags[c.typ]; ok {
+		compileFlags(c, fd)
+		return
+	}
 	// SDK composite types are structs, so they must be recognised before the
 	// generic struct-as-record case. The check is an interface assertion on the
 	// zero value, done once here rather than per value.
@@ -280,6 +285,17 @@ func (d *definitions) sdkComposite(c *codec) bool {
 	case resultish:
 		okT, errT := z.resultElems()
 		compileResult(c, d.compile(okT), d.compile(errT))
+		return true
+	case quantityish:
+		compileQuantity(c, z.quantityUnit())
+		return true
+	case tupleish:
+		elems := z.tupleElems()
+		cs := make([]*codec, len(elems))
+		for i, e := range elems {
+			cs[i] = d.compile(e)
+		}
+		compileTuple(c, cs)
 		return true
 	}
 	return false

@@ -381,6 +381,49 @@ var namedTypeCodecs = map[reflect.Type]func(*codec){
 				dst.Set(reflect.ValueOf(time.Unix(d.Seconds, int64(d.Nanoseconds)).UTC()))
 			})
 	},
+	reflect.TypeFor[Text](): func(c *codec) {
+		scalar(c, types.MakeSchemaTypeBodyTextType(types.TextRestrictions{
+			Languages: witTypes.None[[]string](),
+			MinLength: witTypes.None[uint32](),
+			MaxLength: witTypes.None[uint32](),
+			Regex:     witTypes.None[string](),
+		}), types.SchemaValueNodeTextValue,
+			func(b *valBuilder, v reflect.Value) int32 {
+				return b.push(types.MakeSchemaValueNodeTextValue(types.TextValuePayload{
+					Text:     v.String(),
+					Language: witTypes.None[string](),
+				}))
+			},
+			func(dst reflect.Value, n types.SchemaValueNode) { dst.SetString(n.TextValue().Text) })
+	},
+	reflect.TypeFor[Binary](): func(c *codec) {
+		scalar(c, types.MakeSchemaTypeBodyBinaryType(types.BinaryRestrictions{
+			MimeTypes: witTypes.None[[]string](),
+			MinBytes:  witTypes.None[uint32](),
+			MaxBytes:  witTypes.None[uint32](),
+		}), types.SchemaValueNodeBinaryValue,
+			func(b *valBuilder, v reflect.Value) int32 {
+				return b.push(types.MakeSchemaValueNodeBinaryValue(types.BinaryValuePayload{
+					Bytes:    append([]uint8(nil), v.Bytes()...),
+					MimeType: witTypes.None[string](),
+				}))
+			},
+			func(dst reflect.Value, n types.SchemaValueNode) {
+				dst.SetBytes(append([]byte(nil), n.BinaryValue().Bytes...))
+			})
+	},
+	reflect.TypeFor[Path](): func(c *codec) {
+		scalar(c, types.MakeSchemaTypeBodyPathType(types.PathSpec{
+			Direction:         types.PathDirectionInOut,
+			Kind:              types.PathKindAny,
+			AllowedMimeTypes:  witTypes.None[[]string](),
+			AllowedExtensions: witTypes.None[[]string](),
+		}), types.SchemaValueNodePathValue,
+			func(b *valBuilder, v reflect.Value) int32 {
+				return b.push(types.MakeSchemaValueNodePathValue(v.String()))
+			},
+			func(dst reflect.Value, n types.SchemaValueNode) { dst.SetString(n.PathValue()) })
+	},
 	reflect.TypeFor[time.Duration](): func(c *codec) {
 		scalar(c, types.MakeSchemaTypeBodyDurationType(), types.SchemaValueNodeDurationValue,
 			func(b *valBuilder, v reflect.Value) int32 {
@@ -391,4 +434,39 @@ var namedTypeCodecs = map[reflect.Type]func(*codec){
 				dst.SetInt(n.DurationValue().Nanoseconds)
 			})
 	},
+}
+
+// compileQuantity lowers Quantity[U] to the WIT quantity type. The unit marker U
+// supplies the type-level constraints; the value supplies the fixed-point digits
+// and the unit it is expressed in.
+func compileQuantity(c *codec, unit QuantityUnit) {
+	suffixes := unit.AllowedSuffixes()
+	c.body = func(*graphBuilder) types.SchemaTypeBody {
+		return types.MakeSchemaTypeBodyQuantityType(types.QuantitySpec{
+			BaseUnit:        unit.BaseUnit(),
+			AllowedSuffixes: append([]string(nil), suffixes...),
+			Min:             witTypes.None[types.QuantityValue](),
+			Max:             witTypes.None[types.QuantityValue](),
+		})
+	}
+	c.encode = func(b *valBuilder, v reflect.Value) int32 {
+		mantissa, scale, u := v.Interface().(quantityish).quantityValue()
+		return b.push(types.MakeSchemaValueNodeQuantityValueNode(types.QuantityValue{
+			Mantissa: mantissa,
+			Scale:    scale,
+			Unit:     u,
+		}))
+	}
+	c.decode = func(d *decoder, dst reflect.Value, idx int32) error {
+		n, err := d.node(idx)
+		if err != nil {
+			return err
+		}
+		if n.Tag() != types.SchemaValueNodeQuantityValueNode {
+			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
+		}
+		q := n.QuantityValueNode()
+		dst.Addr().Interface().(quantitySetter).quantitySetValue(q.Mantissa, q.Scale, q.Unit)
+		return nil
+	}
 }
