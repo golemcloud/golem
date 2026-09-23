@@ -28,8 +28,7 @@ iterating on this repository:
 ```sh
 cd ../golem_sdk_tools
 moon run cmd -- agents ../golem_sdk_example1 \
-  --component-dir golem_moonbit_examples \
-  --role ordinary
+  --component-dir golem_moonbit_examples
 ```
 
 ## Tool middleware
@@ -43,22 +42,19 @@ contains:
 - `FileAdapter`, a compact monomorphic adapter that presents `PublicFiles` while expecting
   `Storage` from the next inner layer.
 
-The `moonbit-tool-middleware-local` template runs both generators with role `tool-middleware`,
-embeds SDK world `tool-middleware-guest`, and produces
-`golem_tool_middleware_examples.tool-middleware.wasm`. The package imports `tool-core` and
-`tool-middleware`, but not ambient `tool`/`golem:tool/host`.
+The default local template runs both generators, embeds SDK world `agent-guest`, and produces the
+middleware component. The same world supports ordinary, standalone-middleware, and combined
+components; unused agent and tool discovery returns empty lists.
 
-Generated `golem_reexports.mbt`, `golem_tool_middlewares.mbt`, `.golem-sdk-role`, and the generated
+Generated `golem_reexports.mbt`, `golem_tool_middlewares.mbt`, and the generated
 entries in `moon.pkg` must not be edited manually. To regenerate this component directly:
 
 ```sh
 cd ../golem_sdk_tools
 moon run cmd -- reexports ../golem_sdk \
-  ../golem_sdk_example1/golem_tool_middleware_examples \
-  --role tool-middleware
+  ../golem_sdk_example1/golem_tool_middleware_examples
 moon run cmd -- agents ../golem_sdk_example1 \
-  --component-dir golem_tool_middleware_examples \
-  --role tool-middleware
+  --component-dir golem_tool_middleware_examples
 ```
 
 See the SDK and generator READMEs for the exact monomorphic/universal signatures, capability and

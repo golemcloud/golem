@@ -114,26 +114,29 @@ describe("BridgeTool", () => {
           }),
         }),
     }
-    const invocation = await Effect.runPromise(
-      createToolClientRuntime("grep")
-        .start(
-          [],
-          { graph: { defs: new Map(), root: t.record([]) }, value: { tag: "record", fields: [] } },
-          undefined,
-          true,
-        )
-        .pipe(
-          Effect.provideService(ToolTransport, transport),
-          Effect.provideService(ToolClient, {} as never),
-        ),
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const invocation = yield* createToolClientRuntime("grep").start(
+            [],
+            {
+              graph: { defs: new Map(), root: t.record([]) },
+              value: { tag: "record", fields: [] },
+            },
+            undefined,
+            true,
+          )
+          expect(invocation.stdout).toBeDefined()
+          expect(yield* Stream.runCollect(invocation.stdout!)).toEqual([Uint8Array.of(1, 2)])
+          expect(yield* invocation.result).toEqual({ result: undefined })
+          expect(cancelled).toBe(false)
+          yield* invocation.cancel
+        }),
+      ).pipe(
+        Effect.provideService(ToolTransport, transport),
+        Effect.provideService(ToolClient, {} as never),
+      ),
     )
-    expect(invocation.stdout).toBeDefined()
-    expect(await Effect.runPromise(Stream.runCollect(invocation.stdout!))).toEqual([
-      Uint8Array.of(1, 2),
-    ])
-    expect(await Effect.runPromise(invocation.result)).toEqual({ result: undefined })
-    expect(cancelled).toBe(false)
-    await Effect.runPromise(invocation.cancel)
     expect(cancelled).toBe(true)
   })
 

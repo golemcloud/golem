@@ -395,6 +395,13 @@ pub enum ScheduledAction {
         parent: Option<AgentId>,
         creation_principal: Box<Principal>,
     },
+    ExpireDurableStreamSession {
+        owned_agent_id: OwnedAgentId,
+        target_agent_fingerprint: AgentFingerprint,
+        public_session_id: String,
+        session_key: IdempotencyKey,
+        expected_deadline_millis: u64,
+    },
 }
 
 impl ScheduledAction {
@@ -407,7 +414,10 @@ impl ScheduledAction {
             } => OwnedAgentId::new(*environment_id, &promise_id.agent_id),
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => owned_agent_id.clone(),
             ScheduledAction::Invoke { owned_agent_id, .. }
-            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => owned_agent_id.clone(),
+            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. }
+            | ScheduledAction::ExpireDurableStreamSession { owned_agent_id, .. } => {
+                owned_agent_id.clone()
+            }
             ScheduledAction::Resume { owned_agent_id, .. } => owned_agent_id.clone(),
         }
     }
@@ -426,6 +436,14 @@ impl Display for ScheduledAction {
             | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => {
                 write!(f, "invoke[{owned_agent_id}]")
             }
+            ScheduledAction::ExpireDurableStreamSession {
+                owned_agent_id,
+                public_session_id,
+                ..
+            } => write!(
+                f,
+                "expire-stream-session[{owned_agent_id}/{public_session_id}]"
+            ),
             ScheduledAction::Resume { owned_agent_id, .. } => write!(f, "resume[{owned_agent_id}]"),
         }
     }
@@ -1361,7 +1379,7 @@ pub struct ExportForkReservation {
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 pub enum ReceivedCardTransferState {
     Received {
-        source_card_id: Option<CardId>,
+        source_card_id: CardId,
         card: StoredCard,
     },
     Conflict,
@@ -1447,6 +1465,12 @@ pub struct DurableStreamSessionStatus {
     pub lifecycle_error: Option<String>,
     pub tombstoned_slots: HashSet<String>,
     pub cancellation_requested: bool,
+    pub public_session_id: Option<String>,
+    pub expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
+    pub expiry_deadline_millis: Option<u64>,
+    pub expired: bool,
+    pub export_fork_initialized: bool,
+    pub export_source_invocation: Option<crate::model::durable_stream::StreamInvocationId>,
 }
 
 impl DurableStreamSessionStatus {
@@ -1511,11 +1535,24 @@ impl DurableStreamSessionStatus {
         if let StreamSessionRecord::ForkCut(cut) = record {
             self.attachment_epoch = Some(cut.epoch_floor);
             self.attachment_attached = Some(false);
+            if cut.revert.is_none() {
+                // Concrete Prepared invocation identities remain valid continuations on an
+                // ordinary fork. A target-only export identity is replaced on initialization.
+                if self.first_prepared.is_none() {
+                    self.public_session_id = None;
+                }
+                self.expiry_policy = crate::model::durable_stream::StreamSessionExpiryPolicy::None;
+                self.expiry_deadline_millis = None;
+                self.expired = false;
+            }
             return;
         }
 
         let local_record_key = match record {
             StreamSessionRecord::Prepared(v) => Some(&v.session_key),
+            StreamSessionRecord::ExpiryRefreshed(v) => Some(&v.session_key),
+            StreamSessionRecord::Expired(v) => Some(&v.session_key),
+            StreamSessionRecord::ExportForkInitialized(v) => Some(&v.session_key),
             StreamSessionRecord::Attached(v) => Some(&v.session_key),
             StreamSessionRecord::ResumeAttempt(v) => Some(&v.session_key),
             StreamSessionRecord::Detached(v) => Some(&v.session_key),
@@ -1568,7 +1605,36 @@ impl DurableStreamSessionStatus {
                     self.first_prepared = Some(oplog_idx);
                     self.prepared = Some(oplog_idx);
                     self.prepared_attempt_id = Some(v.attempt.attempt_id);
+                    self.public_session_id = Some(v.public_session_id.clone());
+                    self.expiry_policy = v.expiry_policy;
+                    self.expiry_deadline_millis = v.expiry_deadline_millis;
                 }
+            }
+            StreamSessionRecord::ExpiryRefreshed(v)
+                if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
+                    && matches!(
+                        self.expiry_policy,
+                        crate::model::durable_stream::StreamSessionExpiryPolicy::Sliding { .. }
+                    )
+                    && !self.expired =>
+            {
+                self.expiry_deadline_millis = Some(v.deadline_millis);
+            }
+            StreamSessionRecord::Expired(v)
+                if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
+                    && !self.expired =>
+            {
+                self.expired = true;
+            }
+            StreamSessionRecord::ExportForkInitialized(v) if self.public_session_id.is_none() => {
+                self.public_session_id = Some(v.public_session_id.clone());
+                self.expiry_policy = v.expiry_policy;
+                self.expiry_deadline_millis = v.expiry_deadline_millis;
+                self.expired = false;
+                self.export_fork_initialized = true;
+                self.export_source_invocation = Some(v.source_invocation.clone());
             }
             StreamSessionRecord::Attached(v) => {
                 if self.initial_attachment_epoch.is_some() {
@@ -1638,6 +1704,95 @@ impl DurableStreamSessionStatus {
 }
 
 pub const DURABLE_STREAM_SESSION_RECENT_CAPACITY: usize = 128;
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub enum DurableStreamPublicBinding {
+    Live {
+        session_key: IdempotencyKey,
+        expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
+        expiry_deadline_millis: Option<u64>,
+    },
+    Retired {
+        session_key: IdempotencyKey,
+    },
+}
+
+impl DurableStreamPublicBinding {
+    pub fn fold(
+        current: Option<&Self>,
+        record: &crate::model::durable_stream::StreamSessionRecord,
+    ) -> Option<Self> {
+        use crate::model::durable_stream::StreamSessionRecord;
+
+        match record {
+            StreamSessionRecord::Prepared(record) => match current {
+                None => Some(Self::Live {
+                    session_key: record.session_key.clone(),
+                    expiry_policy: record.expiry_policy,
+                    expiry_deadline_millis: record.expiry_deadline_millis,
+                }),
+                Some(Self::Retired { session_key }) if session_key != &record.session_key => {
+                    Some(Self::Live {
+                        session_key: record.session_key.clone(),
+                        expiry_policy: record.expiry_policy,
+                        expiry_deadline_millis: record.expiry_deadline_millis,
+                    })
+                }
+                Some(current) => Some(current.clone()),
+            },
+            StreamSessionRecord::ExportForkInitialized(record) => match current {
+                None => Some(Self::Live {
+                    session_key: record.session_key.clone(),
+                    expiry_policy: record.expiry_policy,
+                    expiry_deadline_millis: record.expiry_deadline_millis,
+                }),
+                Some(Self::Retired { session_key }) if session_key != &record.session_key => {
+                    Some(Self::Live {
+                        session_key: record.session_key.clone(),
+                        expiry_policy: record.expiry_policy,
+                        expiry_deadline_millis: record.expiry_deadline_millis,
+                    })
+                }
+                Some(current) => Some(current.clone()),
+            },
+            StreamSessionRecord::ExpiryRefreshed(record) => match current {
+                Some(Self::Live {
+                    session_key,
+                    expiry_policy,
+                    expiry_deadline_millis: Some(deadline),
+                }) if session_key == &record.session_key
+                    && *deadline == record.expected_deadline_millis
+                    && matches!(
+                        expiry_policy,
+                        crate::model::durable_stream::StreamSessionExpiryPolicy::Sliding { .. }
+                    ) =>
+                {
+                    Some(Self::Live {
+                        session_key: record.session_key.clone(),
+                        expiry_policy: *expiry_policy,
+                        expiry_deadline_millis: Some(record.deadline_millis),
+                    })
+                }
+                _ => current.cloned(),
+            },
+            StreamSessionRecord::Expired(record) => match current {
+                Some(Self::Live {
+                    session_key,
+                    expiry_deadline_millis: Some(deadline),
+                    ..
+                }) if session_key == &record.session_key
+                    && *deadline == record.expected_deadline_millis =>
+                {
+                    Some(Self::Retired {
+                        session_key: record.session_key.clone(),
+                    })
+                }
+                _ => current.cloned(),
+            },
+            _ => current.cloned(),
+        }
+    }
+}
 
 /// An oplog-derived index of unfinished sessions and a bounded set of recent completions.
 /// Values contain only oplog indices; canonical invocation and result payloads remain in the oplog.
@@ -1732,7 +1887,13 @@ impl DurableStreamSessionIndex {
         };
         let mut status = match self.get(key) {
             Some(status) => status.clone(),
-            None if matches!(record, StreamSessionRecord::Prepared(_)) => Default::default(),
+            None if matches!(
+                record,
+                StreamSessionRecord::Prepared(_) | StreamSessionRecord::ExportForkInitialized(_)
+            ) =>
+            {
+                Default::default()
+            }
             // Caller-side results have no local Prepared/Finished lifecycle.
             None => return,
         };

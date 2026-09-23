@@ -17,6 +17,7 @@
 
 use super::super::error::RequestHandlerError;
 use super::super::{ResponseBody, RouteExecutionResult};
+use super::expiry::{add_expiry_headers, cache_control};
 use super::{body_response, response};
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{ReadStreamSlotSuccess, stream_slot_item};
@@ -77,6 +78,9 @@ pub(super) fn metadata_response(
         http::header::CACHE_CONTROL,
         HeaderValue::from_static("no-store"),
     );
+    if head {
+        add_expiry_headers(&mut out, &r.expiry_policy);
+    }
     out.headers.insert(
         HeaderName::from_static("x-content-type-options"),
         HeaderValue::from_static("nosniff"),
@@ -146,17 +150,20 @@ fn headers(
 /// and cacheable; every other page must not be cached.
 pub(super) fn data_response(
     r: &ReadStreamSlotSuccess,
+    sensitive: bool,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
     let body = render_items(r)?;
     let mut out = body_response(StatusCode::OK, body, content_type(r));
     headers(&mut out, r, false)?;
     out.headers.insert(
         http::header::CACHE_CONTROL,
-        HeaderValue::from_static(if r.closed && !r.up_to_date {
-            "public, max-age=31536000, immutable"
-        } else {
-            "no-store"
-        }),
+        cache_control(
+            &r.expiry_policy,
+            r.expiry_deadline_millis,
+            !sensitive && r.closed && !r.up_to_date,
+        )
+        .parse()
+        .map_err(anyhow::Error::from)?,
     );
     Ok(out)
 }
@@ -391,7 +398,7 @@ mod tests {
     fn closed_historic_page_is_cacheable_but_not_eof() {
         let mut batch = binary_batch();
         batch.closed = true;
-        let page = data_response(&batch).unwrap();
+        let page = data_response(&batch, false).unwrap();
         let closed = HeaderName::from_static("stream-closed");
         assert_eq!(page.headers[&closed], HeaderValue::from_static("false"));
         assert_eq!(
@@ -399,19 +406,17 @@ mod tests {
             HeaderValue::from_static("public, max-age=31536000, immutable")
         );
         assert_eq!(
+            data_response(&batch, true).unwrap().headers[&http::header::CACHE_CONTROL],
+            "no-store"
+        );
+        assert_eq!(
             metadata_response(&batch, true).unwrap().headers[&closed],
             HeaderValue::from_static("true")
         );
         batch.up_to_date = true;
-        let final_page = data_response(&batch).unwrap();
-        assert_eq!(
-            final_page.headers[&closed],
-            HeaderValue::from_static("true")
-        );
-        assert_eq!(
-            final_page.headers[&http::header::CACHE_CONTROL],
-            HeaderValue::from_static("no-store")
-        );
+        let final_page = data_response(&batch, false).unwrap();
+        assert_eq!(final_page.headers[&closed], "true");
+        assert_eq!(final_page.headers[&http::header::CACHE_CONTROL], "no-store");
     }
 
     #[test]
@@ -443,7 +448,7 @@ mod tests {
             assert!(offset_text(&invalid).is_err());
             let mut batch = binary_batch();
             batch.next_offset = invalid.clone();
-            assert!(data_response(&batch).is_err());
+            assert!(data_response(&batch, false).is_err());
             assert!(sse_batch(&batch, &mut None).is_err());
             assert!(metadata_response(&batch, true).is_err());
             batch.next_offset.clear();
@@ -475,5 +480,14 @@ mod tests {
             result.headers[&http::header::CACHE_CONTROL],
             HeaderValue::from_static("no-store")
         );
+    }
+
+    #[test]
+    fn tombstone_metadata_is_not_cacheable() {
+        let mut batch = binary_batch();
+        batch.tombstoned = true;
+        let result = metadata_response(&batch, true).unwrap();
+        assert_eq!(result.status, StatusCode::GONE);
+        assert_eq!(result.headers[&http::header::CACHE_CONTROL], "no-store");
     }
 }

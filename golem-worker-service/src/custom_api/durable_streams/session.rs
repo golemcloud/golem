@@ -21,13 +21,15 @@ use super::super::error::RequestHandlerError;
 use super::super::route_resolver::ResolvedRouteEntry;
 use super::super::{ResponseBody, RichRequest, RouteExecutionResult};
 use super::encoding::{metadata_response, offset_text};
+use super::expiry::{add_expiry_headers, policies_match};
 use super::{DurableStreamsHandler, body_response, response, route_method};
 use golem_api_grpc::proto::golem::worker::{
     AgentInvocationMode, InvocationContext, InvocationStart,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest, ExportStreamControl,
-    ExportStreamControlResult,
+    CreateStreamSessionRequest, CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest,
+    ExportStreamControl, ExportStreamControlResult, StreamSessionCreationIntent,
+    StreamSessionExpiryPolicy, StreamSlotReadAdmission,
 };
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::stream::SchemaValueStream;
@@ -52,6 +54,8 @@ impl DurableStreamsHandler {
         behaviour: &CallAgentBehaviour,
         agent_id: &AgentId,
         session: &str,
+        creation_intent: StreamSessionCreationIntent,
+        expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<CreateStreamSessionSuccess, RequestHandlerError> {
         let body = request.parse_request_body(&behaviour.body).await?;
         let args = self
@@ -118,7 +122,15 @@ impl DurableStreamsHandler {
             origin_invocation: None,
         };
         self.worker_service
-            .create_stream_session(agent_id, start)
+            .create_stream_session(
+                agent_id,
+                CreateStreamSessionRequest {
+                    public_session_id: session.to_owned(),
+                    expiry_policy,
+                    creation_intent: creation_intent as i32,
+                    invocation: Some(start),
+                },
+            )
             .await
             .map_err(Into::into)
     }
@@ -132,9 +144,18 @@ impl DurableStreamsHandler {
         behaviour: &CallAgentBehaviour,
         agent_id: &AgentId,
         session: &str,
+        expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         let created = self
-            .create(request, route, behaviour, agent_id, session)
+            .create(
+                request,
+                route,
+                behaviour,
+                agent_id,
+                session,
+                StreamSessionCreationIntent::ExplicitPut,
+                expiry_policy,
+            )
             .await?;
         let mut result = response(created_status(created.replayed));
         result.headers.insert(
@@ -160,6 +181,7 @@ impl DurableStreamsHandler {
         agent_id: &AgentId,
         session: &str,
         slot: Option<&str>,
+        expiry_policy: Option<StreamSessionExpiryPolicy>,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         if let Some(slot) = slot {
             let mut body = request.underlying.take_body().into_async_read();
@@ -176,12 +198,44 @@ impl DurableStreamsHandler {
                 .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
                 .await?
             {
+                if !policies_match(&metadata.expiry_policy, &expiry_policy) {
+                    return Ok(response(StatusCode::CONFLICT));
+                }
                 if metadata.tombstoned || content_type_mismatch(request, &metadata.content_type)? {
                     return Ok(response(StatusCode::CONFLICT));
                 }
                 if args_from_url {
-                    self.create(request, route, behaviour, agent_id, session)
+                    let created = self
+                        .create(
+                            request,
+                            route,
+                            behaviour,
+                            agent_id,
+                            session,
+                            StreamSessionCreationIntent::ExplicitPut,
+                            expiry_policy,
+                        )
                         .await?;
+                    let Some(metadata) = self
+                        .read_slot_admitted(
+                            route,
+                            agent_id,
+                            session,
+                            slot,
+                            Vec::new(),
+                            0,
+                            0,
+                            StreamSlotReadAdmission::Continuation,
+                            created.invocation_key.clone(),
+                        )
+                        .await?
+                    else {
+                        return Err(anyhow::anyhow!(
+                            "created stream session has no requested slot"
+                        )
+                        .into());
+                    };
+                    return created_slot_response(&metadata, created.replayed);
                 }
                 return metadata_response(&metadata, true);
             }
@@ -203,23 +257,40 @@ impl DurableStreamsHandler {
             }
         }
         let created = self
-            .create(request, route, behaviour, agent_id, session)
+            .create(
+                request,
+                route,
+                behaviour,
+                agent_id,
+                session,
+                StreamSessionCreationIntent::ExplicitPut,
+                expiry_policy,
+            )
             .await?;
-        let mut result = match slot {
+        match slot {
             Some(slot) => match self
-                .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
+                .read_slot_admitted(
+                    route,
+                    agent_id,
+                    session,
+                    slot,
+                    Vec::new(),
+                    0,
+                    0,
+                    StreamSlotReadAdmission::Continuation,
+                    created.invocation_key.clone(),
+                )
                 .await?
             {
-                Some(metadata) if metadata.tombstoned => {
-                    return Ok(response(StatusCode::CONFLICT));
-                }
-                Some(metadata) => metadata_response(&metadata, true)?,
-                None => return Ok(response(StatusCode::NOT_FOUND)),
+                Some(metadata) => created_slot_response(&metadata, created.replayed),
+                None => Err(anyhow::anyhow!("created stream session has no requested slot").into()),
             },
-            None => response(StatusCode::OK),
-        };
-        result.status = created_status(created.replayed);
-        Ok(result)
+            None => {
+                let mut result = response(StatusCode::OK);
+                result.status = created_status(created.replayed);
+                Ok(result)
+            }
+        }
     }
 
     /// `DELETE` on a session or one of its slots, forwarded to the executor as
@@ -268,7 +339,21 @@ impl DurableStreamsHandler {
         session: &str,
     ) -> Result<RouteExecutionResult, RequestHandlerError> {
         let read = self
-            .read_slot(route, agent_id, session, "", Vec::new(), 0, 0)
+            .read_slot_admitted(
+                route,
+                agent_id,
+                session,
+                "",
+                Vec::new(),
+                0,
+                0,
+                if request.underlying.method() == Method::HEAD {
+                    StreamSlotReadAdmission::Head
+                } else {
+                    StreamSlotReadAdmission::TouchingOriginGet
+                },
+                None,
+            )
             .await?;
         let Some(read) = read else {
             return Ok(response(StatusCode::NOT_FOUND));
@@ -277,7 +362,17 @@ impl DurableStreamsHandler {
         let mut closed = true;
         for slot in &read.slots {
             let Some(metadata) = self
-                .read_slot(route, agent_id, session, slot, Vec::new(), 0, 0)
+                .read_slot_admitted(
+                    route,
+                    agent_id,
+                    session,
+                    slot,
+                    Vec::new(),
+                    0,
+                    0,
+                    StreamSlotReadAdmission::Continuation,
+                    read.invocation_key.clone(),
+                )
                 .await?
             else {
                 return Ok(response(StatusCode::NOT_FOUND));
@@ -321,6 +416,7 @@ impl DurableStreamsHandler {
             HeaderValue::from_static(if closed { "true" } else { "false" }),
         );
         if request.underlying.method() == Method::HEAD {
+            add_expiry_headers(&mut result, &read.expiry_policy);
             result.body = ResponseBody::NoBody;
         }
         Ok(result)
@@ -333,6 +429,18 @@ fn created_status(replayed: bool) -> StatusCode {
     } else {
         StatusCode::CREATED
     }
+}
+
+fn created_slot_response(
+    metadata: &golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess,
+    replayed: bool,
+) -> Result<RouteExecutionResult, RequestHandlerError> {
+    if metadata.tombstoned {
+        return Ok(response(StatusCode::CONFLICT));
+    }
+    let mut result = metadata_response(metadata, true)?;
+    result.status = created_status(replayed);
+    Ok(result)
 }
 
 /// True when every non-stream method argument is bound to a path or query
@@ -422,4 +530,24 @@ pub(super) fn declared_slot_content_type(
         return stream_type(graph, &field.body);
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::ReadStreamSlotSuccess;
+    use test_r::test;
+
+    #[test]
+    fn tombstoned_created_slot_is_a_conflict_not_a_success() {
+        let metadata = ReadStreamSlotSuccess {
+            tombstoned: true,
+            ..Default::default()
+        };
+        for replayed in [false, true] {
+            let response = created_slot_response(&metadata, replayed).unwrap();
+            assert_eq!(response.status, StatusCode::CONFLICT);
+            assert_eq!(response.headers[&http::header::CACHE_CONTROL], "no-store");
+        }
+    }
 }

@@ -23,13 +23,12 @@
 //! - `from_text` also accepts the shorthand forms `<N>ns`, `<N>us`,
 //!   `<N>ms`, `<N>s` (integer N, optional leading `-`). The shorthand set
 //!   is intentionally limited to these four units.
-//! - JSON form: a string in the ISO 8601 form on output; `from_json`
-//!   accepts either the same string form or the object
-//!   `{ "nanoseconds": N }`.
+//! - JSON form: `{ "nanoseconds": "N" }`, where `N` is a canonical signed
+//!   base-10 `i64` string.
 
 use crate::schema::canonical::error::ParseError;
 use crate::schema::schema_value::DurationValuePayload;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 const NS_PER_US: i128 = 1_000;
 const NS_PER_MS: i128 = 1_000_000;
@@ -98,12 +97,16 @@ pub fn from_text(s: &str) -> Result<DurationValuePayload, ParseError> {
 }
 
 pub fn to_json(payload: &DurationValuePayload) -> Value {
-    Value::String(to_text(payload))
+    let mut object = Map::new();
+    object.insert(
+        "nanoseconds".to_string(),
+        Value::String(payload.nanoseconds.to_string()),
+    );
+    Value::Object(object)
 }
 
 pub fn from_json(value: &Value) -> Result<DurationValuePayload, ParseError> {
     match value {
-        Value::String(s) => from_text(s),
         Value::Object(obj) => {
             for key in obj.keys() {
                 if key != "nanoseconds" {
@@ -113,17 +116,41 @@ pub fn from_json(value: &Value) -> Result<DurationValuePayload, ParseError> {
             let ns = obj
                 .get("nanoseconds")
                 .ok_or(ParseError::MissingField("nanoseconds"))?;
-            let n = ns.as_i64().ok_or(ParseError::TypeField {
-                expected: "integer",
+            let n = ns.as_str().ok_or(ParseError::TypeField {
+                expected: "canonical signed integer string",
                 field: Some("nanoseconds"),
             })?;
+            if !is_canonical_signed_integer(n) {
+                return Err(ParseError::BadFormat(
+                    "duration nanoseconds must be a canonical signed integer".to_string(),
+                ));
+            }
+            let n = n
+                .parse::<i64>()
+                .map_err(|_| ParseError::OutOfRange("duration nanoseconds"))?;
             Ok(DurationValuePayload { nanoseconds: n })
         }
         _ => Err(ParseError::TypeField {
-            expected: "string or object",
+            expected: "object",
             field: None,
         }),
     }
+}
+
+fn is_canonical_signed_integer(value: &str) -> bool {
+    value == "0"
+        || value
+            .strip_prefix('-')
+            .is_some_and(canonical_nonzero_digits)
+        || canonical_nonzero_digits(value)
+}
+
+fn canonical_nonzero_digits(value: &str) -> bool {
+    value
+        .as_bytes()
+        .first()
+        .is_some_and(|digit| matches!(digit, b'1'..=b'9'))
+        && value.bytes().all(|digit| digit.is_ascii_digit())
 }
 
 fn parse_shorthand(s: &str) -> Result<Option<DurationValuePayload>, ParseError> {
@@ -428,6 +455,24 @@ mod tests {
     }
 
     #[test]
+    fn json_nanoseconds_require_a_canonical_in_range_string() {
+        for nanoseconds in [
+            serde_json::json!(1),
+            serde_json::json!("+1"),
+            serde_json::json!("01"),
+            serde_json::json!("-0"),
+            serde_json::json!("9223372036854775808"),
+        ] {
+            assert!(
+                from_json(&serde_json::json!({
+                    "nanoseconds": nanoseconds,
+                }))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn small_positive() {
         let p = DurationValuePayload {
             nanoseconds: 3_004_005_000, // 3.004005 s
@@ -499,7 +544,7 @@ mod tests {
 
     #[test]
     fn json_object_form() {
-        let v = serde_json::json!({ "nanoseconds": 1234 });
+        let v = serde_json::json!({ "nanoseconds": "1234" });
         assert_eq!(
             from_json(&v),
             Ok(DurationValuePayload { nanoseconds: 1234 })
@@ -521,7 +566,7 @@ mod tests {
         assert_eq!(
             from_json(&Value::Bool(true)),
             Err(ParseError::TypeField {
-                expected: "string or object",
+                expected: "object",
                 field: None,
             })
         );

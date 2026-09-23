@@ -1017,7 +1017,9 @@ impl TestWorkerExecutor {
         Ok(worker
             .add_to_oplog(OplogEntry::card_event_queued(
                 None,
-                golem_common::base_model::oplog::QueuedCardEvent::revoke(card_id),
+                Box::new(golem_common::base_model::oplog::QueuedCardEvent::revoke(
+                    card_id,
+                )),
             ))
             .await)
     }
@@ -1036,7 +1038,9 @@ impl TestWorkerExecutor {
         worker
             .add_and_commit_oplog(OplogEntry::card_event_queued(
                 None,
-                golem_common::base_model::oplog::QueuedCardEvent::install(card),
+                Box::new(golem_common::base_model::oplog::QueuedCardEvent::install(
+                    card,
+                )),
             ))
             .await;
         Ok(())
@@ -1816,6 +1820,8 @@ type WrapBlobStoreServiceFn =
 type WrapComponentServiceFn =
     dyn Fn(Arc<dyn ComponentService>) -> Arc<dyn ComponentService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
+type WrapWorkerEnumerationServiceFn =
+    dyn Fn(Arc<dyn WorkerEnumerationService>) -> Arc<dyn WorkerEnumerationService> + Send + Sync;
 type WrapWorkerProxyFn = dyn Fn(Arc<dyn WorkerProxy>) -> Arc<dyn WorkerProxy> + Send + Sync;
 type CreateCardServiceFn = dyn Fn() -> Arc<dyn CardService> + Send + Sync;
 type CreateDirectInvocationAuthFn = dyn Fn() -> Arc<dyn DirectInvocationAuthService> + Send + Sync;
@@ -1832,6 +1838,7 @@ pub struct TestExecutorOverrides {
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     pub wrap_component_service: Option<Arc<WrapComponentServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
+    pub wrap_worker_enumeration_service: Option<Arc<WrapWorkerEnumerationServiceFn>>,
     /// Wraps the executor's `ShardService`, so a test can observe or fake which
     /// agents this executor owns. Everything that gates on ownership reads it,
     /// including the periodic re-check a caller parked in
@@ -3217,6 +3224,17 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             rpc
         }
     }
+
+    fn wrap_worker_enumeration_service(
+        &self,
+        service: Arc<dyn WorkerEnumerationService>,
+    ) -> Arc<dyn WorkerEnumerationService> {
+        if let Some(wrap) = &self.overrides.wrap_worker_enumeration_service {
+            wrap(service)
+        } else {
+            service
+        }
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -4365,6 +4383,14 @@ impl TestOplog {
 impl Oplog for TestOplog {
     fn retire(&self) {
         self.oplog.retire();
+    }
+
+    fn is_retired(&self) -> bool {
+        self.oplog.is_retired()
+    }
+
+    fn closed(&self) -> golem_worker_executor::services::oplog::OplogCloseCompletion {
+        self.oplog.closed()
     }
 
     fn task_owner(&self) -> Option<&golem_worker_executor::services::oplog::WorkerTasks> {

@@ -14,6 +14,12 @@ pub fn MoonbitStreamingClient::new() -> MoonbitStreamingClient {
 
 ///|
 ///
+pub fn MoonbitStreamingClient::new_for(name : String) -> MoonbitStreamingClient {
+  { client: @tool.ToolClient::new(name), }
+}
+
+///|
+///
 pub fn MoonbitStreamingClient::drop(self : MoonbitStreamingClient) -> Unit {
   self.client.drop()
 }
@@ -66,6 +72,12 @@ pub(all) struct CanonicalGrepClient {
 ///
 pub fn CanonicalGrepClient::new() -> CanonicalGrepClient {
   { client: @tool.ToolClient::new("canonical-grep"), }
+}
+
+///|
+///
+pub fn CanonicalGrepClient::new_for(name : String) -> CanonicalGrepClient {
+  { client: @tool.ToolClient::new(name), }
 }
 
 ///|
@@ -174,6 +186,12 @@ pub(all) struct CanonicalGitClient {
 ///
 pub fn CanonicalGitClient::new() -> CanonicalGitClient {
   { client: @tool.ToolClient::new("canonical-git"), }
+}
+
+///|
+///
+pub fn CanonicalGitClient::new_for(name : String) -> CanonicalGitClient {
+  { client: @tool.ToolClient::new(name), }
 }
 
 ///|
@@ -586,6 +604,14 @@ pub fn CanonicalBigBoundClient::new() -> CanonicalBigBoundClient {
 
 ///|
 ///
+pub fn CanonicalBigBoundClient::new_for(
+  name : String,
+) -> CanonicalBigBoundClient {
+  { client: @tool.ToolClient::new(name), }
+}
+
+///|
+///
 pub fn CanonicalBigBoundClient::drop(self : CanonicalBigBoundClient) -> Unit {
   self.client.drop()
 }
@@ -617,5 +643,99 @@ pub async fn CanonicalBigBoundClient::canonical_big_bound(
   match self.client.invoke_and_await_tool_error([], __golem_input, None) {
     Err(__golem_error) => Err(__golem_error)
     Ok(__golem_result) => @tool.decode_result_empty(__golem_result)
+  }
+}
+
+///|
+///
+pub(all) struct MoonbitReflectionTestClient {
+  client : @tool.ToolClient
+}
+
+///|
+///
+pub fn MoonbitReflectionTestClient::new() -> MoonbitReflectionTestClient {
+  { client: @tool.ToolClient::new("moonbit-reflection-test"), }
+}
+
+///|
+///
+pub fn MoonbitReflectionTestClient::new_for(
+  name : String,
+) -> MoonbitReflectionTestClient {
+  { client: @tool.ToolClient::new(name), }
+}
+
+///|
+///
+pub fn MoonbitReflectionTestClient::drop(
+  self : MoonbitReflectionTestClient,
+) -> Unit {
+  self.client.drop()
+}
+
+///|
+///
+pub async fn MoonbitReflectionTestClient::echo(
+  self : MoonbitReflectionTestClient,
+  label : String,
+) -> Result[String, @tool.ToolError[@tool.NoToolError]] {
+  let __golem_def = __golem_tool_def_MoonBitReflectionTest()
+  let __golem_index = match __golem_def.command_index_by_path(["echo"]) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return Err(
+        @tool.tool_protocol_error(
+          "generated command path is missing from descriptor",
+        ),
+      )
+  }
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
+    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  }
+  let __golem_values = []
+  __golem_values.push(("label", @schema.to_value_as(label)))
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
+    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  }
+  match
+    self.client.invoke_and_await_no_tool_error(["echo"], __golem_input, None) {
+    Err(__golem_error) => Err(__golem_error)
+    Ok(__golem_result) => @tool.decode_result_value(__golem_result)
+  }
+}
+
+///|
+///
+pub async fn MoonbitReflectionTestClient::optional(
+  self : MoonbitReflectionTestClient,
+  maybe : String?,
+) -> Result[String, @tool.ToolError[@tool.NoToolError]] {
+  let __golem_def = __golem_tool_def_MoonBitReflectionTest()
+  let __golem_index = match __golem_def.command_index_by_path(["optional"]) {
+    Some(__golem_index) => __golem_index
+    None =>
+      return Err(
+        @tool.tool_protocol_error(
+          "generated command path is missing from descriptor",
+        ),
+      )
+  }
+  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
+    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  }
+  let __golem_values = []
+  __golem_values.push(("maybe", @schema.to_value_as(maybe)))
+  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
+    __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error)))
+  }
+  match
+    self.client.invoke_and_await_no_tool_error(
+      ["optional"],
+      __golem_input,
+      None,
+    ) {
+    Err(__golem_error) => Err(__golem_error)
+    Ok(__golem_result) => @tool.decode_result_value(__golem_result)
   }
 }

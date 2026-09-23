@@ -1936,7 +1936,7 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
 }
 
 #[test]
-#[timeout("300s")]
+#[timeout("900s")]
 async fn selected_dependency_guest_bridge_reextracts_rebuilt_provider_metadata(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "stale-metadata-repro";

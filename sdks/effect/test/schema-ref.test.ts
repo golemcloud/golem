@@ -8,6 +8,33 @@ const ref = (root: SchemaGraph["root"]) =>
   new SchemaRef(schemaGraphToWit({ defs: new Map(), root }))
 
 describe("SchemaRef", () => {
+  it("keeps union branch bodies and regex discriminators as separate JSON Schema conditions", () => {
+    const schema = ref(
+      t.union([
+        {
+          tag: "named",
+          body: t.record([field("kind", t.string()), field("payload", t.string())]),
+          discriminator: { tag: "field-equals", val: { fieldName: "kind", literal: "named" } },
+          metadata: { aliases: [], examples: [] },
+        },
+        {
+          tag: "pattern",
+          body: t.string(),
+          discriminator: { tag: "regex", val: "^[a-z]+$" },
+          metadata: { aliases: [], examples: [] },
+        },
+      ]),
+    )
+    expect(schema.toJsonSchema()).toMatchObject({
+      oneOf: [
+        {
+          allOf: [{ required: ["kind", "payload"] }, { properties: { kind: { const: "named" } } }],
+        },
+        { allOf: [{ type: "string" }, { pattern: "^[a-z]+$" }] },
+      ],
+    })
+  })
+
   it("renders numeric restrictions and required nullable fields", () => {
     const schema = ref(
       t.record([
@@ -50,23 +77,23 @@ describe("SchemaRef", () => {
     const valid = {
       text: { text: "ok", language: "en" },
       binary: { bytes: "-_8", mimeType: "application/octet-stream" },
-      duration: "250ms",
-      quantity: { mantissa: 12, scale: -1, unit: "m" },
-      signed: Number.MIN_SAFE_INTEGER,
-      unsigned: Number.MAX_SAFE_INTEGER,
+      duration: { nanoseconds: "250000000" },
+      quantity: { mantissa: "12", scale: -1, unit: "m" },
+      signed: "-9223372036854775808",
+      unsigned: "18446744073709551615",
     }
 
     expect(schema.validateJson(valid).success).toBe(true)
     expect(schema.validateJson({ ...valid, text: { text: "x", language: "en" } }).success).toBe(
       false,
     )
-    expect(schema.validateJson({ ...valid, signed: Number.MAX_SAFE_INTEGER + 1 }).success).toBe(
-      false,
-    )
+    expect(schema.validateJson({ ...valid, signed: "9223372036854775808" }).success).toBe(false)
     expect(
-      schema.validateJson({ ...valid, quantity: { mantissa: "12", scale: -1, unit: "m" } } as never)
+      schema.validateJson({ ...valid, quantity: { mantissa: 12, scale: -1, unit: "m" } } as never)
         .success,
     ).toBe(false)
+    expect(schema.validateJson({ ...valid, duration: { nanoseconds: "-0" } }).success).toBe(false)
+    expect(schema.unpackJson(schema.packJson(valid))).toEqual(valid)
   })
 
   it("validates nested native capabilities without consuming or rewriting them", () => {
@@ -143,7 +170,24 @@ describe("SchemaRef", () => {
     }
 
     expect(schema.validateValue(value)).toEqual({ success: true, value })
-    expect(() => schema.unpackJson(value)).toThrow(/losslessly/)
+    expect(schema.unpackJson(value)).toBe("9223372036854775808")
+  })
+
+  it("renders canonical wide-integer shapes and range metadata", () => {
+    expect(ref(t.s64()).toJsonSchema()).toMatchObject({
+      type: "string",
+      format: "int64",
+      pattern: "^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$",
+      "x-golem-minimum": "-9223372036854775808",
+      "x-golem-maximum": "9223372036854775807",
+    })
+    expect(ref(t.u64()).toJsonSchema()).toMatchObject({
+      type: "string",
+      format: "uint64",
+      pattern: "^(?:0|[1-9][0-9]*)$",
+      "x-golem-minimum": "0",
+      "x-golem-maximum": "18446744073709551615",
+    })
   })
 
   it("distinguishes native float membership from canonical JSON representability", () => {

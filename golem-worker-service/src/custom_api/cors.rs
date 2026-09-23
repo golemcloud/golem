@@ -202,7 +202,7 @@ pub fn apply_cors_outgoing_middleware(
     {
         response.headers_mut().insert(
             http::header::ACCESS_CONTROL_EXPOSE_HEADERS,
-            HeaderValue::from_static("Stream-Next-Offset, Stream-Closed, Stream-Cancelled, Stream-Up-To-Date, Stream-Cursor, Stream-SSE-Data-Encoding, Producer-Epoch, Producer-Seq, Producer-Expected-Seq, Producer-Received-Seq, ETag, Location, Retry-After"),
+            HeaderValue::from_static("Stream-Next-Offset, Stream-Closed, Stream-Cancelled, Stream-Up-To-Date, Stream-Cursor, Stream-SSE-Data-Encoding, Stream-TTL, Stream-Expires-At, Producer-Epoch, Producer-Seq, Producer-Expected-Seq, Producer-Received-Seq, ETag, Location, Retry-After"),
         );
     }
     let cors = &resolved_route.route.cors;

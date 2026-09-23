@@ -402,8 +402,8 @@ async function sessionCancellation() {
       method: "PUT",
     });
     const values = await observations.json();
-    if (values[4] === 1) {
-      assert.deepEqual(values, [1, 1, 1, 0, 1, 0, 0]);
+    if (values[4] === "1") {
+      assert.deepEqual(values, ["1", "1", "1", "0", "1", "0", "0"]);
       break;
     }
     assert.ok(
@@ -414,7 +414,7 @@ async function sessionCancellation() {
   }
   assert.equal(
     await (await request(`${s.agent}/mark/37`, 200, { method: "PUT" })).json(),
-    37,
+    "37",
   );
 }
 
@@ -472,10 +472,15 @@ async function tombstoneAndExclusions() {
   const next = session();
   await create(next.slot("input"));
   await handle(next.slot("input")).close();
-  await request(session().slot("input"), 400, {
+  const expiring = session();
+  await request(expiring.slot("input"), 201, {
     method: "PUT",
     headers: { "content-type": json, "stream-ttl": "60" },
   });
+  const expiringHead = await fetch(expiring.slot("input"), { method: "HEAD" });
+  assert.equal(expiringHead.status, 200);
+  assert.equal(expiringHead.headers.get("stream-ttl"), "60");
+  assert.equal(expiringHead.headers.get("cache-control"), "no-store");
   for (const method of ["GET", "PUT"]) {
     await request(s.slot("__ds"), 404, { method });
   }

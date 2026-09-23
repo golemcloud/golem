@@ -115,6 +115,12 @@ pub fn http_router(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[cfg(not(test))]
 #[proc_macro_attribute]
+pub fn agent_client(attr: TokenStream, item: TokenStream) -> TokenStream {
+    agentic::agent_client_impl(attr, item, &get_golem_rust_crate_ident())
+}
+
+#[cfg(not(test))]
+#[proc_macro_attribute]
 pub fn tool_definition(attr: TokenStream, item: TokenStream) -> TokenStream {
     tool::tool_definition_impl(attr, item, &get_golem_rust_crate_ident())
 }

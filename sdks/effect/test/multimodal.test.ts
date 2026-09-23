@@ -68,14 +68,14 @@ describe("multimodal()", () => {
       ) {}
       const validated = Schema.String.pipe(
         Schema.decodeTo(Schema.String, {
-          decode: SchemaGetter.transformOrFail((value) =>
+          decode: SchemaGetter.transformEffect((value) =>
             Effect.gen(function* () {
               yield* Effect.yieldNow
               const validation = yield* Validation
               return `${value}${validation.suffix}`
             }),
           ),
-          encode: SchemaGetter.transformOrFail((value) =>
+          encode: SchemaGetter.transformEffect((value) =>
             Effect.gen(function* () {
               yield* Effect.yieldNow
               const validation = yield* Validation

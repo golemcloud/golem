@@ -14,7 +14,7 @@
 
 mod invocation;
 mod invocation_session;
-mod stream_slots;
+pub(crate) mod stream_slots;
 
 pub(crate) use invocation::{CanStartWorker, from_proto_invocation_context};
 pub(crate) use invocation_session::{build_durable_streaming_request, decode_invocation_input};
@@ -710,8 +710,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn create_stream_session_internal(
         &self,
-        request: golem::worker::InvocationStart,
+        request: golem::workerexecutor::v1::CreateStreamSessionRequest,
     ) -> Result<golem::workerexecutor::v1::CreateStreamSessionSuccess, WorkerExecutorError> {
+        let public_session_id = request.public_session_id;
+        golem_common::model::invocation_session_public::validate_durable_stream_session_id(
+            &public_session_id,
+        )
+        .map_err(WorkerExecutorError::invalid_request)?;
+        let expiry_policy = stream_slots::expiry_policy_from_proto(request.expiry_policy)?;
+        let creation_intent = stream_slots::creation_intent_from_proto(request.creation_intent)?;
+        let mut request = request
+            .invocation
+            .ok_or_else(|| WorkerExecutorError::invalid_request("invocation not found"))?;
         let auth: AuthCtx = request
             .auth_ctx
             .clone()
@@ -720,15 +730,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(WorkerExecutorError::invalid_request)?;
         auth.authorize_system_only("create authorized Durable Streams session")
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-        let key: IdempotencyKey = request
-            .idempotency_key
-            .clone()
-            .ok_or_else(|| WorkerExecutorError::invalid_request("session id not found"))?
-            .into();
-        golem_common::model::invocation_session_public::validate_durable_stream_session_id(
-            &key.value,
-        )
-        .map_err(WorkerExecutorError::invalid_request)?;
         let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&id)?;
         let (worker, _response_lease) =
@@ -742,6 +743,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?
                 }
             };
+        let admission = worker
+            .begin_stream_session_creation(public_session_id, expiry_policy, creation_intent)
+            .await?;
+        let key = admission.invocation_key().clone();
+        request.idempotency_key = Some(key.clone().into());
         let revision = worker.stream_session_revision(&key).await?;
         let component = worker
             .component_service()
@@ -770,7 +776,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 "Durable Streams requires a streaming method",
             ));
         }
-        let mut request = request;
         request.attempt_id = Some(uuid::Uuid::new_v4().into());
         request.expected_callee_fingerprint =
             Some(worker.get_initial_worker_metadata().fingerprint.0.into());
@@ -803,7 +808,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .live_stream_event_broadcast_capacity
                 .get(),
         )?;
-        let result = worker.create_stream_session(domain_request).await?;
+        let result = worker
+            .create_stream_session(domain_request, admission)
+            .await?;
         Ok(result.into())
     }
 
@@ -1418,13 +1425,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &environment_id,
                 &component_id,
                 filter,
-                request
-                    .cursor
-                    .map(|cursor| ScanCursor {
-                        cursor: cursor.cursor,
-                        layer: cursor.layer as usize,
-                    })
-                    .unwrap_or_default(),
+                request.cursor.map(ScanCursor::from).unwrap_or_default(),
                 request.count,
                 request.precise,
             )
@@ -1446,13 +1447,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             result.push(metadata);
         }
 
-        Ok((
-            new_cursor.map(|cursor| Cursor {
-                layer: cursor.layer as u64,
-                cursor: cursor.cursor,
-            }),
-            result,
-        ))
+        Ok((new_cursor.map(Cursor::from), result))
     }
 
     async fn update_worker_internal(
@@ -3168,7 +3163,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn create_stream_session(
         &self,
-        request: Request<golem::worker::InvocationStart>,
+        request: Request<golem::workerexecutor::v1::CreateStreamSessionRequest>,
     ) -> ResponseResult<golem::workerexecutor::v1::CreateStreamSessionResponse> {
         use golem::workerexecutor::v1::create_stream_session_response::Result as Outcome;
         let result = self
@@ -3245,6 +3240,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         error.into(),
                     ),
                 ),
+                invocation_key: None,
+                expiry_policy: None,
+                expiry_deadline_millis: None,
+                stream_head_offset: Vec::new(),
+                stream_closed: None,
             }
         })))
     }

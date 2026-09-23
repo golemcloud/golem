@@ -3914,8 +3914,8 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::workerexecutor::v1::{
-        ForkStreamSlotRequest, ReadStreamSlotRequest, fork_stream_slot_response,
-        read_stream_slot_response, stream_slot_item,
+        ForkStreamSlotRequest, ReadStreamSlotRequest, StreamSlotReadAdmission,
+        fork_stream_slot_response, read_stream_slot_response, stream_slot_item,
     };
     use prost::Message;
 
@@ -3949,14 +3949,14 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
             matches!(entry.entry, PublicOplogEntry::StreamItems(_)).then_some(entry.oplog_index)
         })
         .expect("committed output item");
-    let session = history
+    let (session, source_invocation_key) = history
         .iter()
         .find_map(|entry| {
             if let PublicOplogEntry::StreamSession(session) = &entry.entry
                 && let StreamSessionRecord::Prepared(record) =
                     StreamSessionRecord::from_value(session.record.value()).unwrap()
             {
-                return Some(record.session_key.value);
+                return Some((record.public_session_id, record.session_key));
             }
             None
         })
@@ -3966,7 +3966,7 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
             golem_common::phantom_agent_id!("StreamingRpcTarget", uuid::Uuid::new_v4(), name);
         let target_id =
             AgentId::from_agent_id(component.id, &target).map_err(anyhow::Error::msg)?;
-        if exported {
+        let invocation_key = if exported {
             let response = executor
                 .client
                 .clone()
@@ -3986,18 +3986,19 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
                 })
                 .await?
                 .into_inner();
-            assert!(
-                matches!(
-                    response.result,
-                    Some(fork_stream_slot_response::Result::Success(_))
-                ),
-                "{response:?}"
-            );
+            let result = response.result;
+            let Some(fork_stream_slot_response::Result::Success(success)) = result else {
+                anyhow::bail!("{result:?}");
+            };
+            success
+                .invocation_key
+                .expect("export fork returns its invocation key")
         } else {
             executor
                 .fork_worker(&source_id, &target.to_string(), cut)
                 .await?;
-        }
+            source_invocation_key.clone().into()
+        };
         // This queued invocation can finish only after the fork's open output has drained.
         assert_eq!(
             tokio::time::timeout(
@@ -4025,6 +4026,8 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
                 expected_method: "increment_stream_input".into(),
                 max_items: 100,
                 max_bytes: 1_000_000,
+                admission: StreamSlotReadAdmission::Continuation as i32,
+                invocation_key: Some(invocation_key),
                 ..Default::default()
             })
             .await?
@@ -7462,6 +7465,19 @@ async fn failed_ephemeral_invocation_retry_does_not_reexecute(
         )
         .await;
     assert!(second.is_err());
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let after_restart = executor
+        .invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &idempotency_key,
+            "increment_remote_then_fail",
+            data_value!("ephemeral_crash_retry_target"),
+        )
+        .await;
+    assert!(after_restart.is_err());
 
     let target_agent_id = agent_id!("Counter", "ephemeral_crash_retry_target");
     let count = executor

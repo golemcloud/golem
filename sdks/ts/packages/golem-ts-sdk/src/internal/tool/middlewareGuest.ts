@@ -22,7 +22,7 @@ import type {
 } from 'golem:tool/common@0.1.0';
 import type { UnderlyingTool } from 'golem:tool/underlying@0.1.0';
 import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
-import type { toolMiddlewareGuest as ToolMiddlewareGuest } from 'tool-middleware-guest';
+import type { toolMiddlewareGuest as ToolMiddlewareGuest } from 'agent-guest';
 import { sdkPrincipalFromHost } from '../../principal';
 import {
   middlewareRegistrationError,

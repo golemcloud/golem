@@ -497,7 +497,7 @@ async fn call_tool_weather_agent_component_model(
     assert_eq!(structured["lat"], json!(0.0));
     assert_eq!(structured["long"], json!(0.0));
     assert_eq!(structured["country"], "Unknown");
-    assert_eq!(structured["population"], 0);
+    assert_eq!(structured["population"], "0");
 
     Ok(())
 }
@@ -544,7 +544,7 @@ async fn call_tool_singleton_component_model(
     assert_eq!(location["lat"], json!(0.0));
     assert_eq!(location["long"], json!(0.0));
     assert_eq!(location["country"], "Unknown");
-    assert_eq!(location["population"], 0);
+    assert_eq!(location["population"], "0");
 
     Ok(())
 }

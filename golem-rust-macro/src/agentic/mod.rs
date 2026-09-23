@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use agent_client_impl::*;
 pub use agent_definition_impl::*;
 pub use agent_implementation_impl::*;
 pub use allowed_language_derivation::*;
@@ -21,6 +22,7 @@ pub use compile_errors::*;
 pub use config_schema_impl::*;
 pub use multimodal_derivation::*;
 
+mod agent_client_impl;
 mod agent_definition_attributes;
 mod agent_definition_http_endpoint;
 mod agent_definition_impl;

@@ -72,6 +72,7 @@ import {
   type TypedSchemaValue,
 } from './internal/schema-model';
 import { ToolRegistry } from './internal/registry/toolRegistry';
+import type { ToolClientOptions } from './toolClient';
 import {
   emptyMiddlewareParameterCodec,
   ToolMiddlewareRegistry,
@@ -1298,6 +1299,17 @@ export class BodyBuilder<
 
 const BUILD_TOOL = Symbol('golem.tool.build');
 export type AnyToolDefinition = CommandBuilder<any, any, any, any, true>;
+let bindToolClient:
+  | (<Definition extends AnyToolDefinition>(
+      definition: Definition,
+      options?: ToolClientOptions,
+    ) => ToolClient<Definition>)
+  | undefined;
+
+/** @internal Register the host-specific client constructor outside host-neutral tool metadata. */
+export function registerToolClientFactory(factory: typeof bindToolClient): void {
+  bindToolClient = factory;
+}
 
 export class CommandBuilder<
   Name extends string,
@@ -1321,6 +1333,15 @@ export class CommandBuilder<
     name: Name,
   ): CommandBuilder<Name, {}, undefined, {}, true> {
     return new CommandBuilder(name, emptyCommand(name), '0.0.0');
+  }
+
+  /** Construct the exact typed client owned by this tool definition. */
+  client(
+    this: CommandBuilder<Name, Globals, Body, Children, true>,
+    options?: ToolClientOptions,
+  ): ToolClient<CommandBuilder<Name, Globals, Body, Children, true>> {
+    if (!bindToolClient) throw new Error('Tool client runtime is unavailable in this guest world');
+    return bindToolClient(this, options);
   }
 
   private static child<const Name extends string>(name: Name): CommandBuilder<Name> {

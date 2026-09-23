@@ -1,6 +1,6 @@
 import {
   "golemcloud/golem_sdk/async-core" @asyncCore,
-  "golemcloud/golem_sdk/tool-core" @tool,
+  "golemcloud/golem_sdk/tool",
   "golemcloud/golem_sdk/tool-middleware" @toolMiddleware,
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model" @model,

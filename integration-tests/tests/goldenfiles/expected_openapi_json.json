@@ -90,9 +90,11 @@
             "type": "string"
           },
           "limit": {
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
+            "format": "uint64",
+            "pattern": "^(?:0|[1-9][0-9]*)$",
+            "type": "string",
+            "x-golem-maximum": "18446744073709551615",
+            "x-golem-minimum": "0"
           }
         },
         "required": [
@@ -243,9 +245,11 @@
         "additionalProperties": false,
         "properties": {
           "payload_length": {
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
+            "format": "uint64",
+            "pattern": "^(?:0|[1-9][0-9]*)$",
+            "type": "string",
+            "x-golem-maximum": "18446744073709551615",
+            "x-golem-minimum": "0"
           }
         },
         "required": [
@@ -343,9 +347,11 @@
             "type": "string"
           },
           "limit": {
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
+            "format": "uint64",
+            "pattern": "^(?:0|[1-9][0-9]*)$",
+            "type": "string",
+            "x-golem-maximum": "18446744073709551615",
+            "x-golem-minimum": "0"
           }
         },
         "required": [
@@ -496,9 +502,11 @@
         "additionalProperties": false,
         "properties": {
           "payload_length": {
-            "maximum": 18446744073709551615,
-            "minimum": 0,
-            "type": "integer"
+            "format": "uint64",
+            "pattern": "^(?:0|[1-9][0-9]*)$",
+            "type": "string",
+            "x-golem-maximum": "18446744073709551615",
+            "x-golem-minimum": "0"
           }
         },
         "required": [
@@ -837,9 +845,11 @@
                 "additionalProperties": false,
                 "properties": {
                   "count": {
-                    "maximum": 18446744073709551615,
-                    "minimum": 0,
-                    "type": "integer"
+                    "format": "uint64",
+                    "pattern": "^(?:0|[1-9][0-9]*)$",
+                    "type": "string",
+                    "x-golem-maximum": "18446744073709551615",
+                    "x-golem-minimum": "0"
                   },
                   "name": {
                     "type": "string"
@@ -1014,9 +1024,11 @@
             "name": "limit",
             "required": true,
             "schema": {
-              "maximum": 18446744073709551615,
-              "minimum": 0,
-              "type": "integer"
+              "format": "uint64",
+              "pattern": "^(?:0|[1-9][0-9]*)$",
+              "type": "string",
+              "x-golem-maximum": "18446744073709551615",
+              "x-golem-minimum": "0"
             },
             "style": "form"
           }
@@ -1490,9 +1502,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "maximum": 9223372036854775807,
-                  "minimum": -9223372036854775808,
-                  "type": "integer"
+                  "format": "int64",
+                  "pattern": "^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$",
+                  "type": "string",
+                  "x-golem-maximum": "9223372036854775807",
+                  "x-golem-minimum": "-9223372036854775808"
                 }
               }
             },
@@ -1590,9 +1604,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "maximum": 9223372036854775807,
-                  "minimum": -9223372036854775808,
-                  "type": "integer"
+                  "format": "int64",
+                  "pattern": "^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$",
+                  "type": "string",
+                  "x-golem-maximum": "9223372036854775807",
+                  "x-golem-minimum": "-9223372036854775808"
                 }
               }
             },

@@ -7843,18 +7843,7 @@ components:
         snapshot:
           $ref: '#/components/schemas/PublicSnapshotData'
     ScanCursor:
-      type: object
-      title: ScanCursor
-      required:
-      - cursor
-      - layer
-      properties:
-        cursor:
-          type: integer
-          format: uint64
-        layer:
-          type: integer
-          format: uint64
+      type: string
     SchemaGraph:
       type: object
       required:
@@ -9703,6 +9692,7 @@ components:
       required:
       - timestamp
       - invocation
+      - walletPin
       properties:
         timestamp:
           type: string
@@ -9766,6 +9756,7 @@ components:
       - timestamp
       - cardId
       - parentIds
+      - walletGeneration
       properties:
         timestamp:
           type: string
@@ -9799,6 +9790,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
       properties:
         timestamp:
           type: string
@@ -9835,6 +9827,7 @@ components:
       required:
       - timestamp
       - cardId
+      - walletGeneration
       properties:
         timestamp:
           type: string
@@ -9854,6 +9847,7 @@ components:
       required:
       - timestamp
       - revokedCardIds
+      - localWalletGeneration
       properties:
         timestamp:
           type: string
@@ -9874,6 +9868,7 @@ components:
       - timestamp
       - queuedEventIndex
       - cardId
+      - walletGeneration
       properties:
         timestamp:
           type: string
@@ -9920,6 +9915,7 @@ components:
       - transferId
       - cardId
       - targetHolder
+      - sourceWalletGeneration
       properties:
         timestamp:
           type: string
@@ -9943,8 +9939,10 @@ components:
       required:
       - timestamp
       - transferId
+      - sourceCardId
       - installedCardId
       - targetHolder
+      - targetWalletGeneration
       properties:
         timestamp:
           type: string
@@ -9956,7 +9954,7 @@ components:
         sourceCardId:
           type: string
           format: uuid
-          description: Source card identity, absent only on legacy entries.
+          description: Source card identity.
         installedCardId:
           type: string
           format: uuid

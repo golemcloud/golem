@@ -24,6 +24,7 @@ let instance
 let componentContext = 0
 let nextWaitableSet = 1
 let schemaValueStreamHostMode = 0
+let toolHostMode = 0
 let durableStreamHostMode = 0
 let nextDurableStreamHandle = 400
 const durableStreamResources = new Map()
@@ -34,6 +35,7 @@ const resourceDrops = {
   "quota-token": 0,
   "permission-card": 0,
   "schema-value-stream": 0,
+  "future-invoke-result": 0,
 }
 
 const rootImports = new Proxy(
@@ -123,12 +125,17 @@ const importObject = {
           return resourceDrops["permission-card"]
         case 3:
           return resourceDrops["schema-value-stream"]
+        case 4:
+          return resourceDrops["future-invoke-result"]
         default:
           throw new Error(`unknown resource kind requested by test: ${kind}`)
       }
     },
     "set-schema-value-stream-host-mode"(mode) {
       schemaValueStreamHostMode = mode
+    },
+    "set-tool-host-mode"(mode) {
+      toolHostMode = mode
     },
     "set-durable-stream-host-mode"(mode) {
       durableStreamHostMode = mode
@@ -292,10 +299,42 @@ for (const imported of WebAssembly.Module.imports(module)) {
     imported.module === "golem:tool/host@0.1.0"
   ) {
     importObject[imported.module] ??= {}
-    importObject[imported.module][imported.name] = () => {
-      throw new Error(
-        `cancelled tool input unexpectedly reached the host: ${imported.name}`,
-      )
+    importObject[imported.module][imported.name] = (...args) => {
+      if (toolHostMode === 0) {
+        throw new Error(
+          `cancelled tool input unexpectedly reached the host: ${imported.name}`,
+        )
+      }
+      const memory = new DataView(instance.exports.memory.buffer)
+      switch (imported.name) {
+        case "[static]tool-rpc.create": {
+          const resultPtr = args[2]
+          memory.setUint8(resultPtr, 0)
+          memory.setInt32(resultPtr + 4, 1001, true)
+          return
+        }
+        case "[resource-drop]tool-rpc":
+          return
+        case "[method]tool-rpc.async-invoke-and-await":
+          return 2001
+        case "[async-lower][method]future-invoke-result.get": {
+          const resultPtr = args[1]
+          if (toolHostMode === 1) {
+            memory.setUint8(resultPtr, 1)
+            memory.setUint8(resultPtr + 4, 5)
+          } else {
+            memory.setUint8(resultPtr, 0)
+            memory.setUint8(resultPtr + 4, 0)
+            memory.setUint8(resultPtr + 40, 0)
+          }
+          return 2
+        }
+        case "[resource-drop]future-invoke-result":
+          resourceDrops["future-invoke-result"]++
+          return
+        default:
+          throw new Error(`unsupported tool test import: ${imported.name}`)
+      }
     }
     continue
   }

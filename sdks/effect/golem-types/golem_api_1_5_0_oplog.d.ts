@@ -260,6 +260,19 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'external-span'
     val: ExternalSpanData
   };
+  export type WalletVersionToken = {
+    walletIdHash: Uint8Array;
+    generation: bigint;
+  };
+  export type PublicInvocationWalletPin = {
+    walletToken: WalletVersionToken;
+    scopeCardId?: CardId;
+  };
+  export type RawInvocationWalletPin = {
+    walletToken: WalletVersionToken;
+    pinnedCardIds: CardId[];
+    scopeCardId?: CardId;
+  };
   export type OplogErrorKind = "invocation" | "recovery";
   export type ErrorParameters = {
     timestamp: Datetime;
@@ -321,6 +334,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     queuedEventIndex?: OplogIndex;
     cardId: CardId;
+    walletGeneration: bigint;
   };
   /**
    * Raw parameters for a card-installed oplog entry.
@@ -329,6 +343,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     queuedEventIndex?: OplogIndex;
     card: Uint8Array;
+    walletGeneration: bigint;
   };
   export type CardInstallFailure = "card-revoked" | "not-found" | "recipient-mismatch" | "not-permitted";
   /**
@@ -347,6 +362,7 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     queuedEventIndex: OplogIndex;
     cardId: CardId;
+    walletGeneration: bigint;
   };
   /**
    * Parameters for a card-expired oplog entry.
@@ -354,6 +370,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type CardExpiredParameters = {
     timestamp: Datetime;
     cardId: CardId;
+    walletGeneration: bigint;
   };
   /**
    * Identifies which host-owned stream a host-stream-frame oplog entry belongs to.
@@ -553,6 +570,7 @@ declare module 'golem:api/oplog@1.5.0' {
   export type AgentInvocationStartedParameters = {
     timestamp: Datetime;
     invocation: AgentInvocation;
+    walletPin: PublicInvocationWalletPin;
   };
   export type SaveSnapshotResultParameters = {
     snapshot: SnapshotData;
@@ -780,6 +798,7 @@ declare module 'golem:api/oplog@1.5.0' {
     traceId: string;
     traceStates: string[];
     invocationContext: SpanData[];
+    walletPin: RawInvocationWalletPin;
   };
   export type RawAgentInvocationFinishedParameters = {
     timestamp: Datetime;
@@ -865,6 +884,8 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     data: OplogPayload;
     mimeType: string;
+    activeCards: Uint8Array[];
+    walletGeneration: bigint;
   };
   export type RawOplogProcessorCheckpointParameters = {
     timestamp: Datetime;
