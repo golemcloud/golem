@@ -32,7 +32,41 @@ fn serialize_principal(p: &Principal) -> Vec<u8> {
 }
 
 fn deserialize_principal(bytes: &[u8]) -> Result<Principal, String> {
-    serde_json::from_slice(bytes).map_err(|e| format!("Failed to deserialize principal: {e}"))
+    super::principal_serde::from_json_bytes(bytes)
+        .map_err(|e| format!("Failed to deserialize principal: {e}"))
+}
+
+#[derive(serde::Deserialize)]
+struct JsonSnapshotEnvelope<'a> {
+    #[serde(borrow, default, deserialize_with = "present_json_field")]
+    version: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow, default, deserialize_with = "present_json_field")]
+    principal: Option<&'a serde_json::value::RawValue>,
+    #[serde(borrow, default, deserialize_with = "present_json_field")]
+    state: Option<&'a serde_json::value::RawValue>,
+}
+
+fn present_json_field<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<&'de serde_json::value::RawValue>, D::Error> {
+    <&serde_json::value::RawValue as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+fn encode_json_snapshot(principal: &Principal, state: &[u8]) -> Vec<u8> {
+    #[derive(serde::Serialize)]
+    struct Envelope<'a> {
+        principal: &'a Principal,
+        state: &'a serde_json::value::RawValue,
+        version: u8,
+    }
+
+    let state = serde_json::from_slice(state).expect("Failed to parse snapshot JSON");
+    serde_json::to_vec(&Envelope {
+        principal,
+        state,
+        version: 1,
+    })
+    .expect("Failed to serialize snapshot envelope")
 }
 
 fn decode_snapshot(
@@ -46,24 +80,23 @@ fn decode_snapshot(
     }
 
     if is_json {
-        let json: serde_json::Value = serde_json::from_slice(&bytes)
+        let json: JsonSnapshotEnvelope<'_> = serde_json::from_slice(&bytes)
             .map_err(|e| format!("Failed to parse JSON snapshot: {e}"))?;
         let version = json
-            .get("version")
+            .version
             .ok_or_else(|| "JSON snapshot missing 'version' field".to_string())?;
-        if version.as_u64() != Some(1) {
+        if serde_json::from_str::<u64>(version.get()).ok() != Some(1) {
             return Err("JSON snapshot version must be 1".to_string());
         }
         let principal = json
-            .get("principal")
+            .principal
             .ok_or_else(|| "JSON snapshot missing 'principal' field".to_string())?;
-        let principal = serde_json::from_value(principal.clone())
+        let principal = super::principal_serde::from_json_bytes(principal.get().as_bytes())
             .map_err(|e| format!("Failed to deserialize principal from JSON: {e}"))?;
         let state = json
-            .get("state")
+            .state
             .ok_or_else(|| "JSON snapshot missing 'state' field".to_string())?;
-        let agent_snapshot = serde_json::to_vec(state)
-            .map_err(|e| format!("Failed to re-serialize state from JSON snapshot: {e}"))?;
+        let agent_snapshot = state.get().as_bytes().to_vec();
         Ok((principal, agent_snapshot))
     } else {
         let version = bytes[0];
@@ -272,17 +305,7 @@ impl SaveSnapshotGuest for AgentRuntime {
             let principal = get_principal().unwrap_or(Principal::Anonymous);
 
             if snapshot_data.mime_type == "application/json" {
-                // JSON snapshot: wrap in envelope { version, principal, state }
-                let state: serde_json::Value = serde_json::from_slice(&snapshot_data.data)
-                    .expect("Failed to parse snapshot JSON");
-                let envelope = serde_json::json!({
-                    "version": 1,
-                    "principal": serde_json::to_value(&principal)
-                        .expect("Failed to serialize principal"),
-                    "state": state,
-                });
-                let data =
-                    serde_json::to_vec(&envelope).expect("Failed to serialize snapshot envelope");
+                let data = encode_json_snapshot(&principal, &snapshot_data.data);
                 crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
                     payload: data,
                     mime_type: "application/json".to_string(),
@@ -308,7 +331,10 @@ impl SaveSnapshotGuest for AgentRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{ParsedRestoreIdentity, decode_snapshot, load_agent_snapshot, serialize_principal};
+    use super::{
+        ParsedRestoreIdentity, decode_snapshot, encode_json_snapshot, load_agent_snapshot,
+        serialize_principal,
+    };
     use crate::agentic::{
         AgentInitiator, AgentInvocationResult, BaseAgent, ResolvedAgent, SnapshotData,
         SnapshotRestoreContext, get_principal, get_resolved_agent, get_state,
@@ -459,6 +485,74 @@ mod tests {
         .unwrap();
         assert!(matches!(decoded_principal, Principal::Anonymous));
         assert_eq!(state, b"state");
+    }
+
+    #[test]
+    fn json_snapshot_envelope_preserves_state_semantics_without_materializing_it() {
+        for state in [
+            "null",
+            "false",
+            "18446744073709551615",
+            r#"[7, { "z": [null, false], "a": "árvíz" }, -12]"#,
+            r#"{ "z": 3, "a": {"x": 17.5}, "text": "quote: \"" }"#,
+        ] {
+            let payload = encode_json_snapshot(&Principal::Anonymous, state.as_bytes());
+            let parsed: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+            let old_envelope = serde_json::json!({
+                "version": 1,
+                "principal": serde_json::to_value(Principal::Anonymous).unwrap(),
+                "state": serde_json::from_str::<serde_json::Value>(state).unwrap(),
+            });
+            assert_eq!(parsed, old_envelope);
+            let (principal, restored) = decode_snapshot(
+                load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                    payload,
+                    mime_type: "application/json".into(),
+                },
+            )
+            .unwrap();
+            assert!(matches!(principal, Principal::Anonymous));
+            assert_eq!(restored, state.as_bytes());
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&restored).unwrap(),
+                old_envelope["state"]
+            );
+        }
+        let state = br#"{"a":1,"z":[false,null]}"#;
+        let expected = serde_json::json!({
+            "principal": serde_json::to_value(Principal::Anonymous).unwrap(),
+            "state": serde_json::from_slice::<serde_json::Value>(state).unwrap(),
+            "version": 1,
+        });
+        assert_eq!(
+            encode_json_snapshot(&Principal::Anonymous, state),
+            serde_json::to_vec(&expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn json_snapshot_distinguishes_null_fields_and_requires_integer_version() {
+        for version in ["null", "1.0", "1e0", "-1", "\"1\"", "true"] {
+            let payload = format!(
+                r#"{{"version":{version},"principal":{{"tag":"anonymous"}},"state":null}}"#
+            );
+            let error = decode_snapshot(
+                load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                    payload: payload.into_bytes(),
+                    mime_type: "application/json".into(),
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error, "JSON snapshot version must be 1");
+        }
+        let error = decode_snapshot(
+            load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                payload: br#"{"version":1,"principal":null,"state":null}"#.to_vec(),
+                mime_type: "application/json".into(),
+            },
+        )
+        .unwrap_err();
+        assert!(error.starts_with("Failed to deserialize principal from JSON:"));
     }
 
     #[test]
