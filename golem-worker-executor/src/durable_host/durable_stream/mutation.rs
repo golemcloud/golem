@@ -82,6 +82,7 @@ struct ProducerMutationScope {
     producer: Arc<DurableStreamStore>,
     admission: Arc<StreamWriteAdmission>,
     commit_tails: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    publication_guard: Mutex<Option<tokio::sync::OwnedMutexGuard<()>>>,
     session_records_changed: AtomicBool,
 }
 
@@ -211,6 +212,25 @@ impl StreamWriteContext {
             self.effects.active.load(Ordering::Acquire),
             "stream write context used after its operation completed"
         );
+    }
+
+    /// Excludes lifecycle observation from prearming through final status publication.
+    /// Acquire before prearming an obligation and before producer metadata locks. Nested writes
+    /// share the guard; the independently driven completion releases it after all callback tails.
+    pub(crate) async fn begin_lifecycle_publication(&self) -> Result<(), StreamStoreError> {
+        self.assert_owner(&self.scope.producer);
+        let mut guard = self.scope.publication_guard.lock().await;
+        if guard.is_none() {
+            *guard = Some(
+                self.scope
+                    .producer
+                    .publication_gate
+                    .clone()
+                    .lock_owned()
+                    .await,
+            );
+        }
+        self.scope.producer.ensure_healthy()
     }
 
     /// Marks a durable effect that must finish before this operation can fail safely.
@@ -522,6 +542,7 @@ impl DurableStreamStore {
             producer: producer.clone(),
             admission,
             commit_tails: std::sync::Mutex::new(Vec::new()),
+            publication_guard: Mutex::new(None),
             session_records_changed: AtomicBool::new(false),
         });
         self.mutations
@@ -569,6 +590,7 @@ impl DurableStreamStore {
                         if scope.session_records_changed.load(Ordering::Acquire) {
                             producer.session_records_changed.notify_waiters();
                         }
+                        drop(scope.publication_guard.lock().await.take());
                         drop(activity);
                         drop(scope);
                         let _ = status_reply.send(status);
@@ -579,6 +601,34 @@ impl DurableStreamStore {
         result
             .await
             .expect("durable stream producer-owned write terminated")
+    }
+
+    /// Observes authoritative lifecycle state without racing a prearmed publication.
+    /// The observation must not submit mutations, acquire session locks, or perform recovery/RPC.
+    /// Status-actor reconstruction is allowed; cached status is not an authoritative observation.
+    pub(crate) async fn observe_publication<T>(
+        &self,
+        observation: impl Future<Output = Result<T, StreamStoreError>>,
+    ) -> Result<T, StreamStoreError> {
+        self.ensure_healthy()?;
+        let _activity = self
+            .durable_activity
+            .try_enter()
+            .ok_or(StreamStoreError::RecoveryRequired)?;
+        let _guard = self.publication_gate.lock().await;
+        self.ensure_healthy()?;
+        let outcome = std::panic::AssertUnwindSafe(observation)
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|_| {
+                Err(StreamStoreError::Oplog(
+                    "durable stream publication observation panicked".into(),
+                ))
+            });
+        if outcome.is_err() {
+            self.poison();
+        }
+        outcome
     }
 
     pub(super) async fn commit(&self, context: &StreamWriteContext) {

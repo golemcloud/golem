@@ -58,11 +58,11 @@ use golem_common::model::{AgentInvocationPayload, OwnedAgentId};
 use golem_schema::schema::SchemaFingerprintV1;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{test, timeout};
-use tokio::sync::{Barrier, Notify, oneshot};
+use tokio::sync::{Barrier, Notify, Semaphore, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -814,6 +814,7 @@ async fn publication_waits_until_admitted_session_lock_is_released() {
                     let _guard = lock.lock().await;
                     admission
                         .submit(move |_, context| async move {
+                            context.begin_lifecycle_publication().await?;
                             context.defer_publication(Box::pin(async move {
                                 Ok(publication.await.unwrap())
                             }));
@@ -841,8 +842,171 @@ async fn publication_waits_until_admitted_session_lock_is_released() {
         } else {
             assert_eq!(live.owned_operations.available_permits(), 15);
         }
+        assert_eq!(
+            live.observe_publication(async { Ok(37) }).await.unwrap(),
+            37
+        );
         published.send(Ok(())).unwrap();
         operation.await.unwrap().unwrap();
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn lifecycle_publication_gate_joins_all_tails_without_retaining_inactive_contexts() {
+    for fail_first_tail in [false, true] {
+        let owner = identity();
+        let releases = [Arc::new(Semaphore::new(0)), Arc::new(Semaphore::new(0))];
+        let completed = Arc::new(AtomicUsize::new(0));
+        let next_tail = Arc::new(AtomicUsize::new(0));
+        let (tail_done, mut completions) = tokio::sync::mpsc::unbounded_channel();
+        let commit: DurableStreamCommit = Arc::new({
+            let releases = releases.clone();
+            let completed = completed.clone();
+            move |receipt| {
+                let tail = next_tail.fetch_add(1, Ordering::SeqCst);
+                let release = releases[tail].clone();
+                let completed = completed.clone();
+                let tail_done = tail_done.clone();
+                Box::pin(async move {
+                    receipt.unwrap().send(()).unwrap();
+                    release.acquire().await.unwrap().forget();
+                    completed.fetch_add(1, Ordering::SeqCst);
+                    tail_done.send(tail).unwrap();
+                    assert!(!(fail_first_tail && tail == 0), "publication failed");
+                })
+            }
+        });
+        let live = DurableStreamStore::load_with_commit(
+            Arc::new(TestOplog::default()),
+            owner.environment_id,
+            owner.agent_id,
+            owner.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let (returned, context) = oneshot::channel();
+        let caller = tokio::spawn({
+            let live = live.clone();
+            async move {
+                live.run_admitted(None, 0, false, move |_, admission| async move {
+                    let context = admission
+                        .submit(|owner, context| async move {
+                            context.begin_lifecycle_publication().await?;
+                            context
+                                .run_nested(|_, nested| async move {
+                                    nested.begin_lifecycle_publication().await
+                                })
+                                .await?;
+                            owner.commit(&context).await;
+                            owner.commit(&context).await;
+                            context.finish_durable_effect();
+                            Ok::<_, StreamStoreError>(context)
+                        })
+                        .await?;
+                    returned.send(context).ok().unwrap();
+                    Ok::<_, StreamStoreError>(())
+                })
+                .await
+            }
+        });
+        let inactive_context = context.await.unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        let observed = Arc::new(AtomicBool::new(false));
+        let observation = live.observe_publication({
+            let observed = observed.clone();
+            let completed = completed.clone();
+            async move {
+                observed.store(true, Ordering::SeqCst);
+                Ok(completed.load(Ordering::SeqCst))
+            }
+        });
+        tokio::pin!(observation);
+        assert!(futures::poll!(&mut observation).is_pending());
+        let (entered, entering) = oneshot::channel();
+        let second = tokio::spawn({
+            let live = live.clone();
+            async move {
+                live.run_lifecycle(None, 0, |_, context| async move {
+                    entered.send(()).unwrap();
+                    context.begin_lifecycle_publication().await?;
+                    Ok::<_, StreamStoreError>(42)
+                })
+                .await
+            }
+        });
+        entering.await.unwrap();
+        assert!(!second.is_finished());
+        releases[0].add_permits(1);
+        assert_eq!(completions.recv().await, Some(0));
+        if fail_first_tail {
+            live.retirement.cancelled().await;
+        }
+        assert!(live.publication_gate.try_lock().is_err());
+        assert!(futures::poll!(&mut observation).is_pending());
+        releases[1].add_permits(1);
+        assert_eq!(completions.recv().await, Some(1));
+        if fail_first_tail {
+            assert_eq!(observation.await, Err(StreamStoreError::RecoveryRequired));
+            assert!(!observed.load(Ordering::SeqCst));
+            assert_eq!(
+                second.await.unwrap(),
+                Err(StreamStoreError::RecoveryRequired)
+            );
+        } else {
+            assert_eq!(observation.await.unwrap(), 2);
+            assert!(observed.load(Ordering::SeqCst));
+            assert_eq!(second.await.unwrap().unwrap(), 42);
+        }
+        drop(inactive_context);
+        live.wait_durable_drained().await;
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn failed_publication_observation_fences_queued_writes_before_releasing_gate() {
+    for panic in [false, true] {
+        let live = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+        let (release, released) = oneshot::channel();
+        let observation = live.observe_publication(async move {
+            released.await.unwrap();
+            assert!(!panic, "status actor lost");
+            Err::<(), _>(StreamStoreError::Oplog(
+                "status reconstruction failed".into(),
+            ))
+        });
+        tokio::pin!(observation);
+        assert!(futures::poll!(&mut observation).is_pending());
+        let wrote = Arc::new(AtomicBool::new(false));
+        let (entered, entering) = oneshot::channel();
+        let writer = tokio::spawn({
+            let live = live.clone();
+            let wrote = wrote.clone();
+            async move {
+                live.run_lifecycle(None, 0, move |_, context| async move {
+                    entered.send(()).unwrap();
+                    context.begin_lifecycle_publication().await?;
+                    wrote.store(true, Ordering::SeqCst);
+                    Ok::<_, StreamStoreError>(())
+                })
+                .await
+            }
+        });
+        entering.await.unwrap();
+        release.send(()).unwrap();
+        let error = observation.await.unwrap_err();
+        assert!(matches!(error, StreamStoreError::Oplog(_)));
+        assert_eq!(
+            writer.await.unwrap(),
+            Err(StreamStoreError::RecoveryRequired)
+        );
+        assert!(!wrote.load(Ordering::SeqCst));
+        assert!(live.publication_gate.try_lock().is_ok());
+        live.wait_durable_drained().await;
     }
 }
 

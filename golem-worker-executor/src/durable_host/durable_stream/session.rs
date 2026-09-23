@@ -279,6 +279,12 @@ impl DurableStreamStore {
                 "unsupported or malformed durable Stream Session record".to_string(),
             ));
         }
+        if records
+            .iter()
+            .any(|record| matches!(record, StreamSessionRecord::ReaderForwardIntent(_)))
+        {
+            context.begin_lifecycle_publication().await?;
+        }
         let mut index = self
             .index_for(records.iter().flat_map(|record| {
                 ProducerMetadataKey::session_record(
