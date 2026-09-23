@@ -9103,7 +9103,7 @@ checksum = "fbcebf2228827bc4b61cb54dfd84cf43aacf06ca2dfe4c014b136a0e32b876e2"
 [[package]]
 name = "rustic_core"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/rustic_core?rev=b4ee9228ccb09f3babddbce24b032a0bb123d7ca#b4ee9228ccb09f3babddbce24b032a0bb123d7ca"
+source = "git+https://github.com/golemcloud/rustic_core?rev=b1f72158c3b07c2efb8c546aa9d2aaff0819ea95#b1f72158c3b07c2efb8c546aa9d2aaff0819ea95"
 dependencies = [
  "aes256ctr_poly1305aes",
  "backon",
