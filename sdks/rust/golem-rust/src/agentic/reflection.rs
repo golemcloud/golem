@@ -23,7 +23,7 @@ pub use super::tool_reflection::{
 
 use crate::bindings::golem::agent::{common as wire_common, host};
 use crate::schema::render::{
-    RenderError, from_json_value, to_json_schema_with_config, to_json_value,
+    RenderError, from_json_value, to_json_value, to_reflection_json_schema,
 };
 use crate::schema::validation::validate_value;
 use crate::schema::{
@@ -107,12 +107,7 @@ impl SchemaRef {
 
     #[cfg(feature = "json")]
     pub fn to_json_schema(&self, include_draft_marker: bool) -> serde_json::Value {
-        let config = if include_draft_marker {
-            crate::schema::render::JsonSchemaConfig::CANONICAL
-        } else {
-            crate::schema::render::JsonSchemaConfig::WITHOUT_DRAFT_MARKER
-        };
-        to_json_schema_with_config(&self.graph, &self.root, config)
+        to_reflection_json_schema(&self.graph, &self.root, include_draft_marker)
     }
 }
 
@@ -1683,11 +1678,15 @@ mod tests {
         ReflectedTransport, SchemaRef, TestReflectedTransport, validate_declared_output,
     };
     use crate::bindings::golem::agent::common as wire_common;
+    use crate::schema::schema_type::{NumericBound, NumericRestrictions};
+    use crate::schema::validation::{is_equivalent_cross_graph, validate_graph};
     use crate::schema::{
-        MetadataEnvelope, NamedFieldType, SchemaGraph, SchemaType, SchemaValue, VariantCaseType,
+        MetadataEnvelope, NamedFieldType, PermissionCardSpec, QuantitySpec, QuotaTokenSpec,
+        ResultSpec, SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId, VariantCaseType,
         VariantValuePayload,
     };
-    use serde_json::json;
+    use serde_json::{Value, json};
+    use std::collections::HashSet;
     use std::rc::Rc;
     use test_r::test;
 
@@ -1725,6 +1724,283 @@ mod tests {
             json!({ "name": "demo", "enabled": true })
         );
         assert_eq!(schema.to_json_schema(true)["type"], json!("object"));
+        assert_eq!(
+            schema
+                .pack_json(&json!({ "name": "demo" }))
+                .expect("decode omitted option"),
+            SchemaValue::Record {
+                fields: vec![
+                    SchemaValue::String("demo".to_string()),
+                    SchemaValue::Option { inner: None },
+                ]
+            }
+        );
+        assert_eq!(schema.to_json_schema(false)["required"], json!(["name"]));
+    }
+
+    #[test]
+    fn reflection_json_schema_rejects_unrepresentable_leaves() {
+        for ty in [
+            SchemaType::secret(Default::default()),
+            SchemaType::future(None),
+            SchemaType::stream(None),
+        ] {
+            let schema = SchemaRef::new(SchemaGraph::anonymous(ty));
+            assert_eq!(schema.to_json_schema(false)["not"], json!({}));
+        }
+    }
+
+    fn conformance_field(name: &str, body: SchemaType) -> NamedFieldType {
+        NamedFieldType {
+            name: name.to_string(),
+            body,
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+
+    fn conformance_schema(name: &str) -> SchemaRef {
+        let root = match name {
+            "s64" => SchemaType::s64(),
+            "u64" => SchemaType::u64(),
+            "duration" => SchemaType::duration(),
+            "quantity" => SchemaType::quantity(QuantitySpec {
+                base_unit: "m".to_string(),
+                allowed_suffixes: vec![],
+                min: None,
+                max: None,
+            }),
+            "tool-input" => SchemaType::record(vec![
+                conformance_field("pattern", SchemaType::string()),
+                conformance_field("paths", SchemaType::list(SchemaType::string())),
+                conformance_field("ignoreCase", SchemaType::option(SchemaType::bool())),
+            ]),
+            "constrained-u32" => SchemaType::U32 {
+                restrictions: Some(NumericRestrictions {
+                    min: None,
+                    max: Some(NumericBound::Unsigned(10)),
+                    unit: None,
+                }),
+                metadata: MetadataEnvelope::default(),
+            },
+            "result" => SchemaType::result(ResultSpec {
+                ok: Some(Box::new(SchemaType::string())),
+                err: Some(Box::new(SchemaType::u32())),
+            }),
+            "custom-error" => SchemaType::result(ResultSpec {
+                ok: Some(Box::new(SchemaType::string())),
+                err: Some(Box::new(SchemaType::record(vec![
+                    conformance_field("code", SchemaType::string()),
+                    conformance_field("retryable", SchemaType::bool()),
+                ]))),
+            }),
+            "optional-record" => {
+                let id = TypeId::new("conformance.optional");
+                return SchemaRef::new(SchemaGraph {
+                    defs: vec![SchemaTypeDef {
+                        id: id.clone(),
+                        name: None,
+                        body: SchemaType::option(SchemaType::string()),
+                    }],
+                    root: SchemaType::record(vec![
+                        conformance_field("direct", SchemaType::option(SchemaType::string())),
+                        conformance_field("referenced", SchemaType::ref_to(id)),
+                    ]),
+                });
+            }
+            other => panic!("unknown conformance fixture {other}"),
+        };
+        SchemaRef::new(SchemaGraph::anonymous(root))
+    }
+
+    fn conformance_json_pointer<'a>(value: &'a Value, pointer: &str) -> &'a Value {
+        if pointer.is_empty() {
+            value
+        } else {
+            value
+                .pointer(pointer)
+                .unwrap_or_else(|| panic!("missing JSON pointer {pointer} in {value}"))
+        }
+    }
+
+    fn assert_conformance_subset(actual: &Value, expected: &Value) {
+        match expected {
+            Value::Object(expected) => {
+                let actual = actual.as_object().expect("actual JSON object");
+                for (key, expected) in expected {
+                    assert_conformance_subset(
+                        actual
+                            .get(key)
+                            .unwrap_or_else(|| panic!("missing key {key} in {actual:?}")),
+                        expected,
+                    );
+                }
+            }
+            _ => assert_eq!(actual, expected),
+        }
+    }
+
+    fn assert_conformance_semantic(fixture: &str, expected: &Value) {
+        match fixture {
+            "unsupported-leaves" => {
+                let types = [
+                    SchemaType::secret(Default::default()),
+                    SchemaType::quota_token(QuotaTokenSpec::default()),
+                    SchemaType::permission_card(PermissionCardSpec::default()),
+                    SchemaType::future(None),
+                    SchemaType::stream(None),
+                ];
+                assert_eq!(types.len(), expected["count"].as_u64().unwrap() as usize);
+                for ty in types {
+                    assert_conformance_subset(
+                        &SchemaRef::new(SchemaGraph::anonymous(ty)).to_json_schema(false),
+                        &expected["schema"],
+                    );
+                }
+            }
+            "all-kinds" => assert_eq!(
+                serde_json::to_value(vec![
+                    "ref",
+                    "bool",
+                    "s8",
+                    "s16",
+                    "s32",
+                    "s64",
+                    "u8",
+                    "u16",
+                    "u32",
+                    "u64",
+                    "f32",
+                    "f64",
+                    "char",
+                    "string",
+                    "record",
+                    "variant",
+                    "enum",
+                    "flags",
+                    "tuple",
+                    "list",
+                    "fixed-list",
+                    "map",
+                    "option",
+                    "result",
+                    "text",
+                    "binary",
+                    "path",
+                    "url",
+                    "datetime",
+                    "duration",
+                    "quantity",
+                    "union",
+                    "secret",
+                    "quota-token",
+                    "permission-card",
+                    "future",
+                    "stream",
+                ])
+                .unwrap(),
+                expected["names"]
+            ),
+            "all-restrictions" => assert_eq!(
+                serde_json::to_value(vec![
+                    "numeric-minimum",
+                    "numeric-maximum",
+                    "numeric-unit",
+                    "text-languages",
+                    "text-min-length",
+                    "text-max-length",
+                    "text-regex",
+                    "binary-mime-types",
+                    "binary-min-bytes",
+                    "binary-max-bytes",
+                    "path-direction",
+                    "path-kind",
+                    "path-mime-types",
+                    "path-extensions",
+                    "url-schemes",
+                    "url-hosts",
+                    "quantity-base-unit",
+                    "quantity-suffixes",
+                    "quantity-minimum",
+                    "quantity-maximum",
+                    "union-prefix",
+                    "union-suffix",
+                    "union-regex",
+                    "union-field",
+                ])
+                .unwrap(),
+                expected["names"]
+            ),
+            "graph" => {
+                let referenced = conformance_schema("optional-record");
+                let inline = SchemaRef::new(SchemaGraph::anonymous(SchemaType::record(vec![
+                    conformance_field("direct", SchemaType::option(SchemaType::string())),
+                    conformance_field("referenced", SchemaType::option(SchemaType::string())),
+                ])));
+                assert!(validate_graph(referenced.graph()).is_ok());
+                assert!(is_equivalent_cross_graph(
+                    referenced.graph(),
+                    referenced.root(),
+                    inline.graph(),
+                    inline.root(),
+                ));
+            }
+            other => panic!("unknown semantic conformance fixture {other}"),
+        }
+    }
+
+    #[test]
+    fn reflection_conformance_corpus() {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../../../../../test-data/reflection-conformance/v1.json"
+        ))
+        .expect("valid reflection conformance corpus");
+        let cases = corpus["cases"].as_array().expect("cases array");
+        let mut executed = HashSet::new();
+        for case in cases {
+            let id = case["id"].as_str().expect("case id");
+            assert!(executed.insert(id), "duplicate case ID {id}");
+            let fixture = case["fixture"].as_str().expect("fixture");
+            let expected = &case["expected"];
+            match case["operation"].as_str().expect("operation") {
+                "roundtrip" => {
+                    let schema = conformance_schema(fixture);
+                    let packed = schema
+                        .pack_json(&case["input"])
+                        .unwrap_or_else(|error| panic!("{id}: {error}"));
+                    assert_eq!(
+                        schema
+                            .unpack_json(&packed)
+                            .unwrap_or_else(|error| panic!("{id}: {error}")),
+                        *expected,
+                        "{id}",
+                    );
+                }
+                "reject" => {
+                    let schema = conformance_schema(fixture);
+                    assert!(
+                        schema.pack_json(&case["input"]).is_err(),
+                        "{id} was accepted"
+                    );
+                }
+                "json-schema" => {
+                    let schema = conformance_schema(fixture);
+                    let rendered = schema.to_json_schema(false);
+                    assert_conformance_subset(
+                        conformance_json_pointer(&rendered, case["path"].as_str().expect("path")),
+                        expected,
+                    );
+                }
+                "semantic" => assert_conformance_semantic(fixture, expected),
+                operation => panic!("unknown conformance operation {operation} for {id}"),
+            }
+        }
+        let declared: HashSet<_> = corpus["caseIds"]
+            .as_array()
+            .expect("declared case IDs")
+            .iter()
+            .map(|id| id.as_str().expect("declared case ID"))
+            .collect();
+        assert_eq!(executed, declared, "missing or unknown conformance cases");
     }
 
     #[test]
