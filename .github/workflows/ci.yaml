@@ -1343,11 +1343,6 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
       - uses: ./.github/actions/docker-build-push-service
         with:
-          image-name: golemservices/golem-debugging-service
-          dockerfile: ./golem-debugging-service/docker/Dockerfile
-          platforms: ${{ env.PLATFORMS }}
-      - uses: ./.github/actions/docker-build-push-service
-        with:
           image-name: golemservices/golem-shard-manager
           dockerfile: ./golem-shard-manager/docker/Dockerfile
           platforms: ${{ env.PLATFORMS }}

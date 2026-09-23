@@ -2121,8 +2121,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await;
         }
-        if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS
-            && worker.last_known_status.load().has_durable_stream_history
+        if worker.last_known_status.load().has_durable_stream_history
             && !self
                 .durable_stream_producer_for(&worker)
                 .await?
@@ -5430,10 +5429,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         // An unloaded worker has no invocation loop that could drain a queued readiness marker,
-        // and this method must not start one: the worker already reached a stopped state (for
-        // example a debugging worker that suspended itself after replaying to its target), which
-        // is exactly the "not processing anything until the next explicit start" condition
-        // callers wait for.
+        // and this method must not start one: the worker already reached a stopped state, which is
+        // exactly the "not processing anything until the next explicit start" condition callers
+        // wait for.
         if matches!(&*instance_guard, WorkerInstance::Unloaded { .. }) {
             return Ok(());
         }
@@ -6569,14 +6567,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let producer = self.durable_stream_producer().await?;
         let session_reference = StreamRegistrationInvocation::Local(prepared.session_key.clone());
-        if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS {
-            let _ = self
-                .recover_durable_stream_topologies(
-                    false,
-                    Some(&producer.qualify_session(&session_reference)),
-                )
-                .await?;
-        }
+        let _ = self
+            .recover_durable_stream_topologies(
+                false,
+                Some(&producer.qualify_session(&session_reference)),
+            )
+            .await?;
         let mappings = producer
             .materialize_bindings(&prepared.stream_mappings)
             .await
@@ -6938,8 +6934,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn run_durable_stream_maintenance(&self, producer: &DurableStreamStore) -> bool {
         let mut needs_periodic_maintenance = false;
-        if Ctx::ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS && !producer.deletion_started().await
-        {
+        if !producer.deletion_started().await {
             match self.recover_durable_stream_topologies(true, None).await {
                 Ok(pending) => {
                     needs_periodic_maintenance |= pending;
@@ -8788,10 +8783,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Resolves all queued `AwaitReadyToProcessCommands` markers when the worker reaches the
-    /// `Unloaded` state without the invocation loop having drained them — for example when the
-    /// worker suspends itself mid-invocation, as debugging workers do as soon as their replay
-    /// goes live. Waiters observe the startup failure if there is one, otherwise a successful
-    /// stop. All other queued items are kept for the next start.
+    /// `Unloaded` state without the invocation loop having drained them. Waiters observe the
+    /// startup failure if there is one, otherwise a successful stop. All other queued items are
+    /// kept for the next start.
     async fn resolve_pending_queue_on_unload(
         &self,
         startup_failure: Option<&WorkerExecutorError>,
