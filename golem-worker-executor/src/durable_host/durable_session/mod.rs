@@ -55,7 +55,8 @@ use golem_common::base_model::durable_stream::{
     StreamCallerAttemptRecord, StreamCancelReason, StreamCancelRole,
     StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
     StreamConsumerItemValueRecord, StreamConsumerTerminal, StreamConsumerTerminalRecord,
-    StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamOffset, StreamRecordReference,
+    StreamEndResult, StreamInvocationId, StreamItemsPayload, StreamOffset,
+    StreamReaderForwardDestination, StreamReaderForwardIntentRecord, StreamRecordReference,
     StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamResumeOperation,
     StreamRootKind, StreamSessionDetachedRecord, StreamSessionInvocationResultRecord,
     StreamSessionKey, StreamSessionMapping, StreamSessionMappingRecord,
@@ -2649,7 +2650,7 @@ impl StreamSession {
         struct PendingInput {
             path: Vec<StreamValuePathStep>,
             endpoint: Option<LiveStreamEndpoint>,
-            forwarded_handle: Option<DurableStreamHandle>,
+            forwarded_input: Option<ForwardedDurableInput>,
             element_type: SchemaType,
             element_schema_fingerprint: SchemaFingerprintV1,
         }
@@ -2668,8 +2669,8 @@ impl StreamSession {
                 let element_schema_fingerprint =
                     schema_fingerprint_v1(&graph, element).map_err(|error| error.to_string())?;
                 let forwarded = forwarded_durable_input_reference(stream)?;
-                let (endpoint, forwarded_handle) = match forwarded {
-                    Some(forwarded) => (None, Some(forwarded.take(stream)?.handle)),
+                let (endpoint, forwarded_input) = match forwarded {
+                    Some(forwarded) => (None, Some(forwarded.take(stream)?)),
                     None => (
                         Some(stream.take_host_endpoint::<LiveStreamEndpoint>()?),
                         None,
@@ -2678,7 +2679,7 @@ impl StreamSession {
                 pending.push(PendingInput {
                     path: path.to_vec(),
                     endpoint,
-                    forwarded_handle,
+                    forwarded_input,
                     element_type: element.cloned().unwrap_or_else(SchemaType::u8),
                     element_schema_fingerprint,
                 });
@@ -2705,9 +2706,42 @@ impl StreamSession {
         for (transport_stream_id, pending) in pending.into_iter().enumerate() {
             let transport_stream_id = u64::try_from(transport_stream_id)
                 .map_err(|_| "durable input transport stream id overflow".to_string())?;
-            let local = pending.forwarded_handle.is_none();
-            let handle = if let Some(handle) = pending.forwarded_handle {
-                handle
+            let local = pending.forwarded_input.is_none();
+            let handle = if let Some(forwarded) = pending.forwarded_input {
+                let mapping = StreamSessionMappingRecord {
+                    transport_stream_id,
+                    handle: forwarded.handle.clone(),
+                    role: SessionStreamRole::Input,
+                };
+                let destination = match &self.session_reference {
+                    StreamRegistrationInvocation::Local(_) => {
+                        StreamReaderForwardDestination::SessionBinding {
+                            session_key: self.session_reference.clone(),
+                            binding: StreamBindingRecord::foreign(&mapping),
+                        }
+                    }
+                    StreamRegistrationInvocation::Remote(_) => {
+                        StreamReaderForwardDestination::InvocationInput {
+                            invocation: self.session_key.clone(),
+                            mapping,
+                        }
+                    }
+                };
+                let (_, intent) = forwarded
+                    .prepare_forward_owned(context, self, destination)
+                    .await?;
+                match intent.destination {
+                    StreamReaderForwardDestination::SessionBinding { binding, .. } => {
+                        self.producer
+                            .materialize_binding(&binding)
+                            .await
+                            .map_err(|error| error.to_string())?
+                            .handle
+                    }
+                    StreamReaderForwardDestination::InvocationInput { mapping, .. } => {
+                        mapping.handle
+                    }
+                }
             } else {
                 let request = ProducerRegistrationRequest {
                     entity_parent_start_index: self.entity_parent_start_index,
@@ -5185,6 +5219,103 @@ pub struct DurableInputEndpoint {
 /// Foreign source and attachment state for a forwarded durable input.
 pub struct ForwardedDurableInput {
     pub handle: DurableStreamHandle,
+    origin: StreamSession,
+    reader_id: LocalStreamReaderId,
+}
+
+impl ForwardedDurableInput {
+    /// Resolves historical destination identity without granting live attachment authority.
+    async fn prepare_forward_owned(
+        &self,
+        context: &StreamWriteContext,
+        destination_session: &StreamSession,
+        mut destination: StreamReaderForwardDestination,
+    ) -> Result<(OplogIndex, StreamReaderForwardIntentRecord), String> {
+        if !Arc::ptr_eq(&self.origin.producer, &destination_session.producer) {
+            return Err("forwarded reader belongs to a different stream store".into());
+        }
+        context.assert_owner(&self.origin.producer);
+        let metadata = self.origin.current_control_metadata().await?;
+        let source = metadata.reader_binding(self.reader_id)?.clone();
+        let existing = metadata.reader_forward_intent(self.reader_id)?.cloned();
+        if metadata.consumer_record_count(self.reader_id) != 0 {
+            return Err("cannot forward a durable input stream after reading from it".into());
+        }
+        drop(metadata);
+        let current = self
+            .origin
+            .producer
+            .materialize_binding(&source)
+            .await
+            .map_err(|error| error.to_string())?;
+        if current.handle != self.handle {
+            return Err("forwarded handle does not match its original reader binding".into());
+        }
+        if let Some((_, intent)) = &existing {
+            // Local readers are requalified on fork/revert; their recorded destinations are not.
+            if matches!(source.source, StreamRecordReference::Local(_)) {
+                match (&mut destination, &intent.destination) {
+                    (
+                        StreamReaderForwardDestination::SessionBinding { binding, .. },
+                        StreamReaderForwardDestination::SessionBinding {
+                            binding: recorded, ..
+                        },
+                    ) => binding.source = recorded.source.clone(),
+                    (
+                        StreamReaderForwardDestination::InvocationInput { mapping, .. },
+                        StreamReaderForwardDestination::InvocationInput {
+                            mapping: recorded, ..
+                        },
+                    ) => mapping.handle = recorded.handle.clone(),
+                    _ => {}
+                }
+            }
+            if destination != intent.destination {
+                return Err("durable reader already has a different forwarding destination".into());
+            }
+        }
+        let binding = match &destination {
+            StreamReaderForwardDestination::SessionBinding { binding, .. } => binding.clone(),
+            StreamReaderForwardDestination::InvocationInput { mapping, .. } => {
+                StreamBindingRecord::foreign(mapping)
+            }
+        };
+        if destination_session
+            .binding(binding.transport_stream_id)
+            .is_some_and(|existing| existing != binding)
+        {
+            return Err("forwarding destination slot is already bound to another stream".into());
+        }
+        let destination_metadata = destination_session.current_control_metadata().await?;
+        for reserved in destination_metadata.incoming_reader_forwards().values() {
+            if reserved.destination.transport_stream_id() == binding.transport_stream_id
+                && reserved.destination != destination
+            {
+                return Err("forwarding destination slot is reserved for another stream".into());
+            }
+        }
+        drop(destination_metadata);
+        if let Some(existing) = existing {
+            return Ok(existing);
+        }
+        let intent = StreamReaderForwardIntentRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: self.origin.session_reference.clone(),
+            reader_id: self.reader_id,
+            destination,
+        };
+        let indices = self
+            .origin
+            .producer
+            .append_session_records_owned(
+                context,
+                self.origin.entity_parent_start_index,
+                vec![StreamSessionRecord::ReaderForwardIntent(intent.clone())],
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok((indices[0], intent))
+    }
 }
 
 impl DurableInputEndpoint {
@@ -5199,6 +5330,8 @@ impl DurableInputEndpoint {
         self.forwarded_handle()?;
         Ok(ForwardedDurableInput {
             handle: self.handle,
+            origin: self.streams,
+            reader_id: self.reader_id,
         })
     }
 }
@@ -6372,8 +6505,14 @@ impl<Ctx: WorkerCtx> StreamProducer<Ctx> for DurableInputProducer {
             && !producer.finished
         {
             let handle = producer.input.handle.clone();
+            let origin = producer.input.streams.clone();
+            let reader_id = producer.input.reader_id;
             me.as_mut().get_mut().finished = true;
-            Ok(Box::new(ForwardedDurableInput { handle }))
+            Ok(Box::new(ForwardedDurableInput {
+                handle,
+                origin,
+                reader_id,
+            }))
         } else {
             Err(me)
         }
