@@ -1234,12 +1234,15 @@ async fn a_cpu_options_phase_makes_its_repository_with_its_compression() {
 }
 
 /// A blob storage that passes each call to an in-memory storage, and fails each write of a
-/// snapshot file below `prefix` after the first `allowed` of them.
+/// snapshot file below `prefix` after the first `allowed` of them. After `config_hidden_after`
+/// such writes, it gives no metadata for the config of the agent, so the repository looks absent.
 #[derive(Debug)]
 struct FailingSnapshotWrites {
     inner: Arc<InMemoryBlobStorage>,
     prefix: PathBuf,
+    config: PathBuf,
     allowed: usize,
+    config_hidden_after: usize,
     seen: AtomicUsize,
 }
 
@@ -1247,10 +1250,25 @@ impl FailingSnapshotWrites {
     /// Gives a storage over `inner` that fails the writes of snapshot files of the agent after the
     /// first `allowed` of them.
     fn new(inner: Arc<InMemoryBlobStorage>, agent: &str, allowed: usize) -> Arc<Self> {
+        Self::hiding_config(inner, agent, allowed, usize::MAX)
+    }
+
+    /// Gives a storage over `inner` that fails the writes of snapshot files of the agent after the
+    /// first `allowed` of them, and hides the config of the agent after `config_hidden_after`
+    /// writes of snapshot files.
+    fn hiding_config(
+        inner: Arc<InMemoryBlobStorage>,
+        agent: &str,
+        allowed: usize,
+        config_hidden_after: usize,
+    ) -> Arc<Self> {
+        let root = Path::new("agents").join(agent);
         Arc::new(Self {
             inner,
-            prefix: Path::new("agents").join(agent).join("snapshots"),
+            prefix: root.join("snapshots"),
+            config: root.join("config"),
             allowed,
+            config_hidden_after,
             seen: AtomicUsize::new(0),
         })
     }
@@ -1308,6 +1326,9 @@ impl BlobStorage for FailingSnapshotWrites {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> anyhow::Result<Option<BlobMetadata>> {
+        if path == self.config && self.seen.load(Ordering::SeqCst) >= self.config_hidden_after {
+            return Ok(None);
+        }
         self.inner
             .get_metadata(target_label, op_label, namespace, path)
             .await
@@ -1643,6 +1664,73 @@ fn a_save_threads_phase_saves_with_its_threads() {
                 threads,
                 ..SaveSettings::DEFAULT
             }),
+        )
+    );
+}
+
+#[test]
+async fn a_save_and_open_phase_whose_save_fails_skips_the_open() {
+    // The cold save writes the first snapshot file of the repository, and the last warm save
+    // writes the last one: the second for the cpu-options phase, and the third for the
+    // sqlite-changes phase, which also saves after its clustered change.
+    let fail_last_save = async |scenario: &'static Scenario, phase, agent, snapshots: usize| {
+        let storage =
+            FailingSnapshotWrites::new(Arc::new(InMemoryBlobStorage::new()), agent, snapshots - 1);
+        let (result, _pod) = run_tiny_with(scenario, phase, storage, |_| {}).await;
+        (result.outcome.clone(), skipped_steps(&result))
+    };
+
+    let outcomes = [
+        fail_last_save(&CPU_OPTIONS_TINY, "save-default", "default", 2).await,
+        fail_last_save(&SQLITE_CHANGES_TINY, "save-rabin", "rabin", 3).await,
+    ];
+
+    assert_eq!(
+        outcomes,
+        [
+            (
+                Outcome::Failed {
+                    reason: "the step warm_save failed".into()
+                },
+                vec!["hash_tree", "open"]
+            ),
+            (
+                Outcome::Failed {
+                    reason: "the step warm_save_scattered failed".into()
+                },
+                vec!["hash_tree", "open"]
+            ),
+        ]
+    );
+}
+
+#[test]
+async fn a_save_and_open_phase_fails_at_the_open_when_the_open_finds_no_repository() {
+    // The config of the repository disappears after the second snapshot file, which the warm
+    // save writes last, so the open after the saves finds no repository.
+    let storage = FailingSnapshotWrites::hiding_config(
+        Arc::new(InMemoryBlobStorage::new()),
+        "default",
+        usize::MAX,
+        2,
+    );
+
+    let (result, _pod) = run_tiny_with(&CPU_OPTIONS_TINY, "save-default", storage, |_| {}).await;
+
+    assert_eq!(
+        (
+            result.outcome.clone(),
+            step_states(&result).last().copied(),
+            step(&result, "open").details.clone(),
+            skipped_steps(&result),
+        ),
+        (
+            Outcome::Failed {
+                reason: "the step open failed".into()
+            },
+            Some(("open", true)),
+            json!({ "repository": null }),
+            Vec::<&str>::new(),
         )
     );
 }
