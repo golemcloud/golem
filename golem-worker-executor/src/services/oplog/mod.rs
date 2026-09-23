@@ -211,6 +211,14 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
     ) -> OplogIndex;
 
+    async fn try_get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<OplogIndex, String> {
+        Ok(self.get_last_index(owned_agent_id, agent_mode).await)
+    }
+
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
@@ -243,6 +251,14 @@ pub trait OplogService: Debug + Send + Sync {
 
     /// Checks whether the oplog exists in the oplog, without opening it
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
+
+    async fn try_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, String> {
+        Ok(self.exists(owned_agent_id, agent_mode).await)
+    }
 
     /// Scans the oplog for all workers belonging to the given component, in a paginated way.
     ///
@@ -711,11 +727,19 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Returns the number of dropped entries.
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64;
 
+    async fn try_drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, String> {
+        Ok(self.drop_prefix(last_dropped_id).await)
+    }
+
     /// Commits the buffered entries to the oplog
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry>;
 
     /// Returns the current oplog index
     async fn current_oplog_index(&self) -> OplogIndex;
+
+    async fn try_current_oplog_index(&self) -> Result<OplogIndex, String> {
+        Ok(self.current_oplog_index().await)
+    }
 
     /// Returns actor-ordered lifecycle metadata including buffered raw appends. Absence is proven
     /// through the returned watermark; storage failures must not be reported as absence.
@@ -752,6 +776,14 @@ pub trait Oplog: Any + Debug + Send + Sync {
         self.read_exact(oplog_index, n).await
     }
 
+    async fn try_read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
+        Ok(self.read_source(oplog_index, n).await)
+    }
+
     /// Reads the entry at the given oplog index.
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         self.read_exact(oplog_index, 1)
@@ -772,6 +804,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
     /// Gets the total number of entries in the oplog
     async fn length(&self) -> u64;
+
+    async fn try_length(&self) -> Result<u64, String> {
+        Ok(self.length().await)
+    }
 
     /// Adds an entry to the oplog and immediately commits it
     async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {

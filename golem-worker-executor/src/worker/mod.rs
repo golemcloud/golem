@@ -2557,21 +2557,28 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         drop(instance);
         if self
             .oplog_service()
-            .get_last_index(&self.owned_agent_id, self.agent_mode())
+            .try_get_last_index(&self.owned_agent_id, self.agent_mode())
             .await
+            .map_err(WorkerExecutorError::runtime)?
             != last_oplog_index
         {
             return Ok(None);
         }
         let result = match wait {
             ArchiveWait::Queued => match MultiLayerOplog::try_archive(&self.oplog).await {
-                Some(more) => Some(more),
-                None => EphemeralOplog::try_archive(&self.oplog).await,
+                Ok(Some(more)) => Some(more),
+                Ok(None) => EphemeralOplog::try_archive(&self.oplog)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?,
+                Err(error) => return Err(WorkerExecutorError::runtime(error)),
             },
             ArchiveWait::Finished => match MultiLayerOplog::try_archive_blocking(&self.oplog).await
             {
-                Some(more) => Some(more),
-                None => EphemeralOplog::try_archive_blocking(&self.oplog).await,
+                Ok(Some(more)) => Some(more),
+                Ok(None) => EphemeralOplog::try_archive_blocking(&self.oplog)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?,
+                Err(error) => return Err(WorkerExecutorError::runtime(error)),
             },
         };
         if result == Some(false) {

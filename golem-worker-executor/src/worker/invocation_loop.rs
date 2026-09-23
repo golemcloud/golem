@@ -1071,7 +1071,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 worker
                     .quiesce_for_owner_retirement(None, forwarding.as_deref())
                     .await?;
-                while EphemeralOplog::try_archive_blocking(&worker.oplog).await == Some(true) {}
+                loop {
+                    match EphemeralOplog::try_archive_blocking(&worker.oplog).await {
+                        Ok(Some(true)) => {}
+                        Ok(_) => break,
+                        Err(error) => {
+                            tracing::warn!(
+                                agent_id = %worker.agent_id(),
+                                error = %error,
+                                "Failed to archive ephemeral oplog during retirement; the source remains available for a later sweep"
+                            );
+                            break;
+                        }
+                    }
+                }
                 worker.remove_from_active_agents().await;
                 *cleanup = super::OwnerCleanupState::Retired;
                 Ok(())

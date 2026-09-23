@@ -3303,11 +3303,11 @@ async fn raw_lookup_catches_up_archived_history_after_full_multilayer_reopen() {
     oplog.commit(CommitLevel::Always).await;
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&oplog).await,
-        Some(true)
+        Ok(Some(true))
     );
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&oplog).await,
-        Some(false)
+        Ok(Some(false))
     );
     drop(oplog);
     drop(worker_service);

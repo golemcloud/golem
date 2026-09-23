@@ -744,10 +744,17 @@ impl OplogSweeper {
             return Some(Outcome::Resident);
         }
 
-        let current = route
+        let current = match route
             .source
-            .get_last_index(&owned_agent_id, AgentMode::Ephemeral)
-            .await;
+            .try_get_last_index(&owned_agent_id, AgentMode::Ephemeral)
+            .await
+        {
+            Ok(current) => current,
+            Err(error) => {
+                warn!(agent_id = %owned_agent_id, error = %error, "Failed to inspect oplog archive during sweep");
+                return Some(Outcome::ArchiveFailed);
+            }
+        };
         if current == OplogIndex::NONE {
             self.forget(route.id, &agent_id).await;
             return Some(Outcome::Empty);
@@ -1727,7 +1734,8 @@ mod tests {
                     .open(&owned_agent_id, AgentMode::Ephemeral)
                     .await
                     .append(&[(at, OplogEntry::suspend())])
-                    .await;
+                    .await
+                    .unwrap();
             }
             if self.fails || (self.deleted && forced_revision.is_none()) {
                 return Err(WorkerExecutorError::runtime("component not found"));
@@ -1865,8 +1873,11 @@ mod tests {
                 )
                 .await;
             Ok(match MultiLayerOplog::try_archive_blocking(&oplog).await {
-                Some(more) => Some(more),
-                None => EphemeralOplog::try_archive_blocking(&oplog).await,
+                Ok(Some(more)) => Some(more),
+                Ok(None) => EphemeralOplog::try_archive_blocking(&oplog)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?,
+                Err(error) => return Err(WorkerExecutorError::runtime(error)),
             })
         }
 
@@ -2570,7 +2581,8 @@ mod tests {
                 (OplogIndex::INITIAL, create_entry(agent_id, environment_id)),
                 (OplogIndex::from_u64(2), OplogEntry::exited()),
             ])
-            .await;
+            .await
+            .unwrap();
     }
 
     /// Without this charge, a stack with several source layers would do a whole tick's work per
@@ -3518,43 +3530,52 @@ mod tests {
 
     #[async_trait]
     impl OplogArchive for MiscountingArchive {
-        async fn read_source(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        async fn read_source(
+            &self,
+            idx: OplogIndex,
+            n: u64,
+        ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
             self.inner.read_source(idx, n).await
         }
 
-        async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> u64 {
+        async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, String> {
             self.appends
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if self.keeps_entries {
                 self.inner.append(chunk).await
             } else {
-                0
+                Ok(0)
             }
         }
 
-        async fn verify_persisted(&self, entries: &[(OplogIndex, OplogEntry)]) {
+        async fn verify_persisted(
+            &self,
+            entries: &[(OplogIndex, OplogEntry)],
+        ) -> Result<(), String> {
             if self.keeps_entries {
                 self.inner.verify_persisted(entries).await
+            } else {
+                Ok(())
             }
         }
 
-        async fn current_oplog_index(&self) -> OplogIndex {
+        async fn current_oplog_index(&self) -> Result<OplogIndex, String> {
             self.inner.current_oplog_index().await
         }
 
-        async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+        async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, String> {
             if self.keeps_entries {
-                0
+                Ok(0)
             } else {
                 self.inner.drop_prefix(last_dropped_id).await
             }
         }
 
-        async fn length(&self) -> u64 {
+        async fn length(&self) -> Result<u64, String> {
             self.inner.length().await
         }
 
-        async fn get_last_index(&self) -> OplogIndex {
+        async fn get_last_index(&self) -> Result<OplogIndex, String> {
             self.inner.get_last_index().await
         }
     }
