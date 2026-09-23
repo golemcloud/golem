@@ -25,6 +25,7 @@ if (!appRootDir) {
 
 const embeddedPackages = new Set([
   "@golemcloud/effect-golem",
+  "@golemcloud/effect-golem/middleware",
   "@golemcloud/effect-golem/sqlite",
   "@golemcloud/effect-golem/postgres",
   "@golemcloud/effect-golem/mysql",
@@ -34,19 +35,24 @@ const embeddedPackages = new Set([
 ]);
 
 const externalPackages = (id) =>
-  embeddedPackages.has(id) ||
-  id.startsWith("golem:") ||
-  id.startsWith("wasi:");
+  embeddedPackages.has(id) || id.startsWith("golem:") || id.startsWith("wasi:");
 
 const tsconfigPath = path.resolve("tsconfig.json");
 const { config, error } = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
 if (error) {
   throw new Error(ts.flattenDiagnosticMessageText(error.messageText, "\n"));
 }
-const parsedTsConfig = ts.parseJsonConfigFileContent(config, ts.sys, process.cwd());
+const parsedTsConfig = ts.parseJsonConfigFileContent(
+  config,
+  ts.sys,
+  process.cwd(),
+);
 if (parsedTsConfig.errors.length > 0) {
-  throw new Error(parsedTsConfig.errors.map((error) =>
-    ts.flattenDiagnosticMessageText(error.messageText, "\n")).join("\n"));
+  throw new Error(
+    parsedTsConfig.errors
+      .map((error) => ts.flattenDiagnosticMessageText(error.messageText, "\n"))
+      .join("\n"),
+  );
 }
 
 const require = createRequire(import.meta.url);
@@ -54,7 +60,9 @@ const effectPackageDir = path.dirname(
   require.resolve("effect/package.json", { paths: [appRootDir] }),
 );
 const expectedEffectVersion = "GOLEM_EFFECT_VERSION";
-const actualEffectVersion = require(path.join(effectPackageDir, "package.json")).version;
+const actualEffectVersion = require(
+  path.join(effectPackageDir, "package.json"),
+).version;
 if (actualEffectVersion !== expectedEffectVersion) {
   throw new Error(
     `effect@${actualEffectVersion} installed in this application does not match ` +

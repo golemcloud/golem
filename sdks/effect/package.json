@@ -53,12 +53,6 @@
     "./agent-guest": {
       "types": "./golem-types/exports.d.ts"
     },
-    "./tool-middleware-guest": {
-      "types": "./golem-types/tool_middleware_exports.d.ts"
-    },
-    "./agent-tool-middleware-guest": {
-      "types": "./golem-types/agent_tool_middleware_exports.d.ts"
-    },
     "./internal/*": null,
     "./host/*": null,
     "./Sqlite/internal/*": null,
@@ -74,12 +68,6 @@
     "*": {
       "agent-guest": [
         "golem-types/exports.d.ts"
-      ],
-      "tool-middleware-guest": [
-        "golem-types/tool_middleware_exports.d.ts"
-      ],
-      "agent-tool-middleware-guest": [
-        "golem-types/agent_tool_middleware_exports.d.ts"
       ],
       "golem:agent/common@2.0.0": [
         "golem-types/golem_agent_2_0_0_common.d.ts"
