@@ -61,6 +61,7 @@ type commandOpts struct {
 	aliases     []string
 	stdin       *StreamSpec
 	stdout      *StreamSpec
+	raises      []*toolErrorInfo
 }
 
 // Summary sets a command's one-line description.
@@ -124,9 +125,10 @@ type commandEntry struct {
 
 // toolEntry is a registered tool: its spec and its commands in declaration order.
 type toolEntry struct {
-	def      *ToolDefinition
-	commands []*commandEntry
-	byPath   map[string]*commandEntry
+	def          *ToolDefinition
+	commands     []*commandEntry
+	byPath       map[string]*commandEntry
+	errorsByName map[string]*toolErrorInfo
 }
 
 // DefineTool registers a tool. Call it from a package-level var so registration
@@ -147,7 +149,11 @@ func defineToolInto(r *toolRegistry, d *definitions, name string, spec ToolSpec)
 		return t
 	}
 	r.order = append(r.order, name)
-	r.byName[name] = &toolEntry{def: t, byPath: map[string]*commandEntry{}}
+	r.byName[name] = &toolEntry{
+		def:          t,
+		byPath:       map[string]*commandEntry{},
+		errorsByName: map[string]*toolErrorInfo{},
+	}
 	return t
 }
 
@@ -441,6 +447,21 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, fields
 		})
 	}
 
+	errorCases := make([]toolCommon.ErrorCase, 0, len(ce.opts.raises))
+	for _, info := range ce.opts.raises {
+		payload := witTypes.None[int32]()
+		if info.payload != nil {
+			payload = witTypes.Some(g.node(d.compile(info.payload)))
+		}
+		errorCases = append(errorCases, toolCommon.ErrorCase{
+			Name:     info.name,
+			Doc:      docOf(info.spec.Summary, info.spec.Description),
+			Kind:     uint8(info.spec.Kind),
+			ExitCode: info.spec.ExitCode,
+			Payload:  payload,
+		})
+	}
+
 	return toolCommon.CommandBody{
 		Positionals: toolCommon.Positionals{
 			Fixed: positionals,
@@ -448,6 +469,7 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, fields
 		},
 		Options:     options,
 		Flags:       flags,
+		Errors:      errorCases,
 		Stdin:       streamSpec(ce.opts.stdin),
 		Stdout:      streamSpec(ce.opts.stdout),
 		Result:      result,
@@ -524,7 +546,10 @@ func (d *definitions) invokeCommand(
 	}
 
 	ctx := &ToolContext{tool: e.def.name, path: commandPath, stdin: stdin, stdout: stdout}
-	out, err := runCommandHandler(ce, ctx, args)
+	out, raised, err := runCommandHandler(ce, ctx, args)
+	if raised != nil {
+		return witTypes.Err[toolCommon.InvocationResult](d.declaredToolError(ce, raised))
+	}
 	if err != nil {
 		return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidResult(err.Error()))
 	}
@@ -594,17 +619,28 @@ func (d *definitions) optionShape(g *graphBuilder, ce *commandEntry, f toolArgFi
 	}
 }
 
-// runCommandHandler calls the handler and selects the output stream's terminal
-// for it: finished when the handler returns, failed when it panics. The wire
-// accepts exactly one terminal and treats a dropped writer as abandoned, so
-// choosing one here is what keeps a panicking handler from silently looking
-// like an abandoned transfer.
-func runCommandHandler(ce *commandEntry, ctx *ToolContext, args reflect.Value) (out reflect.Value, err error) {
+// runCommandHandler calls the handler, recovering a panic rather than letting
+// it kill the component, and selects the output stream's terminal: finished
+// when the handler returns, failed when it panics. The wire accepts exactly one
+// terminal and treats a dropped writer as abandoned, so choosing one here is
+// what keeps a panicking handler from looking like an abandoned transfer.
+//
+// A panic carrying a declared error case is returned separately from an
+// ordinary one, because the two reach the caller through different channels.
+func runCommandHandler(
+	ce *commandEntry, ctx *ToolContext, args reflect.Value,
+) (out reflect.Value, raised *RaisedToolError, err error) {
 	finished := false
 	defer func() {
 		if r := recover(); r != nil {
 			_ = ctx.stdout.Fail(StreamFailed(panicMessage(r)))
-			panic(r)
+			if re, ok := r.(*RaisedToolError); ok {
+				out, raised, err = reflect.Value{}, re, nil
+				return
+			}
+			out, raised, err = reflect.Value{}, nil, fmt.Errorf(
+				"command %s panicked: %s", commandLabel(ce.path), panicMessage(r))
+			return
 		}
 		if !finished {
 			return
@@ -615,7 +651,39 @@ func runCommandHandler(ce *commandEntry, ctx *ToolContext, args reflect.Value) (
 	}()
 	out = ce.invoke(ctx, args)
 	finished = true
-	return out, nil
+	return out, nil, nil
+}
+
+// declaredToolError turns a raised error case into the wire error. Raising a
+// case the command did not list is itself a failure: the caller was handed a
+// contract that does not mention it.
+func (d *definitions) declaredToolError(ce *commandEntry, raised *RaisedToolError) types.ToolError {
+	declared := false
+	for _, info := range ce.opts.raises {
+		if info == raised.info {
+			declared = true
+			break
+		}
+	}
+	if !declared {
+		return types.MakeToolErrorInvalidResult(fmt.Sprintf(
+			"command %s raised the undeclared error %q; list it with golem.Raises",
+			commandLabel(ce.path), raised.info.name))
+	}
+
+	payload := types.TypedSchemaValue{}
+	if raised.info.payload != nil {
+		c := d.compile(raised.info.payload)
+		g := graphBuilder{d: d}
+		root := g.node(c)
+		graph := g.build()
+		graph.Root = root
+		payload = types.TypedSchemaValue{Graph: graph, Value: encodeWith(c, raised.payload)}
+	}
+	return types.MakeToolErrorCustomError(types.CustomToolError{
+		Name:    raised.info.name,
+		Payload: payload,
+	})
 }
 
 // panicMessage renders a recovered panic for the stream failure reason.
