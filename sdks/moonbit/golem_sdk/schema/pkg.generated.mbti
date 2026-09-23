@@ -45,6 +45,8 @@ pub fn[T : IntoSchema] register_in_with(@schema_model.SchemaBuilder, TypeTag[T])
 
 pub fn[T : IntoWire] release_wire(T) -> Unit
 
+pub fn release_wire_fields(Array[&IntoWire]) -> Unit
+
 pub fn[T : IntoSchema] schema_graph_of_tag(TypeTag[T]) -> @schema_model.SchemaGraph raise
 
 pub fn[T : IntoSchema] to_value_as(T) -> @schema_model.SchemaValue

@@ -2532,22 +2532,6 @@ fn without_captured_args(
 }
 
 ///|
-fn extend_captured(
-  captured : Array[String],
-  args : Array[ProjectedToolArg],
-) -> Array[String] {
-  let result = captured.copy()
-  for arg in args {
-    for name in projected_arg_identity_names(arg) {
-      if !result.contains(name) {
-        result.push(name)
-      }
-    }
-  }
-  result
-}
-
-///|
 fn wrapper_name(root : ToolInfo, path : Array[String]) -> String {
   root.client_pascal_case() + path.map(wire_to_pascal_case).join("") + "Client"
 }
@@ -2623,11 +2607,12 @@ fn validate_client_type_names(
 ///|
 fn emit_tool_client_method(
   buf : StringBuilder,
-  root : ToolInfo,
   receiver : String,
   command : ToolCommandInfo,
   args : Array[ProjectedToolArg],
   path : Array[String],
+  fields : Array[ProjectedToolArg],
+  captured : Array[ProjectedToolArg],
   has_prefix : Bool,
 ) -> Unit {
   let signature = args
@@ -2664,48 +2649,27 @@ fn emit_tool_client_method(
     error +
     "]] {\n",
   )
-  buf.write_string(
-    "  let __golem_def = " +
-    descriptor_name(root, "") +
-    "()\n  let __golem_index = match __golem_def.command_index_by_path(" +
-    emit_strings(path) +
-    ") {\n    Some(__golem_index) => __golem_index\n    None => return Err(@tool.tool_protocol_error(\"generated command path is missing from descriptor\"))\n  }\n  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch { __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error))) }\n  let __golem_values = " +
-    (if has_prefix { "self.prefix.copy()" } else { "[]" }) +
-    "\n",
+  emit_client_wire_input(
+    buf,
+    fields,
+    captured,
+    has_prefix,
+    !has_stdout,
+    input_stream_source(command),
   )
   let mut stdin = "None"
   for arg in args {
     match arg.placement {
       Hidden(InputStream) => stdin = "Some(" + arg.source + ")"
-      Hidden(_) => ()
-      _ =>
-        buf.write_string(
-          "  __golem_values.push((\"" +
-          escape_string_lit(arg.canonical) +
-          "\", @schema.to_value_as(" +
-          arg.source +
-          ")))\n",
-        )
+      _ => ()
     }
   }
-  buf.write_string(
-    "  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch { __golem_error => return Err(@tool.tool_protocol_error(repr(__golem_error))) }\n",
-  )
-  let invoke = if command.error_type is Some(_) {
-    "self.client.invoke_and_await_tool_error"
-  } else {
-    "self.client.invoke_and_await_no_tool_error"
-  }
+  let decode_error = emit_wire_client_error_decoder(command)
   if has_stdout {
-    let decode_error = if command.error_type is Some(_) {
-      "fn(__golem_name, __golem_value) { @tool.decode_named_tool_error(__golem_name, __golem_value) }"
-    } else {
-      "fn(_, _) { None }"
-    }
     let decode_result = if is_unit(command.success_type) {
-      "@tool.decode_result_empty"
+      "@tool.decode_wire_result_empty"
     } else {
-      "@tool.decode_result_value"
+      "@tool.decode_wire_result_value"
     }
     buf.write_string(
       "  match self.client.start(" +
@@ -2721,17 +2685,17 @@ fn emit_tool_client_method(
     return
   }
   buf.write_string(
-    "  match " +
-    invoke +
-    "(" +
+    "  match self.client.invoke_and_await_wire(" +
     emit_strings(path) +
     ", __golem_input, " +
     stdin +
+    ", " +
+    decode_error +
     ") {\n    Err(__golem_error) => Err(__golem_error)\n    Ok(__golem_result) => @tool." +
     (if is_unit(command.success_type) {
-      "decode_result_empty"
+      "decode_wire_result_empty"
     } else {
-      "decode_result_value"
+      "decode_wire_result_value"
     }) +
     "(__golem_result) }\n}\n\n",
   )
@@ -2744,6 +2708,7 @@ fn emit_subtree_navigation(
   child_receiver : String,
   command : ToolCommandInfo,
   args : Array[ProjectedToolArg],
+  fields : Array[ProjectedToolArg],
   has_prefix : Bool,
 ) -> Unit {
   let signature = args
@@ -2759,18 +2724,12 @@ fn emit_subtree_navigation(
     (if signature.is_empty() { "" } else { ", " + signature }) +
     ") -> " +
     child_receiver +
-    " {\n  let __golem_prefix = " +
+    " {\n  let __golem_prefix : Array[&@schema.IntoWire] = " +
     (if has_prefix { "self.prefix.copy()" } else { "[]" }) +
     "\n",
   )
-  for arg in args {
-    buf.write_string(
-      "  __golem_prefix.push((\"" +
-      escape_string_lit(arg.canonical) +
-      "\", @schema.to_value_as(" +
-      arg.source +
-      ")))\n",
-    )
+  for arg in fields {
+    buf.write_string("  __golem_prefix.push(" + arg.source + ")\n")
   }
   buf.write_string("  { client: self.client, prefix: __golem_prefix }\n}\n\n")
 }
@@ -2783,9 +2742,10 @@ fn emit_client_scope(
   tools : Array[ToolInfo],
   receiver : String,
   path : Array[String],
-  captured : Array[String],
+  captured : Array[ProjectedToolArg],
   has_prefix : Bool,
 ) -> Unit raise ToolEmitError {
+  let captured_names = projected_identity_names(captured)
   let plans : Array[Array[ProjectedToolArg]] = []
   for command in current.commands {
     plans.push(project_command(command, command.subtree is Some(_)))
@@ -2793,29 +2753,37 @@ fn emit_client_scope(
   let root_globals = current.root_command
     .map(index => {
       without_captured_args(
-        plans[index].filter(arg => {
-          arg.placement is GlobalOption || arg.placement is GlobalFlag
-        }),
-        captured,
+        plans[index]
+        .filter(arg => arg.placement is GlobalOption)
+        .concat(plans[index].filter(arg => arg.placement is GlobalFlag)),
+        captured_names,
       )
     })
     .unwrap_or([])
   if current.root_command is Some(index) {
-    let args = without_captured_args(client_args(plans[index], []), captured)
+    let args = without_captured_args(
+      client_args(plans[index], []),
+      captured_names,
+    )
     emit_tool_client_method(
       buf,
-      root,
       receiver,
       current.commands[index],
       args,
       path,
+      direct_input_args(plans[index], captured),
+      captured,
       has_prefix,
     )
   }
   for index, command in current.commands {
     if Some(index) != current.root_command {
       let inherited_args = client_args(plans[index], root_globals)
-      let args = without_captured_args(inherited_args, captured)
+      let args = without_captured_args(inherited_args, captured_names)
+      let fields = direct_input_args(
+        plans[index],
+        captured.concat(root_globals),
+      )
       let command_path = path.concat([command.name])
       match command.subtree {
         Some(target) => {
@@ -2824,29 +2792,28 @@ fn emit_client_scope(
           buf.write_string(
             "///|\npub(all) struct " +
             child_receiver +
-            " { client : @tool.ToolClient; prefix : Array[(String, @model.SchemaValue)] }\n\n///|\npub fn " +
+            " { client : @tool.ToolClient; prefix : Array[&@schema.IntoWire] }\n\n///|\npub fn " +
             child_receiver +
             "::drop(self : " +
             child_receiver +
             ") -> Unit { self.client.drop() }\n\n",
           )
           emit_subtree_navigation(
-            buf, receiver, child_receiver, command, args, has_prefix,
+            buf,
+            receiver,
+            child_receiver,
+            command,
+            args,
+            without_captured_args(fields, captured_names),
+            has_prefix,
           )
           emit_client_scope(
-            buf,
-            root,
-            child,
-            tools,
-            child_receiver,
-            command_path,
-            extend_captured(captured, args),
-            true,
+            buf, root, child, tools, child_receiver, command_path, fields, true,
           )
         }
         None =>
           emit_tool_client_method(
-            buf, root, receiver, command, args, command_path, has_prefix,
+            buf, receiver, command, args, command_path, fields, captured, has_prefix,
           )
       }
     }

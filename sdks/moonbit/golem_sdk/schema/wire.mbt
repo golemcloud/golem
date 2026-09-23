@@ -221,7 +221,7 @@ pub async fn into_wire_record_async(
 }
 
 ///|
-fn release_wire_fields(values : Array[&IntoWire]) -> Unit {
+pub fn release_wire_fields(values : Array[&IntoWire]) -> Unit {
   let releaser : WireReleaser = { resources: [], native_streams: [], }
   for value in values {
     value.release_wire(releaser)

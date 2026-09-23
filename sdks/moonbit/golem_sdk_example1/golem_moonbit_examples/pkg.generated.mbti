@@ -173,7 +173,7 @@ pub impl @schema.WireSchema for CanonicalGitOutputMode
 
 pub(all) struct CanonicalGitRemoteClient {
   client : @tool.ToolClient
-  prefix : Array[(String, @schema_model.SchemaValue)]
+  prefix : Array[&@schema.IntoWire]
 }
 pub async fn CanonicalGitRemoteClient::add(Self, String, @schema.Url, Array[String], String?, Bool, Bool) -> Result[Unit, @tool.ToolError[CanonicalRemoteError]]
 pub fn CanonicalGitRemoteClient::drop(Self) -> Unit
@@ -182,7 +182,7 @@ pub async fn CanonicalGitRemoteClient::set_url(Self, String, @schema.Url, @schem
 
 pub(all) struct CanonicalGitStashClient {
   client : @tool.ToolClient
-  prefix : Array[(String, @schema_model.SchemaValue)]
+  prefix : Array[&@schema.IntoWire]
 }
 pub async fn CanonicalGitStashClient::apply(Self, String?, UInt?) -> Result[Unit, @tool.ToolError[CanonicalStashError]]
 pub fn CanonicalGitStashClient::drop(Self) -> Unit
@@ -199,7 +199,7 @@ pub(all) struct CanonicalGrepClient {
 pub fn CanonicalGrepClient::canonical_grep(Self, Bool, CanonicalGrepColorMode, String, Array[String], UInt?, Array[@schema.Path], @async-core.Stream[Byte]) -> Result[@tool.TypedToolInvocation[Array[CanonicalGrepHit], CanonicalGrepError], @tool.ToolError[CanonicalGrepError]]
 pub fn CanonicalGrepClient::drop(Self) -> Unit
 pub fn CanonicalGrepClient::new() -> Self
-pub async fn CanonicalGrepClient::replace(Self, Bool, CanonicalGrepColorMode, String, String, Array[@schema.Path]) -> Result[UInt64, @tool.ToolError[CanonicalGrepError]]
+pub async fn CanonicalGrepClient::replace(Self, CanonicalGrepColorMode, Bool, String, String, Array[@schema.Path]) -> Result[UInt64, @tool.ToolError[CanonicalGrepError]]
 
 pub(all) enum CanonicalGrepColorMode {
   Always

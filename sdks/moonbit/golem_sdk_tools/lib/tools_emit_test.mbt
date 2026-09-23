@@ -686,7 +686,9 @@ test "tool error schemas are reusable across descriptors and typed clients" {
   let clients = @formatter.impls_to_string(
     @lib.generate_tool_client_code(tools),
   )
-  assert_true(clients.contains("invoke_and_await_tool_error"))
+  assert_true(clients.contains("invoke_and_await_wire"))
+  assert_true(clients.contains("@schema.from_wire(__golem_value.value)"))
+  assert_false(clients.contains("from_error_payload_value"))
   assert_false(clients.contains("__golem_tool_decode_error"))
 }
 
@@ -1108,11 +1110,10 @@ test "typed client preserves a parameter named values" {
       "let values = []\n  values.push((\"values\", @schema.to_value_as(values)))",
     ),
   )
-  assert_true(
-    generated.contains(
-      "__golem_values.push((\"values\", @schema.to_value_as(values)))",
-    ),
-  )
+  assert_true(generated.contains("__golem_values.push(values)"))
+  assert_false(generated.contains("canonical_input_model"))
+  assert_false(generated.contains("@model.SchemaValue"))
+  assert_false(generated.contains("@schema.to_value_as"))
 }
 
 ///|
@@ -1626,4 +1627,27 @@ test "child constraint resolves parent subtree global" {
   assert_true(wire.contains("@tool.wire_value_is_literal"))
   assert_false(wire.contains("SchemaValue"))
   assert_false(wire.contains("__golem_tool_wire_Child"))
+}
+
+///|
+test "wire client orders inherited globals before leaf globals and fields" {
+  let source =
+    #|#derive.tool
+    #|struct Root {}
+    #|#derive.arg("verbose", scope="global")
+    #|#derive.arg("format", scope="global")
+    #|pub fn Root::root(verbose : Bool, format : String) -> Unit { () }
+    #|#derive.arg("limit", scope="global")
+    #|pub fn Root::run(item : String, limit : UInt) -> String { item }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(@lib.parse_tools([("ordered.mbt", source)])),
+  )
+  let run = generated.split("RootClient::run").last().unwrap()
+  let format = run.find("__golem_values.push(format)").unwrap()
+  let verbose = run.find("__golem_values.push(verbose)").unwrap()
+  let limit = run.find("__golem_values.push(limit)").unwrap()
+  let item = run.find("__golem_values.push(item)").unwrap()
+  assert_true(format < verbose && verbose < limit && limit < item)
+  assert_false(run.contains("command_index_by_path"))
+  assert_false(run.contains("build_canonical_input"))
 }
