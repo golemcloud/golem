@@ -138,28 +138,41 @@ pub(super) async fn capture(context: &PhaseContext) -> PhaseOutcome {
     }
 }
 
-/// One form of a warm save: the name of its capture step, the name of its save step, its agent
-/// and its change detection.
-type Form = (&'static str, &'static str, &'static str, ChangeDetection);
+/// One form of a warm save.
+#[derive(Clone, Copy, Debug)]
+struct Form {
+    /// The name of the step that captures the tree for the save.
+    capture_step: &'static str,
+    /// The name of the step of the save.
+    save_step: &'static str,
+    /// The agent whose repository gets the save.
+    agent: &'static str,
+    detection: ChangeDetection,
+}
 
 /// The forms of the warm saves, in the order in which they run.
 const FORMS: [Form; 2] = [
-    (
-        "capture_full_read",
-        "warm_save_full_read",
-        FIRST_AGENT,
-        ChangeDetection::Ctime,
-    ),
-    (
-        "capture_size_mtime",
-        "warm_save_size_mtime",
-        SIZE_MTIME_AGENT,
-        ChangeDetection::SizeMtime,
-    ),
+    Form {
+        capture_step: "capture_full_read",
+        save_step: "warm_save_full_read",
+        agent: FIRST_AGENT,
+        detection: ChangeDetection::Ctime,
+    },
+    Form {
+        capture_step: "capture_size_mtime",
+        save_step: "warm_save_size_mtime",
+        agent: SIZE_MTIME_AGENT,
+        detection: ChangeDetection::SizeMtime,
+    },
 ];
 
 /// The names of the steps of the forms, in the order in which they run.
-static FORM_STEPS: [&str; 4] = [FORMS[0].0, FORMS[0].1, FORMS[1].0, FORMS[1].1];
+static FORM_STEPS: [&str; 4] = [
+    FORMS[0].capture_step,
+    FORMS[0].save_step,
+    FORMS[1].capture_step,
+    FORMS[1].save_step,
+];
 
 /// Runs the capture and the warm save of each form, one form after the other. A failed step gives
 /// the records so far, the name of the step and the steps that did not run.
@@ -173,7 +186,16 @@ async fn warm_forms(
         .map(Ok)
         .try_fold(
             steps,
-            |mut steps, (index, (capture_step, save_step, agent, detection))| async move {
+            |mut steps,
+             (
+                index,
+                Form {
+                    capture_step,
+                    save_step,
+                    agent,
+                    detection,
+                },
+            )| async move {
                 let target: PathBuf = context.work_dir.join(capture_step);
                 let (record, captured) =
                     measure(capture_step, storage, capture_tree(tree, &target)).await;
@@ -207,7 +229,7 @@ async fn warm_forms(
 
 /// Captures the tree `from` into the new directory `to` on a blocking thread.
 async fn capture_tree(from: &Path, to: &Path) -> anyhow::Result<CopyCounts> {
-    let (from, to) = (from.to_path_buf(), to.to_path_buf());
+    let (from, to): (Box<Path>, Box<Path>) = (from.into(), to.into());
     tokio::task::spawn_blocking(move || trees::copy_tree(&from, &to, Times::Keep)).await?
 }
 

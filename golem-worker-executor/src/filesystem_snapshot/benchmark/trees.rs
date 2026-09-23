@@ -210,9 +210,11 @@ pub(super) const fn limit_layout(objects: u64) -> (u64, u64) {
 /// Makes the tree in the directory `root`, which must not exist.
 pub(super) async fn generate(spec: &TreeSpec, root: &Path) -> anyhow::Result<TreeCounts> {
     std::fs::create_dir(root).with_context(|| format!("create the tree {}", root.display()))?;
-    match files_of(spec) {
-        Some(files) => in_blocking(root, move |root| generate_files(root, &files)).await,
-        None => generate_database(&root.join(DATABASE), sqlite_bytes(spec)).await,
+    match tree_content(spec) {
+        TreeContent::Files(files) => {
+            in_blocking(root, move |root| generate_files(root, &files)).await
+        }
+        TreeContent::Sqlite { bytes } => generate_database(&root.join(DATABASE), bytes).await,
     }?;
     settle(root)?;
     Ok(count(root)?)
@@ -231,9 +233,13 @@ pub(super) async fn change(spec: &TreeSpec, root: &Path) -> anyhow::Result<Value
 /// object limit also loses one file in each round, so it keeps its number of objects. A SQLite
 /// tree gets new payload in rows spread over the database.
 pub(super) async fn change_round(spec: &TreeSpec, root: &Path, round: u8) -> anyhow::Result<Value> {
-    let change = match files_of(spec) {
-        Some(files) => in_blocking(root, move |root| change_files(root, &files, round)).await?,
-        None => change_database(&root.join(DATABASE), SqliteChange::Scattered).await?,
+    let change = match tree_content(spec) {
+        TreeContent::Files(files) => {
+            in_blocking(root, move |root| change_files(root, &files, round)).await?
+        }
+        TreeContent::Sqlite { .. } => {
+            change_database(&root.join(DATABASE), SqliteChange::Scattered).await?
+        }
     };
     settle(root)?;
     Ok(change)
@@ -243,7 +249,7 @@ pub(super) async fn change_round(spec: &TreeSpec, root: &Path, round: u8) -> any
 /// gives what changed. The rows are on about 34 consecutive pages.
 pub(super) async fn change_clustered(spec: &TreeSpec, root: &Path) -> anyhow::Result<Value> {
     anyhow::ensure!(
-        files_of(spec).is_none(),
+        matches!(tree_content(spec), TreeContent::Sqlite { .. }),
         "the tree {} has no database",
         spec.name
     );
@@ -305,8 +311,18 @@ struct Files {
     content: Content,
 }
 
-/// Gives the files of the tree, or `None` for a SQLite tree.
-fn files_of(spec: &TreeSpec) -> Option<Files> {
+/// What a tree holds: files, or one SQLite database.
+#[derive(Clone, Copy, Debug)]
+enum TreeContent {
+    Files(Files),
+    /// One SQLite database of at least the size.
+    Sqlite {
+        bytes: u64,
+    },
+}
+
+/// Gives what the tree holds.
+fn tree_content(spec: &TreeSpec) -> TreeContent {
     let (layout, bytes, replace) = match spec.shape {
         TreeShape::Files {
             files,
@@ -318,21 +334,14 @@ fn files_of(spec: &TreeSpec) -> Option<Files> {
             (Layout::Flat { files, directories }, bytes, Replace::Yes)
         }
         TreeShape::Modules { files, bytes } => (Layout::Modules { files }, bytes, Replace::No),
-        TreeShape::Sqlite { .. } => return None,
+        TreeShape::Sqlite { bytes } => return TreeContent::Sqlite { bytes },
     };
-    Some(Files {
+    TreeContent::Files(Files {
         layout,
         bytes,
         replace,
         content: spec.content,
     })
-}
-
-fn sqlite_bytes(spec: &TreeSpec) -> u64 {
-    match spec.shape {
-        TreeShape::Sqlite { bytes } => bytes,
-        _ => 0,
-    }
 }
 
 /// Gives the path of the file with the index in a flat tree, relative to the root of the tree.
@@ -422,9 +431,9 @@ enum Replace {
     No,
 }
 
-/// Gives the name of the file that the round adds: the name, and for a round after the first,
-/// the name with the round.
-fn round_name(name: &str, round: u8) -> String {
+/// Gives the file name of the round: the name, and for a round after the first, the name with
+/// the round.
+fn file_name_of_round(name: &str, round: u8) -> String {
     if round == 1 {
         name.to_string()
     } else {
@@ -456,7 +465,7 @@ fn change_files(root: &Path, files: &Files, round: u8) -> anyhow::Result<Value> 
             let path = files.layout.path(deleted);
             std::fs::remove_file(root.join(&path))?;
             (
-                path.with_file_name(round_name("replaced", round)),
+                path.with_file_name(file_name_of_round("replaced", round)),
                 deleted,
                 1,
             )
@@ -465,7 +474,7 @@ fn change_files(root: &Path, files: &Files, round: u8) -> anyhow::Result<Value> 
             files
                 .layout
                 .path(0)
-                .with_file_name(round_name("added", round)),
+                .with_file_name(file_name_of_round("added", round)),
             0,
             0,
         ),

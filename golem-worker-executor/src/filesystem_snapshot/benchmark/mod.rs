@@ -38,7 +38,7 @@ mod trees;
 mod volume;
 
 use super::rustic::{
-    ChangeDetection, Chunking, Compression, PhaseTime, Repository, RepositoryKey,
+    ChangeDetection, Chunking, Compression, InspectReport, PhaseTime, Repository, RepositoryKey,
     RepositorySettings, STORAGE_CALL_DEADLINE, SaveSettings,
 };
 use super::{SnapshotName, SnapshotScope};
@@ -197,6 +197,9 @@ enum PhaseKind {
     /// A copy of the repository of the save phase to another agent, and its deletion (see
     /// [`scopes`]).
     Scopes,
+    /// The phase of [`PhaseKind::Save`], and then an open of the repository, whose record gives
+    /// the settings that the repository has.
+    SaveAndOpen,
 }
 
 const SAVE: Phase = Phase {
@@ -304,11 +307,11 @@ const fn with_defaults(name: &'static str, kind: PhaseKind) -> Phase {
 }
 
 /// A save phase of a later scenario: a cold save, a small change and a warm save into the
-/// repository of the variant.
+/// repository of the variant, and an open of the repository.
 const fn save_phase(name: &'static str, variant: &'static Variant) -> Phase {
     Phase {
         name,
-        kind: PhaseKind::Save,
+        kind: PhaseKind::SaveAndOpen,
         variant,
     }
 }
@@ -860,13 +863,63 @@ async fn run_kind(context: &PhaseContext, kind: PhaseKind) -> PhaseOutcome {
         PhaseKind::Capture => capture::capture(context).await,
         PhaseKind::History => history::history(context).await,
         PhaseKind::Prune { fast_repack } => history::prune(context, fast_repack).await,
-        PhaseKind::SqliteChanges => sqlite::sqlite_changes(context).await,
+        PhaseKind::SqliteChanges => with_open(context, sqlite::sqlite_changes(context).await).await,
         PhaseKind::Mixed {
             saves,
             restores,
             reader_threads,
         } => concurrent::mixed(context, saves, restores, reader_threads).await,
         PhaseKind::Scopes => scopes::scopes(context).await,
+        PhaseKind::SaveAndOpen => with_open(context, base_save(context).await).await,
+    }
+}
+
+/// Gives the outcome of a save phase with an open of the repository of the phase after it. The
+/// open finds the warm save, and its record gives the settings that the repository has. A save
+/// phase that failed gets a skipped open, and an open that fails or finds no repository fails the
+/// phase.
+async fn with_open(context: &PhaseContext, saved: PhaseOutcome) -> PhaseOutcome {
+    if saved.outcome != Outcome::Ok {
+        return PhaseOutcome {
+            steps: saved
+                .steps
+                .into_iter()
+                .chain(std::iter::once(StepRecord::skipped("open")))
+                .collect(),
+            ..saved
+        };
+    }
+    let repository = context.repository();
+    let (record, inspected) = measure("open", &context.storage, async {
+        repository.inspect(&snapshot_name(WARM_SAVE)?).await
+    })
+    .await;
+    let mut steps = saved.steps;
+    steps.push(inspect_record(record, &inspected));
+    if matches!(inspected, Ok(Some(_))) {
+        PhaseOutcome { steps, ..saved }
+    } else {
+        failed(saved.tree_facts, steps, "open", &[])
+    }
+}
+
+/// Gives the record of an open with what it found: the number of snapshots, whether a snapshot
+/// has the name, and the settings of the repository, as its config file gives them.
+fn inspect_record(
+    record: StepRecord,
+    inspected: &anyhow::Result<Option<InspectReport>>,
+) -> StepRecord {
+    match inspected {
+        Ok(Some(report)) => record.with_details(
+            json!({
+                "snapshots": report.snapshots,
+                "found": report.found,
+                "settings": repository_parameters(&report.settings),
+            }),
+            phase_walls(&report.phases),
+        ),
+        Ok(None) => record.with_details(json!({ "repository": null }), Box::default()),
+        Err(_) => record,
     }
 }
 
@@ -887,13 +940,23 @@ fn with_settings(step: StepRecord, variant: &Variant) -> StepRecord {
 
 /// Gives the settings as step parameters. A setting that is not set is `null`.
 fn settings_parameters(settings: &Settings) -> Map<String, Value> {
-    let repository = &settings.repository;
     [
         ("save_threads", json!(settings.save.threads)),
         (
             "change_detection",
             json!(change_detection_name(settings.save.detection)),
         ),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value))
+    .chain(repository_parameters(&settings.repository))
+    .collect()
+}
+
+/// Gives the settings of a repository as step parameters. A setting that is not set is `null`:
+/// the default compression is the zstd level that rustic chooses when the config file has none.
+fn repository_parameters(repository: &RepositorySettings) -> Map<String, Value> {
+    [
         (
             "chunker",
             match repository.chunking {
@@ -904,7 +967,7 @@ fn settings_parameters(settings: &Settings) -> Map<String, Value> {
         (
             "compression",
             match repository.compression {
-                Compression::Default => json!("default"),
+                Compression::Default => Value::Null,
                 Compression::Off => json!("off"),
                 Compression::Level(level) => json!(level.get()),
             },

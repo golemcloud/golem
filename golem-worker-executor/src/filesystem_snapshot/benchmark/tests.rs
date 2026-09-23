@@ -856,7 +856,7 @@ fn a_later_phase_records_its_settings_and_an_earlier_phase_records_none() {
                 "save_threads": 2,
                 "change_detection": "ctime",
                 "chunker": "rabin",
-                "compression": "default",
+                "compression": null,
                 "extra_verify": true,
             }),
             json!("size-mtime"),
@@ -1049,6 +1049,10 @@ async fn fixed_chunks_save_less_after_a_clustered_change_and_restore_the_databas
                 .bytes
                 .is_some_and(|bytes| bytes >= 4 * 1024 * 1024),
             fixed.tree_facts.change.as_ref() == Some(&step(&fixed, "scattered_change").details),
+            [
+                detail(&rabin, "open", "/settings/chunker"),
+                detail(&fixed, "open", "/settings"),
+            ],
         ),
         (
             Outcome::Ok,
@@ -1061,6 +1065,7 @@ async fn fixed_chunks_save_less_after_a_clustered_change_and_restore_the_databas
                 ("scattered_change", true),
                 ("warm_save_scattered", true),
                 ("hash_tree", true),
+                ("open", true),
             ],
             true,
             json!("fixed-65536"),
@@ -1070,6 +1075,10 @@ async fn fixed_chunks_save_less_after_a_clustered_change_and_restore_the_databas
             (Some(1), Some(0)),
             true,
             true,
+            [
+                json!("rabin"),
+                json!({ "chunker": "fixed-65536", "compression": null, "extra_verify": true }),
+            ],
         )
     );
 }
@@ -1204,6 +1213,8 @@ async fn a_cpu_options_phase_makes_its_repository_with_its_compression() {
             default_packed < default_added.map(|added| added * 3 / 4),
             off_packed >= off_added,
             step(&off, "cold_save").parameters["compression"].clone(),
+            step(&default, "open").details.clone(),
+            detail(&off, "open", "/settings"),
         ),
         (
             Outcome::Ok,
@@ -1212,6 +1223,12 @@ async fn a_cpu_options_phase_makes_its_repository_with_its_compression() {
             true,
             true,
             json!("off"),
+            json!({
+                "snapshots": 2,
+                "found": true,
+                "settings": { "chunker": "rabin", "compression": null, "extra_verify": true },
+            }),
+            json!({ "chunker": "rabin", "compression": "off", "extra_verify": true }),
         )
     );
 }

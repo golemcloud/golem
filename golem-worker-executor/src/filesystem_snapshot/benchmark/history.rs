@@ -22,12 +22,10 @@ use super::agents::{FIRST_AGENT, agent_blobs, copy_agent, total_bytes};
 use super::measure::measure;
 use super::report::{Outcome, StepRecord, TreeFacts};
 use super::{
-    COLD_SAVE, PhaseContext, PhaseOutcome, failed, phase_walls, save_record, saved_hash,
-    snapshot_name, trees, without_save,
+    COLD_SAVE, PhaseContext, PhaseOutcome, failed, inspect_record, phase_walls, save_record,
+    saved_hash, snapshot_name, trees, without_save,
 };
-use crate::filesystem_snapshot::rustic::{
-    InspectReport, PruneReport, PruneSettings, RepackLimits, Repository,
-};
+use crate::filesystem_snapshot::rustic::{PruneReport, PruneSettings, RepackLimits, Repository};
 use futures::{StreamExt, TryStreamExt};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -42,13 +40,13 @@ const OPEN_AFTER: [u8; 3] = [1, 11, 12];
 const KEEP: u8 = 2;
 
 /// The name of the snapshot of the save of the round, from 1 to [`ROUNDS`].
-fn round_name(round: u8) -> String {
-    format!("round-{round:02}")
+fn snapshot_of_round(round: u8) -> Box<str> {
+    format!("round-{round:02}").into()
 }
 
 /// The name of the newest snapshot of the history.
-fn newest() -> String {
-    round_name(ROUNDS)
+fn newest() -> Box<str> {
+    snapshot_of_round(ROUNDS)
 }
 
 /// The settings of both prunes of a prune phase: no grace period, and no limit that leaves unused
@@ -121,8 +119,8 @@ pub(super) async fn history(context: &PhaseContext) -> PhaseOutcome {
 
     let forgotten = (0..=ROUNDS - KEEP)
         .map(|round| match round {
-            0 => COLD_SAVE.to_string(),
-            round => round_name(round),
+            0 => Box::from(COLD_SAVE),
+            round => snapshot_of_round(round),
         })
         .collect::<Box<[_]>>();
     let (record, forgot) = measure("forget", storage, async {
@@ -181,7 +179,7 @@ async fn save_round(
     if changed.is_err() {
         return Err(steps);
     }
-    let name = round_name(round);
+    let name = snapshot_of_round(round);
     let (record, saved) = measure("save", storage, async {
         repository
             .save_with(&snapshot_name(&name)?, tree, context.save_settings())
@@ -213,21 +211,6 @@ async fn open_step(
         steps.push(inspect_record(record, &inspected).with_parameters(json!({ "saves": saves })));
     }
     steps
-}
-
-/// Gives the record of an open with what it found.
-fn inspect_record(
-    record: StepRecord,
-    inspected: &anyhow::Result<Option<InspectReport>>,
-) -> StepRecord {
-    match inspected {
-        Ok(Some(report)) => record.with_details(
-            json!({ "snapshots": report.snapshots, "found": report.found }),
-            phase_walls(&report.phases),
-        ),
-        Ok(None) => record.with_details(json!({ "repository": null }), Box::default()),
-        Err(_) => record,
-    }
 }
 
 /// A prune phase: the repository of the history phase goes on the server to the agent of the

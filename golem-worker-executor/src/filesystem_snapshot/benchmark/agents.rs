@@ -341,8 +341,8 @@ async fn copy_blob(
 }
 
 /// The directories of a repository in the order in which a copy of the repository lists and
-/// copies them: the reverse of the order in which a save writes them. A snapshot that the copy has
-/// thus has its index and its packs too. The config goes last.
+/// copies them. A save writes them in the opposite order, so a snapshot that the copy has also has
+/// its index and its packs. The config goes last.
 const COPY_ORDER: [&str; 3] = ["snapshots", "index", "data"];
 
 /// Gives each blob of the repository of the agent, with the path relative to the repository, in

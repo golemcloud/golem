@@ -219,7 +219,7 @@ pub(super) enum ChangeDetection {
 }
 
 /// The settings of one save.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct SaveSettings {
     /// The number of threads of each parallel stage of the save. `None` is the number of CPUs
     /// that the process can use.
@@ -233,6 +233,12 @@ impl SaveSettings {
         threads: None,
         detection: ChangeDetection::Ctime,
     };
+}
+
+impl Default for SaveSettings {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }
 
 /// Which packs a prune repacks.
