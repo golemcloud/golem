@@ -395,7 +395,10 @@ object SchemaWireInteropSpec extends ZIOSpecDefault {
                                 for {
                                   first <- stream.pull()
                                   end   <- stream.pull()
-                                } yield assertTrue(first.contains(SchemaValue.StringValue("first")), end.isEmpty)
+                                } yield assertTrue(
+                                  first.contains(WitSchemaValueTree(Vector(StringValue("first")), 0)),
+                                  end.isEmpty
+                                )
                               }
                             case other =>
                               Future.successful(assertTrue(false).label(s"expected wrapped stream, got $other"))

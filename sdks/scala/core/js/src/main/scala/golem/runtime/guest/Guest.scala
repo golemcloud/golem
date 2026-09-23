@@ -203,14 +203,11 @@ object Guest {
               case None          => Future.successful(Left(WitToolError.InvalidToolName(toolName)))
               case Some(invoker) =>
                 val path = commandPath.toList
-                val body = ToolRegistry.getExtendedTool(toolName).flatMap { tool =>
-                  tool.commandIndexByPath(path).flatMap(index => tool.commands(index).body)
-                }
-                body match {
-                  case None                                                          => Future.successful(Left(WitToolError.InvalidCommandPath(path)))
-                  case Some(selected) if selected.stdout.isEmpty && stdout.isDefined =>
+                ToolRegistry.getCommandStdout(toolName, path) match {
+                  case None                                                   => Future.successful(Left(WitToolError.InvalidCommandPath(path)))
+                  case Some(selected) if selected.isEmpty && stdout.isDefined =>
                     Future.successful(Left(WitToolError.InvalidInput("unexpected stdout stream")))
-                  case Some(selected) if selected.stdout.exists(_.required) && stdout.isEmpty =>
+                  case Some(selected) if selected.exists(_.required) && stdout.isEmpty =>
                     Future.successful(
                       Left(WitToolError.InvalidInput("tool invocation did not contain declared stdout stream"))
                     )
@@ -228,11 +225,14 @@ object Guest {
     // A `Left` (declared tool error) is surfaced as a rejection carrying the
     // wire-encoded `tool-error`; a failed Future (user code error) propagates as
     // an unhandled rejection so it becomes a WASM trap.
-    val encoded = invoked.map {
+    val encoded = invoked.flatMap {
       case Right(res) =>
-        JsInvocationResult(res.result.map(SchemaWireInterop.typedToJs).orUndefined)
+        res.result match {
+          case Some(value) => SchemaWireInterop.typedToJsAsync(value).map(value => JsInvocationResult(value))
+          case None        => Future.successful(JsInvocationResult(js.undefined))
+        }
       case Left(error) =>
-        throw js.JavaScriptException(ToolWireInterop.toolErrorToJs(error))
+        ToolWireInterop.toolErrorToJsAsync(error).flatMap(error => Future.failed(js.JavaScriptException(error)))
     }
     val cleanup = List(
       () => inputOwnership.close(),

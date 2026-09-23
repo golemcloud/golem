@@ -20,6 +20,7 @@ import golem.host.js.tool._
 import golem.tool._
 import golem.tool.wire._
 
+import scala.concurrent.{ExecutionContext, Future}
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
 
@@ -99,6 +100,16 @@ object ToolWireInterop {
       case WitToolError.CustomError(error)       =>
         JsToolError.customError(error.name, SchemaWireInterop.typedToJs(error.payload))
     }
+
+  def toolErrorToJsAsync(e: WitToolError): Future[JsToolError] = e match {
+    case WitToolError.CustomError(error) =>
+      SchemaWireInterop
+        .typedToJsAsync(error.payload)
+        .map(payload => JsToolError.customError(error.name, payload))(using
+          ExecutionContext.parasitic
+        )
+    case other => Future.successful(toolErrorToJs(other))
+  }
 
   def toolErrorFromJs(j: JsToolError): WitToolError =
     j.tag match {
