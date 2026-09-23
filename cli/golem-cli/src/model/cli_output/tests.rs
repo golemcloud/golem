@@ -1238,7 +1238,10 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
 
     let outputs = vec![
         to_structured_output_value_masked(
-            crate::model::secret::SecretCreateView(secret.clone().into()),
+            crate::model::secret::SecretCreateView {
+                action: crate::model::create_action::CreateAction::Created,
+                secret: secret.clone().into(),
+            },
             MaskingConfig::hide_secrets(),
         )
         .expect("secret.create should serialize"),
@@ -6549,10 +6552,22 @@ fn arb_retry_policy() -> BoxedStrategy<golem_common::model::retry_policy::RetryP
 }
 
 fn arb_secret_create_result() -> OutputDocumentStrategy {
-    arb_secret()
-        .prop_map(|secret| {
+    use crate::model::create_action::CreateAction;
+
+    (
+        arb_secret(),
+        prop_oneof![
+            Just(CreateAction::Created),
+            Just(CreateAction::Updated),
+            Just(CreateAction::Replaced),
+        ],
+    )
+        .prop_map(|(secret, action)| {
             to_structured_output_value_masked(
-                crate::model::secret::SecretCreateView(secret.into()),
+                crate::model::secret::SecretCreateView {
+                    action,
+                    secret: secret.into(),
+                },
                 MaskingConfig::hide_secrets(),
             )
             .expect("generated secret create should serialize")

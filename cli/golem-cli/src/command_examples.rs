@@ -785,6 +785,12 @@ pub const SECRET_CREATE: &str = "Examples:
   # Create the secret without a value
   golem-cli secret create apiKey --type String --no-value
 
+  # Create the secret, or update its value if it already exists
+  golem-cli secret create apiKey --type String --value 'sk-abc123' --update-existing
+
+  # Also replace an existing secret that has a different type (asks for confirmation)
+  golem-cli secret create retries --type u32 --value 3 --update-existing --replace-on-type-change
+
   # Type and value use the project's language syntax (or JSON):
   #   --type String   for Rust
   #   --type string   for TypeScript";

@@ -22,6 +22,7 @@ pub mod cli_command_metadata;
 pub mod cli_output;
 pub mod component;
 pub mod config;
+pub mod create_action;
 pub mod deploy;
 pub mod environment;
 pub mod format;

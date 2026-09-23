@@ -1951,6 +1951,16 @@ pub mod api {
                 /// Create the secret without a value
                 #[arg(long, conflicts_with_all = ["value", "value_stdin"])]
                 no_value: bool,
+                /// If a secret already exists at the path, update its value instead of failing.
+                /// Fails if the existing secret has a different type, unless
+                /// `--replace-on-type-change` is also given.
+                #[arg(long)]
+                update_existing: bool,
+                /// With `--update-existing`: if the existing secret has a different type, delete it
+                /// and create it again with the new type and value (asks for confirmation, use
+                /// `-Y/--yes` to skip). The replacement is not atomic and changes the secret ID.
+                #[arg(long, requires = "update_existing")]
+                replace_on_type_change: bool,
             },
 
             /// Get Secret by path or ID
@@ -3145,6 +3155,22 @@ mod test {
                 }
             }
         }
+    }
+
+    #[test]
+    fn secret_create_replace_on_type_change_requires_update_existing() {
+        let base = ["golem", "secret", "create", "apiKey", "--type", "String"];
+        assert!(
+            GolemCliCommand::try_parse_from(base.into_iter().chain(["--replace-on-type-change"]))
+                .is_err()
+        );
+        assert!(
+            GolemCliCommand::try_parse_from(
+                base.into_iter()
+                    .chain(["--update-existing", "--replace-on-type-change"])
+            )
+            .is_ok()
+        );
     }
 
     #[test]

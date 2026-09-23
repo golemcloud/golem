@@ -8509,6 +8509,7 @@
       "x-golem-command": "secret create",
       "required": [
         "$type",
+        "action",
         "id",
         "environmentId",
         "path",
@@ -8518,6 +8519,11 @@
       "properties": {
         "$type": {
           "const": "secret.create"
+        },
+        "action": {
+          "description": "Whether the secret was created, an existing secret was updated (`--update-existing`), or an existing secret with a different type was deleted and created again (`--replace-on-type-change`).",
+          "type": "string",
+          "enum": ["created", "updated", "replaced"]
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },

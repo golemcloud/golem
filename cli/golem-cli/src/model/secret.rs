@@ -14,6 +14,7 @@
 
 use crate::agent_id_display::{SourceLanguage, render_type_for_language};
 use crate::model::cli_output::StructuredOutput;
+use crate::model::create_action::CreateAction;
 use crate::model::masking::{Masked, MaskingConfig, mask_json_secret_value};
 use crate::model::text_format::*;
 
@@ -57,25 +58,35 @@ impl Masked for SecretView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[serde(transparent)]
-pub struct SecretCreateView(pub SecretView);
+pub struct SecretCreateView {
+    pub action: CreateAction,
+    #[serde(flatten)]
+    pub secret: SecretView,
+}
 
 impl Masked for SecretCreateView {
     fn masked(self, config: MaskingConfig) -> anyhow::Result<Self> {
-        Ok(Self(self.0.masked(config)?))
+        Ok(Self {
+            action: self.action,
+            secret: self.secret.masked(config)?,
+        })
     }
 }
 
 impl MessageWithFields for SecretCreateView {
     fn message(&self) -> String {
-        format!(
-            "Created a new secret {}",
-            format_message_highlight(&self.0.id),
-        )
+        let id = format_message_highlight(&self.secret.id);
+        match self.action {
+            CreateAction::Created => format!("Created a new secret {id}"),
+            CreateAction::Updated => format!("Updated existing secret {id}"),
+            CreateAction::Replaced => {
+                format!("Replaced existing secret with a new secret {id}")
+            }
+        }
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        secret_view_fields(&self.0)
+        secret_view_fields(&self.secret)
     }
 }
 

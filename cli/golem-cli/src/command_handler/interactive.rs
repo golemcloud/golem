@@ -327,6 +327,17 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_replace_secret_with_different_type(&self, path: &str) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            format!(
+                "Secret {} already exists with a different type. Delete it and create it again with the new type and value?",
+                path.log_color_highlight()
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,

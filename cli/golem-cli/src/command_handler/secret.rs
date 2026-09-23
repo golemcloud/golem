@@ -16,9 +16,10 @@ use crate::agent_id_display::{SourceLanguage, parse_type_for_language, parse_val
 use crate::command::api::secret::SecretSubcommand;
 use crate::command_handler::Handlers;
 use crate::context::Context;
-use crate::error::service::MapServiceError;
+use crate::error::service::{MapServiceError, ServiceError};
 use crate::error::{NonSuccessfulExit, ShowClapHelpTarget};
 use crate::log::log_error;
+use crate::model::create_action::CreateAction;
 use crate::model::environment::EnvironmentResolveMode;
 use crate::model::language::GuestLanguage;
 use crate::model::secret::{
@@ -27,9 +28,11 @@ use crate::model::secret::{
 use anyhow::{Context as AnyhowContext, bail};
 use golem_client::api::AgentSecretsClient;
 use golem_client::model::{AgentSecretCreation, AgentSecretDto, AgentSecretUpdate};
+use golem_common::base_model::api;
 use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath, CanonicalAgentSecretPath};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
-use golem_common::schema::validation::validate_value;
+use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
 use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 use std::collections::BTreeSet;
 use std::io::{IsTerminal, Read};
@@ -52,11 +55,15 @@ impl SecretCommandHandler {
                 value,
                 value_stdin,
                 no_value,
+                update_existing,
+                replace_on_type_change,
             } => {
                 self.cmd_create(
                     path,
                     secret_type,
                     SecretValueInput::from_args(value, value_stdin, no_value),
+                    update_existing,
+                    replace_on_type_change,
                 )
                 .await
             }
@@ -128,6 +135,8 @@ impl SecretCommandHandler {
         path: AgentSecretPath,
         secret_type: String,
         value_input: SecretValueInput,
+        update_existing: bool,
+        replace_on_type_change: bool,
     ) -> anyhow::Result<()> {
         let environment = self
             .ctx
@@ -159,9 +168,51 @@ impl SecretCommandHandler {
             }
         };
 
+        let canonical_path = CanonicalAgentSecretPath::from_path_in_unknown_casing(&path.0);
+
+        let existing = if update_existing {
+            clients
+                .agent_secrets
+                .get_environment_agent_secret(&environment.environment_id.0, &canonical_path.0)
+                .await
+                .map_service_error_not_found_as_opt()?
+        } else {
+            None
+        };
+
+        let existing = match existing {
+            None => None,
+            Some(existing)
+                if is_equivalent_cross_graph(
+                    &existing.secret_type,
+                    &existing.secret_type.root,
+                    &secret_type,
+                    &secret_type.root,
+                ) =>
+            {
+                Some((existing, false))
+            }
+            Some(existing) => {
+                if !replace_on_type_change {
+                    log_error(format!(
+                        "Secret '{canonical_path}' already exists with a different type. Delete it first, or use --replace-on-type-change"
+                    ));
+                    bail!(NonSuccessfulExit);
+                }
+                if !self
+                    .ctx
+                    .interactive_handler()
+                    .confirm_replace_secret_with_different_type(&canonical_path.to_string())?
+                {
+                    bail!(NonSuccessfulExit);
+                }
+                Some((existing, true))
+            }
+        };
+
         let secret_value = self.read_secret_value(
             value_input,
-            &CanonicalAgentSecretPath::from_path_in_unknown_casing(&path.0).to_string(),
+            &canonical_path.to_string(),
             ShowClapHelpTarget::SecretCreate,
             "--value, --value-stdin or --no-value",
         )?;
@@ -171,10 +222,75 @@ impl SecretCommandHandler {
             &source_language,
         )?;
 
-        let result = clients
+        let (action, result) = match existing {
+            None => (
+                CreateAction::Created,
+                self.create_secret(
+                    &environment.environment_id,
+                    path,
+                    secret_type,
+                    secret_value,
+                    update_existing,
+                )
+                .await?,
+            ),
+            Some((existing, false)) => (
+                CreateAction::Updated,
+                clients
+                    .agent_secrets
+                    .update_agent_secret(
+                        &existing.id.0,
+                        &AgentSecretUpdate {
+                            current_revision: existing.revision,
+                            secret_value: OptionalFieldUpdate::update_from_option(secret_value),
+                        },
+                    )
+                    .await
+                    .map_service_error()?,
+            ),
+            Some((existing, true)) => {
+                clients
+                    .agent_secrets
+                    .delete_agent_secret(&existing.id.0, existing.revision.into())
+                    .await
+                    .map_service_error()?;
+                (
+                    CreateAction::Replaced,
+                    self.create_secret(
+                        &environment.environment_id,
+                        path,
+                        secret_type,
+                        secret_value,
+                        update_existing,
+                    )
+                    .await?,
+                )
+            }
+        };
+
+        self.ctx.log_handler().log_output(SecretCreateView {
+            action,
+            secret: result.into(),
+        })?;
+
+        Ok(())
+    }
+
+    async fn create_secret(
+        &self,
+        environment_id: &EnvironmentId,
+        path: AgentSecretPath,
+        secret_type: SchemaGraph,
+        secret_value: Option<ExternalSchemaValue>,
+        update_existing: bool,
+    ) -> anyhow::Result<AgentSecretDto> {
+        let clients = self.ctx.golem_clients().await?;
+        let canonical_path = CanonicalAgentSecretPath::from_path_in_unknown_casing(&path.0);
+
+        match clients
             .agent_secrets
             .create_agent_secret(
-                &environment.environment_id.0,
+                &environment_id.0,
                 &AgentSecretCreation {
                     path,
                     secret_type,
@@ -182,13 +298,21 @@ impl SecretCommandHandler {
                 },
             )
             .await
-            .map_service_error()?;
-
-        self.ctx
-            .log_handler()
-            .log_output(SecretCreateView(result.into()))?;
-
-        Ok(())
+        {
+            Ok(result) => Ok(result),
+            Err(err) => {
+                let err: ServiceError = err.into();
+                if !update_existing
+                    && err.is_already_exists(api::error_code::AGENT_SECRET_ALREADY_EXISTS)
+                {
+                    log_error(format!(
+                        "Secret '{canonical_path}' already exists. Use --update-existing to update its value"
+                    ));
+                    bail!(NonSuccessfulExit);
+                }
+                Err(err.into())
+            }
+        }
     }
 
     async fn cmd_get(

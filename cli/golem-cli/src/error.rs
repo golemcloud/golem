@@ -293,6 +293,15 @@ pub mod service {
             }
         }
 
+        pub fn is_already_exists(&self, code: &str) -> bool {
+            match &self.kind {
+                ServiceErrorKind::ErrorResponse(err) => {
+                    err.is_status_code(409) && err.has_code(code)
+                }
+                _ => false,
+            }
+        }
+
         pub fn is_agent_secret_not_compatible(&self) -> bool {
             match &self.kind {
                 ServiceErrorKind::ErrorResponse(err) => {
