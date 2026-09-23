@@ -344,6 +344,7 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
         details: Some("committed external cancellation".into()),
     };
     oplog.commit(CommitLevel::Always).await;
+    let witness_index = service.stream_session_index.clone();
     let probe =
         DbDirectStreamAttachmentConsumerProbe::new(Arc::new(service), oplog_service.clone());
     assert_eq!(
@@ -433,6 +434,19 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
         append_session(foreign_oplog.as_ref(), record).await;
     }
     foreign_oplog.commit(CommitLevel::Always).await;
+    let witness = witness_index
+        .lookup_topology_witness(
+            &foreign,
+            AgentMode::Durable,
+            &key,
+            &StreamBindingRecord::foreign(&mapping),
+            foreign_oplog.current_oplog_index().await,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(witness.attachment, foreign_attachment);
+    assert!(witness.epoch_authority.is_none());
     assert_eq!(
         probe
             .status_exact(&foreign_attachment, Some(&mapping))
@@ -1907,6 +1921,637 @@ async fn persisted_control_projection_reopens_without_history_and_catches_commit
         4,
         "historical attempts only capture the committed tip, without history or payload reads"
     );
+}
+
+#[test]
+async fn invalid_topology_witnesses_do_not_poison_unrelated_session_indexes() {
+    use golem_common::model::durable_stream::*;
+
+    for scenario in 0..5 {
+        let (service, _, oplog_service) = service_with_oplog().await;
+        let owner = owned_agent("invalid-witness", ComponentId::new());
+        let key = session_key(&owner, &IdempotencyKey::new("bad".into()));
+        let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
+        let StreamSessionRecord::Prepared(prepared) =
+            prepared_with_reader(&owner, &key.idempotency_key)
+        else {
+            unreachable!()
+        };
+        let binding = prepared.stream_mappings[0].clone();
+        let StreamRecordReference::Foreign(handle) = &binding.source else {
+            unreachable!()
+        };
+        let mapping = StreamSessionMappingRecord {
+            transport_stream_id: binding.transport_stream_id,
+            handle: handle.clone(),
+            role: binding.role,
+        };
+        let mut attachment = StreamAttachmentKey {
+            attachment_id: prepared.attempt.attachment_id,
+            stream_id: handle.stream_id,
+            epoch: 1,
+            session_key: key.clone(),
+            producer_environment_id: handle.producer_environment_id,
+            producer: handle.producer.clone(),
+            expected_producer_fingerprint: handle.expected_producer_fingerprint,
+            consumer_environment_id: owner.environment_id,
+            consumer: owner.agent_id.clone(),
+            expected_consumer_fingerprint: key.callee_fingerprint,
+            consumer_invocation: key.clone(),
+        };
+        let attempt_id = prepared.attempt.attempt_id;
+        let publication =
+            append_session(oplog.as_ref(), StreamSessionRecord::Prepared(prepared)).await;
+        let pending = append_pending_invocation(oplog.as_ref(), &key.idempotency_key).await;
+        append_session(
+            oplog.as_ref(),
+            StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+                format_version: 1,
+                session_key: key.idempotency_key.clone(),
+                attachment_id: attachment.attachment_id,
+                attempt_id,
+                epoch: 1,
+                pending_invocation_oplog_index: pending,
+            }),
+        )
+        .await;
+        if scenario == 1 {
+            let mut higher = attachment.clone();
+            higher.epoch = 2;
+            append_session(
+                oplog.as_ref(),
+                StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
+                    format_version: 1,
+                    session_key: key.clone(),
+                    attachment: higher,
+                    mapping: mapping.clone(),
+                }),
+            )
+            .await;
+        }
+        if scenario == 3 {
+            attachment.epoch = 2;
+        }
+        if scenario != 0 {
+            append_session(
+                oplog.as_ref(),
+                StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
+                    format_version: if scenario == 2 { 0 } else { 1 },
+                    session_key: key.clone(),
+                    attachment: attachment.clone(),
+                    mapping: mapping.clone(),
+                }),
+            )
+            .await;
+        }
+        append_session(
+            oplog.as_ref(),
+            StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
+                format_version: 1,
+                session_key: key.clone(),
+                attachment: attachment.clone(),
+                mapping: mapping.clone(),
+            }),
+        )
+        .await;
+        if scenario == 4 {
+            append_session(
+                oplog.as_ref(),
+                StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
+                    format_version: 0,
+                    session_key: key.clone(),
+                    attachment,
+                    mapping,
+                }),
+            )
+            .await;
+        }
+        let unrelated = session_key(&owner, &IdempotencyKey::new("healthy".into()));
+        append_session(
+            oplog.as_ref(),
+            prepared_record(&owner, &unrelated.idempotency_key),
+        )
+        .await;
+        oplog.commit(CommitLevel::Always).await;
+        assert!(
+            service
+                .stream_session_index
+                .lookup_topology_witness(&owner, AgentMode::Durable, &key, &binding, publication)
+                .await
+                .unwrap()
+                .is_none(),
+            "scenario {scenario}"
+        );
+        assert!(
+            service
+                .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &unrelated)
+                .await
+                .unwrap()
+                .is_prepared()
+        );
+        assert!(
+            service
+                .stream_session_index
+                .lookup_latest(&owner, AgentMode::Durable, &unrelated.idempotency_key)
+                .await
+                .unwrap()
+                .unwrap()
+                .lifecycle_error
+                .is_none()
+        );
+    }
+}
+
+#[test]
+async fn historical_topology_witness_survives_epoch_changes_and_fork_without_live_authority() {
+    use crate::durable_host::durable_stream::ConsumerAttachmentStatus;
+    use crate::services::stream_session_index::StreamSessionIndexService;
+    use golem_common::model::durable_stream::*;
+
+    let (service, _, oplog_service) = service_with_oplog().await;
+    let owner = owned_agent("witness-owner", ComponentId::new());
+    let key = session_key(&owner, &IdempotencyKey::new("witness-session".into()));
+    let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
+    let StreamSessionRecord::Prepared(prepared) =
+        prepared_with_reader(&owner, &key.idempotency_key)
+    else {
+        unreachable!()
+    };
+    let binding = prepared.stream_mappings[0].clone();
+    let StreamRecordReference::Foreign(handle) = &binding.source else {
+        unreachable!()
+    };
+    let mapping = StreamSessionMappingRecord {
+        transport_stream_id: binding.transport_stream_id,
+        handle: handle.clone(),
+        role: binding.role,
+    };
+    let attachment = StreamAttachmentKey {
+        attachment_id: prepared.attempt.attachment_id,
+        stream_id: handle.stream_id,
+        epoch: 1,
+        session_key: key.clone(),
+        producer_environment_id: handle.producer_environment_id,
+        producer: handle.producer.clone(),
+        expected_producer_fingerprint: handle.expected_producer_fingerprint,
+        consumer_environment_id: owner.environment_id,
+        consumer: owner.agent_id.clone(),
+        expected_consumer_fingerprint: key.callee_fingerprint,
+        consumer_invocation: key.clone(),
+    };
+    let attempt = prepared.attempt.attempt_id;
+    let publication = append_session(oplog.as_ref(), StreamSessionRecord::Prepared(prepared)).await;
+    let pending = append_pending_invocation(oplog.as_ref(), &key.idempotency_key).await;
+    let authority = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+            format_version: 1,
+            session_key: key.idempotency_key.clone(),
+            attachment_id: attachment.attachment_id,
+            attempt_id: attempt,
+            epoch: 1,
+            pending_invocation_oplog_index: pending,
+        }),
+    )
+    .await;
+    let prepare = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
+            format_version: 1,
+            session_key: key.clone(),
+            attachment: attachment.clone(),
+            mapping: mapping.clone(),
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await;
+    let index = &service.stream_session_index;
+    assert!(
+        index
+            .lookup_topology_witness(&owner, AgentMode::Durable, &key, &binding, publication)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    for _ in 0..1025 {
+        append_noop(oplog.as_ref()).await;
+    }
+    let activate = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
+            format_version: 1,
+            session_key: key.clone(),
+            attachment: attachment.clone(),
+            mapping: mapping.clone(),
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await;
+    let expected = index
+        .lookup_topology_witness(&owner, AgentMode::Durable, &key, &binding, publication)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(expected.attachment, attachment);
+    assert_eq!(
+        (
+            expected.prepared_index,
+            expected.activated_index,
+            expected.epoch_authority
+        ),
+        (prepare, activate, Some(authority))
+    );
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
+            format_version: 1,
+            session_key: key.idempotency_key.clone(),
+            accepted_epoch: 2,
+            attempt: ResumeAttemptDescriptor {
+                format_version: 1,
+                operation: StreamResumeOperation::Takeover,
+                session_key: key.clone(),
+                attachment_id: attachment.attachment_id,
+                expected_callee_fingerprint: key.callee_fingerprint,
+                attempt_id: AttemptId::fresh(),
+                expected_epoch: 1,
+                effective_identity: vec![],
+                cursors: vec![],
+                live_join_buffer_events: 1,
+            },
+        }),
+    )
+    .await;
+    let mut next_attachment = attachment.clone();
+    next_attachment.epoch = 2;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
+            format_version: 1,
+            session_key: key.clone(),
+            attachment: next_attachment.clone(),
+            mapping: mapping.clone(),
+        }),
+    )
+    .await;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+            format_version: 1,
+            session_key: local_registration(&key),
+            result: Ok(()),
+        }),
+    )
+    .await;
+    append_noop(oplog.as_ref()).await;
+    oplog.commit(CommitLevel::Always).await;
+    assert_eq!(
+        index
+            .lookup_topology_witness(&owner, AgentMode::Durable, &key, &binding, publication)
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+    let control = service
+        .lookup_durable_stream_control_metadata(&owner, AgentMode::Durable, &key)
+        .await
+        .unwrap();
+    assert_eq!(
+        control
+            .topology_status(&next_attachment, Some(&mapping))
+            .unwrap(),
+        ConsumerAttachmentStatus::Prepared
+    );
+    assert_eq!(
+        control
+            .topology_status(&attachment, Some(&mapping))
+            .unwrap(),
+        ConsumerAttachmentStatus::EpochMismatch
+    );
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
+            format_version: 1,
+            session_key: key.clone(),
+            attachment: next_attachment,
+            mapping: mapping.clone(),
+        }),
+    )
+    .await;
+    let retained_tip = append_noop(oplog.as_ref()).await;
+    oplog.commit(CommitLevel::Always).await;
+    assert_eq!(
+        index
+            .lookup_topology_witness(&owner, AgentMode::Durable, &key, &binding, publication)
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+
+    let target = owned_agent("witness-fork", ComponentId::new());
+    let target_key = session_key(&target, &key.idempotency_key);
+    let fork = create_oplog(oplog_service.as_ref(), &target).await;
+    for (_, entry) in oplog
+        .read_exact(OplogIndex::INITIAL.next(), retained_tip.as_u64() - 1)
+        .await
+    {
+        fork.add(entry).await;
+    }
+    assert_eq!(fork.current_oplog_index().await, retained_tip);
+    append_session(
+        fork.as_ref(),
+        StreamSessionRecord::ForkCut(StreamForkCutRecord {
+            format_version: 1,
+            request_hash: vec![3; 32],
+            creation_fingerprint: target_key.callee_fingerprint,
+            export: None,
+            cut_index: retained_tip,
+            revert: None,
+            epoch_floor: 1,
+            selected_stream_id: None,
+            retained_through: None,
+        }),
+    )
+    .await;
+    let after_marker = append_noop(fork.as_ref()).await;
+    fork.commit(CommitLevel::Always).await;
+    assert_eq!(
+        index
+            .lookup_topology_witness(
+                &target,
+                AgentMode::Durable,
+                &target_key,
+                &binding,
+                publication
+            )
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+    assert!(
+        index
+            .lookup_topology_witness(
+                &target,
+                AgentMode::Durable,
+                &target_key,
+                &binding,
+                after_marker
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let control = service
+        .lookup_durable_stream_control_metadata(&target, AgentMode::Durable, &target_key)
+        .await
+        .unwrap();
+    assert_eq!(
+        control
+            .topology_status(&attachment, Some(&mapping))
+            .unwrap(),
+        ConsumerAttachmentStatus::Missing
+    );
+    assert!(control.topology_epoch_position().is_none());
+    let fresh = StreamSessionIndexService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::downgrade(&(oplog_service.clone() as Arc<dyn OplogService>)),
+    );
+    assert_eq!(
+        fresh
+            .lookup_topology_witness(
+                &target,
+                AgentMode::Durable,
+                &target_key,
+                &binding,
+                publication
+            )
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+    let mut wrong_binding = binding.clone();
+    wrong_binding.transport_stream_id += 1;
+    assert!(
+        index
+            .lookup_topology_witness(
+                &target,
+                AgentMode::Durable,
+                &target_key,
+                &wrong_binding,
+                publication
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut fork_attachment = attachment.clone();
+    fork_attachment.epoch = 1;
+    fork_attachment.session_key = target_key.clone();
+    fork_attachment.attachment_id = AttachmentId::primary(
+        target.environment_id,
+        &target.agent_id,
+        &key.idempotency_key,
+    )
+    .unwrap();
+    fork_attachment.consumer_environment_id = target.environment_id;
+    fork_attachment.consumer = target.agent_id.clone();
+    fork_attachment.expected_consumer_fingerprint = target_key.callee_fingerprint;
+    fork_attachment.consumer_invocation = target_key.clone();
+    for record in [
+        StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
+            format_version: 1,
+            session_key: target_key.clone(),
+            attachment: fork_attachment.clone(),
+            mapping: mapping.clone(),
+        }),
+        StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
+            format_version: 1,
+            session_key: target_key.clone(),
+            attachment: fork_attachment.clone(),
+            mapping: mapping.clone(),
+        }),
+    ] {
+        append_session(fork.as_ref(), record).await;
+    }
+    fork.commit(CommitLevel::Always).await;
+    assert!(
+        index
+            .lookup_topology_witness(
+                &target,
+                AgentMode::Durable,
+                &target_key,
+                &binding,
+                after_marker
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let fork_authority = append_session(
+        fork.as_ref(),
+        StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
+            format_version: 1,
+            session_key: key.idempotency_key.clone(),
+            accepted_epoch: 2,
+            attempt: ResumeAttemptDescriptor {
+                format_version: 1,
+                operation: StreamResumeOperation::Takeover,
+                session_key: target_key.clone(),
+                attachment_id: fork_attachment.attachment_id,
+                expected_callee_fingerprint: target_key.callee_fingerprint,
+                attempt_id: AttemptId::fresh(),
+                expected_epoch: 1,
+                effective_identity: vec![],
+                cursors: vec![],
+                live_join_buffer_events: 1,
+            },
+        }),
+    )
+    .await;
+    fork_attachment.epoch = 2;
+    for record in [
+        StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
+            format_version: 1,
+            session_key: target_key.clone(),
+            attachment: fork_attachment.clone(),
+            mapping: mapping.clone(),
+        }),
+        StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
+            format_version: 1,
+            session_key: target_key.clone(),
+            attachment: fork_attachment.clone(),
+            mapping: mapping.clone(),
+        }),
+    ] {
+        append_session(fork.as_ref(), record).await;
+    }
+    fork.commit(CommitLevel::Always).await;
+    let fork_witness = index
+        .lookup_topology_witness(
+            &target,
+            AgentMode::Durable,
+            &target_key,
+            &binding,
+            after_marker,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fork_witness.attachment, fork_attachment);
+    assert_eq!(fork_witness.epoch_authority, Some(fork_authority));
+    assert_eq!(
+        index
+            .lookup_topology_witness(
+                &target,
+                AgentMode::Durable,
+                &target_key,
+                &binding,
+                publication
+            )
+            .await
+            .unwrap(),
+        Some(expected)
+    );
+
+    let removed = golem_common::model::regions::OplogRegion {
+        start: prepare.next(),
+        end: retained_tip,
+    };
+    let marker = DurableStreamOplogRecord::Session(
+        None,
+        Box::new(StreamSessionRecord::ForkCut(StreamForkCutRecord {
+            format_version: 1,
+            request_hash: vec![4; 32],
+            creation_fingerprint: key.callee_fingerprint,
+            export: None,
+            cut_index: prepare,
+            revert: Some(removed.clone()),
+            epoch_floor: 3,
+            selected_stream_id: None,
+            retained_through: None,
+        })),
+    )
+    .into_inline_entry();
+    oplog
+        .add_pair(OplogEntry::revert(removed), Box::new(move |_| marker))
+        .await;
+    oplog.commit(CommitLevel::Always).await;
+    assert!(
+        index
+            .lookup_topology_witness(&owner, AgentMode::Durable, &key, &binding, publication)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        fresh
+            .lookup_topology_witness(&owner, AgentMode::Durable, &key, &binding, publication)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let resumed_authority = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
+            format_version: 1,
+            session_key: key.idempotency_key.clone(),
+            accepted_epoch: 4,
+            attempt: ResumeAttemptDescriptor {
+                format_version: 1,
+                operation: StreamResumeOperation::Takeover,
+                session_key: key.clone(),
+                attachment_id: attachment.attachment_id,
+                expected_callee_fingerprint: key.callee_fingerprint,
+                attempt_id: AttemptId::fresh(),
+                expected_epoch: 3,
+                effective_identity: vec![],
+                cursors: vec![],
+                live_join_buffer_events: 1,
+            },
+        }),
+    )
+    .await;
+    let mut resumed = attachment.clone();
+    resumed.epoch = 4;
+    let resumed_prepare = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
+            format_version: 1,
+            session_key: key.clone(),
+            attachment: resumed.clone(),
+            mapping: mapping.clone(),
+        }),
+    )
+    .await;
+    let resumed_activate = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::TopologyActivated(StreamTopologyActivatedRecord {
+            format_version: 1,
+            session_key: key.clone(),
+            attachment: resumed.clone(),
+            mapping,
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await;
+    for index in [index, &fresh] {
+        let witness = index
+            .lookup_topology_witness(&owner, AgentMode::Durable, &key, &binding, publication)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(witness.attachment, resumed);
+        assert_eq!(witness.prepared_index, resumed_prepare);
+        assert_eq!(witness.activated_index, resumed_activate);
+        assert_eq!(witness.epoch_authority, Some(resumed_authority));
+        assert!(
+            index
+                .lookup_topology_witness(&owner, AgentMode::Durable, &key, &binding, activate)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
 }
 
 #[test]

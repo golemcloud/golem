@@ -89,6 +89,7 @@ pub struct SessionControlMetadata {
     finished: Option<OplogIndex>,
     root_outputs: Vec<u64>,
     topology_epoch: Option<u64>,
+    topology_epoch_position: Option<OplogIndex>,
     topologies: HashMap<
         (
             AttachmentId,
@@ -186,6 +187,10 @@ impl SessionControlMetadata {
     /// Returns the currently folded attachment epoch.
     pub fn topology_epoch(&self) -> Option<u64> {
         self.topology_epoch
+    }
+    /// Position of the Attached or ResumeAttempt record establishing the folded epoch.
+    pub(crate) fn topology_epoch_position(&self) -> Option<OplogIndex> {
+        self.topology_epoch_position
     }
     /// Returns the unique folded caller attempt, rejecting conflicting records.
     pub fn caller_attempt_id(&self) -> Result<Option<AttemptId>, String> {
@@ -887,9 +892,11 @@ impl SessionControlMetadata {
                     self.initial_attached = Some(index);
                 }
                 self.topology_epoch = Some(record.epoch);
+                self.topology_epoch_position = Some(index);
             }
             StreamSessionRecord::ResumeAttempt(record) if record_matches => {
                 self.topology_epoch = Some(record.accepted_epoch);
+                self.topology_epoch_position = Some(index);
             }
             _ => {}
         }
@@ -1104,6 +1111,7 @@ impl SessionControlMetadata {
         if result.topology_epoch.is_some() {
             result.topology_epoch = Some(cut.epoch_floor);
         }
+        result.topology_epoch_position = None;
         result.topologies.clear();
         result.finalized_attachments.clear();
         result.consumer_deleting = None;
