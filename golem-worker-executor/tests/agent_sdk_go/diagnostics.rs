@@ -261,7 +261,10 @@ async fn diag_sched_trace(
         .into_typed::<String>()?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let run = std::env::var("DIAG_RUN").unwrap_or_default();
-    write_dump(&format!("sched{run}.txt"), &format!("{report}=== oplog ===\n{}", render(&oplog)));
+    write_dump(
+        &format!("sched{run}.txt"),
+        &format!("{report}=== oplog ===\n{}", render(&oplog)),
+    );
     drop(executor);
     Ok(())
 }
@@ -301,7 +304,10 @@ async fn diag_sched_trace_replay(
         .await?
         .into_typed::<String>()?;
     let live_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    write_dump(&format!("replay{run}-live.txt"), &format!("{live}=== oplog ===\n{}", render(&live_oplog)));
+    write_dump(
+        &format!("replay{run}-live.txt"),
+        &format!("{live}=== oplog ===\n{}", render(&live_oplog)),
+    );
 
     drop(executor);
     let executor = start(deps, &context).await?;
@@ -319,7 +325,10 @@ async fn diag_sched_trace_replay(
         Ok(Err(e)) => format!("ERR: {e}\n"),
         Err(_) => "HANG\n".to_string(),
     };
-    write_dump(&format!("replay{run}-replay.txt"), &format!("{replay}=== oplog ===\n{}", render(&after_oplog)));
+    write_dump(
+        &format!("replay{run}-replay.txt"),
+        &format!("{replay}=== oplog ===\n{}", render(&after_oplog)),
+    );
     drop(executor);
     Ok(())
 }
@@ -341,8 +350,12 @@ async fn diag_sched_trace_with_snapshots(
     use golem_worker_executor::services::golem_config::SnapshotPolicy;
     use golem_worker_executor_test_utils::start_with_snapshot_policy;
     let context = TestContext::new(last_unique_id);
-    let executor =
-        start_with_snapshot_policy(deps, &context, SnapshotPolicy::EveryNInvocation { count: 2 }).await?;
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_go)
         .store()
@@ -362,7 +375,10 @@ async fn diag_sched_trace_with_snapshots(
         .into_typed::<String>()?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let run = std::env::var("DIAG_RUN").unwrap_or_default();
-    write_dump(&format!("schedsnap{run}.txt"), &format!("{report}=== oplog ===\n{}", render(&oplog)));
+    write_dump(
+        &format!("schedsnap{run}.txt"),
+        &format!("{report}=== oplog ===\n{}", render(&oplog)),
+    );
     drop(executor);
     Ok(())
 }
