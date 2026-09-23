@@ -101,6 +101,7 @@ token = "lDL3DP2d7I3EbgfgJ9YEjVdEXNETpPkGYwyb36jgs28"
 
 [initial_plans.default]
 app_limit = 10
+blob_storage_limit = 1000000000000000000
 component_limit = 100
 env_limit = 40
 max_concurrent_agents_per_executor = 1000000000000000000

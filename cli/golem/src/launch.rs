@@ -252,6 +252,7 @@ fn registry_service_config(
                     component_limit: u64::MAX,
                     worker_connection_limit: u64::MAX,
                     storage_limit: u64::MAX,
+                    blob_storage_limit: u64::MAX,
                     monthly_gas_limit: u64::MAX,
                     monthly_upload_limit: u64::MAX,
                     max_memory_per_worker: u64::MAX,

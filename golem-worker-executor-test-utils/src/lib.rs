@@ -112,7 +112,7 @@ use golem_worker_executor::services::active_agents::{ActiveAgents, InvocationLoo
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
-    BlobStoreError, BlobStoreService, DefaultBlobStoreService,
+    BlobStoreError, BlobStoreMutation, BlobStoreService, DefaultBlobStoreService,
 };
 use golem_worker_executor::services::card::{CardService, CardState, NoopCardService};
 use golem_worker_executor::services::card_interest::CardInterestIndex;
@@ -7115,7 +7115,7 @@ impl BlobStoreService for FailingBlobStoreService {
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner.clear(environment_id, container_name).await
     }
 
@@ -7131,14 +7131,16 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn copy_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         source_container_name: String,
         source_object_name: String,
         destination_container_name: String,
         destination_object_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .copy_object(
+                resource_limits,
                 environment_id,
                 source_container_name,
                 source_object_name,
@@ -7152,7 +7154,7 @@ impl BlobStoreService for FailingBlobStoreService {
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .create_container(environment_id, container_name)
             .await
@@ -7162,7 +7164,7 @@ impl BlobStoreService for FailingBlobStoreService {
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .delete_container(environment_id, container_name)
             .await
@@ -7173,7 +7175,7 @@ impl BlobStoreService for FailingBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .delete_object(environment_id, container_name, object_name)
             .await
@@ -7184,7 +7186,7 @@ impl BlobStoreService for FailingBlobStoreService {
         environment_id: EnvironmentId,
         container_name: &str,
         object_names: &[String],
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         if let Some(recorder) = &self.mutation_recorder {
             recorder.record(BlobStoreMutationCall::DeleteObjects {
                 environment_id,
@@ -7268,7 +7270,7 @@ impl BlobStoreService for FailingBlobStoreService {
         source_object_name: String,
         destination_container_name: String,
         destination_object_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .move_object(
                 environment_id,
@@ -7293,11 +7295,12 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn write_data(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: &str,
         object_name: &str,
         data: &[u8],
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         if let Some(recorder) = &self.mutation_recorder {
             recorder.record(BlobStoreMutationCall::WriteData {
                 environment_id,
@@ -7316,7 +7319,13 @@ impl BlobStoreService for FailingBlobStoreService {
             ))
         } else {
             self.inner
-                .write_data(environment_id, container_name, object_name, data)
+                .write_data(
+                    resource_limits,
+                    environment_id,
+                    container_name,
+                    object_name,
+                    data,
+                )
                 .await
         }
     }

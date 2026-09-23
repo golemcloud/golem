@@ -82,7 +82,8 @@ pub(crate) fn classify_blob_store_error(err: &BlobStoreError) -> HostFailureKind
         BlobStoreError::NotFound(_)
         | BlobStoreError::AlreadyExists(_)
         | BlobStoreError::PermissionDenied(_)
-        | BlobStoreError::InvalidInput(_) => HostFailureKind::Permanent,
+        | BlobStoreError::InvalidInput(_)
+        | BlobStoreError::LimitExceeded(_) => HostFailureKind::Permanent,
         BlobStoreError::TransientBackend(_) | BlobStoreError::Other(_) => {
             HostFailureKind::Transient
         }
@@ -302,20 +303,26 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
+                if let Ok(mutation) = &result {
+                    self.account_resource_limits()
+                        .try_record_blob_storage_delta(mutation.bytes_delta);
+                }
                 let account_id = self.created_by().to_string();
                 let environment_id_str = environment_id.to_string();
                 record_storage_objects_deleted(
                     STORAGE_TYPE_BLOB_STORE,
                     &account_id,
                     &environment_id_str,
-                    1,
+                    result
+                        .as_ref()
+                        .map_or(0, |mutation| mutation.objects_deleted),
                 );
             }
             handle
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
@@ -438,6 +445,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .state
                     .blob_store_service
                     .copy_object(
+                        self.account_resource_limits(),
                         environment_id,
                         input.source_container.clone(),
                         input.source_object.clone(),
@@ -457,7 +465,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
@@ -530,16 +538,34 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
+            if let Ok(mutation) = &result {
+                self.account_resource_limits()
+                    .try_record_blob_storage_delta(mutation.bytes_delta);
+            }
             handle
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
         };
 
         Ok(result.result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BlobStoreError, HostFailureKind, classify_blob_store_error};
+    use test_r::test;
+
+    #[test]
+    fn quota_rejections_are_guest_visible_without_internal_retry() {
+        assert_eq!(
+            classify_blob_store_error(&BlobStoreError::LimitExceeded("quota".to_string())),
+            HostFailureKind::Permanent
+        );
     }
 }
