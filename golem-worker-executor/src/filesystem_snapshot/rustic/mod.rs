@@ -25,6 +25,8 @@ mod fault;
 mod prune;
 #[cfg_attr(not(test), allow(dead_code))]
 mod publish;
+#[cfg_attr(not(test), allow(dead_code))]
+mod scope;
 
 #[cfg(test)]
 mod holding;
