@@ -98,6 +98,18 @@ mod canonical {
             }
         }
 
+        impl golem_rust::FromWire for String {
+            fn read_wire(
+                reader: &mut golem_rust::schema::wit::direct::WireReader,
+                index: i32,
+            ) -> Result<Self, golem_rust::schema::wit::direct::WireError> {
+                match reader.take(index)? {
+                    golem_rust::schema::wit::wire::SchemaValueNode::TextValue(_) => Ok(Self),
+                    _ => Err(golem_rust::schema::wit::direct::WireError::Shape("text")),
+                }
+            }
+        }
+
         impl Schema for String {
             fn get_type() -> StructuredSchema {
                 BUILDS.fetch_add(1, Ordering::SeqCst);
@@ -218,12 +230,15 @@ mod canonical {
         use golem_rust::agentic::{InputStream, OutputStream};
         use golem_rust::schema::schema_type::NumericBound;
         use golem_rust::schema::{SchemaType, SchemaValue};
-        use golem_rust::{FromSchema, IntoSchema, tool_definition, tool_implementation};
+        use golem_rust::{
+            FromSchema, FromWire, IntoSchema, IntoWire, WireSchema, tool_definition,
+            tool_implementation,
+        };
         use golem_rust_macro::ToolError;
         use std::path::PathBuf;
         use test_r::test;
 
-        #[derive(Clone, IntoSchema, FromSchema)]
+        #[derive(Clone, IntoSchema, FromSchema, FromWire)]
         #[schema(rename_all = "kebab-case")]
         enum ColorMode {
             Always,
@@ -231,7 +246,7 @@ mod canonical {
             Auto,
         }
 
-        #[derive(IntoSchema, FromSchema)]
+        #[derive(IntoSchema, FromSchema, IntoWire, WireSchema)]
         struct Hit {
             file: PathBuf,
             line: u32,

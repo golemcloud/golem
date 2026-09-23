@@ -29,7 +29,8 @@ mod tests {
         ToolErrorSchema, get_tool_invoker_by_name,
     };
     use golem_rust::{
-        FromSchema, IntoSchema, Quantity, QuantityUnit, tool_definition, tool_implementation,
+        FromSchema, FromWire, IntoSchema, IntoWire, Quantity, QuantityUnit, WireSchema,
+        tool_definition, tool_implementation,
     };
     use golem_rust_macro::ToolError;
     use std::collections::BTreeMap;
@@ -61,6 +62,115 @@ mod tests {
 
     fn anonymous_principal() -> golem_rust::agentic::Principal {
         golem_rust::agentic::Principal::Anonymous
+    }
+
+    #[test]
+    fn direct_input_consumes_named_record_and_unbound_globals_without_model_traits() {
+        use golem_rust::agentic::DirectToolInput;
+        use golem_rust::schema::wit::{direct, wire};
+
+        #[derive(IntoWire, WireSchema)]
+        struct Input {
+            target: String,
+            inherited: Vec<Option<String>>,
+        }
+
+        let make_input = || wire::TypedSchemaValue {
+            graph: direct::schema::<Input>(),
+            value: direct::encode(&Input {
+                target: "leaf-value".to_string(),
+                inherited: vec![None, Some("ancestor-value".to_string())],
+            })
+            .unwrap(),
+        };
+        let mut input = DirectToolInput::new(make_input()).unwrap();
+        assert_eq!(input.take::<String>("target").unwrap(), "leaf-value");
+        input.finish().unwrap();
+
+        let mut invalid = make_input();
+        let definition = invalid.graph.defs[0].body as usize;
+        let wire::SchemaTypeBody::RecordType(fields) =
+            &mut invalid.graph.type_nodes[definition].body
+        else {
+            panic!("expected named record");
+        };
+        fields[1].metadata.aliases.push("target".to_string());
+        assert!(
+            DirectToolInput::new(invalid)
+                .err()
+                .unwrap()
+                .contains("ambiguous")
+        );
+
+        let mut invalid = make_input();
+        let inherited = invalid
+            .value
+            .value_nodes
+            .iter_mut()
+            .find(|node| matches!(node, wire::SchemaValueNode::ListValue(_)))
+            .unwrap();
+        *inherited = wire::SchemaValueNode::ListValue(vec![999]);
+        let mut input = DirectToolInput::new(invalid).unwrap();
+        assert_eq!(input.take::<String>("target").unwrap(), "leaf-value");
+        assert!(input.finish().unwrap_err().contains("out of bounds"));
+    }
+
+    #[tool_definition]
+    trait RefinedTextDirectRoundTrip {
+        #[arg(value = "positional", regex = "[a-z]+")]
+        #[arg(items = "option", regex = "[a-z]+")]
+        #[arg(maybe = "option", regex = "[a-z]+")]
+        fn echo(&self, value: String, items: Vec<String>, maybe: Option<String>) -> String;
+    }
+
+    struct RefinedTextDirectRoundTripImpl;
+
+    #[tool_implementation]
+    impl RefinedTextDirectRoundTrip for RefinedTextDirectRoundTripImpl {
+        fn echo(&self, value: String, items: Vec<String>, maybe: Option<String>) -> String {
+            format!("{value}:{}:{}", items.join("/"), maybe.unwrap_or_default())
+        }
+    }
+
+    #[test]
+    async fn guest_invoke_decodes_refined_text_in_scalar_list_and_option() {
+        use golem_rust::schema::{SchemaValue, TextValuePayload};
+        let text = |value: &str| {
+            SchemaValue::Text(TextValuePayload {
+                text: value.to_string(),
+                language: None,
+            })
+        };
+        let tool =
+            <RefinedTextDirectRoundTripImpl as RefinedTextDirectRoundTrip>::__tool_descriptor();
+        let input = encoded_input(
+            &tool,
+            &["echo"],
+            vec![
+                text("scalar"),
+                SchemaValue::List {
+                    elements: vec![text("first"), text("second")],
+                },
+                SchemaValue::Option {
+                    inner: Some(Box::new(text("optional"))),
+                },
+            ],
+        );
+        let result = RefinedTextDirectRoundTripImpl::__tool_invoke(
+            vec!["echo".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+        assert_eq!(
+            golem_rust::schema::wit::direct::decode::<String>(result.value).unwrap(),
+            "scalar:first/second:optional",
+        );
     }
 
     #[tool_definition]
@@ -184,9 +294,9 @@ mod tests {
     #[test]
     fn imported_user_principal_parameter_is_schema_input() {
         mod user_principal_schema {
-            use golem_rust::{FromSchema, IntoSchema};
+            use golem_rust::{FromSchema, FromWire, IntoSchema, IntoWire, WireSchema};
 
-            #[derive(IntoSchema, FromSchema)]
+            #[derive(IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
             pub struct Principal {
                 pub id: String,
             }
@@ -1219,7 +1329,7 @@ async fn audit(
         assert_eq!(payload, "declared-payload");
     }
 
-    #[derive(Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+    #[derive(Debug, Eq, PartialEq, IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
     struct CustomPlainReturn {
         name: String,
     }
@@ -2690,6 +2800,57 @@ fn check_sparse_nested_capture_set() {
     }
 
     #[tool_definition]
+    trait SubtreeAliasSiblingIsolation {
+        fn sibling(&self, count: u32, format: String) -> String;
+
+        #[arg(count = "global", aliases = ["format"])]
+        #[command(subtree = AliasChildRoundTrip)]
+        fn alias_child_round_trip(&self, count: u32) -> AliasChildRoundTripSubtree;
+    }
+
+    struct SubtreeAliasSiblingIsolationImpl;
+
+    #[tool_implementation]
+    impl SubtreeAliasSiblingIsolation for SubtreeAliasSiblingIsolationImpl {
+        fn sibling(&self, count: u32, format: String) -> String {
+            format!("{count}:{format}")
+        }
+
+        fn alias_child_round_trip(&self, _count: u32) -> AliasChildRoundTripSubtree {
+            AliasChildRoundTripSubtree
+        }
+    }
+
+    #[test]
+    async fn subtree_aliases_do_not_shadow_sibling_fields() {
+        let tool =
+            <SubtreeAliasSiblingIsolationImpl as SubtreeAliasSiblingIsolation>::__tool_descriptor();
+        let input = encoded_input(
+            &tool,
+            &["sibling"],
+            vec![
+                golem_rust::SchemaValue::U32(7),
+                golem_rust::SchemaValue::String("plain".to_string()),
+            ],
+        );
+
+        let result = SubtreeAliasSiblingIsolationImpl::__tool_invoke(
+            vec!["sibling".to_string()],
+            input,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("an alias owned by a different command path must not shadow sibling fields");
+        let result = result.result.expect("plain return is encoded as a result");
+        assert_eq!(
+            golem_rust::schema::wit::direct::decode::<String>(result.value).unwrap(),
+            "7:plain",
+        );
+    }
+
+    #[tool_definition]
     trait EarlierGlobalAliasParentSubtreeRoundTrip {
         #[arg(profile = "global")]
         fn earlier_global_alias_parent_subtree_round_trip(
@@ -3192,7 +3353,7 @@ fn check_sparse_nested_capture_set() {
             .expect("matching inferred bool global re-declaration is valid");
     }
 
-    #[derive(Clone, Debug, IntoSchema, FromSchema)]
+    #[derive(Clone, Debug, IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
     struct RecursiveNode {
         next: Option<Box<RecursiveNode>>,
     }
@@ -4497,9 +4658,9 @@ trait GoodTool {
         let output = cargo_check_tool_crate(
             "inferred-tail-custom-item-min-unused-option",
             r#"
-use golem_rust::{tool_definition, FromSchema, IntoSchema, ToolError};
+use golem_rust::{tool_definition, FromSchema, FromWire, IntoSchema, IntoWire, ToolError, WireSchema};
 
-#[derive(Clone, IntoSchema, FromSchema)]
+#[derive(Clone, IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
 struct Item {
     value: String,
 }
@@ -6568,12 +6729,12 @@ impl UnusedParamTool for UnusedParamToolImpl {
         let output = cargo_check_tool_crate(
             "user-principal-value-type",
             r#"
-use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+use golem_rust::{tool_definition, tool_implementation, FromSchema, FromWire, IntoSchema, IntoWire, WireSchema};
 
 mod domain {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
     pub struct Principal {
         pub id: String,
     }
@@ -6613,12 +6774,12 @@ fn build_client() {
         let output = cargo_check_tool_crate(
             "bug-finder-domain-principal-input",
             r#"
-use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+use golem_rust::{tool_definition, tool_implementation, FromSchema, FromWire, IntoSchema, IntoWire, WireSchema};
 
 mod domain {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
     pub struct Principal {
         pub id: String,
     }
@@ -6658,9 +6819,9 @@ fn compile_client_and_impl() {
         let output = cargo_check_tool_crate(
             "bug-finder-local-principal-input",
             r#"
-use golem_rust::{tool_definition, tool_implementation, FromSchema, IntoSchema};
+use golem_rust::{tool_definition, tool_implementation, FromSchema, FromWire, IntoSchema, IntoWire, WireSchema};
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, WireSchema, IntoWire, FromWire)]
 pub struct Principal {
     pub id: String,
 }
@@ -6890,6 +7051,41 @@ impl BadTool for BadToolImpl {
                     "expected a two-element fixed list",
                 )),
             }
+        }
+    }
+
+    impl golem_rust::WireSchema for FixedPair {
+        fn append_schema(builder: &mut golem_rust::schema::wit::direct::WireSchemaBuilder) -> i32 {
+            let element = <u32 as golem_rust::WireSchema>::append_schema(builder);
+            builder.push(
+                golem_rust::schema::wit::wire::SchemaTypeBody::FixedListType(
+                    golem_rust::schema::wit::wire::FixedListSpec { element, length: 2 },
+                ),
+            )
+        }
+    }
+
+    impl golem_rust::FromWire for FixedPair {
+        fn read_wire(
+            reader: &mut golem_rust::schema::wit::direct::WireReader,
+            index: i32,
+        ) -> Result<Self, golem_rust::schema::wit::direct::WireError> {
+            let golem_rust::schema::wit::wire::SchemaValueNode::FixedListValue(values) =
+                reader.take(index)?
+            else {
+                return Err(golem_rust::schema::wit::direct::WireError::Shape(
+                    "fixed list",
+                ));
+            };
+            if values.len() != 2 {
+                return Err(golem_rust::schema::wit::direct::WireError::Shape(
+                    "fixed list length",
+                ));
+            }
+            for value in values {
+                let _ = <u32 as golem_rust::FromWire>::read_wire(reader, value)?;
+            }
+            Ok(FixedPair)
         }
     }
 

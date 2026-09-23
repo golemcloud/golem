@@ -20,11 +20,14 @@ pub use wasip3;
 
 pub use golem_schema;
 pub use golem_schema::schema;
+pub use golem_schema::schema::wit::direct::{FromWire, IntoWire, WireSchema};
 pub use golem_schema::schema::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, Quantity, QuantityUnit, Schema,
     SchemaFingerprintError, SchemaFingerprintV1, SchemaGraph, SchemaType, SchemaValue,
     TypedSchemaValue, schema_fingerprint_v1,
 };
+#[cfg(feature = "macro")]
+pub use golem_schema::schema::{FromWire, IntoWire, WireSchema};
 pub use golem_schema::{AgentId, CardId, ComponentId, EnvironmentId, PromiseId};
 
 pub fn encode_schema_graph(

@@ -21,7 +21,308 @@
 use super::wire::ValueNodeIndex;
 use super::{GuestPermissionCardHandle, GuestQuotaTokenHandle, GuestSecretHandle, wire};
 use crate::schema::SchemaValueStream;
-use std::collections::HashSet;
+use crate::schema::{Quantity, QuantityUnit, QuantityValue};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+/// Builds the flat WIT schema arena used alongside directly encoded values.
+/// Named definitions are reserved before their bodies are appended, allowing
+/// derived recursive types to refer to themselves without constructing a
+/// recursive schema model.
+#[derive(Default)]
+pub struct WireSchemaBuilder {
+    type_nodes: Vec<wire::SchemaTypeNode>,
+    defs: Vec<wire::SchemaTypeDef>,
+    named: HashMap<String, wire::DefIndex>,
+}
+
+impl WireSchemaBuilder {
+    pub fn push(&mut self, body: wire::SchemaTypeBody) -> wire::TypeNodeIndex {
+        self.push_with_metadata(body, empty_metadata())
+    }
+
+    pub fn push_with_metadata(
+        &mut self,
+        body: wire::SchemaTypeBody,
+        metadata: wire::MetadataEnvelope,
+    ) -> wire::TypeNodeIndex {
+        let index = self.type_nodes.len() as wire::TypeNodeIndex;
+        self.type_nodes
+            .push(wire::SchemaTypeNode { body, metadata });
+        index
+    }
+
+    pub fn reserve(&mut self, id: String, name: Option<String>) -> (wire::DefIndex, bool) {
+        if let Some(index) = self.named.get(&id) {
+            return (*index, false);
+        }
+        let index = self.defs.len() as wire::DefIndex;
+        self.named.insert(id.clone(), index);
+        self.defs.push(wire::SchemaTypeDef { id, name, body: -1 });
+        (index, true)
+    }
+
+    pub fn commit(&mut self, definition: wire::DefIndex, body: wire::TypeNodeIndex) {
+        self.defs[definition as usize].body = body;
+    }
+
+    pub fn reference(&mut self, definition: wire::DefIndex) -> wire::TypeNodeIndex {
+        self.push(wire::SchemaTypeBody::RefType(definition))
+    }
+
+    pub fn finish(self, root: wire::TypeNodeIndex) -> wire::SchemaGraph {
+        wire::SchemaGraph {
+            type_nodes: self.type_nodes,
+            defs: self.defs,
+            root,
+        }
+    }
+}
+
+pub fn empty_metadata() -> wire::MetadataEnvelope {
+    wire::MetadataEnvelope {
+        doc: None,
+        aliases: Vec::new(),
+        examples: Vec::new(),
+        deprecated: None,
+        role: None,
+    }
+}
+
+/// Appends the concrete type's schema directly to a shared wire arena.
+pub trait WireSchema {
+    const IS_UNIT: bool = false;
+
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex;
+
+    fn wire_type_id() -> String {
+        std::any::type_name::<Self>().replace("::", ".")
+    }
+}
+
+pub fn schema<T: WireSchema + ?Sized>() -> wire::SchemaGraph {
+    let mut builder = WireSchemaBuilder::default();
+    let root = T::append_schema(&mut builder);
+    builder.finish(root)
+}
+
+macro_rules! wire_schema_scalar {
+    ($($ty:ty => $body:expr),* $(,)?) => {$(
+        impl WireSchema for $ty {
+            fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+                builder.push($body)
+            }
+        }
+    )*};
+}
+
+wire_schema_scalar! {
+    bool => wire::SchemaTypeBody::BoolType,
+    i8 => wire::SchemaTypeBody::S8Type(None), i16 => wire::SchemaTypeBody::S16Type(None),
+    i32 => wire::SchemaTypeBody::S32Type(None), i64 => wire::SchemaTypeBody::S64Type(None),
+    u8 => wire::SchemaTypeBody::U8Type(None), u16 => wire::SchemaTypeBody::U16Type(None),
+    u32 => wire::SchemaTypeBody::U32Type(None), u64 => wire::SchemaTypeBody::U64Type(None),
+    f32 => wire::SchemaTypeBody::F32Type(None), f64 => wire::SchemaTypeBody::F64Type(None),
+    char => wire::SchemaTypeBody::CharType, String => wire::SchemaTypeBody::StringType,
+    str => wire::SchemaTypeBody::StringType,
+}
+
+impl<U: QuantityUnit> WireSchema for Quantity<U> {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        builder.push(wire::SchemaTypeBody::QuantityType(wire::QuantitySpec {
+            base_unit: U::base_unit().to_string(),
+            allowed_suffixes: U::allowed_suffixes()
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            min: None,
+            max: None,
+        }))
+    }
+}
+
+impl<U: QuantityUnit> IntoWire for Quantity<U> {
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        let value = self.as_quantity_value();
+        Ok(writer.push(wire::SchemaValueNode::QuantityValueNode(
+            wire::QuantityValue {
+                mantissa: value.mantissa,
+                scale: value.scale,
+                unit: value.unit.clone(),
+            },
+        )))
+    }
+}
+
+impl<U: QuantityUnit> FromWire for Quantity<U> {
+    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
+        let wire::SchemaValueNode::QuantityValueNode(value) = reader.take(index)? else {
+            return Err(WireError::Shape("quantity"));
+        };
+        Quantity::from_quantity_value(QuantityValue {
+            mantissa: value.mantissa,
+            scale: value.scale,
+            unit: value.unit,
+        })
+        .map_err(|_| WireError::Shape("quantity unit"))
+    }
+}
+
+impl WireSchema for std::path::PathBuf {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        builder.push(wire::SchemaTypeBody::PathType(wire::PathSpec {
+            direction: wire::PathDirection::InOut,
+            kind: wire::PathKind::Any,
+            allowed_mime_types: None,
+            allowed_extensions: None,
+        }))
+    }
+}
+
+impl FromWire for std::path::PathBuf {
+    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
+        match reader.take(index)? {
+            wire::SchemaValueNode::PathValue(path) => Ok(path.into()),
+            _ => Err(WireError::Shape("path")),
+        }
+    }
+}
+
+impl IntoWire for std::path::PathBuf {
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        Ok(writer.push(wire::SchemaValueNode::PathValue(
+            self.to_string_lossy().into_owned(),
+        )))
+    }
+}
+
+impl<T: WireSchema + ?Sized> WireSchema for Box<T> {
+    const IS_UNIT: bool = T::IS_UNIT;
+
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        T::append_schema(builder)
+    }
+}
+impl<T: WireSchema> WireSchema for Vec<T> {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        let element = T::append_schema(builder);
+        builder.push(wire::SchemaTypeBody::ListType(element))
+    }
+}
+impl<T: WireSchema> WireSchema for Option<T> {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        let inner = T::append_schema(builder);
+        builder.push(wire::SchemaTypeBody::OptionType(inner))
+    }
+}
+impl<T: WireSchema, E: WireSchema> WireSchema for Result<T, E> {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        let ok = if T::IS_UNIT {
+            None
+        } else {
+            Some(T::append_schema(builder))
+        };
+        let err = if E::IS_UNIT {
+            None
+        } else {
+            Some(E::append_schema(builder))
+        };
+        builder.push(wire::SchemaTypeBody::ResultType(wire::ResultSpec {
+            ok,
+            err,
+        }))
+    }
+}
+impl WireSchema for () {
+    const IS_UNIT: bool = true;
+
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        builder.push(wire::SchemaTypeBody::TupleType(Vec::new()))
+    }
+}
+impl<K: WireSchema, V: WireSchema> WireSchema for HashMap<K, V> {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        let key = K::append_schema(builder);
+        let value = V::append_schema(builder);
+        builder.push(wire::SchemaTypeBody::MapType(wire::MapSpec { key, value }))
+    }
+}
+impl<K: WireSchema, V: WireSchema> WireSchema for BTreeMap<K, V> {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        let key = K::append_schema(builder);
+        let value = V::append_schema(builder);
+        builder.push(wire::SchemaTypeBody::MapType(wire::MapSpec { key, value }))
+    }
+}
+
+macro_rules! wire_map {
+    ($map:ident) => {
+        impl<K: IntoWire, V: IntoWire> IntoWire for $map<K, V> {
+            fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
+                for (key, value) in self {
+                    key.preflight(resources)?;
+                    value.preflight(resources)?;
+                }
+                Ok(())
+            }
+            async fn prepare_wire(&self) -> Result<(), WireError> {
+                for (key, value) in self {
+                    key.prepare_wire().await?;
+                    value.prepare_wire().await?;
+                }
+                Ok(())
+            }
+            fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+                let entries = self
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok(wire::MapEntry {
+                            key: key.write_wire(writer)?,
+                            value: value.write_wire(writer)?,
+                        })
+                    })
+                    .collect::<Result<_, WireError>>()?;
+                Ok(writer.push(wire::SchemaValueNode::MapValue(entries)))
+            }
+        }
+        impl<K: FromWire + Ord, V: FromWire> FromWire for $map<K, V> {
+            fn read_wire(
+                reader: &mut WireReader,
+                index: ValueNodeIndex,
+            ) -> Result<Self, WireError> {
+                let wire::SchemaValueNode::MapValue(entries) = reader.take(index)? else {
+                    return Err(WireError::Shape("map"));
+                };
+                entries
+                    .into_iter()
+                    .map(|entry| {
+                        Ok((
+                            K::read_wire(reader, entry.key)?,
+                            V::read_wire(reader, entry.value)?,
+                        ))
+                    })
+                    .collect()
+            }
+        }
+    };
+}
+wire_map!(BTreeMap);
+
+macro_rules! wire_schema_tuple {
+    ($($ty:ident),+) => { impl<$($ty: WireSchema),+> WireSchema for ($($ty,)+) {
+        fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+            let elements = vec![$($ty::append_schema(builder)),+];
+            builder.push(wire::SchemaTypeBody::TupleType(elements))
+        }
+    }};
+}
+wire_schema_tuple!(A);
+wire_schema_tuple!(A, B);
+wire_schema_tuple!(A, B, C);
+wire_schema_tuple!(A, B, C, D);
+wire_schema_tuple!(A, B, C, D, E);
+wire_schema_tuple!(A, B, C, D, E, F);
+wire_schema_tuple!(A, B, C, D, E, F, G);
+wire_schema_tuple!(A, B, C, D, E, F, G, H);
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum WireError {
@@ -99,6 +400,35 @@ impl WireReader {
             .ok_or(WireError::OutOfBounds(index))?
             .take()
             .ok_or(WireError::AliasedNode(index))
+    }
+
+    /// Consume an unbound field, releasing its resources and checking its edges
+    /// without constructing a recursive value. The explicit stack also bounds
+    /// stack usage for deeply nested fields not consumed by a typed decoder.
+    pub fn discard(&mut self, index: ValueNodeIndex) -> Result<(), WireError> {
+        let mut pending = vec![index];
+        while let Some(index) = pending.pop() {
+            match self.take(index)? {
+                wire::SchemaValueNode::RecordValue(children)
+                | wire::SchemaValueNode::TupleValue(children)
+                | wire::SchemaValueNode::ListValue(children)
+                | wire::SchemaValueNode::FixedListValue(children) => pending.extend(children),
+                wire::SchemaValueNode::MapValue(entries) => {
+                    for entry in entries {
+                        pending.extend([entry.key, entry.value]);
+                    }
+                }
+                wire::SchemaValueNode::VariantValue(value) => pending.extend(value.payload),
+                wire::SchemaValueNode::OptionValue(value) => pending.extend(value),
+                wire::SchemaValueNode::ResultValue(value) => match value {
+                    wire::ResultValuePayload::OkValue(value)
+                    | wire::ResultValuePayload::ErrValue(value) => pending.extend(value),
+                },
+                wire::SchemaValueNode::UnionValue(value) => pending.push(value.body),
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     pub fn finish(self) -> Result<(), WireError> {
@@ -219,7 +549,39 @@ scalar! {
     bool => BoolValue, i8 => S8Value, i16 => S16Value, i32 => S32Value,
     i64 => S64Value, u8 => U8Value, u16 => U16Value, u32 => U32Value,
     u64 => U64Value, f32 => F32Value, f64 => F64Value, char => CharValue,
-    String => StringValue,
+}
+
+impl FromWire for String {
+    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
+        match reader.take(index)? {
+            wire::SchemaValueNode::StringValue(value) => Ok(value),
+            // Text-refined tool arguments retain String as their Rust type.
+            wire::SchemaValueNode::TextValue(value) => Ok(value.text),
+            _ => Err(WireError::Shape("string or text")),
+        }
+    }
+}
+
+impl IntoWire for String {
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        self.as_str().write_wire(writer)
+    }
+}
+
+impl WireSchema for usize {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        <u64 as WireSchema>::append_schema(builder)
+    }
+}
+impl IntoWire for usize {
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        (*self as u64).write_wire(writer)
+    }
+}
+impl FromWire for usize {
+    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
+        usize::try_from(u64::read_wire(reader, index)?).map_err(|_| WireError::Shape("usize range"))
+    }
 }
 
 impl IntoWire for str {
@@ -483,6 +845,32 @@ resource!(
     "permission-card"
 );
 
+impl WireSchema for GuestSecretHandle {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        let inner = <String as WireSchema>::append_schema(builder);
+        builder.push(wire::SchemaTypeBody::SecretType(wire::SecretSpec {
+            inner,
+            category: None,
+        }))
+    }
+}
+
+impl WireSchema for GuestQuotaTokenHandle {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        builder.push(wire::SchemaTypeBody::QuotaTokenType(wire::QuotaTokenSpec {
+            resource_name: None,
+        }))
+    }
+}
+
+impl WireSchema for GuestPermissionCardHandle {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        builder.push(wire::SchemaTypeBody::PermissionCardType(
+            wire::PermissionCardSpec { polymorphic: false },
+        ))
+    }
+}
+
 impl FromWire for SchemaValueStream {
     fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
         match reader.take(index)? {
@@ -510,5 +898,11 @@ impl IntoWire for SchemaValueStream {
     fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
         let stream = self.take_wrapped().ok_or(WireError::AsyncStream)?;
         Ok(writer.push(wire::SchemaValueNode::StreamValue(stream)))
+    }
+}
+
+impl WireSchema for SchemaValueStream {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        builder.push(wire::SchemaTypeBody::StreamType(None))
     }
 }

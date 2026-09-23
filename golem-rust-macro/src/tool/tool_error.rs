@@ -31,7 +31,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Attribute, Data, DeriveInput, Error, Expr, Fields, Ident};
 
-pub fn derive_tool_error_impl(input: TokenStream, golem_rust: &Ident) -> TokenStream {
+pub fn derive_tool_error_impl(input: TokenStream, golem_rust: &Ident, guest: bool) -> TokenStream {
     let derive_input = syn::parse_macro_input!(input as DeriveInput);
     let canonical_golem_rust = Ident::new("golem_rust", Span::call_site());
     let preserved_golem_rust = fresh_internal_ident(
@@ -51,7 +51,7 @@ pub fn derive_tool_error_impl(input: TokenStream, golem_rust: &Ident) -> TokenSt
     );
     match parse_tool_error(&ir_input) {
         Ok(ir) => resolve_generated_sdk_paths(
-            synthesize_tool_error(&ir).into(),
+            synthesize_tool_error(&ir, guest),
             golem_rust,
             &canonical_golem_rust,
             &preserved_golem_rust,
@@ -62,7 +62,7 @@ pub fn derive_tool_error_impl(input: TokenStream, golem_rust: &Ident) -> TokenSt
 }
 
 /// Builds `impl golem_rust::agentic::ToolErrorSchema for <Enum>` from the IR.
-fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
+fn synthesize_tool_error(ir: &ToolErrorIr, guest: bool) -> proc_macro2::TokenStream {
     let enum_ident = &ir.enum_ident;
     let type_name = enum_ident.to_string();
     let cases = ir.variants.iter().map(|variant| {
@@ -218,6 +218,22 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
             },
         }
     });
+    let direct_error_payload_arms = ir.variants.iter().map(|variant| {
+        let variant_ident = &variant.variant_ident;
+        let name = to_kebab_case(&variant.variant_ident.to_string());
+        match &variant.payload {
+            ToolErrorPayloadIr::None { style } => {
+                let pattern = no_payload_pattern(variant_ident, *style);
+                quote! { #pattern => (#name.to_string(), golem_rust::agentic::encode_direct_tool_value(&()).await?) }
+            }
+            ToolErrorPayloadIr::Single { field_ident: None, .. } => quote! {
+                Self::#variant_ident(__payload) => (#name.to_string(), golem_rust::agentic::encode_direct_tool_value(__payload).await?)
+            },
+            ToolErrorPayloadIr::Single { field_ident: Some(field_ident), .. } => quote! {
+                Self::#variant_ident { #field_ident } => (#name.to_string(), golem_rust::agentic::encode_direct_tool_value(#field_ident).await?)
+            },
+        }
+    });
     let from_error_payload_arms = ir.variants.iter().map(|variant| {
         let variant_ident = &variant.variant_ident;
         let name = to_kebab_case(&variant.variant_ident.to_string());
@@ -240,6 +256,18 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
         }
     });
     let variant_count = ir.variants.len() as u32;
+    let direct_error_impl = guest.then(|| {
+        quote! {
+            impl golem_rust::agentic::DirectToolError for #enum_ident {
+                async fn direct_error_payload(&self) -> ::std::result::Result<
+                    (::std::string::String, golem_rust::schema::wit::wire::TypedSchemaValue),
+                    ::std::string::String,
+                > {
+                    ::std::result::Result::Ok(match self { #(#direct_error_payload_arms),* })
+                }
+            }
+        }
+    });
     quote! {
         impl golem_rust::agentic::ToolErrorSchema for #enum_ident {
             fn error_cases() -> ::std::result::Result<
@@ -265,6 +293,8 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
                 }
             }
         }
+
+        #direct_error_impl
 
         impl golem_rust::IntoSchema for #enum_ident {
             fn type_id() -> golem_rust::schema::TypeId {
@@ -325,7 +355,6 @@ fn synthesize_tool_error(ir: &ToolErrorIr) -> TokenStream {
             }
         }
     }
-    .into()
 }
 
 /// Parses a `#[derive(ToolError)]` enum into its IR.
@@ -542,6 +571,24 @@ mod tests {
     fn parse(src: &str) -> Result<ToolErrorIr, Error> {
         let input: DeriveInput = syn::parse_str(src).unwrap();
         parse_tool_error(&input)
+    }
+
+    #[test]
+    fn direct_error_encoding_is_only_emitted_for_guest_sdk() {
+        let ir = parse(
+            r#"enum Failure {
+            #[tool_error(kind = "usage-error", exit_code = 2)] Reason(String),
+            #[tool_error(kind = "runtime-error", exit_code = 1)] Empty,
+        }"#,
+        )
+        .unwrap();
+        let guest = synthesize_tool_error(&ir, true).to_string();
+        let native = synthesize_tool_error(&ir, false).to_string();
+        assert!(guest.contains("DirectToolError"));
+        assert!(guest.contains("encode_direct_tool_value"));
+        assert!(!native.contains("DirectToolError"));
+        assert!(!native.contains("encode_direct_tool_value"));
+        assert!(native.contains("ToolErrorSchema"));
     }
 
     #[test]

@@ -13,10 +13,346 @@
 // limitations under the License.
 
 use super::helpers::{default_name_for, schema_crate_path};
-use crate::parse::{ItemAttrs, RichSpec, parse_item_attrs, parse_type_attrs};
+use crate::parse::{
+    DeprecatedMarker, DiscriminatorAttr, ItemAttrs, RichSpec, TypeAttrs, parse_item_attrs,
+    parse_type_attrs,
+};
 use proc_macro2::{TokenStream, TokenTree};
 use quote::{format_ident, quote};
 use syn::{Data, DeriveInput, Fields, GenericParam, Member, Type};
+
+pub fn expand_schema(input: &DeriveInput) -> syn::Result<TokenStream> {
+    let schema = schema_crate_path();
+    let wire = quote!(#schema::schema::wit::wire);
+    let direct = quote!(#schema::schema::wit::direct);
+    let attrs = parse_type_attrs(&input.attrs)?;
+    let ident = &input.ident;
+    let mut generics = input.generics.clone();
+    let groups = match &input.data {
+        Data::Struct(data) => vec![&data.fields],
+        Data::Enum(data) => data.variants.iter().map(|v| &v.fields).collect(),
+        Data::Union(_) => Vec::new(),
+    };
+    let mut described_types = TokenStream::new();
+    for fields in groups {
+        for field in fields {
+            let a = parse_item_attrs(&field.attrs)?;
+            if matches!(fields, Fields::Named(_)) && (a.skip || a.default_with.is_some()) {
+                continue;
+            }
+            let ty = &field.ty;
+            described_types.extend(quote!(#ty));
+        }
+    }
+    for param in &mut generics.params {
+        if let GenericParam::Type(param) = param
+            && (attrs.named.is_some() || contains_ident(described_types.clone(), &param.ident))
+        {
+            param.bounds.push(syn::parse_quote!(#direct::WireSchema));
+        }
+    }
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    if attrs.transparent {
+        let Data::Struct(data) = &input.data else {
+            return Err(syn::Error::new_spanned(
+                input,
+                "transparent schema requires a tuple struct",
+            ));
+        };
+        let Fields::Unnamed(fields) = &data.fields else {
+            return Err(syn::Error::new_spanned(
+                input,
+                "transparent schema requires a tuple struct",
+            ));
+        };
+        if fields.unnamed.len() != 1 {
+            return Err(syn::Error::new_spanned(
+                input,
+                "transparent schema requires one field",
+            ));
+        }
+        let ty = &fields.unnamed[0].ty;
+        return Ok(quote! {
+            #[automatically_derived]
+            impl #impl_generics #direct::WireSchema for #ident #ty_generics #where_clause {
+                const IS_UNIT: bool = <#ty as #direct::WireSchema>::IS_UNIT;
+
+                fn append_schema(builder: &mut #direct::WireSchemaBuilder) -> #wire::TypeNodeIndex {
+                    <#ty as #direct::WireSchema>::append_schema(builder)
+                }
+                fn wire_type_id() -> ::std::string::String { <#ty as #direct::WireSchema>::wire_type_id() }
+            }
+        });
+    }
+
+    let body = schema_body(input, &attrs, &wire, &direct)?;
+    let metadata = metadata(
+        &attrs.doc,
+        &attrs.alias,
+        &attrs.example,
+        attrs.deprecated.as_ref(),
+        attrs.role.as_deref(),
+        &wire,
+    );
+    let display = attrs.named.clone().unwrap_or_else(|| ident.to_string());
+    let id = if let Some(name) = &attrs.named {
+        let type_params: Vec<_> = input.generics.type_params().map(|p| &p.ident).collect();
+        if type_params.is_empty() {
+            quote!(::std::string::String::from(#name))
+        } else {
+            quote!({
+                let args = [#(<#type_params as #direct::WireSchema>::wire_type_id()),*];
+                ::std::format!("{}<{}>", #name, args.join(", "))
+            })
+        }
+    } else {
+        quote!(::core::any::type_name::<Self>().replace("::", "."))
+    };
+    Ok(quote! {
+        #[automatically_derived]
+        impl #impl_generics #direct::WireSchema for #ident #ty_generics #where_clause {
+            fn append_schema(builder: &mut #direct::WireSchemaBuilder) -> #wire::TypeNodeIndex {
+                let id = <Self as #direct::WireSchema>::wire_type_id();
+                let (definition, fresh) = builder.reserve(id, ::core::option::Option::Some(#display.to_string()));
+                if fresh {
+                    let body = { #body };
+                    let node = builder.push_with_metadata(body, #metadata);
+                    builder.commit(definition, node);
+                }
+                builder.reference(definition)
+            }
+            fn wire_type_id() -> ::std::string::String { #id }
+        }
+    })
+}
+
+fn schema_body(
+    input: &DeriveInput,
+    attrs: &TypeAttrs,
+    wire: &TokenStream,
+    direct: &TokenStream,
+) -> syn::Result<TokenStream> {
+    match &input.data {
+        Data::Struct(data) => fields_schema(&data.fields, attrs, wire, direct),
+        Data::Enum(data) if attrs.union => {
+            let branches = data.variants.iter().map(|variant| {
+                let Fields::Unnamed(fields) = &variant.fields else {
+                    return Err(syn::Error::new_spanned(variant, "wire union branches require one tuple field"));
+                };
+                if fields.unnamed.len() != 1 {
+                    return Err(syn::Error::new_spanned(variant, "wire union branches require one tuple field"));
+                }
+                let a = parse_item_attrs(&variant.attrs)?;
+                let name = a.rename.clone().unwrap_or_else(|| default_name_for(&variant.ident, attrs.rename_all));
+                let meta = item_metadata(&a, wire);
+                let body = field_schema(&fields.unnamed[0], wire, direct)?;
+                let discriminator = match a.discriminator.as_ref() {
+                    Some(DiscriminatorAttr::Prefix(value)) => quote!(#wire::DiscriminatorRule::Prefix(#value.to_string())),
+                    Some(DiscriminatorAttr::Suffix(value)) => quote!(#wire::DiscriminatorRule::Suffix(#value.to_string())),
+                    Some(DiscriminatorAttr::Contains(value)) => quote!(#wire::DiscriminatorRule::Contains(#value.to_string())),
+                    Some(DiscriminatorAttr::Regex(value)) => quote!(#wire::DiscriminatorRule::Regex(#value.to_string())),
+                    Some(DiscriminatorAttr::FieldAbsent(value)) => quote!(#wire::DiscriminatorRule::FieldAbsent(#value.to_string())),
+                    Some(DiscriminatorAttr::FieldEquals { field, literal }) => {
+                        let literal = option_string(literal.as_deref());
+                        quote!(#wire::DiscriminatorRule::FieldEquals(#wire::FieldDiscriminator { field_name: #field.to_string(), literal: #literal }))
+                    }
+                    None => return Err(syn::Error::new_spanned(variant, "wire union branches require a discriminator")),
+                };
+                Ok(quote!(#wire::UnionBranch { tag: #name.to_string(), body: #body, discriminator: #discriminator, metadata: #meta }))
+            }).collect::<syn::Result<Vec<_>>>()?;
+            Ok(
+                quote!(#wire::SchemaTypeBody::UnionType(#wire::UnionSpec { branches: ::std::vec![#(#branches),*] })),
+            )
+        }
+        Data::Enum(data) => {
+            let all_unit = !data.variants.is_empty()
+                && data
+                    .variants
+                    .iter()
+                    .all(|v| matches!(v.fields, Fields::Unit));
+            if all_unit {
+                let names = data
+                    .variants
+                    .iter()
+                    .map(|v| {
+                        let a = parse_item_attrs(&v.attrs)?;
+                        Ok(a.rename
+                            .unwrap_or_else(|| default_name_for(&v.ident, attrs.rename_all)))
+                    })
+                    .collect::<syn::Result<Vec<_>>>()?;
+                Ok(quote!(#wire::SchemaTypeBody::EnumType(::std::vec![#(#names.to_string()),*])))
+            } else {
+                let cases = data.variants.iter().map(|v| {
+                    let a = parse_item_attrs(&v.attrs)?;
+                    let name = a.rename.clone().unwrap_or_else(|| default_name_for(&v.ident, attrs.rename_all));
+                    let meta = item_metadata(&a, wire);
+                    let payload = if matches!(v.fields, Fields::Unit) {
+                        quote!(::core::option::Option::None)
+                    } else if let Fields::Unnamed(fields) = &v.fields
+                        && fields.unnamed.len() == 1
+                    {
+                        let body = field_schema(&fields.unnamed[0], wire, direct)?;
+                        quote!(::core::option::Option::Some(#body))
+                    } else {
+                        let body = fields_schema(&v.fields, attrs, wire, direct)?;
+                        quote!({
+                            let payload_body = #body;
+                            ::core::option::Option::Some(builder.push(payload_body))
+                        })
+                    };
+                    Ok(quote!(#wire::VariantCaseType { name: #name.to_string(), payload: #payload, metadata: #meta }))
+                }).collect::<syn::Result<Vec<_>>>()?;
+                Ok(quote!(#wire::SchemaTypeBody::VariantType(::std::vec![#(#cases),*])))
+            }
+        }
+        Data::Union(_) => Err(syn::Error::new_spanned(
+            input,
+            "Rust unions have no wire schema",
+        )),
+    }
+}
+
+fn fields_schema(
+    fields: &Fields,
+    attrs: &TypeAttrs,
+    wire: &TokenStream,
+    direct: &TokenStream,
+) -> syn::Result<TokenStream> {
+    match fields {
+        Fields::Named(fields) => {
+            let values = fields.named.iter().filter_map(|field| {
+                let a = match parse_item_attrs(&field.attrs) { Ok(a) => a, Err(e) => return Some(Err(e)) };
+                if a.skip || a.default_with.is_some() { return None; }
+                if a.flatten { return Some(Err(syn::Error::new_spanned(field, "flatten field schemas are not supported by WireSchema"))); }
+                let body = match field_schema(field, wire, direct) { Ok(body) => body, Err(e) => return Some(Err(e)) };
+                let ident = field.ident.as_ref().unwrap();
+                let name = a.rename.clone().unwrap_or_else(|| default_name_for(ident, attrs.rename_all));
+                let meta = item_metadata(&a, wire);
+                Some(Ok(quote!(#wire::NamedFieldType { name: #name.to_string(), body: #body, metadata: #meta })))
+            }).collect::<syn::Result<Vec<_>>>()?;
+            Ok(quote!(#wire::SchemaTypeBody::RecordType(::std::vec![#(#values),*])))
+        }
+        Fields::Unnamed(fields) => {
+            let values = fields
+                .unnamed
+                .iter()
+                .map(|f| field_schema(f, wire, direct))
+                .collect::<syn::Result<Vec<_>>>()?;
+            Ok(quote!(#wire::SchemaTypeBody::TupleType(::std::vec![#(#values),*])))
+        }
+        Fields::Unit => Ok(quote!(#wire::SchemaTypeBody::RecordType(::std::vec::Vec::new()))),
+    }
+}
+
+fn field_schema(
+    field: &syn::Field,
+    wire: &TokenStream,
+    direct: &TokenStream,
+) -> syn::Result<TokenStream> {
+    let attrs = parse_item_attrs(&field.attrs)?;
+    let ty = &field.ty;
+    let body = match attrs.rich {
+        Some(RichSpec::Text(spec)) => {
+            let languages = option_strings(
+                spec.languages
+                    .as_deref()
+                    .or_else(|| spec.language.as_ref().map(::std::slice::from_ref)),
+            );
+            let min = option_number(spec.min);
+            let max = option_number(spec.max);
+            let regex = option_string(spec.regex.as_deref());
+            quote!(#wire::SchemaTypeBody::TextType(#wire::TextRestrictions { languages: #languages, min_length: #min, max_length: #max, regex: #regex }))
+        }
+        Some(RichSpec::Binary(spec)) => {
+            let mimes = option_strings(
+                spec.mime_types
+                    .as_deref()
+                    .or_else(|| spec.mime_type.as_ref().map(::std::slice::from_ref)),
+            );
+            let min = option_number(spec.min_bytes);
+            let max = option_number(spec.max_bytes);
+            quote!(#wire::SchemaTypeBody::BinaryType(#wire::BinaryRestrictions { mime_types: #mimes, min_bytes: #min, max_bytes: #max }))
+        }
+        Some(RichSpec::Url(spec)) => {
+            let schemes = option_strings(spec.allowed_schemes.as_deref());
+            let hosts = option_strings(spec.allowed_hosts.as_deref());
+            quote!(#wire::SchemaTypeBody::UrlType(#wire::UrlRestrictions { allowed_schemes: #schemes, allowed_hosts: #hosts }))
+        }
+        Some(RichSpec::QuotaToken(spec)) => {
+            let resource_name = option_string(spec.resource_name.as_deref());
+            quote!(#wire::SchemaTypeBody::QuotaTokenType(#wire::QuotaTokenSpec { resource_name: #resource_name }))
+        }
+        Some(_) => {
+            return Err(syn::Error::new_spanned(
+                field,
+                "this rich field schema is not supported by WireSchema",
+            ));
+        }
+        None => return Ok(quote!(<#ty as #direct::WireSchema>::append_schema(builder))),
+    };
+    Ok(quote!(builder.push(#body)))
+}
+
+fn option_number(value: Option<u32>) -> TokenStream {
+    match value {
+        Some(value) => quote!(::core::option::Option::Some(#value)),
+        None => quote!(::core::option::Option::None),
+    }
+}
+
+fn option_strings(value: Option<&[String]>) -> TokenStream {
+    match value {
+        Some(value) => quote!(::core::option::Option::Some(
+            ::std::vec![#(#value.to_string()),*]
+        )),
+        None => quote!(::core::option::Option::None),
+    }
+}
+
+fn item_metadata(attrs: &ItemAttrs, wire: &TokenStream) -> TokenStream {
+    metadata(
+        &attrs.doc,
+        &attrs.alias,
+        &attrs.example,
+        attrs.deprecated.as_ref(),
+        None,
+        wire,
+    )
+}
+
+fn metadata(
+    doc: &Option<String>,
+    aliases: &[String],
+    examples: &[String],
+    deprecated: Option<&DeprecatedMarker>,
+    role: Option<&str>,
+    wire: &TokenStream,
+) -> TokenStream {
+    let doc = match doc {
+        Some(value) => quote!(::core::option::Option::Some(#value.to_string())),
+        None => quote!(::core::option::Option::None),
+    };
+    let deprecated = match deprecated.map(DeprecatedMarker::message) {
+        Some(value) => quote!(::core::option::Option::Some(#value.to_string())),
+        None => quote!(::core::option::Option::None),
+    };
+    let role = match role {
+        Some("multimodal") => quote!(::core::option::Option::Some(#wire::Role::Multimodal)),
+        Some("unstructured-text") => {
+            quote!(::core::option::Option::Some(#wire::Role::UnstructuredText))
+        }
+        Some("unstructured-binary") => {
+            quote!(::core::option::Option::Some(#wire::Role::UnstructuredBinary))
+        }
+        Some(other) => quote!(::core::option::Option::Some(#wire::Role::Other(#other.to_string()))),
+        None => quote!(::core::option::Option::None),
+    };
+    quote!(#wire::MetadataEnvelope {
+        doc: #doc, aliases: ::std::vec![#(#aliases.to_string()),*],
+        examples: ::std::vec![#(#examples.to_string()),*], deprecated: #deprecated, role: #role,
+    })
+}
 
 pub fn expand(input: &DeriveInput, encode: bool) -> syn::Result<TokenStream> {
     let schema = schema_crate_path();

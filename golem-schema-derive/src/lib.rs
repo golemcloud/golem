@@ -69,6 +69,15 @@ pub fn derive_from_wire(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Appends a concrete type definition directly to the flat WIT schema arena.
+#[proc_macro_derive(WireSchema, attributes(schema))]
+pub fn derive_wire_schema(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    codegen::wire::expand_schema(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 #[proc_macro_derive(IntoSchema, attributes(schema))]
 pub fn derive_into_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

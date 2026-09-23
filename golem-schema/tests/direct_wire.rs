@@ -1,27 +1,90 @@
 test_r::enable!();
 
-use golem_schema::schema::wit::direct::{WireError, decode, encode, encode_async};
+use golem_schema::schema::wit::direct::{WireError, decode, encode, encode_async, schema};
 use golem_schema::schema::wit::{
     GuestPermissionCardHandle, GuestQuotaTokenHandle, GuestSecretHandle, wire,
 };
-use golem_schema_derive::{FromWire, IntoWire};
+use golem_schema_derive::{FromWire, IntoWire, WireSchema};
 use test_r::test;
 
 // Deliberately no IntoSchema/FromSchema implementations: a hidden model adapter
 // cannot satisfy these tests.
-#[derive(Debug, PartialEq, FromWire, IntoWire)]
+#[derive(Debug, PartialEq, FromWire, IntoWire, WireSchema)]
 #[schema(named = "example.Request")]
 struct Request {
+    #[schema(doc = "request identifier")]
     id: u32,
     values: Vec<Option<Result<String, Fault>>>,
 }
 
-#[derive(Debug, PartialEq, FromWire, IntoWire)]
+#[derive(Debug, PartialEq, FromWire, IntoWire, WireSchema)]
 enum Fault {
     Missing,
     Rejected { code: u16, reason: String },
     Retry(u8, bool),
     Nested(Box<Request>),
+}
+
+#[test]
+fn wire_schema_derive_builds_recursive_flat_arena() {
+    let graph = schema::<Request>();
+    assert_eq!(graph.defs.len(), 2);
+    assert_eq!(graph.defs[0].id, "example.Request");
+    assert!(graph.defs.iter().all(|definition| definition.body >= 0));
+    assert!(matches!(
+        graph.type_nodes[graph.root as usize].body,
+        wire::SchemaTypeBody::RefType(0)
+    ));
+
+    let request = &graph.type_nodes[graph.defs[0].body as usize];
+    let wire::SchemaTypeBody::RecordType(fields) = &request.body else {
+        panic!("request must be a record")
+    };
+    assert_eq!(fields[0].name, "id");
+    assert_eq!(
+        fields[0].metadata.doc.as_deref(),
+        Some("request identifier")
+    );
+
+    let fault = graph
+        .defs
+        .iter()
+        .find(|definition| definition.name.as_deref() == Some("Fault"))
+        .unwrap();
+    assert!(matches!(
+        graph.type_nodes[fault.body as usize].body,
+        wire::SchemaTypeBody::VariantType(_)
+    ));
+}
+
+#[test]
+fn wire_schema_single_field_variant_payload_matches_encoder() {
+    let encoded = encode(&Fault::Nested(Box::new(Request {
+        id: 1,
+        values: Vec::new(),
+    })))
+    .unwrap();
+    let wire::SchemaValueNode::VariantValue(encoded_variant) =
+        &encoded.value_nodes[encoded.root as usize]
+    else {
+        panic!("fault must encode as a variant")
+    };
+    assert!(matches!(
+        encoded.value_nodes[encoded_variant.payload.unwrap() as usize],
+        wire::SchemaValueNode::RecordValue(_)
+    ));
+
+    let graph = schema::<Fault>();
+    let definition = &graph.defs[0];
+    let wire::SchemaTypeBody::VariantType(cases) = &graph.type_nodes[definition.body as usize].body
+    else {
+        panic!("fault must be a variant")
+    };
+    let payload = cases[3].payload.expect("tuple case must have a payload");
+    assert!(matches!(
+        graph.type_nodes[payload as usize].body,
+        wire::SchemaTypeBody::RefType(_)
+    ));
 }
 
 #[derive(Debug, PartialEq, FromWire, IntoWire)]
@@ -312,7 +375,7 @@ fn resource_preflight_failure_preserves_earlier_and_aliased_handles() {
     assert_eq!(secret.take().unwrap().take_handle(), 71);
 }
 
-#[derive(Debug, PartialEq, IntoWire, FromWire)]
+#[derive(Debug, PartialEq, IntoWire, FromWire, WireSchema)]
 struct Rich {
     #[schema(text(language = "hu", regex = "[a-z]+"))]
     text: String,
@@ -327,6 +390,22 @@ struct Rich {
 #[test]
 fn rich_fields_preserve_wire_semantics_without_guest_validation() {
     use wire::SchemaValueNode::*;
+    let graph = schema::<Rich>();
+    let wire::SchemaTypeBody::RecordType(fields) =
+        &graph.type_nodes[graph.defs[0].body as usize].body
+    else {
+        panic!("expected rich record schema");
+    };
+    assert_eq!(fields.len(), 3);
+    assert!(
+        matches!(&graph.type_nodes[fields[0].body as usize].body, wire::SchemaTypeBody::TextType(spec) if spec.languages.as_deref() == Some(&["hu".to_string()]) && spec.regex.as_deref() == Some("[a-z]+"))
+    );
+    assert!(
+        matches!(&graph.type_nodes[fields[1].body as usize].body, wire::SchemaTypeBody::BinaryType(spec) if spec.mime_types.as_deref() == Some(&["application/octet-stream".to_string()]))
+    );
+    assert!(
+        matches!(&graph.type_nodes[fields[2].body as usize].body, wire::SchemaTypeBody::UrlType(spec) if spec.allowed_schemes.as_deref() == Some(&["https".to_string()]))
+    );
     let value = Rich {
         text: "ÁRVÍZ".into(),
         bytes: vec![0, 255, 13],
@@ -345,7 +424,7 @@ fn rich_fields_preserve_wire_semantics_without_guest_validation() {
     assert_eq!(decode::<Rich>(encoded).unwrap(), value);
 }
 
-#[derive(Debug, PartialEq, IntoWire, FromWire)]
+#[derive(Debug, PartialEq, IntoWire, FromWire, WireSchema)]
 #[schema(union, rename_all = "kebab-case")]
 enum Choice<T> {
     #[schema(prefix = "x")]
@@ -354,9 +433,27 @@ enum Choice<T> {
     SecondValue(T),
 }
 
-#[derive(Debug, PartialEq, IntoWire, FromWire)]
+#[derive(Debug, PartialEq, IntoWire, FromWire, WireSchema)]
 #[schema(transparent)]
 struct Unit(());
+
+#[test]
+fn boxed_transparent_unit_result_schema_has_no_payload() {
+    let graph = schema::<Result<Box<Unit>, String>>();
+    let wire::SchemaTypeBody::ResultType(spec) = &graph.type_nodes[graph.root as usize].body else {
+        panic!("expected result schema");
+    };
+    assert!(spec.ok.is_none());
+    assert!(matches!(
+        graph.type_nodes[spec.err.unwrap() as usize].body,
+        wire::SchemaTypeBody::StringType
+    ));
+    let encoded = encode(&Ok::<Box<Unit>, String>(Box::new(Unit(())))).unwrap();
+    assert!(matches!(
+        encoded.value_nodes[encoded.root as usize],
+        wire::SchemaValueNode::ResultValue(wire::ResultValuePayload::OkValue(None))
+    ));
+}
 
 #[derive(Debug, PartialEq, IntoWire, FromWire)]
 enum Mode {
@@ -367,6 +464,20 @@ enum Mode {
 #[test]
 fn generic_union_tags_unit_payloads_and_enum_indices_are_direct() {
     use wire::SchemaValueNode::*;
+    let graph = schema::<Choice<String>>();
+    let wire::SchemaTypeBody::UnionType(spec) = &graph.type_nodes[graph.defs[0].body as usize].body
+    else {
+        panic!("expected union schema");
+    };
+    assert_eq!(spec.branches[0].tag, "first-value");
+    assert_eq!(spec.branches[1].tag, "other");
+    assert!(
+        matches!(&spec.branches[1].discriminator, wire::DiscriminatorRule::Suffix(suffix) if suffix == "y")
+    );
+    assert!(matches!(
+        graph.type_nodes[spec.branches[1].body as usize].body,
+        wire::SchemaTypeBody::StringType
+    ));
     let encoded = encode(&Choice::SecondValue("body".to_string())).unwrap();
     assert!(matches!(&encoded.value_nodes[1], UnionValue(v) if v.tag == "other" && v.body == 0));
     assert_eq!(
@@ -454,7 +565,7 @@ fn derives_handle_shadowed_prelude_names_and_uninhabited_variants() {
 fn skipped_generic_field_does_not_require_wire_traits() {
     struct NotWire;
 
-    #[derive(IntoWire, FromWire)]
+    #[derive(IntoWire, FromWire, WireSchema)]
     struct Envelope<T> {
         value: u8,
         #[schema(skip)]
@@ -467,6 +578,13 @@ fn skipped_generic_field_does_not_require_wire_traits() {
     };
     let encoded = encode(&value).unwrap();
     assert_eq!(decode::<Envelope<NotWire>>(encoded).unwrap().value, 7);
+    let graph = schema::<Envelope<NotWire>>();
+    let wire::SchemaTypeBody::RecordType(fields) =
+        &graph.type_nodes[graph.defs[0].body as usize].body
+    else {
+        panic!("expected record schema");
+    };
+    assert_eq!(fields.len(), 1);
 
     #[derive(IntoWire, FromWire)]
     struct WithDefault<T> {
