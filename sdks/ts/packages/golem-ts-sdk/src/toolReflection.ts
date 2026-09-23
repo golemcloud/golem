@@ -21,6 +21,7 @@ import type {
 } from 'golem:tool/common@0.1.0';
 import {
   field,
+  cloneSchemaValue,
   freezeSchemaGraph,
   schemaGraphRootsFromWit,
   schemaShapesMatch,
@@ -119,14 +120,17 @@ export class ToolCommand {
               const root =
                 item.required || item.default_ !== undefined
                   ? typeAt(item.type)
-                  : t.option(typeAt(item.type));
+                  : optionalRoot(graph, typeAt(item.type));
+              const defaultValue =
+                item.default_ === undefined ? undefined : schemaValueFromWit(item.default_);
               return Object.freeze({
                 kind: 'positional',
                 name: item.name,
                 aliases: [],
                 required: item.required,
-                default:
-                  item.default_ === undefined ? undefined : schemaValueFromWit(item.default_),
+                get default() {
+                  return defaultValue === undefined ? undefined : cloneSchemaValue(defaultValue);
+                },
                 optionalCarrier:
                   !item.required && item.default_ === undefined ? (true as const) : undefined,
                 schema: SchemaRef.fromImmutableGraph(graph, root),
@@ -487,6 +491,7 @@ export class ToolType {
 
 function immutableSnapshot<T>(value: T): T {
   if (Array.isArray(value)) return Object.freeze(value.map(immutableSnapshot)) as T;
+  if (value instanceof Uint8Array) return value.slice() as T;
   if (value !== null && typeof value === 'object') {
     const copy = Object.fromEntries(
       Object.entries(value).map(([key, child]) => [key, immutableSnapshot(child)]),
@@ -565,16 +570,34 @@ function optionArgument(
     option.default_ === undefined &&
     option.shape.tag !== 'repeatable-list' &&
     option.shape.tag !== 'repeatable-map';
+  const defaultValue =
+    option.default_ === undefined ? undefined : schemaValueFromWit(option.default_);
   return Object.freeze({
     kind: 'option',
     name: option.long,
     aliases: Object.freeze([...option.aliases]),
     short: option.short,
     required: option.required,
-    default: option.default_ === undefined ? undefined : schemaValueFromWit(option.default_),
+    get default() {
+      return defaultValue === undefined ? undefined : cloneSchemaValue(defaultValue);
+    },
     optionalCarrier: optional ? (true as const) : undefined,
-    schema: SchemaRef.fromImmutableGraph(graph, optional ? t.option(root) : root),
+    schema: SchemaRef.fromImmutableGraph(graph, optional ? optionalRoot(graph, root) : root),
   });
+}
+
+function optionalRoot(graph: SchemaGraph, root: SchemaType): SchemaType {
+  let current = root;
+  const seen = new Set<string>();
+  while (current.body.tag === 'ref') {
+    if (seen.has(current.body.id))
+      throw new TypeError(`Cyclic tool schema ref '${current.body.id}'`);
+    seen.add(current.body.id);
+    const definition = graph.defs.get(current.body.id);
+    if (!definition) throw new TypeError(`Unresolved tool schema ref '${current.body.id}'`);
+    current = definition.body;
+  }
+  return current.body.tag === 'option' ? root : t.option(root);
 }
 
 function flagArgument(

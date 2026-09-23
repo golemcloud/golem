@@ -5,6 +5,7 @@ import { Effect, Exit, Scope, Stream } from "effect"
 import { createToolClientRuntime, isRpcError, type ToolRuntimeError } from "./BridgeTool.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
+  cloneSchemaValue,
   field,
   schemaValueEquals,
   schemaShapesMatch,
@@ -140,7 +141,7 @@ export class ToolCommand {
             const optional = !positional.required && positional.default_ === undefined
             const schema = SchemaRef.fromImmutableGraph(
               graph,
-              optional ? t.option(typeAt(positional.type)) : typeAt(positional.type),
+              optional ? optionalRoot(graph, typeAt(positional.type)) : typeAt(positional.type),
             )
             const defaultValue =
               positional.default_ === undefined
@@ -152,7 +153,9 @@ export class ToolCommand {
               aliases: [] as ReadonlyArray<string>,
               required: positional.required,
               optionalCarrier: optional ? (true as const) : undefined,
-              default: defaultValue,
+              get default() {
+                return defaultValue === undefined ? undefined : cloneSchemaValue(defaultValue)
+              },
               defaultJson:
                 defaultValue === undefined ? undefined : canonicalDefault(schema, defaultValue),
               schema,
@@ -628,6 +631,7 @@ export class ToolType {
 
 const immutableSnapshot = <T>(value: T): T => {
   if (Array.isArray(value)) return Object.freeze(value.map(immutableSnapshot)) as T
+  if (value instanceof Uint8Array) return value.slice() as T
   if (value !== null && typeof value === "object") {
     const copy = Object.fromEntries(
       Object.entries(value).map(([key, child]) => [key, immutableSnapshot(child)]),
@@ -766,7 +770,7 @@ function optionArgument(
     option.default_ === undefined &&
     option.shape.tag !== "repeatable-list" &&
     option.shape.tag !== "repeatable-map"
-  const schema = SchemaRef.fromImmutableGraph(graph, optional ? t.option(root) : root)
+  const schema = SchemaRef.fromImmutableGraph(graph, optional ? optionalRoot(graph, root) : root)
   const defaultValue =
     option.default_ !== undefined
       ? schemaValueFromWit(option.default_)
@@ -781,10 +785,26 @@ function optionArgument(
     aliases: Object.freeze([...option.aliases]),
     required: option.required,
     optionalCarrier: optional ? true : undefined,
-    default: defaultValue,
+    get default() {
+      return defaultValue === undefined ? undefined : cloneSchemaValue(defaultValue)
+    },
     defaultJson: defaultValue === undefined ? undefined : canonicalDefault(schema, defaultValue),
     schema,
   })
+}
+
+function optionalRoot(graph: SchemaGraph, root: SchemaType): SchemaType {
+  let current = root
+  const seen = new Set<string>()
+  while (current.body.tag === "ref") {
+    if (seen.has(current.body.id))
+      throw new TypeError(`Cyclic tool schema ref '${current.body.id}'`)
+    seen.add(current.body.id)
+    const definition = graph.defs.get(current.body.id)
+    if (!definition) throw new TypeError(`Unresolved tool schema ref '${current.body.id}'`)
+    current = definition.body
+  }
+  return current.body.tag === "option" ? root : t.option(root)
 }
 
 function flagArgument(flag: Common.FlagSpec, graph: SchemaGraph): ToolArgument {

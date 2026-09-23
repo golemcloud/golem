@@ -485,7 +485,18 @@ export function compileDefinition(
       !(argument.options.required ?? argument.kind === "positional") &&
       argument.options.default === undefined &&
       !argument.repeatable
-    return optional ? Schema.NullOr(argument.schema) : argument.schema
+    if (!optional) return argument.schema
+    const graph = compileOnce(argument.schema).graph
+    let root = graph.root
+    const seen = new Set<string>()
+    while (root.body.tag === "ref") {
+      if (seen.has(root.body.id)) throw new TypeError(`Cyclic tool schema ref '${root.body.id}'`)
+      seen.add(root.body.id)
+      const definition = graph.defs.get(root.body.id)
+      if (!definition) throw new TypeError(`Unresolved tool schema ref '${root.body.id}'`)
+      root = definition.body
+    }
+    return root.body.tag === "option" ? argument.schema : Schema.NullOr(argument.schema)
   }
   const collect = (
     m: CommandModel,

@@ -199,9 +199,26 @@ interface oplog {
         external-span(external-span-data)
     }
 
+    record wallet-version-token {
+        wallet-id-hash: list<u8>,
+        generation: u64,
+    }
+
+    record public-invocation-wallet-pin {
+        wallet-token: wallet-version-token,
+        scope-card-id: option<card-id>,
+    }
+
+    record raw-invocation-wallet-pin {
+        wallet-token: wallet-version-token,
+        pinned-card-ids: list<card-id>,
+        scope-card-id: option<card-id>,
+    }
+
     record agent-invocation-started-parameters {
         timestamp: datetime,
         invocation: agent-invocation,
+        wallet-pin: public-invocation-wallet-pin,
     }
 
     record agent-invocation-finished-parameters {
@@ -273,6 +290,7 @@ interface oplog {
         timestamp: datetime,
         queued-event-index: option<oplog-index>,
         card-id: card-id,
+        wallet-generation: u64,
     }
 
     /// Raw parameters for a card-installed oplog entry.
@@ -280,6 +298,7 @@ interface oplog {
         timestamp: datetime,
         queued-event-index: option<oplog-index>,
         card: list<u8>,
+        wallet-generation: u64,
     }
 
     enum card-install-failure {
@@ -302,12 +321,14 @@ interface oplog {
         timestamp: datetime,
         queued-event-index: oplog-index,
         card-id: card-id,
+        wallet-generation: u64,
     }
 
     /// Parameters for a card-expired oplog entry.
     record card-expired-parameters {
         timestamp: datetime,
         card-id: card-id,
+        wallet-generation: u64,
     }
 
     /// Identifies which host-owned stream a host-stream-frame oplog entry belongs to.
@@ -688,6 +709,7 @@ interface oplog {
         trace-id: string,
         trace-states: list<string>,
         invocation-context: list<span-data>,
+        wallet-pin: raw-invocation-wallet-pin,
     }
 
     record raw-agent-invocation-finished-parameters {
@@ -779,7 +801,9 @@ interface oplog {
     record raw-snapshot-parameters {
         timestamp: datetime,
         data: oplog-payload,
-        mime-type: string
+        mime-type: string,
+        active-cards: list<list<u8>>,
+        wallet-generation: u64,
     }
 
     record raw-oplog-processor-checkpoint-parameters {

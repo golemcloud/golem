@@ -502,14 +502,14 @@ describe('tool registration', () => {
     expect(received).toBe('supplied');
   });
 
-  it('rejects an ambiguous optional-of-option canonical field', () => {
+  it('uses one canonical option carrier for an already optional field', async () => {
     const definition = toolDefinition('nested-optional-tool').body((body) =>
       body.option('label', z.string().optional()).returns(z.void()),
     );
-    let called = false;
+    let received: unknown;
     definition.implement({
-      'nested-optional-tool': async () => {
-        called = true;
+      'nested-optional-tool': async (args) => {
+        received = args.label;
         return ok(undefined);
       },
     });
@@ -517,10 +517,22 @@ describe('tool registration', () => {
     const registered = ToolRegistry.get('nested-optional-tool');
     const commandNode = registered?.extended.commandByPath([]);
     if (!registered || !commandNode) throw new Error('nested optional tool was not registered');
-    expect(() => registered.extended.canonicalInputModel(commandNode)).toThrow(
-      'option<option<_>> is invalid',
-    );
-    expect(called).toBe(false);
+    const model = registered.extended.canonicalInputModel(commandNode);
+    const root = model.codec.graph.root.body;
+    if (root.tag !== 'record') throw new Error('expected canonical input record');
+    expect(root.fields[0].body.body.tag).toBe('option');
+    if (root.fields[0].body.body.tag === 'option') {
+      expect(root.fields[0].body.body.element.body.tag).not.toBe('option');
+    }
+
+    await expect(
+      registered.invoker([], model.encodeTyped({ label: undefined }), {}),
+    ).resolves.toEqual(ok(undefined));
+    expect(received).toBeUndefined();
+    await expect(
+      registered.invoker([], model.encodeTyped({ label: 'supplied' }), {}),
+    ).resolves.toEqual(ok(undefined));
+    expect(received).toBe('supplied');
   });
 
   it('rejects non-canonical values for required fields without an outer option carrier', async () => {
@@ -1340,6 +1352,65 @@ describe('tool guest exports', () => {
       expect(output.write).toHaveBeenCalledWith(new Uint8Array([1, 2]));
       expect(output.write).toHaveBeenCalledWith(new Uint8Array([3]));
       expect(output.finish).toHaveBeenCalledOnce();
+    });
+
+    it('default-finishes stdout before returning a declared tool error', async () => {
+      toolDefinition('stdout-declared-error')
+        .body((body) =>
+          body
+            .stdout({ required: true })
+            .returns(z.void())
+            .error('declared', { kind: 'runtime', exitCode: 1 }),
+        )
+        .implement({
+          'stdout-declared-error': async (_, context) => {
+            await context.stdout.getWriter().write(Uint8Array.of(1, 2, 3));
+            return err('declared');
+          },
+        });
+
+      const output = stdoutWriter();
+      await expect(
+        tool.invoke(
+          'stdout-declared-error',
+          [],
+          invocationInput('stdout-declared-error'),
+          undefined,
+          output,
+          { tag: 'anonymous' },
+        ),
+      ).rejects.toMatchObject({ tag: 'custom-error' });
+      expect(output.write).toHaveBeenCalledWith(Uint8Array.of(1, 2, 3));
+      expect(output.finish).toHaveBeenCalledOnce();
+      expect(output.fail).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { name: 'success', outcome: ok(undefined), expected: 'success' },
+      { name: 'declared error', outcome: err('declared'), expected: 'custom-error' },
+    ])('preserves $name when implicit stdout finish fails', async ({ name, outcome, expected }) => {
+      const toolName = `stdout-finish-failure-${name.replace(' ', '-')}`;
+      toolDefinition(toolName)
+        .body((body) =>
+          body
+            .stdout({ required: true })
+            .returns(z.void())
+            .error('declared', { kind: 'runtime', exitCode: 1 }),
+        )
+        .implement({ [toolName]: async () => outcome });
+
+      const output = stdoutWriter();
+      output.finish.mockRejectedValue({ tag: 'concurrent-operation' });
+      const invocation = tool.invoke(toolName, [], invocationInput(toolName), undefined, output, {
+        tag: 'anonymous',
+      });
+      if (expected === 'success') {
+        await expect(invocation).resolves.toEqual({ result: undefined });
+      } else {
+        await expect(invocation).rejects.toMatchObject({ tag: expected });
+      }
+      expect(output.finish).toHaveBeenCalledOnce();
+      expect(output.fail).not.toHaveBeenCalled();
     });
 
     it('errors when stdin yields an empty chunk', async () => {

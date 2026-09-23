@@ -14,9 +14,10 @@
 
 use crate::model::component::{CanonicalFilePath, ComponentRevision};
 use crate::model::durable_stream::{
-    AttachmentId, AttemptId, SessionStreamRole, StreamInvocationId, StreamRegistrationInvocation,
-    StreamSessionAttachedRecord, StreamSessionCancelRequestedRecord, StreamSessionRecord,
-    StreamSlotTombstonedRecord,
+    AttachmentId, AttemptId, SessionStreamRole, StreamExportForkInitializedRecord,
+    StreamInvocationId, StreamRegistrationInvocation, StreamSessionAttachedRecord,
+    StreamSessionCancelRequestedRecord, StreamSessionExpiredRecord, StreamSessionExpiryPolicy,
+    StreamSessionExpiryRefreshedRecord, StreamSessionRecord, StreamSlotTombstonedRecord,
 };
 use crate::model::environment::EnvironmentId;
 use crate::model::oplog::OplogIndex;
@@ -25,10 +26,10 @@ use crate::model::{
     AccountEmail, AccountId, AgentFilter, AgentFingerprint, AgentId, AgentMetadata, AgentMode,
     AgentStatus, AgentStatusRecord, ComponentId, DEFAULT_INVOCATION_RESULT_BLOOM_BITS,
     DEFAULT_INVOCATION_RESULT_BLOOM_HASHES, DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
-    DurableStreamSessionIndex, DurableStreamSessionStatus, ExportForkAdmissions, FilterComparator,
-    IdempotencyKey, InvocationResultBloom, InvocationResultMembership, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
-    StringFilterComparator, Timestamp,
+    DurableStreamPublicBinding, DurableStreamSessionIndex, DurableStreamSessionStatus,
+    ExportForkAdmissions, FilterComparator, IdempotencyKey, InvocationResultBloom,
+    InvocationResultMembership, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
+    ReceivedCardTransferIndex, ReceivedCardTransferState, StringFilterComparator, Timestamp,
 };
 use desert_rust::BinaryCodec;
 use serde::{Deserialize, Serialize};
@@ -48,6 +49,164 @@ fn durable_stream_test_session_key(key: &str) -> StreamInvocationId {
         callee_fingerprint: AgentFingerprint(Uuid::new_v4()),
         idempotency_key: IdempotencyKey::new(key.to_string()),
     }
+}
+
+fn fold_public_binding(
+    current: &mut Option<DurableStreamPublicBinding>,
+    record: &StreamSessionRecord,
+) {
+    *current = DurableStreamPublicBinding::fold(current.as_ref(), record);
+}
+
+#[test]
+fn durable_stream_public_binding_is_incarnation_and_deadline_fenced() {
+    let first = durable_stream_test_session_key("first");
+    let second = durable_stream_test_session_key("second");
+    let public = "report-42";
+    let initialize = |invocation: &StreamInvocationId, deadline| {
+        StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
+            format_version: 1,
+            public_session_id: public.to_string(),
+            session_key: invocation.idempotency_key.clone(),
+            source_invocation: invocation.clone(),
+            request_hash: vec![7; 32],
+            expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
+            expiry_deadline_millis: Some(deadline),
+        })
+    };
+    let refresh = |invocation: &StreamInvocationId, expected, deadline| {
+        StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
+            format_version: 1,
+            public_session_id: public.to_string(),
+            session_key: invocation.idempotency_key.clone(),
+            expected_deadline_millis: expected,
+            refreshed_at_millis: deadline - 10_000,
+            deadline_millis: deadline,
+        })
+    };
+    let expire = |invocation: &StreamInvocationId, expected| {
+        StreamSessionRecord::Expired(StreamSessionExpiredRecord {
+            format_version: 1,
+            public_session_id: public.to_string(),
+            session_key: invocation.idempotency_key.clone(),
+            expected_deadline_millis: expected,
+            expired_at_millis: expected,
+        })
+    };
+
+    for record in [
+        initialize(&first, 10_000),
+        refresh(&first, 10_000, 20_000),
+        expire(&first, 20_000),
+    ] {
+        assert!(record.has_supported_format());
+        let bytes = crate::serialization::serialize(&record).unwrap();
+        let decoded: StreamSessionRecord = crate::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, record);
+    }
+
+    let mut binding = None;
+    fold_public_binding(&mut binding, &initialize(&first, 10_000));
+    fold_public_binding(&mut binding, &initialize(&first, 5_000));
+    fold_public_binding(&mut binding, &refresh(&first, 9_999, 20_000));
+    assert!(matches!(
+        binding.as_ref(),
+        Some(DurableStreamPublicBinding::Live {
+            session_key,
+            expiry_deadline_millis: Some(10_000),
+            ..
+        }) if session_key == &first.idempotency_key
+    ));
+
+    fold_public_binding(&mut binding, &refresh(&first, 10_000, 20_000));
+    fold_public_binding(&mut binding, &initialize(&first, 15_000));
+    fold_public_binding(&mut binding, &expire(&first, 10_000));
+    assert!(matches!(
+        binding.as_ref(),
+        Some(DurableStreamPublicBinding::Live {
+            expiry_deadline_millis: Some(20_000),
+            ..
+        })
+    ));
+
+    fold_public_binding(&mut binding, &expire(&first, 20_000));
+    fold_public_binding(&mut binding, &initialize(&first, 30_000));
+    assert!(matches!(
+        binding.as_ref(),
+        Some(DurableStreamPublicBinding::Retired { session_key })
+            if session_key == &first.idempotency_key
+    ));
+
+    fold_public_binding(&mut binding, &initialize(&second, 30_000));
+    fold_public_binding(&mut binding, &expire(&first, 20_000));
+    fold_public_binding(&mut binding, &initialize(&first, 40_000));
+    assert!(matches!(
+        binding.as_ref(),
+        Some(DurableStreamPublicBinding::Live {
+            session_key,
+            expiry_deadline_millis: Some(30_000),
+            ..
+        }) if session_key == &second.idempotency_key
+    ));
+
+    let bytes = crate::serialization::serialize(binding.as_ref().unwrap()).unwrap();
+    let decoded: DurableStreamPublicBinding = crate::serialization::deserialize(&bytes).unwrap();
+    assert_eq!(Some(decoded), binding);
+
+    let mut status = DurableStreamSessionStatus::default();
+    status.apply_record(OplogIndex::from_u64(1), &initialize(&first, 10_000));
+    status.apply_record(OplogIndex::from_u64(2), &initialize(&first, 20_000));
+    assert_eq!(status.expiry_deadline_millis, Some(10_000));
+}
+
+#[test]
+fn durable_stream_absolute_expiry_cannot_be_refreshed_past_its_fixed_deadline() {
+    let invocation = durable_stream_test_session_key("absolute");
+    let public = "report-absolute";
+    let mut index = DurableStreamSessionIndex::default();
+    let initialized =
+        StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
+            format_version: 1,
+            public_session_id: public.to_string(),
+            session_key: invocation.idempotency_key.clone(),
+            source_invocation: invocation.clone(),
+            request_hash: vec![7; 32],
+            expiry_policy: StreamSessionExpiryPolicy::Absolute {
+                expires_at_millis: 10_000,
+            },
+            expiry_deadline_millis: Some(10_000),
+        });
+    let refreshed = StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
+        format_version: 1,
+        session_key: invocation.idempotency_key.clone(),
+        public_session_id: public.to_string(),
+        expected_deadline_millis: 10_000,
+        refreshed_at_millis: 9_000,
+        deadline_millis: 20_000,
+    });
+    index.apply_record(OplogIndex::from_u64(1), &initialized);
+    index.apply_record(OplogIndex::from_u64(2), &refreshed);
+    let mut binding = None;
+    fold_public_binding(&mut binding, &initialized);
+    fold_public_binding(&mut binding, &refreshed);
+
+    assert!(matches!(
+        binding,
+        Some(DurableStreamPublicBinding::Live {
+            expiry_policy: StreamSessionExpiryPolicy::Absolute {
+                expires_at_millis: 10_000
+            },
+            expiry_deadline_millis: Some(10_000),
+            ..
+        })
+    ));
+    assert_eq!(
+        index
+            .get(&invocation.idempotency_key)
+            .unwrap()
+            .expiry_deadline_millis,
+        Some(10_000)
+    );
 }
 
 #[test]
@@ -113,6 +272,51 @@ fn durable_stream_fork_status_resets_retained_sessions_and_preserves_results() {
         ..sibling
     };
     assert_eq!(index.get(&sibling_key), Some(&expected_sibling));
+}
+
+#[test]
+fn durable_stream_self_revert_preserves_retained_session() {
+    use crate::model::durable_stream::StreamForkCutRecord;
+    use crate::model::regions::OplogRegion;
+
+    let source = durable_stream_test_session_key("self-revert");
+    let public_session_id = "retained-public";
+    let mut index = DurableStreamSessionIndex::default();
+    index.apply_record(
+        OplogIndex::from_u64(2),
+        &StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
+            format_version: 1,
+            public_session_id: public_session_id.into(),
+            session_key: source.idempotency_key.clone(),
+            source_invocation: source.clone(),
+            request_hash: vec![0; 32],
+            expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 },
+            expiry_deadline_millis: Some(40_000),
+        }),
+    );
+    index.apply_record(
+        OplogIndex::from_u64(5),
+        &StreamSessionRecord::ForkCut(StreamForkCutRecord {
+            format_version: 1,
+            request_hash: vec![0; 32],
+            creation_fingerprint: source.callee_fingerprint,
+            export: None,
+            cut_index: OplogIndex::from_u64(2),
+            revert: Some(OplogRegion {
+                start: OplogIndex::from_u64(3),
+                end: OplogIndex::from_u64(3),
+            }),
+            epoch_floor: 2,
+            selected_stream_id: None,
+            retained_through: None,
+        }),
+    );
+
+    let status = index.get(&source.idempotency_key).unwrap();
+    assert_eq!(status.public_session_id.as_deref(), Some(public_session_id));
+    assert_eq!(status.expiry_deadline_millis, Some(40_000));
+    assert_eq!(status.attachment_epoch, Some(2));
+    assert_eq!(status.attachment_attached, Some(false));
 }
 
 #[test]
@@ -270,6 +474,38 @@ fn durable_stream_session_index_retains_unfinished_and_bounded_recent_finished()
         index
             .get(&IdempotencyKey::new("done-139".to_string()))
             .is_some()
+    );
+}
+
+#[test]
+fn durable_stream_session_index_serialization_stays_bounded() {
+    let mut index = DurableStreamSessionIndex::default();
+    for n in 0..128 {
+        index.insert(
+            IdempotencyKey::new(format!("done-{n:04}")),
+            DurableStreamSessionStatus {
+                first_prepared: Some(OplogIndex::from_u64(1)),
+                finished: Some(OplogIndex::from_u64(2)),
+                ..Default::default()
+            },
+        );
+    }
+    let bounded_size = crate::serialization::serialize(&index).unwrap().len();
+
+    for n in 128..1_128 {
+        index.insert(
+            IdempotencyKey::new(format!("done-{n:04}")),
+            DurableStreamSessionStatus {
+                first_prepared: Some(OplogIndex::from_u64(1)),
+                finished: Some(OplogIndex::from_u64(2)),
+                ..Default::default()
+            },
+        );
+    }
+
+    assert_eq!(
+        crate::serialization::serialize(&index).unwrap().len(),
+        bounded_size
     );
 }
 

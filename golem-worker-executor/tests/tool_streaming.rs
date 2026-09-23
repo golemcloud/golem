@@ -146,6 +146,13 @@ struct TsStreamEvidence {
 }
 
 #[derive(Debug, FromSchema)]
+struct TsCompletionEvidence {
+    output: Vec<u8>,
+    stdout_terminal: String,
+    result_terminal: String,
+}
+
+#[derive(Debug, FromSchema)]
 struct ScalaStreamEvidence {
     output: String,
     bytes_read: i64,
@@ -7345,6 +7352,19 @@ async fn typescript_generated_client_streams_live(
         .into_typed()?;
     assert_eq!(failure, "resource-exhausted");
 
+    let declared: TsCompletionEvidence = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "declaredErrorCompletion",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(declared.output, b"ts-declared:");
+    assert_eq!(declared.stdout_terminal, "finished");
+    assert_eq!(declared.result_terminal, "declared-error");
+
     Ok(())
 }
 
@@ -7445,6 +7465,25 @@ async fn scala_generated_client_streams_live(
     assert!(cleanup.stdin_cancelled);
     assert_eq!(cleanup.stdout_terminal, "failed");
 
+    let declared: ScalaOutputEvidence = executor
+        .invoke_and_await_agent(
+            &stored_component,
+            &agent_id,
+            "declaredErrorCompletion",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        declared.bytes,
+        b"scala-declared:"
+            .iter()
+            .map(|byte| i32::from(*byte))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(declared.terminal, "finished");
+    assert_eq!(declared.result, "declared:expected");
+
     Ok(())
 }
 
@@ -7533,6 +7572,17 @@ async fn moonbit_generated_client_streams_live(
         .await?
         .into_typed()?;
     assert_eq!(explicit_failure, "resource-exhausted:ok");
+
+    let declared: String = executor
+        .invoke_and_await_agent(
+            &stored_component,
+            &agent_id,
+            "declared_error_completion",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(declared, "finished:declared:expected");
 
     Ok(())
 }

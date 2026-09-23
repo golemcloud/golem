@@ -9,7 +9,7 @@
   "dependencies": {
     "@golemcloud/effect-golem": "file:../..",
     "@golemcloud/golem-ts-sdk": "file:../../../ts/packages/golem-ts-sdk",
-    "effect": "4.0.0-beta.98",
+    "effect": "4.0.0-rc.117",
     "zod": "4.4.3"
   },
   "devDependencies": {

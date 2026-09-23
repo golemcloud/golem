@@ -452,6 +452,14 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
                 pos
               )
             )
+          val into = Expr
+            .summon[IntoSchema[t]]
+            .getOrElse(
+              report.errorAndAbort(
+                s"No implicit IntoSchema available for middleware parameter type ${Type.show[t]}",
+                pos
+              )
+            )
           if (countFlag)
             '{
               ToolMiddlewareParamDecoder.Field(
@@ -463,7 +471,7 @@ private[macros] final class ToolMiddlewareAssembler(val core: ToolMacroCore) {
             '{
               ToolMiddlewareParamDecoder.Field(
                 ${ Expr(canonicalName) },
-                ToolMiddlewareInvokerRuntime.fieldDecoder[t]($from)
+                ToolMiddlewareInvokerRuntime.fieldDecoder[t]($from, $into)
               )
             }
       }

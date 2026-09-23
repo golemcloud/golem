@@ -452,10 +452,7 @@ mod tests {
         assert!(get_tool_middleware_by_name("registry-shared-name").is_some());
     }
 
-    #[cfg(any(
-        feature = "export_golem_tool_middleware",
-        feature = "export_golem_agentic_tool_middleware"
-    ))]
+    #[cfg(feature = "export_golem_agentic")]
     #[test]
     fn guest_discovery_and_lookup_encode_complete_scope_metadata() {
         let presented = tool("registry-presented");

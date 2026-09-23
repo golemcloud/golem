@@ -532,9 +532,12 @@ object ToolMiddlewareInvokerSpec extends ZIOSpecDefault {
     future.value.getOrElse(throw new IllegalStateException("future did not complete synchronously")).get
 
   private def invocationInput(path: List[String], values: SchemaValue*): TypedSchemaValue = {
-    val index  = presented.commandIndexByPath(path).get
-    val schema = presented.canonicalInputRecordSchema(index).toOption.get
-    TypedSchemaValue(schema, SchemaValue.RecordValue(values.toList))
+    val index = presented.commandIndexByPath(path).get
+    val model = presented.canonicalInputModel(index).toOption.get
+    ToolClientRuntime
+      .buildInputFromModel(Right(model), model.fields.map(_.name).zip(values.toList))
+      .toOption
+      .get
   }
 
   private def invoke(

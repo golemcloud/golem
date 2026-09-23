@@ -280,6 +280,7 @@ dependencies = [
  "effect-fixture-guest-client",
  "golem-rust",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

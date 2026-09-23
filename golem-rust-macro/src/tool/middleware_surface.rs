@@ -934,9 +934,18 @@ fn emit_dispatch_block(input: LeafInput, method_ident: Ident) -> syn::Result<Tok
                                 #sdk::tool::ToolInvokeError::InvalidInput(
                                     format!("missing canonical tool input field `{}`", #canonical_name)
                                 )
-                            })?;
+                        })?;
                         let #field_ident = #input_fields_ident.remove(#field_index_ident);
-                        <#ty as #sdk::FromSchema>::from_value(&#field_ident.value)
+                        let __golem_expected_graph = <#ty as #sdk::agentic::Schema>::get_type()
+                            .get_schema_graph()
+                            .expect("tool parameter must have a concrete schema graph");
+                        let __golem_value = #sdk::agentic::adapt_canonical_input_value(
+                            #field_ident,
+                            #canonical_name,
+                            &__golem_expected_graph,
+                        )
+                        .map_err(#sdk::tool::ToolInvokeError::InvalidInput)?;
+                        <#ty as #sdk::FromSchema>::from_value(&__golem_value)
                             .map_err(|error| {
                                 #sdk::tool::ToolInvokeError::InvalidInput(error.to_string())
                             })?

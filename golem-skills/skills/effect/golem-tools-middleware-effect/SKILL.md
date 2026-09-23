@@ -9,4 +9,4 @@ Build a definition with `Tool.toolDefinition(name).body(...)`. A provider finish
 
 Use `Middleware.typed({ name, presented, handler })` when the presented tool shape is known. Use the universal middleware API only when every tool must be intercepted. Forward input, output, permission cards, and streams exactly once to `underlying`; capability handles are affine.
 
-Combined agent/tool worlds are supported by current SDK artifacts. Standalone middleware attachment and deployment is host-blocked by GOL-39; do not invent a manifest field or claim it can be deployed independently.
+The default world supports ordinary, standalone-middleware, and combined components. Standalone middleware can be attached and deployed independently; unused agent and tool discovery returns empty lists.

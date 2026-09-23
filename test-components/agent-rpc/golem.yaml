@@ -38,9 +38,9 @@ componentTemplates:
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
   moonbit-test-build:
     build:
-    - command: moon run cmd -- reexports "{{ appRootDir }}/../../sdks/moonbit/golem_sdk" "{{ componentDir }}" --role ordinary
+    - command: moon run cmd -- reexports "{{ appRootDir }}/../../sdks/moonbit/golem_sdk" "{{ componentDir }}"
       dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
-    - command: moon run cmd -- agents "{{ componentDir }}" --component-dir . --role ordinary
+    - command: moon run cmd -- agents "{{ componentDir }}" --component-dir .
       dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
     - command: moon -C "{{ appRootDir }}/../../sdks/moonbit" build "{{ componentDir }}" --target wasm --release --target-dir "{{ componentDir }}/_build"
     - command: wasm-tools component embed "{{ appRootDir }}/../../sdks/moonbit/golem_sdk/wit" "{{ componentDir }}/_build/wasm/release/build/golemcloud/golem_it_agent_rpc_moonbit/golem_it_agent_rpc_moonbit.wasm" --world agent-guest --encoding utf16 --output "{{ componentDir }}/_build/wasm/release/{{ component_name | to_snake_case }}.embed.wasm"

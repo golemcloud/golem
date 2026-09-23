@@ -52,10 +52,14 @@ mod tests {
             .expect("command path resolves");
         let model = CanonicalInputModel::from_fields(tool.canonical_input_fields(command_index))
             .expect("canonical input model builds");
-        let input = golem_rust::TypedSchemaValue::new(
-            model.record_schema,
-            golem_rust::SchemaValue::Record { fields: values },
-        );
+        let params = model
+            .fields
+            .iter()
+            .zip(values)
+            .map(|(field, value)| (field.name.as_str(), value))
+            .collect();
+        let input = golem_rust::agentic::build_canonical_input(&model, params)
+            .expect("canonical input builds");
         golem_rust::encode_typed_schema_value(&input).expect("typed schema value encodes")
     }
 
@@ -836,7 +840,7 @@ async fn audit(
     }
 
     #[test]
-    fn pure_middleware_feature_compiles_generated_definition_and_authoring_surfaces() {
+    fn default_world_compiles_generated_middleware_definition_and_authoring_surfaces() {
         let output = cargo_tool_crate_with_dependency(
             "pure-middleware-generated-surfaces",
             "pure-middleware-generated-surfaces",
@@ -868,12 +872,12 @@ impl EchoMiddleware for Policy {
 }
 "#,
             "check",
-            "golem-rust = { path = PATH, features = [\"export_golem_tool_middleware\"] }",
+            "golem-rust = { path = PATH, features = [\"export_golem_agentic\"] }",
         );
 
         assert!(
             output.status.success(),
-            "the pure middleware feature must compile generated descriptors, clients, proxies, and authoring adapters:\n{}",
+            "the default world must compile generated descriptors, clients, proxies, and authoring adapters:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -998,6 +1002,43 @@ impl EchoMiddleware for Policy {
             ),
             "expected an InheritedGlobalConflict for `verbose` on `leaf`, got {err:?}",
         );
+    }
+
+    #[tool_definition]
+    trait OptionalCaptureChild {
+        fn leaf(&self, count: u32, name: String) -> Result<(), RemoteError>;
+    }
+
+    struct OptionalCaptureChildSubtree;
+
+    #[tool_definition]
+    trait OptionalCaptureParent {
+        #[command(subtree = OptionalCaptureChild, name = "optional-capture-child")]
+        #[arg(count = "global", required = false)]
+        fn child(&self, count: u32) -> OptionalCaptureChildSubtree;
+    }
+
+    fn generated_subtree_optional_capture_typechecks() {
+        let client = OptionalCaptureParentClient::default().child(7);
+        let _: &golem_rust::SchemaGraph = &client.inherited_prefix[0].schema;
+    }
+
+    #[test]
+    fn optional_parent_field_keeps_its_carrier_when_child_redeclares() {
+        let tool = __golem_tool_descriptor_for_OptionalCaptureParent(&mut ToolBuildCtx::new())
+            .expect("optional subtree descriptor builds");
+        let child = tool
+            .node_index_by_path(&["optional-capture-child".to_string()])
+            .expect("subtree command exists");
+        let field = tool
+            .canonical_input_fields(child)
+            .into_iter()
+            .find(|field| field.name == "count")
+            .expect("parent count field exists");
+        assert!(matches!(
+            field.schema.root,
+            golem_rust::SchemaType::Option { .. }
+        ));
     }
 
     #[tool_definition]
@@ -2275,7 +2316,9 @@ fn duplicate_canonical_param_uses_last_staged_value() {
 
     assert_eq!(
         fields[0],
-        golem_rust::SchemaValue::U32(2),
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(2))),
+        },
         "when two client arguments map to the same canonical inherited global, the generated client must preserve the pre-optimization BTreeMap::insert overwrite semantics",
     );
 }
@@ -2410,10 +2453,17 @@ fn duplicate_canonical_param_uses_last_staged_value_after_prior_removal() {
         panic!("expected client input to be a record");
     };
 
-    assert_eq!(fields[0], golem_rust::SchemaValue::U32(99));
+    assert_eq!(
+        fields[0],
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(99))),
+        },
+    );
     assert_eq!(
         fields[1],
-        golem_rust::SchemaValue::U32(3),
+        golem_rust::SchemaValue::Option {
+            inner: Some(Box::new(golem_rust::SchemaValue::U32(3))),
+        },
         "last staged duplicate canonical value must still win after packing an earlier canonical field",
     );
     assert_eq!(

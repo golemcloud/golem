@@ -9,12 +9,11 @@ steps:
   - id: "add-streaming-agent"
     prompt: >
       In this Effect-based Golem project, add a durable `StreamingAgent` with an Effect-native
-      `doubled` method whose input and output are `Schema.AgentStream(Schema.Number)`. Convert the
-      affine input with `toEffect` using a real error mapper, double each element with Effect
-      `Stream`, and return the Effect produced by `AgentStream.AgentStream.fromEffect`. Also add a
-      normal `roundtrip` method that constructs a three-item AgentStream, calls `doubled` through
-      the typed client in a scope, consumes the response incrementally, and returns `[2, 4, 6]`.
-      Build and deploy successfully.
+      `doubled` method whose input and output are `WitTypes.AgentStream(Schema.Number)`. Use native
+      Effect `Stream` values in the handler, double each element lazily, and return the stream in an
+      Effect. Also add a normal `roundtrip` method that constructs a three-item Effect Stream,
+      calls `doubled` through the typed client in a scope, consumes the response incrementally, and
+      returns `[2, 4, 6]`. Build and deploy successfully.
     expectedSkills:
       - "golem-streaming-agent-effect"
     verify:

@@ -6,4 +6,4 @@ publish = false
 
 [dependencies]
 middleware-definition = { path = "../definition" }
-sdk = { package = "golem-rust", path = "../../../..", features = ["export_golem_tool_middleware"] }
+sdk = { package = "golem-rust", path = "../../../..", features = ["export_golem_agentic"] }
