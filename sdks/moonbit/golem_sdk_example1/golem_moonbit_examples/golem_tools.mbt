@@ -3,31 +3,35 @@
 ///|
 ///
 #warnings("-unused_try")
-pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn error_cases() {
-  Ok([
-    {
-      name: "invalid-pattern",
-      doc: {
-        summary: "The supplied pattern is not a valid regular expression.",
-        description: "",
-        examples: [],
-      },
-      kind: @toolCommon.ErrorKind::USAGE_ERROR,
-      exit_code: 2,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-    {
-      name: "no-match",
-      doc: { summary: "No line matched.", description: "", examples: [], },
-      kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
-      exit_code: 1,
-      payload: None,
-    },
-  ]) catch {
+pub impl @tool.ToolErrorSchema for CanonicalGrepError with error_cases() {
+  try {
+    Ok(
+      [
+        {
+          name: "invalid-pattern",
+          doc: {
+            summary: "The supplied pattern is not a valid regular expression.",
+            description: "",
+            examples: [],
+          },
+          kind: @toolCommon.ErrorKind::USAGE_ERROR,
+          exit_code: 2,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+        {
+          name: "no-match",
+          doc: { summary: "No line matched.", description: "", examples: [] },
+          kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+          exit_code: 1,
+          payload: None,
+        },
+      ],
+    )
+  } catch{
     __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
@@ -35,32 +39,38 @@ pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn error_cases() {
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn to_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalGrepError with to_error_payload_value(
   self,
 ) {
   match self {
-    InvalidPattern(reason~) =>
-      Ok(("invalid-pattern", @schema.try_into_typed_schema_value(reason))) catch {
+    InvalidPattern(reason~) => {
+      try {
+        Ok(("invalid-pattern", @schema.try_into_typed_schema_value(reason)))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    NoMatch =>
-      Ok(("no-match", @schema.try_into_typed_schema_value(()))) catch {
+    }
+    NoMatch => {
+      try {
+        Ok(("no-match", @schema.try_into_typed_schema_value(())))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
+    }
   }
 }
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn from_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalGrepError with from_error_payload_value(
   __golem_name,
   __golem_value,
 ) {
   match __golem_name {
     "invalid-pattern" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -69,9 +79,9 @@ pub impl @tool.ToolErrorSchema for CanonicalGrepError with fn from_error_payload
       Err("remote tool error payload is malformed for case `invalid-pattern`")
     }
     "no-match" => {
-      let __golem_decoded : Unit? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :Unit? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -93,34 +103,38 @@ extend CanonicalGrepError with @tool.ToolErrorSchema::{
 ///|
 ///
 #warnings("-unused_try")
-pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn error_cases() {
-  Ok([
-    {
-      name: "nothing-staged",
-      doc: { summary: "", description: "", examples: [], },
-      kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
-      exit_code: 1,
-      payload: None,
-    },
-    {
-      name: "dirty-merge",
-      doc: { summary: "", description: "", examples: [], },
-      kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
-      exit_code: 128,
-      payload: None,
-    },
-    {
-      name: "bad-author-format",
-      doc: { summary: "", description: "", examples: [], },
-      kind: @toolCommon.ErrorKind::USAGE_ERROR,
-      exit_code: 129,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-  ]) catch {
+pub impl @tool.ToolErrorSchema for CanonicalCommitError with error_cases() {
+  try {
+    Ok(
+      [
+        {
+          name: "nothing-staged",
+          doc: { summary: "", description: "", examples: [] },
+          kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+          exit_code: 1,
+          payload: None,
+        },
+        {
+          name: "dirty-merge",
+          doc: { summary: "", description: "", examples: [] },
+          kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+          exit_code: 128,
+          payload: None,
+        },
+        {
+          name: "bad-author-format",
+          doc: { summary: "", description: "", examples: [] },
+          kind: @toolCommon.ErrorKind::USAGE_ERROR,
+          exit_code: 129,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+      ],
+    )
+  } catch{
     __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
@@ -128,36 +142,45 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn error_cases() {
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn to_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalCommitError with to_error_payload_value(
   self,
 ) {
   match self {
-    NothingStaged =>
-      Ok(("nothing-staged", @schema.try_into_typed_schema_value(()))) catch {
+    NothingStaged => {
+      try {
+        Ok(("nothing-staged", @schema.try_into_typed_schema_value(())))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    DirtyMerge =>
-      Ok(("dirty-merge", @schema.try_into_typed_schema_value(()))) catch {
+    }
+    DirtyMerge => {
+      try {
+        Ok(("dirty-merge", @schema.try_into_typed_schema_value(())))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    BadAuthorFormat(author~) =>
-      Ok(("bad-author-format", @schema.try_into_typed_schema_value(author))) catch {
+    }
+    BadAuthorFormat(author~) => {
+      try {
+        Ok(("bad-author-format", @schema.try_into_typed_schema_value(author)))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
+    }
   }
 }
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn from_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalCommitError with from_error_payload_value(
   __golem_name,
   __golem_value,
 ) {
   match __golem_name {
     "nothing-staged" => {
-      let __golem_decoded : Unit? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :Unit? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -166,9 +189,9 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn from_error_paylo
       Err("remote tool error payload is malformed for case `nothing-staged`")
     }
     "dirty-merge" => {
-      let __golem_decoded : Unit? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :Unit? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -177,9 +200,9 @@ pub impl @tool.ToolErrorSchema for CanonicalCommitError with fn from_error_paylo
       Err("remote tool error payload is malformed for case `dirty-merge`")
     }
     "bad-author-format" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -201,23 +224,27 @@ extend CanonicalCommitError with @tool.ToolErrorSchema::{
 ///|
 ///
 #warnings("-unused_try")
-pub impl @tool.ToolErrorSchema for CanonicalLogError with fn error_cases() {
-  Ok([
-    {
-      name: "bad-revision",
-      doc: { summary: "", description: "", examples: [], },
-      kind: @toolCommon.ErrorKind::USAGE_ERROR,
-      exit_code: 128,
-      payload: None,
-    },
-    {
-      name: "not-a-repository",
-      doc: { summary: "", description: "", examples: [], },
-      kind: @toolCommon.ErrorKind::USAGE_ERROR,
-      exit_code: 129,
-      payload: None,
-    },
-  ]) catch {
+pub impl @tool.ToolErrorSchema for CanonicalLogError with error_cases() {
+  try {
+    Ok(
+      [
+        {
+          name: "bad-revision",
+          doc: { summary: "", description: "", examples: [] },
+          kind: @toolCommon.ErrorKind::USAGE_ERROR,
+          exit_code: 128,
+          payload: None,
+        },
+        {
+          name: "not-a-repository",
+          doc: { summary: "", description: "", examples: [] },
+          kind: @toolCommon.ErrorKind::USAGE_ERROR,
+          exit_code: 129,
+          payload: None,
+        },
+      ],
+    )
+  } catch{
     __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
@@ -225,32 +252,38 @@ pub impl @tool.ToolErrorSchema for CanonicalLogError with fn error_cases() {
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalLogError with fn to_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalLogError with to_error_payload_value(
   self,
 ) {
   match self {
-    BadRevision =>
-      Ok(("bad-revision", @schema.try_into_typed_schema_value(()))) catch {
+    BadRevision => {
+      try {
+        Ok(("bad-revision", @schema.try_into_typed_schema_value(())))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
-    NotARepository =>
-      Ok(("not-a-repository", @schema.try_into_typed_schema_value(()))) catch {
+    }
+    NotARepository => {
+      try {
+        Ok(("not-a-repository", @schema.try_into_typed_schema_value(())))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
+    }
   }
 }
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalLogError with fn from_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalLogError with from_error_payload_value(
   __golem_name,
   __golem_value,
 ) {
   match __golem_name {
     "bad-revision" => {
-      let __golem_decoded : Unit? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :Unit? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -259,9 +292,9 @@ pub impl @tool.ToolErrorSchema for CanonicalLogError with fn from_error_payload_
       Err("remote tool error payload is malformed for case `bad-revision`")
     }
     "not-a-repository" => {
-      let __golem_decoded : Unit? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :Unit? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -283,20 +316,24 @@ extend CanonicalLogError with @tool.ToolErrorSchema::{
 ///|
 ///
 #warnings("-unused_try")
-pub impl @tool.ToolErrorSchema for CanonicalRemoteError with fn error_cases() {
-  Ok([
-    {
-      name: "no-such-remote",
-      doc: { summary: "", description: "", examples: [], },
-      kind: @toolCommon.ErrorKind::USAGE_ERROR,
-      exit_code: 128,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-  ]) catch {
+pub impl @tool.ToolErrorSchema for CanonicalRemoteError with error_cases() {
+  try {
+    Ok(
+      [
+        {
+          name: "no-such-remote",
+          doc: { summary: "", description: "", examples: [] },
+          kind: @toolCommon.ErrorKind::USAGE_ERROR,
+          exit_code: 128,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+      ],
+    )
+  } catch{
     __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
@@ -304,28 +341,31 @@ pub impl @tool.ToolErrorSchema for CanonicalRemoteError with fn error_cases() {
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalRemoteError with fn to_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalRemoteError with to_error_payload_value(
   self,
 ) {
   match self {
-    NoSuchRemote(name~) =>
-      Ok(("no-such-remote", @schema.try_into_typed_schema_value(name))) catch {
+    NoSuchRemote(name~) => {
+      try {
+        Ok(("no-such-remote", @schema.try_into_typed_schema_value(name)))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
+    }
   }
 }
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalRemoteError with fn from_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalRemoteError with from_error_payload_value(
   __golem_name,
   __golem_value,
 ) {
   match __golem_name {
     "no-such-remote" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -347,20 +387,24 @@ extend CanonicalRemoteError with @tool.ToolErrorSchema::{
 ///|
 ///
 #warnings("-unused_try")
-pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with fn error_cases() {
-  Ok([
-    {
-      name: "failed",
-      doc: { summary: "", description: "", examples: [], },
-      kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
-      exit_code: 1,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-  ]) catch {
+pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with error_cases() {
+  try {
+    Ok(
+      [
+        {
+          name: "failed",
+          doc: { summary: "", description: "", examples: [] },
+          kind: @toolCommon.ErrorKind::RUNTIME_ERROR,
+          exit_code: 1,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+      ],
+    )
+  } catch{
     __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
@@ -368,28 +412,31 @@ pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with fn error_cases() {
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with fn to_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with to_error_payload_value(
   self,
 ) {
   match self {
-    Failed(__golem_payload) =>
-      Ok(("failed", @schema.try_into_typed_schema_value(__golem_payload))) catch {
+    Failed(__golem_payload) => {
+      try {
+        Ok(("failed", @schema.try_into_typed_schema_value(__golem_payload)))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
+    }
   }
 }
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with fn from_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalSetUrlError with from_error_payload_value(
   __golem_name,
   __golem_value,
 ) {
   match __golem_name {
     "failed" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -411,20 +458,24 @@ extend CanonicalSetUrlError with @tool.ToolErrorSchema::{
 ///|
 ///
 #warnings("-unused_try")
-pub impl @tool.ToolErrorSchema for CanonicalStashError with fn error_cases() {
-  Ok([
-    {
-      name: "no-such-stash",
-      doc: { summary: "", description: "", examples: [], },
-      kind: @toolCommon.ErrorKind::USAGE_ERROR,
-      exit_code: 128,
-      payload: Some(
-        @schema.into_schema_graph(
-          (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-        ),
-      ),
-    },
-  ]) catch {
+pub impl @tool.ToolErrorSchema for CanonicalStashError with error_cases() {
+  try {
+    Ok(
+      [
+        {
+          name: "no-such-stash",
+          doc: { summary: "", description: "", examples: [] },
+          kind: @toolCommon.ErrorKind::USAGE_ERROR,
+          exit_code: 128,
+          payload: Some(
+            @schema.into_schema_graph(
+              (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+            ),
+          ),
+        },
+      ],
+    )
+  } catch{
     __golem_error =>
       Err(@tool.ToolBuildError::schema_model(__golem_error.to_string()))
   }
@@ -432,28 +483,31 @@ pub impl @tool.ToolErrorSchema for CanonicalStashError with fn error_cases() {
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalStashError with fn to_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalStashError with to_error_payload_value(
   self,
 ) {
   match self {
-    NoSuchStash(name~) =>
-      Ok(("no-such-stash", @schema.try_into_typed_schema_value(name))) catch {
+    NoSuchStash(name~) => {
+      try {
+        Ok(("no-such-stash", @schema.try_into_typed_schema_value(name)))
+      } catch{
         __golem_error => Err(__golem_error.to_string())
       }
+    }
   }
 }
 
 ///|
 ///
-pub impl @tool.ToolErrorSchema for CanonicalStashError with fn from_error_payload_value(
+pub impl @tool.ToolErrorSchema for CanonicalStashError with from_error_payload_value(
   __golem_name,
   __golem_value,
 ) {
   match __golem_name {
     "no-such-stash" => {
-      let __golem_decoded : String? = Some(
-        @schema.from_value_as(__golem_value.value),
-      ) catch {
+      let __golem_decoded :String? = try {
+        Some(@schema.from_value_as(__golem_value.value))
+      } catch{
         _ => None
       }
       if __golem_decoded is Some(__golem_payload) {
@@ -496,10 +550,7 @@ fn __golem_tool_concat_globals(
 
 ///|
 ///
-fn __golem_tool_rebase_node(
-  node : @tool.CommandNodeDef,
-  offset : Int,
-) -> @tool.CommandNodeDef {
+fn __golem_tool_rebase_node(node : @tool.CommandNodeDef, offset : Int) -> @tool.CommandNodeDef {
   {
     name: node.name,
     aliases: node.aliases,
@@ -521,14 +572,11 @@ fn __golem_tool_extract_prepared(def : @tool.ToolDef) -> @tool.ToolDef {
 
 ///|
 ///
-fn __golem_tool_append_prepared(
-  def : @tool.ToolDef,
-  child : @tool.ToolDef,
-) -> @tool.ToolDef {
+fn __golem_tool_append_prepared(def : @tool.ToolDef, child : @tool.ToolDef) -> @tool.ToolDef {
   let offset = def.commands.length()
   let commands = def.commands.copy()
   let root = commands[0]
-  commands[0] = {
+  commands[0] =  {
     name: root.name,
     aliases: root.aliases,
     doc: root.doc,
@@ -539,86 +587,96 @@ fn __golem_tool_append_prepared(
   for node in child.commands {
     commands.push(__golem_tool_rebase_node(node, offset))
   }
-  { version: def.version, commands, }
+  { version: def.version, commands }
 }
 
 ///|
 ///
 fn __golem_tool_def_raw_MoonBitStreaming() -> @tool.ToolDef {
   try {
-    let def : @tool.ToolDef = {
+    let def :@tool.ToolDef = {
       version: "1.0.0",
       commands: [
         {
           name: "moonbit-streaming",
           aliases: [],
-          doc: { summary: "", description: "", examples: [], },
-          globals: { options: [], flags: [], },
+          doc: { summary: "", description: "", examples: [] },
+          globals: { options: [], flags: [] },
           subcommands: [1],
           body: None,
         },
         {
           name: "stream",
           aliases: [],
-          doc: { summary: "", description: "", examples: [], },
-          globals: { options: [], flags: [], },
+          doc: { summary: "", description: "", examples: [] },
+          globals: { options: [], flags: [] },
           subcommands: [],
-          body: Some({
-            positionals: {
-              fixed: [
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "mode",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: None,
+              },
+              options: [],
+              flags: [],
+              constraints: [],
+              stdin: Some(
                 {
-                  name: "mode",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                  default: None,
+                  doc: { summary: "", description: "", examples: [] },
+                  mime: [],
                   required: true,
-                  accepts_stdio: false,
                 },
-              ],
-              tail: None,
-            },
-            options: [],
-            flags: [],
-            constraints: [],
-            stdin: Some({
-              doc: { summary: "", description: "", examples: [], },
-              mime: [],
-              required: true,
-            }),
-            stdout: Some({
-              doc: { summary: "", description: "", examples: [], },
-              mime: [],
-              required: true,
-            }),
-            result: Some({
-              type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
               ),
-              doc: { summary: "", description: "", examples: [], },
-              formatters: [
+              stdout: Some(
                 {
-                  name: "default",
-                  doc: { summary: "", description: "", examples: [], },
+                  doc: { summary: "", description: "", examples: [] },
+                  mime: [],
+                  required: true,
                 },
-              ],
-              default_formatter: "default",
-            }),
-            errors: [],
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
+              ),
+              result: Some(
+                {
+                  type_: @schema.into_schema_graph(
+                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                  ),
+                  doc: { summary: "", description: "", examples: [] },
+                  formatters: [
+                    {
+                      name: "default",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "default",
+                },
+              ),
+              errors: [],
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
+            },
+          ),
         },
       ],
     }
     def
-  } catch {
+  } catch{
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -633,13 +691,13 @@ fn __golem_tool_def_prepare_MoonBitStreaming(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier : @tool.ToolDef = {
+    let carrier :@tool.ToolDef = {
       version: "1.0.0",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [], },
+          doc: { summary: "", description: "", examples: [] },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -658,7 +716,7 @@ fn __golem_tool_def_prepare_MoonBitStreaming(
     )
     let def = prepared
     def
-  } catch {
+  } catch{
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -666,13 +724,15 @@ fn __golem_tool_def_prepare_MoonBitStreaming(
 ///|
 ///
 fn __golem_tool_def_MoonBitStreaming() -> @tool.ToolDef {
-  __golem_tool_def_prepare_MoonBitStreaming(
-    { options: [], flags: [], },
-    { options: [], flags: [], },
-    None,
-    None,
-    None,
-  ).normalize_inherited_globals() catch {
+  try {
+    __golem_tool_def_prepare_MoonBitStreaming(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
+  } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
@@ -688,66 +748,86 @@ async fn __golem_tool_invoke_MoonBitStreaming(
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_MoonBitStreaming()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool moonbit-streaming invocation",
-  ) catch {
-    __golem_error =>
+  let __golem_index =
+    match __golem_def.command_index_by_path(__golem_command_path) {
+      Some(__golem_index) => __golem_index
+      None => {
+        return @tool.reject_wire_invocation(
+          __golem_input,
+          __golem_stdin,
+          @types.ToolError::InvalidCommandPath(__golem_command_path),
+        )
+      }
+    }
+  let __golem_decoded = try {
+    @tool.decode_canonical_input(
+      __golem_def,
+      __golem_index,
+      __golem_input,
+      "tool moonbit-streaming invocation",
+    )
+  } catch{
+    __golem_error => {
       return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+    }
   }
   match __golem_index {
     1 => {
-      let mode : String = @tool.decode_canonical_field(
-        __golem_decoded, "mode", "tool moonbit-streaming command stream",
-      ) catch {
-        __golem_error =>
+      let mode :String = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "mode",
+          "tool moonbit-streaming command stream",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
       let stdin = match __golem_stdin {
         Some(__golem_stream) => __golem_stream
-        None =>
+        None => {
           return @tool.reject_decoded_invocation(
             __golem_decoded,
             __golem_stdin,
             @types.ToolError::InvalidInput("required stdin stream is missing"),
           )
+        }
       }
       let stdout = match __golem_stdout {
         Some(__golem_output) => __golem_output
-        None =>
+        None => {
           return @tool.reject_decoded_invocation(
             __golem_decoded,
             __golem_stdin,
             @types.ToolError::InvalidInput("required stdout stream is missing"),
           )
+        }
       }
       let __golem_value = MoonBitStreaming::stream(mode, stdin, stdout)
       Ok(
-        @tool.invocation_result_value(__golem_value) catch {
-          @asyncCore.Cancelled::Cancelled as error => raise error
-          @types.ToolError::InvalidResult(message) =>
+        try {
+          @tool.invocation_result_wire(__golem_value)
+        } catch{
+          @asyncCore.Cancelled::Cancelled as error => raise  error
+          @types.ToolError::InvalidResult(message) => {
             return Err(@types.ToolError::InvalidResult(message))
-          error => raise error
+          }
+          error => raise  error
         },
       )
     }
-    _ =>
+    _ => {
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
         @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
+    }
   }
 }
 
@@ -755,7 +835,7 @@ async fn __golem_tool_invoke_MoonBitStreaming(
 ///
 fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
   try {
-    let def : @tool.ToolDef = {
+    let def :@tool.ToolDef = {
       version: "2.0.0",
       commands: [
         {
@@ -781,16 +861,18 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
                     (
-                      @schema.TypeTag::{ } :
-                      @schema.TypeTag[CanonicalGrepColorMode]),
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[CanonicalGrepColorMode]
+                    ),
                   ),
                 ),
                 default: Some(
                   @tool.literal_to_schema_value(
                     @schema.into_schema_graph(
                       (
-                        @schema.TypeTag::{ } :
-                        @schema.TypeTag[CanonicalGrepColorMode]),
+                        @schema.TypeTag::{  }
+                        : @schema.TypeTag[CanonicalGrepColorMode]
+                      ),
                     ),
                     @tool.ToolLiteral::Scalar("Auto"),
                   ),
@@ -809,140 +891,156 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                   description: "",
                   examples: [],
                 },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
                 env_var: None,
               },
             ],
           },
           subcommands: [1],
-          body: Some({
-            positionals: {
-              fixed: [
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "pattern",
+                    doc: {
+                      summary: "regular expression",
+                      description: "",
+                      examples: [],
+                    },
+                    value_name: None,
+                    type_: @tool.refine_text(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      ),
+                      Some("^.+$"),
+                      None,
+                      None,
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: Some(
+                  {
+                    name: "files",
+                    doc: {
+                      summary: "files to search",
+                      description: "",
+                      examples: [],
+                    },
+                    value_name: None,
+                    item_type: @tool.refine_path(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                      ),
+                      Some(@types.PathDirection::INPUT),
+                      Some(@types.PathKind::FILE),
+                      None,
+                    ),
+                    min: 0U,
+                    max: None,
+                    separator: None,
+                    verbatim: false,
+                    accepts_stdio: true,
+                  },
+                ),
+              },
+              options: [
                 {
-                  name: "pattern",
+                  long: "extra-patterns",
+                  short: Some('\u{65}'),
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::RepeatableList(
+                    {
+                      repetition: @toolCommon.Repetition::Either('\u{2c}'),
+                      item_type: @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      ),
+                    },
+                  ),
+                  default: None,
+                  required: false,
+                  env_var: None,
+                },
+                {
+                  long: "max-count",
+                  short: Some('\u{6e}'),
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @tool.refine_numeric(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                      ),
+                      Some("1"),
+                      None,
+                      None,
+                    ),
+                  ),
+                  default: None,
+                  required: false,
+                  env_var: None,
+                },
+              ],
+              flags: [],
+              constraints: [],
+              stdin: Some(
+                {
+                  doc: { summary: "", description: "", examples: [] },
+                  mime: [],
+                  required: true,
+                },
+              ),
+              stdout: Some(
+                {
+                  doc: { summary: "", description: "", examples: [] },
+                  mime: [],
+                  required: true,
+                },
+              ),
+              result: Some(
+                {
+                  type_: @schema.into_schema_graph(
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[Array[CanonicalGrepHit]]
+                    ),
+                  ),
                   doc: {
-                    summary: "regular expression",
+                    summary: "Search files for a regular expression. Bare `canonical-grep` runs this body.",
                     description: "",
                     examples: [],
                   },
-                  value_name: None,
-                  type_: @tool.refine_text(
-                    @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                    ),
-                    Some("^.+$"),
-                    None,
-                    None,
-                  ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
+                  formatters: [
+                    {
+                      name: "default",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "default",
                 },
-              ],
-              tail: Some({
-                name: "files",
-                doc: {
-                  summary: "files to search",
-                  description: "",
-                  examples: [],
-                },
-                value_name: None,
-                item_type: @tool.refine_path(
-                  @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
-                  ),
-                  Some(@types.PathDirection::INPUT),
-                  Some(@types.PathKind::FILE),
-                  None,
-                ),
-                min: 0U,
-                max: None,
-                separator: None,
-                verbatim: false,
-                accepts_stdio: true,
-              }),
-            },
-            options: [
-              {
-                long: "extra-patterns",
-                short: Some('\u{65}'),
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::RepeatableList({
-                  repetition: @toolCommon.Repetition::Either('\u{2c}'),
-                  item_type: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                }),
-                default: None,
-                required: false,
-                env_var: None,
-              },
-              {
-                long: "max-count",
-                short: Some('\u{6e}'),
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @tool.refine_numeric(
-                    @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
-                    ),
-                    Some("1"),
-                    None,
-                    None,
-                  ),
-                ),
-                default: None,
-                required: false,
-                env_var: None,
-              },
-            ],
-            flags: [],
-            constraints: [],
-            stdin: Some({
-              doc: { summary: "", description: "", examples: [], },
-              mime: [],
-              required: true,
-            }),
-            stdout: Some({
-              doc: { summary: "", description: "", examples: [], },
-              mime: [],
-              required: true,
-            }),
-            result: Some({
-              type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[Array[CanonicalGrepHit]]),
               ),
-              doc: {
-                summary: "Search files for a regular expression. Bare `canonical-grep` runs this body.",
-                description: "",
-                examples: [],
+              errors: match CanonicalGrepError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
               },
-              formatters: [
+              annotations: Some(
                 {
-                  name: "default",
-                  doc: { summary: "", description: "", examples: [], },
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
                 },
-              ],
-              default_formatter: "default",
-            }),
-            errors: match CanonicalGrepError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              ),
             },
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
+          ),
         },
         {
           name: "replace",
@@ -958,21 +1056,23 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                 long: "color",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [], },
+                doc: { summary: "", description: "", examples: [] },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @schema.into_schema_graph(
                     (
-                      @schema.TypeTag::{ } :
-                      @schema.TypeTag[CanonicalGrepColorMode]),
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[CanonicalGrepColorMode]
+                    ),
                   ),
                 ),
                 default: Some(
                   @tool.literal_to_schema_value(
                     @schema.into_schema_graph(
                       (
-                        @schema.TypeTag::{ } :
-                        @schema.TypeTag[CanonicalGrepColorMode]),
+                        @schema.TypeTag::{  }
+                        : @schema.TypeTag[CanonicalGrepColorMode]
+                      ),
                     ),
                     @tool.ToolLiteral::Scalar("Auto"),
                   ),
@@ -986,99 +1086,106 @@ fn __golem_tool_def_raw_CanonicalGrep() -> @tool.ToolDef {
                 long: "case-sensitive",
                 short: Some('\u{69}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: false, negatable: false }
+                ),
                 env_var: None,
               },
             ],
           },
           subcommands: [],
-          body: Some({
-            positionals: {
-              fixed: [
-                {
-                  name: "pattern",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
-                },
-                {
-                  name: "replacement",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
-                },
-              ],
-              tail: Some({
-                name: "files",
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                item_type: @tool.refine_path(
-                  @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
-                  ),
-                  Some(@types.PathDirection::IN_OUT),
-                  Some(@types.PathKind::FILE),
-                  None,
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "pattern",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "replacement",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: Some(
+                  {
+                    name: "files",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    item_type: @tool.refine_path(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                      ),
+                      Some(@types.PathDirection::IN_OUT),
+                      Some(@types.PathKind::FILE),
+                      None,
+                    ),
+                    min: 0U,
+                    max: None,
+                    separator: None,
+                    verbatim: false,
+                    accepts_stdio: false,
+                  },
                 ),
-                min: 0U,
-                max: None,
-                separator: None,
-                verbatim: false,
-                accepts_stdio: false,
-              }),
-            },
-            options: [],
-            flags: [],
-            constraints: [],
-            stdin: None,
-            stdout: None,
-            result: Some({
-              type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
-              ),
-              doc: {
-                summary: "Replace matching text in place.",
-                description: "",
-                examples: [],
               },
-              formatters: [
+              options: [],
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: Some(
                 {
-                  name: "default",
-                  doc: { summary: "", description: "", examples: [], },
+                  type_: @schema.into_schema_graph(
+                    (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                  ),
+                  doc: {
+                    summary: "Replace matching text in place.",
+                    description: "",
+                    examples: [],
+                  },
+                  formatters: [
+                    {
+                      name: "default",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "default",
                 },
-              ],
-              default_formatter: "default",
-            }),
-            errors: match CanonicalGrepError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              ),
+              errors: match CanonicalGrepError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
+              },
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
             },
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
+          ),
         },
       ],
     }
     def
-  } catch {
+  } catch{
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -1093,13 +1200,13 @@ fn __golem_tool_def_prepare_CanonicalGrep(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier : @tool.ToolDef = {
+    let carrier :@tool.ToolDef = {
       version: "2.0.0",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [], },
+          doc: { summary: "", description: "", examples: [] },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -1118,7 +1225,7 @@ fn __golem_tool_def_prepare_CanonicalGrep(
     )
     let def = prepared
     def
-  } catch {
+  } catch{
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -1126,13 +1233,15 @@ fn __golem_tool_def_prepare_CanonicalGrep(
 ///|
 ///
 fn __golem_tool_def_CanonicalGrep() -> @tool.ToolDef {
-  __golem_tool_def_prepare_CanonicalGrep(
-    { options: [], flags: [], },
-    { options: [], flags: [], },
-    None,
-    None,
-    None,
-  ).normalize_inherited_globals() catch {
+  try {
+    __golem_tool_def_prepare_CanonicalGrep(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
+  } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
@@ -1148,124 +1257,195 @@ async fn __golem_tool_invoke_CanonicalGrep(
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGrep()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool canonical-grep invocation",
-  ) catch {
-    __golem_error =>
+  let __golem_index =
+    match __golem_def.command_index_by_path(__golem_command_path) {
+      Some(__golem_index) => __golem_index
+      None => {
+        return @tool.reject_wire_invocation(
+          __golem_input,
+          __golem_stdin,
+          @types.ToolError::InvalidCommandPath(__golem_command_path),
+        )
+      }
+    }
+  let __golem_decoded = try {
+    @tool.decode_canonical_input(
+      __golem_def,
+      __golem_index,
+      __golem_input,
+      "tool canonical-grep invocation",
+    )
+  } catch{
+    __golem_error => {
       return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+    }
   }
   match __golem_index {
     0 => {
-      let case_sensitive : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "case-sensitive", "tool canonical-grep command canonical-grep",
-      ) catch {
-        __golem_error =>
+      let case_sensitive :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "case-sensitive",
+          "tool canonical-grep command canonical-grep",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let color : CanonicalGrepColorMode = @tool.decode_canonical_field(
-        __golem_decoded, "color", "tool canonical-grep command canonical-grep",
-      ) catch {
-        __golem_error =>
+      let color :CanonicalGrepColorMode = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "color",
+          "tool canonical-grep command canonical-grep",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let pattern : String = @tool.decode_canonical_field(
-        __golem_decoded, "pattern", "tool canonical-grep command canonical-grep",
-      ) catch {
-        __golem_error =>
+      let pattern :String = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "pattern",
+          "tool canonical-grep command canonical-grep",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let extra_patterns : Array[String] = @tool.decode_canonical_field(
-        __golem_decoded, "extra-patterns", "tool canonical-grep command canonical-grep",
-      ) catch {
-        __golem_error =>
+      let extra_patterns :Array[String] = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "extra-patterns",
+          "tool canonical-grep command canonical-grep",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let max_count : UInt? = @tool.decode_canonical_field(
-        __golem_decoded, "max-count", "tool canonical-grep command canonical-grep",
-      ) catch {
-        __golem_error =>
+      let max_count :UInt? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "max-count",
+          "tool canonical-grep command canonical-grep",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let files : Array[@schema.Path] = @tool.decode_canonical_field(
-        __golem_decoded, "files", "tool canonical-grep command canonical-grep",
-      ) catch {
-        __golem_error =>
+      let files :Array[@schema.Path] = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "files",
+          "tool canonical-grep command canonical-grep",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
       let stdin = match __golem_stdin {
         Some(__golem_stream) => __golem_stream
-        None =>
+        None => {
           return @tool.reject_decoded_invocation(
             __golem_decoded,
             __golem_stdin,
             @types.ToolError::InvalidInput("required stdin stream is missing"),
           )
+        }
       }
       let stdout = match __golem_stdout {
         Some(__golem_output) => __golem_output
-        None =>
+        None => {
           return @tool.reject_decoded_invocation(
             __golem_decoded,
             __golem_stdin,
             @types.ToolError::InvalidInput("required stdout stream is missing"),
           )
+        }
       }
-      match
-        CanonicalGrep::canonical_grep(
-          case_sensitive, color, pattern, extra_patterns, max_count, files, stdin,
-          stdout,
-        ) {
-        Ok(__golem_value) =>
+      match CanonicalGrep::canonical_grep(
+        case_sensitive,
+        color,
+        pattern,
+        extra_patterns,
+        max_count,
+        files,
+        stdin,
+        stdout,
+      ) {
+        Ok(__golem_value) => {
           Ok(
-            @tool.invocation_result_value(__golem_value) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
-              @types.ToolError::InvalidResult(message) =>
+            try {
+              @tool.invocation_result_wire(__golem_value)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
                 return Err(@types.ToolError::InvalidResult(message))
-              error => raise error
+              }
+              error => raise  error
             },
           )
+        }
         Err(error) => {
-          let (__golem_error_name, payload) = match
-            CanonicalGrepError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
+          match error {
+            InvalidPattern(reason~) => {
+              let payload = try {
+                @tool.encode_wire_result(reason)
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError(
+                  { name: "invalid-pattern", payload }
                 ),
               )
+            }
+            NoMatch => {
+              let payload = try {
+                @tool.encode_wire_result(())
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(@types.ToolError::CustomError({ name: "no-match", payload }))
+            }
           }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
-              return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
         }
       }
     }
@@ -1288,88 +1468,142 @@ async fn __golem_tool_invoke_CanonicalGrep(
           ),
         )
       }
-      let case_sensitive : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "case-sensitive", "tool canonical-grep command replace",
-      ) catch {
-        __golem_error =>
+      let case_sensitive :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "case-sensitive",
+          "tool canonical-grep command replace",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let color : CanonicalGrepColorMode = @tool.decode_canonical_field(
-        __golem_decoded, "color", "tool canonical-grep command replace",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let pattern : String = @tool.decode_canonical_field(
-        __golem_decoded, "pattern", "tool canonical-grep command replace",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let replacement : String = @tool.decode_canonical_field(
-        __golem_decoded, "replacement", "tool canonical-grep command replace",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let files : Array[@schema.Path] = @tool.decode_canonical_field(
-        __golem_decoded, "files", "tool canonical-grep command replace",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      match
-        CanonicalGrep::replace(
-          case_sensitive, color, pattern, replacement, files,
-        ) {
-        Ok(__golem_value) =>
-          Ok(
-            @tool.invocation_result_value(__golem_value) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
-              @types.ToolError::InvalidResult(message) =>
-                return Err(@types.ToolError::InvalidResult(message))
-              error => raise error
-            },
-          )
-        Err(error) => {
-          let (__golem_error_name, payload) = match
-            CanonicalGrepError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
-                ),
-              )
-          }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
-              return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
         }
       }
+      let color :CanonicalGrepColorMode = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "color",
+          "tool canonical-grep command replace",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let pattern :String = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "pattern",
+          "tool canonical-grep command replace",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let replacement :String = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "replacement",
+          "tool canonical-grep command replace",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let files :Array[@schema.Path] = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "files",
+          "tool canonical-grep command replace",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      match CanonicalGrep::replace(
+        case_sensitive,
+        color,
+        pattern,
+        replacement,
+        files,
+      ) {
+        Ok(__golem_value) => {
+          Ok(
+            try {
+              @tool.invocation_result_wire(__golem_value)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            },
+          )
+        }
+        Err(error) => {
+          match error {
+            InvalidPattern(reason~) => {
+              let payload = try {
+                @tool.encode_wire_result(reason)
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError(
+                  { name: "invalid-pattern", payload }
+                ),
+              )
+            }
+            NoMatch => {
+              let payload = try {
+                @tool.encode_wire_result(())
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(@types.ToolError::CustomError({ name: "no-match", payload }))
+            }
+          }
+        }
+      }
     }
-    _ =>
+    _ => {
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
         @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
+    }
   }
 }
 
@@ -1377,7 +1611,7 @@ async fn __golem_tool_invoke_CanonicalGrep(
 ///
 fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
   try {
-    let def : @tool.ToolDef = {
+    let def :@tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
@@ -1388,7 +1622,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [1, 2],
           body: None,
         },
@@ -1406,12 +1640,12 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "git-dir",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [], },
+                doc: { summary: "", description: "", examples: [] },
                 value_name: None,
                 shape: @tool.OptionShapeDef::Scalar(
                   @tool.refine_path(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
                     ),
                     None,
                     Some(@types.PathKind::DIRECTORY),
@@ -1422,7 +1656,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                   @tool.literal_to_schema_value(
                     @tool.refine_path(
                       @schema.into_schema_graph(
-                        (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+                        (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
                       ),
                       None,
                       Some(@types.PathKind::DIRECTORY),
@@ -1438,15 +1672,20 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "config",
                 short: Some('\u{63}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [], },
+                doc: { summary: "", description: "", examples: [] },
                 value_name: None,
-                shape: @tool.OptionShapeDef::RepeatableMap({
-                  repetition: @toolCommon.Repetition::Repeated,
-                  map_type: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[Map[String, String]]),
-                  ),
-                  duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
-                }),
+                shape: @tool.OptionShapeDef::RepeatableMap(
+                  {
+                    repetition: @toolCommon.Repetition::Repeated,
+                    map_type: @schema.into_schema_graph(
+                      (
+                        @schema.TypeTag::{  }
+                        : @schema.TypeTag[Map[String, String]]
+                      ),
+                    ),
+                    duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
+                  },
+                ),
                 default: None,
                 required: false,
                 env_var: None,
@@ -1457,7 +1696,7 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "verbose",
                 short: Some('\u{76}'),
                 aliases: [],
-                doc: { summary: "", description: "", examples: [], },
+                doc: { summary: "", description: "", examples: [] },
                 shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
                 env_var: None,
               },
@@ -1465,384 +1704,408 @@ fn __golem_tool_def_raw_CanonicalGit() -> @tool.ToolDef {
                 long: "paginate",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: true,
-                  negatable: true,
-                }),
+                doc: { summary: "", description: "", examples: [] },
+                shape: @toolCommon.FlagShape::BoolFlag(
+                  { default: true, negatable: true }
+                ),
                 env_var: None,
               },
             ],
           },
           subcommands: [],
-          body: Some({
-            positionals: { fixed: [], tail: None, },
-            options: [
-              {
-                long: "message",
-                short: Some('\u{6d}'),
-                aliases: ["msg"],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                ),
-                default: None,
-                required: true,
-                env_var: None,
-              },
-              {
-                long: "author",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @tool.refine_text(
+          body: Some(
+            {
+              positionals: { fixed: [], tail: None },
+              options: [
+                {
+                  long: "message",
+                  short: Some('\u{6d}'),
+                  aliases: ["msg"],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
                     ),
-                    Some("^.+ <.+@.+>$"),
-                    None,
-                    None,
                   ),
-                ),
-                default: None,
-                required: false,
-                env_var: Some("GIT_AUTHOR_NAME"),
-              },
-              {
-                long: "output",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @schema.into_schema_graph(
-                    (
-                      @schema.TypeTag::{ } :
-                      @schema.TypeTag[CanonicalGitOutputMode]),
+                  default: None,
+                  required: true,
+                  env_var: None,
+                },
+                {
+                  long: "author",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @tool.refine_text(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      ),
+                      Some("^.+ <.+@.+>$"),
+                      None,
+                      None,
+                    ),
                   ),
-                ),
-                default: Some(
-                  @tool.literal_to_schema_value(
+                  default: None,
+                  required: false,
+                  env_var: Some("GIT_AUTHOR_NAME"),
+                },
+                {
+                  long: "output",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
                     @schema.into_schema_graph(
                       (
-                        @schema.TypeTag::{ } :
-                        @schema.TypeTag[CanonicalGitOutputMode]),
+                        @schema.TypeTag::{  }
+                        : @schema.TypeTag[CanonicalGitOutputMode]
+                      ),
                     ),
-                    @tool.ToolLiteral::Scalar("Human"),
                   ),
-                ),
-                required: false,
-                env_var: None,
-              },
-            ],
-            flags: [
-              {
-                long: "amend",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: true,
-                }),
-                env_var: None,
-              },
-              {
-                long: "signoff",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: true,
-                }),
-                env_var: None,
-              },
-              {
-                long: "reset-author",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
-                env_var: None,
-              },
-            ],
-            constraints: [
-              @tool.ConstraintDef::Implies({
-                lhs_quant: @toolCommon.Quantifier::ALL,
-                lhs: [@tool.RefDef::Present("reset-author")],
-                rhs_quant: @toolCommon.Quantifier::ALL,
-                rhs: [@tool.RefDef::Present("amend")],
-              }),
-              @tool.ConstraintDef::RequiresAll([
-                @tool.RefDef::ValueIs({
-                  name: "output",
-                  value: @tool.ValueIsLiteralDef::Deferred(
-                    @tool.ToolLiteral::Scalar("Json"),
+                  default: Some(
+                    @tool.literal_to_schema_value(
+                      @schema.into_schema_graph(
+                        (
+                          @schema.TypeTag::{  }
+                          : @schema.TypeTag[CanonicalGitOutputMode]
+                        ),
+                      ),
+                      @tool.ToolLiteral::Scalar("Human"),
+                    ),
                   ),
-                }),
-              ]),
-            ],
-            stdin: None,
-            stdout: None,
-            result: Some({
-              type_: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[CanonicalCommitResult]),
-              ),
-              doc: {
-                summary: "Record changes to the repository.",
-                description: "",
-                examples: [],
-              },
-              formatters: [
-                {
-                  name: "human",
-                  doc: { summary: "", description: "", examples: [], },
-                },
-                {
-                  name: "porcelain",
-                  doc: { summary: "", description: "", examples: [], },
-                },
-                {
-                  name: "json",
-                  doc: { summary: "", description: "", examples: [], },
+                  required: false,
+                  env_var: None,
                 },
               ],
-              default_formatter: "human",
-            }),
-            errors: match CanonicalCommitError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              flags: [
+                {
+                  long: "amend",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: true }
+                  ),
+                  env_var: None,
+                },
+                {
+                  long: "signoff",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: true }
+                  ),
+                  env_var: None,
+                },
+                {
+                  long: "reset-author",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: false }
+                  ),
+                  env_var: None,
+                },
+              ],
+              constraints: [
+                @tool.ConstraintDef::Implies(
+                  {
+                    lhs_quant: @toolCommon.Quantifier::ALL,
+                    lhs: [@tool.RefDef::Present("reset-author")],
+                    rhs_quant: @toolCommon.Quantifier::ALL,
+                    rhs: [@tool.RefDef::Present("amend")],
+                  },
+                ),
+                @tool.ConstraintDef::RequiresAll(
+                  [
+                    @tool.RefDef::ValueIs(
+                      {
+                        name: "output",
+                        value: @tool.ValueIsLiteralDef::Deferred(
+                          @tool.ToolLiteral::Scalar("Json"),
+                        ),
+                      },
+                    ),
+                  ],
+                ),
+              ],
+              stdin: None,
+              stdout: None,
+              result: Some(
+                {
+                  type_: @schema.into_schema_graph(
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[CanonicalCommitResult]
+                    ),
+                  ),
+                  doc: {
+                    summary: "Record changes to the repository.",
+                    description: "",
+                    examples: [],
+                  },
+                  formatters: [
+                    {
+                      name: "human",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                    {
+                      name: "porcelain",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                    {
+                      name: "json",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "human",
+                },
+              ),
+              errors: match CanonicalCommitError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
+              },
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
             },
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
+          ),
         },
         {
           name: "log",
           aliases: [],
-          doc: { summary: "Show commit logs.", description: "", examples: [], },
-          globals: { options: [], flags: [], },
+          doc: { summary: "Show commit logs.", description: "", examples: [] },
+          globals: { options: [], flags: [] },
           subcommands: [],
-          body: Some({
-            positionals: {
-              fixed: [],
-              tail: Some({
-                name: "paths",
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                item_type: @tool.refine_path(
-                  @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
-                  ),
-                  Some(@types.PathDirection::INPUT),
-                  Some(@types.PathKind::FILE),
-                  None,
-                ),
-                min: 0U,
-                max: None,
-                separator: Some("--"),
-                verbatim: false,
-                accepts_stdio: false,
-              }),
-            },
-            options: [
-              {
-                long: "max-count",
-                short: Some('\u{6e}'),
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @tool.refine_numeric(
-                    @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[Int64]),
+          body: Some(
+            {
+              positionals: {
+                fixed: [],
+                tail: Some(
+                  {
+                    name: "paths",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    item_type: @tool.refine_path(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
+                      ),
+                      Some(@types.PathDirection::INPUT),
+                      Some(@types.PathKind::FILE),
+                      None,
                     ),
-                    Some("0"),
-                    Some("9223372036854775807"),
-                    None,
-                  ),
+                    min: 0U,
+                    max: None,
+                    separator: Some("--"),
+                    verbatim: false,
+                    accepts_stdio: false,
+                  },
                 ),
-                default: None,
-                required: false,
-                env_var: None,
               },
-              {
-                long: "since",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[@types.Datetime]),
-                  ),
-                ),
-                default: None,
-                required: false,
-                env_var: None,
-              },
-              {
-                long: "until",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[@types.Datetime]),
-                  ),
-                ),
-                default: None,
-                required: false,
-                env_var: None,
-              },
-              {
-                long: "author",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::RepeatableList({
-                  repetition: @toolCommon.Repetition::Delimited('\u{2c}'),
-                  item_type: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                }),
-                default: None,
-                required: false,
-                env_var: None,
-              },
-              {
-                long: "grep",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::RepeatableList({
-                  repetition: @toolCommon.Repetition::Either('\u{2c}'),
-                  item_type: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
-                  ),
-                }),
-                default: None,
-                required: false,
-                env_var: None,
-              },
-            ],
-            flags: [
-              {
-                long: "all-match",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
-                env_var: None,
-              },
-              {
-                long: "invert-grep",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
-                env_var: None,
-              },
-              {
-                long: "oneline",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
-                env_var: None,
-              },
-              {
-                long: "graph",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
-                env_var: None,
-              },
-            ],
-            constraints: [
-              @tool.ConstraintDef::AllOrNone([
-                @tool.RefDef::Present("all-match"),
-                @tool.RefDef::Present("grep"),
-              ]),
-            ],
-            stdin: None,
-            stdout: None,
-            result: Some({
-              type_: @schema.into_schema_graph(
-                (
-                  @schema.TypeTag::{ } :
-                  @schema.TypeTag[Array[CanonicalLogEntry]]),
-              ),
-              doc: {
-                summary: "Show commit logs.",
-                description: "",
-                examples: [],
-              },
-              formatters: [
+              options: [
                 {
-                  name: "oneline",
-                  doc: { summary: "", description: "", examples: [], },
+                  long: "max-count",
+                  short: Some('\u{6e}'),
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @tool.refine_numeric(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[Int64]),
+                      ),
+                      Some("0"),
+                      Some("9223372036854775807"),
+                      None,
+                    ),
+                  ),
+                  default: None,
+                  required: false,
+                  env_var: None,
                 },
                 {
-                  name: "short",
-                  doc: { summary: "", description: "", examples: [], },
+                  long: "since",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
+                    ),
+                  ),
+                  default: None,
+                  required: false,
+                  env_var: None,
                 },
                 {
-                  name: "medium",
-                  doc: { summary: "", description: "", examples: [], },
+                  long: "until",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[@types.Datetime]),
+                    ),
+                  ),
+                  default: None,
+                  required: false,
+                  env_var: None,
                 },
                 {
-                  name: "full",
-                  doc: { summary: "", description: "", examples: [], },
+                  long: "author",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::RepeatableList(
+                    {
+                      repetition: @toolCommon.Repetition::Delimited('\u{2c}'),
+                      item_type: @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      ),
+                    },
+                  ),
+                  default: None,
+                  required: false,
+                  env_var: None,
+                },
+                {
+                  long: "grep",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::RepeatableList(
+                    {
+                      repetition: @toolCommon.Repetition::Either('\u{2c}'),
+                      item_type: @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      ),
+                    },
+                  ),
+                  default: None,
+                  required: false,
+                  env_var: None,
                 },
               ],
-              default_formatter: "medium",
-            }),
-            errors: match CanonicalLogError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              flags: [
+                {
+                  long: "all-match",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: false }
+                  ),
+                  env_var: None,
+                },
+                {
+                  long: "invert-grep",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: false }
+                  ),
+                  env_var: None,
+                },
+                {
+                  long: "oneline",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: false }
+                  ),
+                  env_var: None,
+                },
+                {
+                  long: "graph",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: false }
+                  ),
+                  env_var: None,
+                },
+              ],
+              constraints: [
+                @tool.ConstraintDef::AllOrNone(
+                  [
+                    @tool.RefDef::Present("all-match"),
+                    @tool.RefDef::Present("grep"),
+                  ],
+                ),
+              ],
+              stdin: None,
+              stdout: None,
+              result: Some(
+                {
+                  type_: @schema.into_schema_graph(
+                    (
+                      @schema.TypeTag::{  }
+                      : @schema.TypeTag[Array[CanonicalLogEntry]]
+                    ),
+                  ),
+                  doc: {
+                    summary: "Show commit logs.",
+                    description: "",
+                    examples: [],
+                  },
+                  formatters: [
+                    {
+                      name: "oneline",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                    {
+                      name: "short",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                    {
+                      name: "medium",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                    {
+                      name: "full",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "medium",
+                },
+              ),
+              errors: match CanonicalLogError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
+              },
+              annotations: Some(
+                {
+                  read_only: true,
+                  destructive: true,
+                  idempotent: true,
+                  open_world: true,
+                },
+              ),
             },
-            annotations: Some({
-              read_only: true,
-              destructive: true,
-              idempotent: true,
-              open_world: true,
-            }),
-          }),
+          ),
         },
       ],
     }
     def
-  } catch {
+  } catch{
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -1857,13 +2120,13 @@ fn __golem_tool_def_prepare_CanonicalGit(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier : @tool.ToolDef = {
+    let carrier :@tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [], },
+          doc: { summary: "", description: "", examples: [] },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -1893,12 +2156,12 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "git-dir",
             short: None,
             aliases: [],
-            doc: { summary: "", description: "", examples: [], },
+            doc: { summary: "", description: "", examples: [] },
             value_name: None,
             shape: @tool.OptionShapeDef::Scalar(
               @tool.refine_path(
                 @schema.into_schema_graph(
-                  (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+                  (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
                 ),
                 None,
                 Some(@types.PathKind::DIRECTORY),
@@ -1909,7 +2172,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
               @tool.literal_to_schema_value(
                 @tool.refine_path(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
                   ),
                   None,
                   Some(@types.PathKind::DIRECTORY),
@@ -1925,15 +2188,17 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "config",
             short: Some('\u{63}'),
             aliases: [],
-            doc: { summary: "", description: "", examples: [], },
+            doc: { summary: "", description: "", examples: [] },
             value_name: None,
-            shape: @tool.OptionShapeDef::RepeatableMap({
-              repetition: @toolCommon.Repetition::Repeated,
-              map_type: @schema.into_schema_graph(
-                (@schema.TypeTag::{ } : @schema.TypeTag[Map[String, String]]),
-              ),
-              duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
-            }),
+            shape: @tool.OptionShapeDef::RepeatableMap(
+              {
+                repetition: @toolCommon.Repetition::Repeated,
+                map_type: @schema.into_schema_graph(
+                  (@schema.TypeTag::{  } : @schema.TypeTag[Map[String, String]]),
+                ),
+                duplicate_key_policy: @toolCommon.DuplicateKeyPolicy::REJECT,
+              },
+            ),
             default: None,
             required: false,
             env_var: None,
@@ -1944,7 +2209,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "verbose",
             short: Some('\u{76}'),
             aliases: [],
-            doc: { summary: "", description: "", examples: [], },
+            doc: { summary: "", description: "", examples: [] },
             shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
             env_var: None,
           },
@@ -1952,21 +2217,22 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "paginate",
             short: None,
             aliases: [],
-            doc: { summary: "", description: "", examples: [], },
-            shape: @toolCommon.FlagShape::BoolFlag({
-              default: true,
-              negatable: true,
-            }),
+            doc: { summary: "", description: "", examples: [] },
+            shape: @toolCommon.FlagShape::BoolFlag(
+              { default: true, negatable: true }
+            ),
             env_var: None,
           },
         ],
       },
       None,
-      Some({
-        summary: "Manage the set of tracked repositories.",
-        description: "",
-        examples: [],
-      }),
+      Some(
+        {
+          summary: "Manage the set of tracked repositories.",
+          description: "",
+          examples: [],
+        },
+      ),
       Some(["rmt"]),
     )
     let def = __golem_tool_append_prepared(def, child)
@@ -1978,12 +2244,12 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "git-dir",
             short: None,
             aliases: [],
-            doc: { summary: "", description: "", examples: [], },
+            doc: { summary: "", description: "", examples: [] },
             value_name: None,
             shape: @tool.OptionShapeDef::Scalar(
               @tool.refine_path(
                 @schema.into_schema_graph(
-                  (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+                  (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
                 ),
                 None,
                 Some(@types.PathKind::DIRECTORY),
@@ -1994,7 +2260,7 @@ fn __golem_tool_def_prepare_CanonicalGit(
               @tool.literal_to_schema_value(
                 @tool.refine_path(
                   @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Path]),
+                    (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Path]),
                   ),
                   None,
                   Some(@types.PathKind::DIRECTORY),
@@ -2012,23 +2278,25 @@ fn __golem_tool_def_prepare_CanonicalGit(
             long: "verbose",
             short: Some('\u{76}'),
             aliases: [],
-            doc: { summary: "", description: "", examples: [], },
+            doc: { summary: "", description: "", examples: [] },
             shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
             env_var: None,
           },
         ],
       },
       None,
-      Some({
-        summary: "Stash changes in a dirty working directory.",
-        description: "",
-        examples: [],
-      }),
+      Some(
+        {
+          summary: "Stash changes in a dirty working directory.",
+          description: "",
+          examples: [],
+        },
+      ),
       None,
     )
     let def = __golem_tool_append_prepared(def, child)
     def
-  } catch {
+  } catch{
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -2036,13 +2304,15 @@ fn __golem_tool_def_prepare_CanonicalGit(
 ///|
 ///
 fn __golem_tool_def_CanonicalGit() -> @tool.ToolDef {
-  __golem_tool_def_prepare_CanonicalGit(
-    { options: [], flags: [], },
-    { options: [], flags: [], },
-    None,
-    None,
-    None,
-  ).normalize_inherited_globals() catch {
+  try {
+    __golem_tool_def_prepare_CanonicalGit(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
+  } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
@@ -2058,24 +2328,32 @@ async fn __golem_tool_invoke_CanonicalGit(
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalGit()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool canonical-git invocation",
-  ) catch {
-    __golem_error =>
+  let __golem_index =
+    match __golem_def.command_index_by_path(__golem_command_path) {
+      Some(__golem_index) => __golem_index
+      None => {
+        return @tool.reject_wire_invocation(
+          __golem_input,
+          __golem_stdin,
+          @types.ToolError::InvalidCommandPath(__golem_command_path),
+        )
+      }
+    }
+  let __golem_decoded = try {
+    @tool.decode_canonical_input(
+      __golem_def,
+      __golem_index,
+      __golem_input,
+      "tool canonical-git invocation",
+    )
+  } catch{
+    __golem_error => {
       return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+    }
   }
-  if __golem_command_path.length() > 0 &&
-    ["remote", "rmt"].contains(__golem_command_path[0]) {
+  if __golem_command_path.length() > 0 && ["remote", "rmt"].contains(
+    __golem_command_path[0],
+  ) {
     return @tool.invoke_registered_subtool(
       "remote",
       __golem_command_path[1:].to_owned(),
@@ -2085,8 +2363,9 @@ async fn __golem_tool_invoke_CanonicalGit(
       __golem_principal,
     )
   }
-  if __golem_command_path.length() > 0 &&
-    ["stash"].contains(__golem_command_path[0]) {
+  if __golem_command_path.length() > 0 && ["stash"].contains(
+    __golem_command_path[0],
+  ) {
     return @tool.invoke_registered_subtool(
       "stash",
       __golem_command_path[1:].to_owned(),
@@ -2116,120 +2395,230 @@ async fn __golem_tool_invoke_CanonicalGit(
           ),
         )
       }
-      let verbose : UInt = @tool.decode_canonical_field(
-        __golem_decoded, "verbose", "tool canonical-git command commit",
-      ) catch {
-        __golem_error =>
+      let verbose :UInt = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "verbose",
+          "tool canonical-git command commit",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let git_dir : @schema.Path = @tool.decode_canonical_field(
-        __golem_decoded, "git-dir", "tool canonical-git command commit",
-      ) catch {
-        __golem_error =>
+      let git_dir :@schema.Path = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "git-dir",
+          "tool canonical-git command commit",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let paginate : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "paginate", "tool canonical-git command commit",
-      ) catch {
-        __golem_error =>
+      let paginate :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "paginate",
+          "tool canonical-git command commit",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let config : Map[String, String] = @tool.decode_canonical_field(
-        __golem_decoded, "config", "tool canonical-git command commit",
-      ) catch {
-        __golem_error =>
+      let config :Map[String, String] = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "config",
+          "tool canonical-git command commit",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let message : String = @tool.decode_canonical_field(
-        __golem_decoded, "message", "tool canonical-git command commit",
-      ) catch {
-        __golem_error =>
+      let message :String = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "message",
+          "tool canonical-git command commit",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let author : String? = @tool.decode_canonical_field(
-        __golem_decoded, "author", "tool canonical-git command commit",
-      ) catch {
-        __golem_error =>
+      let author :String? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "author",
+          "tool canonical-git command commit",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let amend : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "amend", "tool canonical-git command commit",
-      ) catch {
-        __golem_error =>
+      let amend :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "amend",
+          "tool canonical-git command commit",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let signoff : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "signoff", "tool canonical-git command commit",
-      ) catch {
-        __golem_error =>
+      let signoff :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "signoff",
+          "tool canonical-git command commit",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let reset_author : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "reset-author", "tool canonical-git command commit",
-      ) catch {
-        __golem_error =>
+      let reset_author :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "reset-author",
+          "tool canonical-git command commit",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let output : CanonicalGitOutputMode = @tool.decode_canonical_field(
-        __golem_decoded, "output", "tool canonical-git command commit",
-      ) catch {
-        __golem_error =>
+      let output :CanonicalGitOutputMode = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "output",
+          "tool canonical-git command commit",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      match
-        CanonicalGit::commit(
-          verbose, git_dir, paginate, config, message, author, amend, signoff, reset_author,
-          output,
-        ) {
-        Ok(__golem_value) =>
+      match CanonicalGit::commit(
+        verbose,
+        git_dir,
+        paginate,
+        config,
+        message,
+        author,
+        amend,
+        signoff,
+        reset_author,
+        output,
+      ) {
+        Ok(__golem_value) => {
           Ok(
-            @tool.invocation_result_value(__golem_value) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
-              @types.ToolError::InvalidResult(message) =>
+            try {
+              @tool.invocation_result_wire(__golem_value)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
                 return Err(@types.ToolError::InvalidResult(message))
-              error => raise error
+              }
+              error => raise  error
             },
           )
+        }
         Err(error) => {
-          let (__golem_error_name, payload) = match
-            CanonicalCommitError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
+          match error {
+            NothingStaged => {
+              let payload = try {
+                @tool.encode_wire_result(())
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError(
+                  { name: "nothing-staged", payload }
                 ),
               )
+            }
+            DirtyMerge => {
+              let payload = try {
+                @tool.encode_wire_result(())
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError({ name: "dirty-merge", payload }),
+              )
+            }
+            BadAuthorFormat(author~) => {
+              let payload = try {
+                @tool.encode_wire_result(author)
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError(
+                  { name: "bad-author-format", payload }
+                ),
+              )
+            }
           }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
-              return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
         }
       }
     }
@@ -2252,129 +2641,224 @@ async fn __golem_tool_invoke_CanonicalGit(
           ),
         )
       }
-      let max_count : Int64? = @tool.decode_canonical_field(
-        __golem_decoded, "max-count", "tool canonical-git command log",
-      ) catch {
-        __golem_error =>
+      let max_count :Int64? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "max-count",
+          "tool canonical-git command log",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let since : @types.Datetime? = @tool.decode_canonical_field(
-        __golem_decoded, "since", "tool canonical-git command log",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let until : @types.Datetime? = @tool.decode_canonical_field(
-        __golem_decoded, "until", "tool canonical-git command log",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let author : Array[String] = @tool.decode_canonical_field(
-        __golem_decoded, "author", "tool canonical-git command log",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let grep : Array[String] = @tool.decode_canonical_field(
-        __golem_decoded, "grep", "tool canonical-git command log",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let all_match : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "all-match", "tool canonical-git command log",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let invert_grep : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "invert-grep", "tool canonical-git command log",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let oneline : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "oneline", "tool canonical-git command log",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let graph : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "graph", "tool canonical-git command log",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      let paths : Array[@schema.Path] = @tool.decode_canonical_field(
-        __golem_decoded, "paths", "tool canonical-git command log",
-      ) catch {
-        __golem_error =>
-          return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
-          )
-      }
-      match
-        CanonicalGit::log(
-          max_count, since, until, author, grep, all_match, invert_grep, oneline,
-          graph, paths,
-        ) {
-        Ok(__golem_value) =>
-          Ok(
-            @tool.invocation_result_value(__golem_value) catch {
-              @asyncCore.Cancelled::Cancelled as error => raise error
-              @types.ToolError::InvalidResult(message) =>
-                return Err(@types.ToolError::InvalidResult(message))
-              error => raise error
-            },
-          )
-        Err(error) => {
-          let (__golem_error_name, payload) = match
-            CanonicalLogError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
-                ),
-              )
-          }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
-              return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
         }
       }
+      let since :@types.Datetime? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "since",
+          "tool canonical-git command log",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let until :@types.Datetime? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "until",
+          "tool canonical-git command log",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let author :Array[String] = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "author",
+          "tool canonical-git command log",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let grep :Array[String] = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "grep",
+          "tool canonical-git command log",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let all_match :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "all-match",
+          "tool canonical-git command log",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let invert_grep :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "invert-grep",
+          "tool canonical-git command log",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let oneline :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "oneline",
+          "tool canonical-git command log",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let graph :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "graph",
+          "tool canonical-git command log",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let paths :Array[@schema.Path] = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "paths",
+          "tool canonical-git command log",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      match CanonicalGit::log(
+        max_count,
+        since,
+        until,
+        author,
+        grep,
+        all_match,
+        invert_grep,
+        oneline,
+        graph,
+        paths,
+      ) {
+        Ok(__golem_value) => {
+          Ok(
+            try {
+              @tool.invocation_result_wire(__golem_value)
+            } catch{
+              @asyncCore.Cancelled::Cancelled as error => raise  error
+              @types.ToolError::InvalidResult(message) => {
+                return Err(@types.ToolError::InvalidResult(message))
+              }
+              error => raise  error
+            },
+          )
+        }
+        Err(error) => {
+          match error {
+            BadRevision => {
+              let payload = try {
+                @tool.encode_wire_result(())
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError({ name: "bad-revision", payload }),
+              )
+            }
+            NotARepository => {
+              let payload = try {
+                @tool.encode_wire_result(())
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError(
+                  { name: "not-a-repository", payload }
+                ),
+              )
+            }
+          }
+        }
+      }
     }
-    _ =>
+    _ => {
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
         @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
+    }
   }
 }
 
@@ -2382,7 +2866,7 @@ async fn __golem_tool_invoke_CanonicalGit(
 ///
 fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
   try {
-    let def : @tool.ToolDef = {
+    let def :@tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
@@ -2393,14 +2877,14 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [1, 2, 3],
           body: None,
         },
         {
           name: "add",
           aliases: [],
-          doc: { summary: "Add a remote.", description: "", examples: [], },
+          doc: { summary: "Add a remote.", description: "", examples: [] },
           globals: {
             options: [],
             flags: [
@@ -2408,167 +2892,175 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
                 long: "verbose",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [], },
+                doc: { summary: "", description: "", examples: [] },
                 shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
                 env_var: None,
               },
             ],
           },
           subcommands: [],
-          body: Some({
-            positionals: {
-              fixed: [
-                {
-                  name: "name",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @tool.refine_text(
-                    @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "name",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @tool.refine_text(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      ),
+                      Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
+                      None,
+                      None,
                     ),
-                    Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
-                    None,
-                    None,
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "url",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @tool.refine_url(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                      ),
+                      Some(["https"]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: None,
+              },
+              options: [
+                {
+                  long: "track",
+                  short: Some('\u{74}'),
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::RepeatableList(
+                    {
+                      repetition: @toolCommon.Repetition::Repeated,
+                      item_type: @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      ),
+                    },
                   ),
                   default: None,
-                  required: true,
-                  accepts_stdio: false,
+                  required: false,
+                  env_var: None,
                 },
                 {
-                  name: "url",
-                  doc: { summary: "", description: "", examples: [], },
+                  long: "master",
+                  short: Some('\u{6d}'),
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
                   value_name: None,
-                  type_: @tool.refine_url(
+                  shape: @tool.OptionShapeDef::Scalar(
                     @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Url]),
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
                     ),
-                    Some(["https"]),
                   ),
                   default: None,
-                  required: true,
-                  accepts_stdio: false,
+                  required: false,
+                  env_var: None,
                 },
               ],
-              tail: None,
-            },
-            options: [
-              {
-                long: "track",
-                short: Some('\u{74}'),
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::RepeatableList({
-                  repetition: @toolCommon.Repetition::Repeated,
-                  item_type: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+              flags: [
+                {
+                  long: "tags",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: true, negatable: true }
                   ),
-                }),
-                default: None,
-                required: false,
-                env_var: None,
-              },
-              {
-                long: "master",
-                short: Some('\u{6d}'),
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+                  env_var: None,
+                },
+                {
+                  long: "fetch",
+                  short: Some('\u{66}'),
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: false }
                   ),
-                ),
-                default: None,
-                required: false,
-                env_var: None,
+                  env_var: None,
+                },
+              ],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: None,
+              errors: match CanonicalRemoteError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
               },
-            ],
-            flags: [
-              {
-                long: "tags",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: true,
-                  negatable: true,
-                }),
-                env_var: None,
-              },
-              {
-                long: "fetch",
-                short: Some('\u{66}'),
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
-                env_var: None,
-              },
-            ],
-            constraints: [],
-            stdin: None,
-            stdout: None,
-            result: None,
-            errors: match CanonicalRemoteError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: false,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
             },
-            annotations: Some({
-              read_only: false,
-              destructive: false,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
+          ),
         },
         {
           name: "remove",
           aliases: ["rm"],
-          doc: { summary: "Remove a remote.", description: "", examples: [], },
-          globals: { options: [], flags: [], },
+          doc: { summary: "Remove a remote.", description: "", examples: [] },
+          globals: { options: [], flags: [] },
           subcommands: [],
-          body: Some({
-            positionals: {
-              fixed: [
-                {
-                  name: "name",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @tool.refine_text(
-                    @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "name",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @tool.refine_text(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                      ),
+                      Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
+                      None,
+                      None,
                     ),
-                    Some("^[a-zA-Z][a-zA-Z0-9_-]*$"),
-                    None,
-                    None,
-                  ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: None,
+              },
+              options: [],
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: None,
+              errors: match CanonicalRemoteError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
+              },
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: true,
+                  open_world: true,
                 },
-              ],
-              tail: None,
+              ),
             },
-            options: [],
-            flags: [],
-            constraints: [],
-            stdin: None,
-            stdout: None,
-            result: None,
-            errors: match CanonicalRemoteError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
-            },
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: true,
-              open_world: true,
-            }),
-          }),
+          ),
         },
         {
           name: "set-url",
@@ -2578,114 +3070,117 @@ fn __golem_tool_def_raw_CanonicalRemote() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [],
-          body: Some({
-            positionals: {
-              fixed: [
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "name",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "newurl",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @tool.refine_url(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                      ),
+                      Some(["https"]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "oldurl",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @tool.refine_url(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[@schema.Url]),
+                      ),
+                      Some(["https"]),
+                    ),
+                    default: None,
+                    required: false,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: None,
+              },
+              options: [],
+              flags: [
                 {
-                  name: "name",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+                  long: "push",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: false }
                   ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
+                  env_var: None,
                 },
                 {
-                  name: "newurl",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @tool.refine_url(
-                    @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Url]),
-                    ),
-                    Some(["https"]),
+                  long: "add",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: false }
                   ),
-                  default: None,
-                  required: true,
-                  accepts_stdio: false,
+                  env_var: None,
                 },
                 {
-                  name: "oldurl",
-                  doc: { summary: "", description: "", examples: [], },
-                  value_name: None,
-                  type_: @tool.refine_url(
-                    @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[@schema.Url]),
-                    ),
-                    Some(["https"]),
+                  long: "delete",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: false }
                   ),
-                  default: None,
-                  required: false,
-                  accepts_stdio: false,
+                  env_var: None,
                 },
               ],
-              tail: None,
+              constraints: [
+                @tool.ConstraintDef::MutexGroups(
+                  [
+                    { refs: [@tool.RefDef::Present("add")], },
+                    { refs: [@tool.RefDef::Present("delete")], },
+                  ],
+                ),
+              ],
+              stdin: None,
+              stdout: None,
+              result: None,
+              errors: match CanonicalSetUrlError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
+              },
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
             },
-            options: [],
-            flags: [
-              {
-                long: "push",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
-                env_var: None,
-              },
-              {
-                long: "add",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
-                env_var: None,
-              },
-              {
-                long: "delete",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
-                env_var: None,
-              },
-            ],
-            constraints: [
-              @tool.ConstraintDef::MutexGroups([
-                { refs: [@tool.RefDef::Present("add")], },
-                { refs: [@tool.RefDef::Present("delete")], },
-              ]),
-            ],
-            stdin: None,
-            stdout: None,
-            result: None,
-            errors: match CanonicalSetUrlError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
-            },
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
+          ),
         },
       ],
     }
     def
-  } catch {
+  } catch{
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -2700,13 +3195,13 @@ fn __golem_tool_def_prepare_CanonicalRemote(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier : @tool.ToolDef = {
+    let carrier :@tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [], },
+          doc: { summary: "", description: "", examples: [] },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -2725,7 +3220,7 @@ fn __golem_tool_def_prepare_CanonicalRemote(
     )
     let def = prepared
     def
-  } catch {
+  } catch{
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -2733,13 +3228,15 @@ fn __golem_tool_def_prepare_CanonicalRemote(
 ///|
 ///
 fn __golem_tool_def_CanonicalRemote() -> @tool.ToolDef {
-  __golem_tool_def_prepare_CanonicalRemote(
-    { options: [], flags: [], },
-    { options: [], flags: [], },
-    None,
-    None,
-    None,
-  ).normalize_inherited_globals() catch {
+  try {
+    __golem_tool_def_prepare_CanonicalRemote(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
+  } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
@@ -2755,21 +3252,28 @@ async fn __golem_tool_invoke_CanonicalRemote(
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalRemote()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool remote invocation",
-  ) catch {
-    __golem_error =>
+  let __golem_index =
+    match __golem_def.command_index_by_path(__golem_command_path) {
+      Some(__golem_index) => __golem_index
+      None => {
+        return @tool.reject_wire_invocation(
+          __golem_input,
+          __golem_stdin,
+          @types.ToolError::InvalidCommandPath(__golem_command_path),
+        )
+      }
+    }
+  let __golem_decoded = try {
+    @tool.decode_canonical_input(
+      __golem_def,
+      __golem_index,
+      __golem_input,
+      "tool remote invocation",
+    )
+  } catch{
+    __golem_error => {
       return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+    }
   }
   match __golem_index {
     1 => {
@@ -2791,85 +3295,132 @@ async fn __golem_tool_invoke_CanonicalRemote(
           ),
         )
       }
-      let verbose : UInt = @tool.decode_canonical_field(
-        __golem_decoded, "verbose", "tool remote command add",
-      ) catch {
-        __golem_error =>
+      let verbose :UInt = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "verbose",
+          "tool remote command add",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let name : String = @tool.decode_canonical_field(
-        __golem_decoded, "name", "tool remote command add",
-      ) catch {
-        __golem_error =>
+      let name :String = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "name",
+          "tool remote command add",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let url : @schema.Url = @tool.decode_canonical_field(
-        __golem_decoded, "url", "tool remote command add",
-      ) catch {
-        __golem_error =>
+      let url :@schema.Url = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "url",
+          "tool remote command add",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let track : Array[String] = @tool.decode_canonical_field(
-        __golem_decoded, "track", "tool remote command add",
-      ) catch {
-        __golem_error =>
+      let track :Array[String] = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "track",
+          "tool remote command add",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let master : String? = @tool.decode_canonical_field(
-        __golem_decoded, "master", "tool remote command add",
-      ) catch {
-        __golem_error =>
+      let master :String? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "master",
+          "tool remote command add",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let tags : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "tags", "tool remote command add",
-      ) catch {
-        __golem_error =>
+      let tags :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "tags",
+          "tool remote command add",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let fetch : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "fetch", "tool remote command add",
-      ) catch {
-        __golem_error =>
+      let fetch :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "fetch",
+          "tool remote command add",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      match
-        CanonicalRemote::add(verbose, name, url, track, master, tags, fetch) {
+      match CanonicalRemote::add(verbose, name, url, track, master, tags, fetch) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let (__golem_error_name, payload) = match
-            CanonicalRemoteError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
+          match error {
+            NoSuchRemote(name~) => {
+              let payload = try {
+                @tool.encode_wire_result(name)
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError(
+                  { name: "no-such-remote", payload }
                 ),
               )
+            }
           }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
-              return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
         }
       }
     }
@@ -2892,36 +3443,42 @@ async fn __golem_tool_invoke_CanonicalRemote(
           ),
         )
       }
-      let name : String = @tool.decode_canonical_field(
-        __golem_decoded, "name", "tool remote command remove",
-      ) catch {
-        __golem_error =>
+      let name :String = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "name",
+          "tool remote command remove",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
       match CanonicalRemote::remove(name) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let (__golem_error_name, payload) = match
-            CanonicalRemoteError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
+          match error {
+            NoSuchRemote(name~) => {
+              let payload = try {
+                @tool.encode_wire_result(name)
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError(
+                  { name: "no-such-remote", payload }
                 ),
               )
+            }
           }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
-              return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
         }
       }
     }
@@ -2944,85 +3501,123 @@ async fn __golem_tool_invoke_CanonicalRemote(
           ),
         )
       }
-      let name : String = @tool.decode_canonical_field(
-        __golem_decoded, "name", "tool remote command set-url",
-      ) catch {
-        __golem_error =>
+      let name :String = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "name",
+          "tool remote command set-url",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let newurl : @schema.Url = @tool.decode_canonical_field(
-        __golem_decoded, "newurl", "tool remote command set-url",
-      ) catch {
-        __golem_error =>
+      let newurl :@schema.Url = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "newurl",
+          "tool remote command set-url",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let oldurl : @schema.Url? = @tool.decode_canonical_field(
-        __golem_decoded, "oldurl", "tool remote command set-url",
-      ) catch {
-        __golem_error =>
+      let oldurl :@schema.Url? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "oldurl",
+          "tool remote command set-url",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let push : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "push", "tool remote command set-url",
-      ) catch {
-        __golem_error =>
+      let push :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "push",
+          "tool remote command set-url",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let add : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "add", "tool remote command set-url",
-      ) catch {
-        __golem_error =>
+      let add :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "add",
+          "tool remote command set-url",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let delete : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "delete", "tool remote command set-url",
-      ) catch {
-        __golem_error =>
+      let delete :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "delete",
+          "tool remote command set-url",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
       match CanonicalRemote::set_url(name, newurl, oldurl, push, add, delete) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let (__golem_error_name, payload) = match
-            CanonicalSetUrlError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
-                ),
-              )
+          match error {
+            Failed(__golem_payload) => {
+              let payload = try {
+                @tool.encode_wire_result(__golem_payload)
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(@types.ToolError::CustomError({ name: "failed", payload }))
+            }
           }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
-              return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
         }
       }
     }
-    _ =>
+    _ => {
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
         @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
+    }
   }
 }
 
@@ -3030,7 +3625,7 @@ async fn __golem_tool_invoke_CanonicalRemote(
 ///
 fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
   try {
-    let def : @tool.ToolDef = {
+    let def :@tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
@@ -3048,60 +3643,63 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
                 long: "verbose",
                 short: None,
                 aliases: [],
-                doc: { summary: "", description: "", examples: [], },
+                doc: { summary: "", description: "", examples: [] },
                 shape: @toolCommon.FlagShape::CountFlag(Some(3U)),
                 env_var: None,
               },
             ],
           },
           subcommands: [1, 2],
-          body: Some({
-            positionals: { fixed: [], tail: None, },
-            options: [
-              {
-                long: "message",
-                short: Some('\u{6d}'),
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+          body: Some(
+            {
+              positionals: { fixed: [], tail: None },
+              options: [
+                {
+                  long: "message",
+                  short: Some('\u{6d}'),
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
                   ),
-                ),
-                default: None,
-                required: true,
-                env_var: None,
+                  default: None,
+                  required: true,
+                  env_var: None,
+                },
+              ],
+              flags: [
+                {
+                  long: "keep-index",
+                  short: Some('\u{6b}'),
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  shape: @toolCommon.FlagShape::BoolFlag(
+                    { default: false, negatable: false }
+                  ),
+                  env_var: None,
+                },
+              ],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: None,
+              errors: match CanonicalStashError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
               },
-            ],
-            flags: [
-              {
-                long: "keep-index",
-                short: Some('\u{6b}'),
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                shape: @toolCommon.FlagShape::BoolFlag({
-                  default: false,
-                  negatable: false,
-                }),
-                env_var: None,
-              },
-            ],
-            constraints: [],
-            stdin: None,
-            stdout: None,
-            result: None,
-            errors: match CanonicalStashError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
             },
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
+          ),
         },
         {
           name: "pop",
@@ -3111,58 +3709,62 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [],
-          body: Some({
-            positionals: {
-              fixed: [
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "name",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: false,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: None,
+              },
+              options: [
                 {
-                  name: "name",
-                  doc: { summary: "", description: "", examples: [], },
+                  long: "index",
+                  short: Some('\u{69}'),
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
                   value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                    ),
                   ),
                   default: None,
                   required: false,
-                  accepts_stdio: false,
+                  env_var: None,
                 },
               ],
-              tail: None,
-            },
-            options: [
-              {
-                long: "index",
-                short: Some('\u{69}'),
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
-                  ),
-                ),
-                default: None,
-                required: false,
-                env_var: None,
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: None,
+              errors: match CanonicalStashError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
               },
-            ],
-            flags: [],
-            constraints: [],
-            stdin: None,
-            stdout: None,
-            result: None,
-            errors: match CanonicalStashError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
             },
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
+          ),
         },
         {
           name: "apply",
@@ -3172,63 +3774,67 @@ fn __golem_tool_def_raw_CanonicalStash() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [],
-          body: Some({
-            positionals: {
-              fixed: [
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "name",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                    default: None,
+                    required: false,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: None,
+              },
+              options: [
                 {
-                  name: "name",
-                  doc: { summary: "", description: "", examples: [], },
+                  long: "index",
+                  short: Some('\u{69}'),
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
                   value_name: None,
-                  type_: @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[String]),
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[UInt]),
+                    ),
                   ),
                   default: None,
                   required: false,
-                  accepts_stdio: false,
+                  env_var: None,
                 },
               ],
-              tail: None,
-            },
-            options: [
-              {
-                long: "index",
-                short: Some('\u{69}'),
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @schema.into_schema_graph(
-                    (@schema.TypeTag::{ } : @schema.TypeTag[UInt]),
-                  ),
-                ),
-                default: None,
-                required: false,
-                env_var: None,
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: None,
+              errors: match CanonicalStashError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
               },
-            ],
-            flags: [],
-            constraints: [],
-            stdin: None,
-            stdout: None,
-            result: None,
-            errors: match CanonicalStashError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
             },
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
+          ),
         },
       ],
     }
     def
-  } catch {
+  } catch{
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -3243,13 +3849,13 @@ fn __golem_tool_def_prepare_CanonicalStash(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier : @tool.ToolDef = {
+    let carrier :@tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [], },
+          doc: { summary: "", description: "", examples: [] },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -3268,7 +3874,7 @@ fn __golem_tool_def_prepare_CanonicalStash(
     )
     let def = prepared
     def
-  } catch {
+  } catch{
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -3276,13 +3882,15 @@ fn __golem_tool_def_prepare_CanonicalStash(
 ///|
 ///
 fn __golem_tool_def_CanonicalStash() -> @tool.ToolDef {
-  __golem_tool_def_prepare_CanonicalStash(
-    { options: [], flags: [], },
-    { options: [], flags: [], },
-    None,
-    None,
-    None,
-  ).normalize_inherited_globals() catch {
+  try {
+    __golem_tool_def_prepare_CanonicalStash(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
+  } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
@@ -3298,21 +3906,28 @@ async fn __golem_tool_invoke_CanonicalStash(
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalStash()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool stash invocation",
-  ) catch {
-    __golem_error =>
+  let __golem_index =
+    match __golem_def.command_index_by_path(__golem_command_path) {
+      Some(__golem_index) => __golem_index
+      None => {
+        return @tool.reject_wire_invocation(
+          __golem_input,
+          __golem_stdin,
+          @types.ToolError::InvalidCommandPath(__golem_command_path),
+        )
+      }
+    }
+  let __golem_decoded = try {
+    @tool.decode_canonical_input(
+      __golem_def,
+      __golem_index,
+      __golem_input,
+      "tool stash invocation",
+    )
+  } catch{
+    __golem_error => {
       return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+    }
   }
   match __golem_index {
     0 => {
@@ -3334,52 +3949,72 @@ async fn __golem_tool_invoke_CanonicalStash(
           ),
         )
       }
-      let verbose : UInt = @tool.decode_canonical_field(
-        __golem_decoded, "verbose", "tool stash command stash",
-      ) catch {
-        __golem_error =>
+      let verbose :UInt = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "verbose",
+          "tool stash command stash",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let message : String = @tool.decode_canonical_field(
-        __golem_decoded, "message", "tool stash command stash",
-      ) catch {
-        __golem_error =>
+      let message :String = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "message",
+          "tool stash command stash",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let keep_index : Bool = @tool.decode_canonical_field(
-        __golem_decoded, "keep-index", "tool stash command stash",
-      ) catch {
-        __golem_error =>
+      let keep_index :Bool = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "keep-index",
+          "tool stash command stash",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
       match CanonicalStash::stash(verbose, message, keep_index) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let (__golem_error_name, payload) = match
-            CanonicalStashError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
+          match error {
+            NoSuchStash(name~) => {
+              let payload = try {
+                @tool.encode_wire_result(name)
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError(
+                  { name: "no-such-stash", payload }
                 ),
               )
+            }
           }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
-              return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
         }
       }
     }
@@ -3402,44 +4037,57 @@ async fn __golem_tool_invoke_CanonicalStash(
           ),
         )
       }
-      let name : String? = @tool.decode_canonical_field(
-        __golem_decoded, "name", "tool stash command pop",
-      ) catch {
-        __golem_error =>
+      let name :String? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "name",
+          "tool stash command pop",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let index : UInt? = @tool.decode_canonical_field(
-        __golem_decoded, "index", "tool stash command pop",
-      ) catch {
-        __golem_error =>
+      let index :UInt? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "index",
+          "tool stash command pop",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
       match CanonicalStash::pop(name, index) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let (__golem_error_name, payload) = match
-            CanonicalStashError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
+          match error {
+            NoSuchStash(name~) => {
+              let payload = try {
+                @tool.encode_wire_result(name)
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError(
+                  { name: "no-such-stash", payload }
                 ),
               )
+            }
           }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
-              return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
         }
       }
     }
@@ -3462,53 +4110,67 @@ async fn __golem_tool_invoke_CanonicalStash(
           ),
         )
       }
-      let name : String? = @tool.decode_canonical_field(
-        __golem_decoded, "name", "tool stash command apply",
-      ) catch {
-        __golem_error =>
+      let name :String? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "name",
+          "tool stash command apply",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
-      let index : UInt? = @tool.decode_canonical_field(
-        __golem_decoded, "index", "tool stash command apply",
-      ) catch {
-        __golem_error =>
+      let index :UInt? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "index",
+          "tool stash command apply",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
       match CanonicalStash::apply(name, index) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let (__golem_error_name, payload) = match
-            CanonicalStashError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
+          match error {
+            NoSuchStash(name~) => {
+              let payload = try {
+                @tool.encode_wire_result(name)
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError(
+                  { name: "no-such-stash", payload }
                 ),
               )
+            }
           }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
-              return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
         }
       }
     }
-    _ =>
+    _ => {
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
         @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
+    }
   }
 }
 
@@ -3516,7 +4178,7 @@ async fn __golem_tool_invoke_CanonicalStash(
 ///
 fn __golem_tool_def_raw_CanonicalBigBound() -> @tool.ToolDef {
   try {
-    let def : @tool.ToolDef = {
+    let def :@tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
@@ -3527,53 +4189,57 @@ fn __golem_tool_def_raw_CanonicalBigBound() -> @tool.ToolDef {
             description: "",
             examples: [],
           },
-          globals: { options: [], flags: [], },
+          globals: { options: [], flags: [] },
           subcommands: [],
-          body: Some({
-            positionals: { fixed: [], tail: None, },
-            options: [
-              {
-                long: "count",
-                short: None,
-                aliases: [],
-                doc: { summary: "", description: "", examples: [], },
-                value_name: None,
-                shape: @tool.OptionShapeDef::Scalar(
-                  @tool.refine_numeric(
-                    @schema.into_schema_graph(
-                      (@schema.TypeTag::{ } : @schema.TypeTag[UInt64]),
+          body: Some(
+            {
+              positionals: { fixed: [], tail: None },
+              options: [
+                {
+                  long: "count",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @tool.refine_numeric(
+                      @schema.into_schema_graph(
+                        (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                      ),
+                      Some("0"),
+                      Some("18446744073709551615"),
+                      None,
                     ),
-                    Some("0"),
-                    Some("18446744073709551615"),
-                    None,
                   ),
-                ),
-                default: None,
-                required: false,
-                env_var: None,
+                  default: None,
+                  required: false,
+                  env_var: None,
+                },
+              ],
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: None,
+              errors: match CanonicalGrepError::error_cases() {
+                Ok(__golem_errors) => __golem_errors
+                Err(__golem_error) => raise  __golem_error
               },
-            ],
-            flags: [],
-            constraints: [],
-            stdin: None,
-            stdout: None,
-            result: None,
-            errors: match CanonicalGrepError::error_cases() {
-              Ok(__golem_errors) => __golem_errors
-              Err(__golem_error) => raise __golem_error
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
             },
-            annotations: Some({
-              read_only: false,
-              destructive: true,
-              idempotent: false,
-              open_world: true,
-            }),
-          }),
+          ),
         },
       ],
     }
     def
-  } catch {
+  } catch{
     error => abort("invalid generated raw tool definition: " + repr(error))
   }
 }
@@ -3588,13 +4254,13 @@ fn __golem_tool_def_prepare_CanonicalBigBound(
   override_aliases : Array[String]?,
 ) -> @tool.ToolDef {
   try {
-    let carrier : @tool.ToolDef = {
+    let carrier :@tool.ToolDef = {
       version: "0.0.0",
       commands: [
         {
           name: "__golem_ancestry",
           aliases: [],
-          doc: { summary: "", description: "", examples: [], },
+          doc: { summary: "", description: "", examples: [] },
           globals: strict_ancestors,
           subcommands: [],
           body: None,
@@ -3613,7 +4279,7 @@ fn __golem_tool_def_prepare_CanonicalBigBound(
     )
     let def = prepared
     def
-  } catch {
+  } catch{
     error => abort("invalid generated prepared tool definition: " + repr(error))
   }
 }
@@ -3621,13 +4287,15 @@ fn __golem_tool_def_prepare_CanonicalBigBound(
 ///|
 ///
 fn __golem_tool_def_CanonicalBigBound() -> @tool.ToolDef {
-  __golem_tool_def_prepare_CanonicalBigBound(
-    { options: [], flags: [], },
-    { options: [], flags: [], },
-    None,
-    None,
-    None,
-  ).normalize_inherited_globals() catch {
+  try {
+    __golem_tool_def_prepare_CanonicalBigBound(
+      { options: [], flags: [] },
+      { options: [], flags: [] },
+      None,
+      None,
+      None,
+    ).normalize_inherited_globals()
+  } catch{
     error => abort("invalid generated tool definition: " + repr(error))
   }
 }
@@ -3643,21 +4311,28 @@ async fn __golem_tool_invoke_CanonicalBigBound(
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let __golem_def = __golem_tool_def_CanonicalBigBound()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return @tool.reject_wire_invocation(
-        __golem_input,
-        __golem_stdin,
-        @types.ToolError::InvalidCommandPath(__golem_command_path),
-      )
-  }
-  let __golem_decoded = @tool.decode_canonical_input(
-    __golem_def, __golem_index, __golem_input, "tool canonical-big-bound invocation",
-  ) catch {
-    __golem_error =>
+  let __golem_index =
+    match __golem_def.command_index_by_path(__golem_command_path) {
+      Some(__golem_index) => __golem_index
+      None => {
+        return @tool.reject_wire_invocation(
+          __golem_input,
+          __golem_stdin,
+          @types.ToolError::InvalidCommandPath(__golem_command_path),
+        )
+      }
+    }
+  let __golem_decoded = try {
+    @tool.decode_canonical_input(
+      __golem_def,
+      __golem_index,
+      __golem_input,
+      "tool canonical-big-bound invocation",
+    )
+  } catch{
+    __golem_error => {
       return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error)
+    }
   }
   match __golem_index {
     0 => {
@@ -3679,45 +4354,64 @@ async fn __golem_tool_invoke_CanonicalBigBound(
           ),
         )
       }
-      let count : UInt64? = @tool.decode_canonical_field(
-        __golem_decoded, "count", "tool canonical-big-bound command canonical-big-bound",
-      ) catch {
-        __golem_error =>
+      let count :UInt64? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "count",
+          "tool canonical-big-bound command canonical-big-bound",
+        )
+      } catch{
+        __golem_error => {
           return @tool.reject_decoded_invocation(
-            __golem_decoded, __golem_stdin, __golem_error,
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
           )
+        }
       }
       match CanonicalBigBound::canonical_big_bound(count) {
         Ok(__golem_value) => Ok(@tool.invocation_result_empty())
         Err(error) => {
-          let (__golem_error_name, payload) = match
-            CanonicalGrepError::to_error_payload_value(error) {
-            Ok(payload) => payload
-            Err(encode_error) =>
-              return Err(
-                @types.ToolError::InvalidResult(
-                  "failed serializing custom tool error: " + encode_error,
+          match error {
+            InvalidPattern(reason~) => {
+              let payload = try {
+                @tool.encode_wire_result(reason)
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(
+                @types.ToolError::CustomError(
+                  { name: "invalid-pattern", payload }
                 ),
               )
+            }
+            NoMatch => {
+              let payload = try {
+                @tool.encode_wire_result(())
+              } catch{
+                @asyncCore.Cancelled::Cancelled as error => raise  error
+                @types.ToolError::InvalidResult(message) => {
+                  return Err(@types.ToolError::InvalidResult(message))
+                }
+                error => raise  error
+              }
+              Err(@types.ToolError::CustomError({ name: "no-match", payload }))
+            }
           }
-          let payload = @tool.encode_error_payload(payload) catch {
-            @asyncCore.Cancelled::Cancelled as error => raise error
-            @types.ToolError::InvalidResult(message) =>
-              return Err(@types.ToolError::InvalidResult(message))
-            error => raise error
-          }
-          Err(
-            @types.ToolError::CustomError({ name: __golem_error_name, payload, }),
-          )
         }
       }
     }
-    _ =>
+    _ => {
       @tool.reject_decoded_invocation(
         __golem_decoded,
         __golem_stdin,
         @types.ToolError::InvalidCommandPath(__golem_command_path),
       )
+    }
   }
 }
 
@@ -3749,7 +4443,7 @@ fn init {
       __golem_tool_def_CanonicalBigBound(),
       __golem_tool_invoke_CanonicalBigBound,
     )
-  } catch {
+  } catch{
     error => abort("failed to register generated tools: " + repr(error))
   }
 }

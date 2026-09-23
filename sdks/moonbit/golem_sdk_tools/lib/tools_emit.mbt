@@ -1825,7 +1825,7 @@ fn input_stream_source(command : ToolCommandInfo) -> String? {
 ///|
 fn emit_invocation_value(command : ToolCommandInfo, value : String) -> String {
   ignore(command)
-  "Ok(@tool.invocation_result_value(" +
+  "Ok(@tool.invocation_result_wire(" +
   value +
   ") catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@types.ToolError::InvalidResult(message) => return Err(@types.ToolError::InvalidResult(message))\nerror => raise error })"
 }
@@ -1838,13 +1838,20 @@ fn emit_empty_invocation(command : ToolCommandInfo) -> String {
 
 ///|
 fn emit_custom_error(command : ToolCommandInfo, error_value : String) -> String {
-  let error_type = command.error_type.map(emit_type).unwrap()
-  "{\n" +
-  "let (__golem_error_name, payload) = match " +
-  error_type +
-  "::to_error_payload_value(" +
-  error_value +
-  ") { Ok(payload) => payload\nErr(encode_error) => return Err(@types.ToolError::InvalidResult(\"failed serializing custom tool error: \" + encode_error)) }\nlet payload = @tool.encode_error_payload(payload) catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@types.ToolError::InvalidResult(message) => return Err(@types.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@types.ToolError::CustomError({ name: __golem_error_name, payload }))\n}"
+  let cases = command.errors.map(error => {
+    let (pattern, payload) = match (error.payload, error.payload_label) {
+      (Some(_), Some(label)) => (error.name + "(" + label + "~)", label)
+      (Some(_), None) => (error.name + "(__golem_payload)", "__golem_payload")
+      (None, _) => (error.name, "()")
+    }
+    pattern +
+    " => { let payload = @tool.encode_wire_result(" +
+    payload +
+    ") catch { @asyncCore.Cancelled::Cancelled as error => raise error\n@types.ToolError::InvalidResult(message) => return Err(@types.ToolError::InvalidResult(message))\nerror => raise error }\nErr(@types.ToolError::CustomError({ name: \"" +
+    escape_string_lit(moonbit_name_to_kebab_case(error.name)) +
+    "\", payload })) }"
+  })
+  "match " + error_value + " {\n" + cases.join("\n") + "\n}"
 }
 
 ///|

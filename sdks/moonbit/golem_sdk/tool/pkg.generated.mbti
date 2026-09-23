@@ -43,6 +43,8 @@ pub fn encode_invocation_input(@schema_model.SchemaGraph, Array[@schema_model.Sc
 
 pub async fn[T : @schema.IntoSchema] encode_result_value(T) -> @types.TypedSchemaValue
 
+pub async fn[T : @schema.WireSchema + @schema.IntoWire] encode_wire_result(T) -> @types.TypedSchemaValue
+
 pub fn[E] expect_no_stdout(@async-core.Stream[Byte]?) -> Result[Unit, ToolError[E]]
 
 pub fn[E] expect_no_value(@schema_model.TypedSchemaValue?) -> Result[Unit, ToolError[E]]
@@ -62,6 +64,8 @@ pub fn invocation_result_stdout(@async-core.Stream[Byte]) -> @golemcloud/golem_s
 pub async fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
 pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
+pub async fn[T : @schema.WireSchema + @schema.IntoWire] invocation_result_wire(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
 pub async fn[E] invoke_and_await(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?, (String, @schema_model.TypedSchemaValue) -> Result[E, String]?) -> Result[@tool-core.InvocationResult, ToolError[E]]
 

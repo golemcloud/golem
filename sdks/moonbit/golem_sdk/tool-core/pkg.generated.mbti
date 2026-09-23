@@ -38,6 +38,8 @@ pub async fn[T : @schema.IntoSchema] encode_result_value(T) -> @types.TypedSchem
 
 pub fn encode_typed_input(@schema_model.TypedSchemaValue) -> Result[@types.TypedSchemaValue, String]
 
+pub async fn[T : @schema.WireSchema + @schema.IntoWire] encode_wire_result(T) -> @types.TypedSchemaValue
+
 pub fn forward_canonical_input(Array[CanonicalInputValue], ToolDef, Int) -> @types.TypedSchemaValue raise @types.ToolError
 
 pub fn get_registered_tool(String) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.Tool, @types.ToolError]
@@ -49,6 +51,8 @@ pub fn invocation_result_stdout(@async-core.Stream[Byte]) -> @golemcloud/golem_s
 pub async fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
 pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
+pub async fn[T : @schema.WireSchema + @schema.IntoWire] invocation_result_wire(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
 pub fn literal_to_schema_value(@schema_model.SchemaGraph, ToolLiteral) -> @schema_model.SchemaValue raise ToolBuildError
 

@@ -161,7 +161,7 @@ test "stdout parameter is not shadowed by a generated result binding" {
   )
   assert_true(
     compact.contains(
-      "try{@tool.invocation_result_value(__golem_value)}catch{@asyncCore.Cancelled::Cancelledaserror=>raiseerror",
+      "try{@tool.invocation_result_wire(__golem_value)}catch{@asyncCore.Cancelled::Cancelledaserror=>raiseerror",
     ),
   )
 }
@@ -626,7 +626,8 @@ test "custom tool errors encode the declared case payload" {
   assert_true(
     generated.contains("try_into_typed_schema_value(__golem_payload)"),
   )
-  assert_true(generated.contains("RunError::to_error_payload_value(error)"))
+  assert_false(generated.contains("RunError::to_error_payload_value(error)"))
+  assert_true(generated.contains("@tool.encode_wire_result(__golem_payload)"))
   assert_true(
     generated.split("@asyncCore.Cancelled::Cancelled as error").count() - 1 >= 2,
   )
@@ -652,7 +653,8 @@ test "raised custom tool errors encode the declared case payload" {
   assert_true(
     generated.contains("try_into_typed_schema_value(__golem_payload)"),
   )
-  assert_true(generated.contains("RunError::to_error_payload_value(error)"))
+  assert_false(generated.contains("RunError::to_error_payload_value(error)"))
+  assert_true(generated.contains("@tool.encode_wire_result(__golem_payload)"))
 }
 
 ///|

@@ -34,7 +34,7 @@ pub struct Reader[T] {
 }
 pub fn[T] Reader::checkpoint(Self[T]) -> @durable-streams.DurableStreamCheckpoint
 pub fn[T] Reader::close(Self[T]) -> Unit
-pub fn[T : @schema.IntoSchema + @schema.FromSchema] Reader::into_stream(Self[T]) -> @schema.AgentStream[T] raise
+pub fn[T : @schema.IntoWire + @schema.FromWire] Reader::into_stream(Self[T]) -> @schema.AgentStream[T] raise
 pub async fn[T] Reader::read(Self[T]) -> T?
 
 pub struct Writer[T] {

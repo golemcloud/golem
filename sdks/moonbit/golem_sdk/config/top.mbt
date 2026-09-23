@@ -1,17 +1,5 @@
-// Agent configuration over the schema model.
-//
-// Mirrors the Rust SDK's `agentic::agent_config` (`Config<T>`, `Secret<T>`,
-// `ConfigSchema`) and `extended_agent_type` config handling:
-//   * runtime loading uses the new host import
-//     `get_config_value(key, expected : @types.SchemaGraph) -> result<@types.SchemaValueTree, config-value-error>`,
-//     decoded via `FromSchema` (build the expected graph from `IntoSchema`,
-//     encode it to the wire form, call the host, decode the returned value).
-//   * config *declarations* are produced in the pre-encoding form
-//     `@agents.AgentConfigDef { source, path, value_type : @model.SchemaGraph }`
-//     (the MoonBit analogue of Rust `ExtendedAgentConfigDeclaration`); the
-//     agent-type assembler (`agents/agent_type.mbt`) merges each `value_type`
-//     graph into the agent's shared schema pool and installs a `type-node-index`
-//     into the wire `@common.AgentConfigDeclaration`.
+// Configuration loading uses direct wire type and value codecs. Recursive
+// schema declarations remain available for explicit dynamic consumers.
 
 ///|
 /// A loaded configuration value of type `T`. Generated constructor glue
@@ -55,48 +43,39 @@ fn[T : @schema.IntoSchema] secret_schema_graph_of(
 
 ///|
 /// Load and decode a configuration value of type `T` from the given key path.
-///
-/// Pipeline (mirrors Rust `Secret::get` / `ConfigSchema::load` leaf):
-/// build `T`'s schema graph → encode to the wire `@types.SchemaGraph` →
-/// `get_config_value` → decode the returned `@types.SchemaValueTree` to a
-/// model `SchemaValue` → `FromSchema`.
-pub fn[T : @schema.IntoSchema + @schema.FromSchema] load_config_value(
+pub fn[T : @schema.WireSchema + @schema.FromWire] load_config_value(
   key : Array[String],
 ) -> T raise @common.AgentError {
-  let graph = schema_graph_of((@schema.TypeTag::{ } : @schema.TypeTag[T]))
-  let wire_graph = @model.schema_graph_to_wit(graph) catch {
-    e => raise @common.AgentError::InvalidInput(repr(e))
-  }
+  let wire_graph = @schema.wire_schema(
+    (@schema.type_tag() : @schema.TypeTag[T]),
+  )
   let wire_value = match @host.get_config_value(key, wire_graph) {
     Ok(value) => value
     Err(@host.ConfigValueError::PermissionDenied) =>
       raise @common.AgentError::InvalidInput("config access denied")
   }
-  let model_value = @model_host.schema_value_from_wit(wire_value) catch {
+  @schema.from_wire(wire_value) catch {
     e => raise @common.AgentError::InvalidInput(repr(e))
   }
-  let decoded : T = @schema.from_value_as(model_value) catch {
-    e => {
-      model_value.release_resources(@model_host.resource_drops())
-      raise @common.AgentError::InvalidInput(repr(e))
-    }
-  }
-  decoded
 }
 
 ///|
 /// Read the secret value, building its schema graph from `T`.
-pub fn[T : @schema.IntoSchema + @schema.FromSchema] Secret::get(
+pub fn[T : @schema.WireSchema + @schema.FromWire] Secret::get(
   self : Secret[T],
 ) -> T raise @common.AgentError {
   let tag = (@schema.TypeTag::{ } : @schema.TypeTag[T])
-  let inner_graph = schema_graph_of(tag)
-  let secret_graph = secret_schema_graph_of(tag)
-  let secret_wire_graph = @model.schema_graph_to_wit(secret_graph) catch {
-    e => raise @common.AgentError::InvalidInput(repr(e))
-  }
-  let inner_wire_graph = @model.schema_graph_to_wit(inner_graph) catch {
-    e => raise @common.AgentError::InvalidInput(repr(e))
+  let inner_wire_graph = @schema.wire_schema(tag)
+  let nodes = inner_wire_graph.type_nodes.copy()
+  let secret_root = nodes.length()
+  nodes.push({
+    body: @types.SecretType({ inner: inner_wire_graph.root, category: None, }),
+    metadata: @schema.empty_wire_metadata(),
+  })
+  let secret_wire_graph : @types.SchemaGraph = {
+    type_nodes: nodes,
+    defs: inner_wire_graph.defs,
+    root: secret_root,
   }
   let secret_wire_value = match
     @host.get_config_value(self.key, secret_wire_graph) {
@@ -104,17 +83,8 @@ pub fn[T : @schema.IntoSchema + @schema.FromSchema] Secret::get(
     Err(@host.ConfigValueError::PermissionDenied) =>
       raise @common.AgentError::InvalidInput("config access denied")
   }
-  let secret_model_value = @model_host.schema_value_from_wit(secret_wire_value) catch {
+  let handle : @model.GuestSecretHandle = @schema.from_wire(secret_wire_value) catch {
     e => raise @common.AgentError::InvalidInput(repr(e))
-  }
-  let handle = match secret_model_value {
-    Secret(handle) => handle
-    other => {
-      other.release_resources(@model_host.resource_drops())
-      raise @common.AgentError::InvalidInput(
-        "expected secret handle from config, got \{@schema.value_kind(other)}",
-      )
-    }
   }
   let raw_handle = match handle.take() {
     Some(h) => h
@@ -132,18 +102,9 @@ pub fn[T : @schema.IntoSchema + @schema.FromSchema] Secret::get(
       raise @common.AgentError::InvalidInput("secret reveal failed: \{msg}")
     }
   }
-  let revealed_model_value = @model_host.schema_value_from_wit(
-    revealed_wire_value,
-  ) catch {
+  @schema.from_wire(revealed_wire_value) catch {
     e => raise @common.AgentError::InvalidInput(repr(e))
   }
-  let decoded : T = @schema.from_value_as(revealed_model_value) catch {
-    e => {
-      revealed_model_value.release_resources(@model_host.resource_drops())
-      raise @common.AgentError::InvalidInput(repr(e))
-    }
-  }
-  decoded
 }
 
 ///|
@@ -333,45 +294,45 @@ pub impl ConfigField for Bytes with fn load(path) {
 }
 
 ///|
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for T? with fn collect_entries(
+pub impl[T : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire] ConfigField for T? with fn collect_entries(
   path,
 ) {
   local_entry((@schema.TypeTag::{ } : @schema.TypeTag[T?]), path)
 }
 
 ///|
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for T? with fn load(
+pub impl[T : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire] ConfigField for T? with fn load(
   path,
 ) {
   load_config_value(path)
 }
 
 ///|
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Array[T] with fn collect_entries(
-  path,
-) {
+pub impl[T : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire] ConfigField for Array[
+  T,
+] with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{ } : @schema.TypeTag[Array[T]]), path)
 }
 
 ///|
-pub impl[T : @schema.IntoSchema + @schema.FromSchema] ConfigField for Array[T] with fn load(
-  path,
-) {
+pub impl[T : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire] ConfigField for Array[
+  T,
+] with fn load(path) {
   load_config_value(path)
 }
 
 ///|
 pub impl[
-  T : @schema.IntoSchema + @schema.FromSchema,
-  E : @schema.IntoSchema + @schema.FromSchema,
+  T : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire,
+  E : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire,
 ] ConfigField for Result[T, E] with fn collect_entries(path) {
   local_entry((@schema.TypeTag::{ } : @schema.TypeTag[Result[T, E]]), path)
 }
 
 ///|
 pub impl[
-  T : @schema.IntoSchema + @schema.FromSchema,
-  E : @schema.IntoSchema + @schema.FromSchema,
+  T : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire,
+  E : @schema.IntoSchema + @schema.WireSchema + @schema.FromWire,
 ] ConfigField for Result[T, E] with fn load(path) {
   load_config_value(path)
 }
