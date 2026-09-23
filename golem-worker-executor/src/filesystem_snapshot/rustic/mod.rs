@@ -19,14 +19,13 @@
 //! module.
 
 mod backend;
-#[cfg_attr(not(test), allow(dead_code))]
 mod fault;
-#[cfg_attr(not(test), allow(dead_code))]
 mod prune;
-#[cfg_attr(not(test), allow(dead_code))]
 mod publish;
-#[cfg_attr(not(test), allow(dead_code))]
 mod scope;
+mod store;
+
+pub(crate) use store::RusticSnapshotStore;
 
 #[cfg(test)]
 mod holding;
@@ -512,29 +511,51 @@ fn restore(
     let Some(snapshot) = snapshot else {
         return Ok(None);
     };
+    let restored = restore_snapshot(
+        repository,
+        &snapshot,
+        into,
+        &RestoreOptions::default().reader_threads(reader_threads),
+    )?;
+    Ok(Some(RestoreReport {
+        phases: [open, lookup]
+            .into_iter()
+            .chain(restored.phases.iter().copied())
+            .collect(),
+        ..restored
+    }))
+}
+
+/// Writes the tree of the snapshot into the empty directory `into`. The phases of the result are
+/// the index load, the plan and the writes.
+fn restore_snapshot(
+    repository: RusticRepository<OpenStatus>,
+    snapshot: &SnapshotFile,
+    into: &Path,
+    options: &RestoreOptions,
+) -> anyhow::Result<RestoreReport> {
     let (repository, index) = timed(OperationPhase::IndexLoad, || repository.to_indexed())?;
     let into = into
         .to_str()
         .context("the directory of a restore must have a UTF-8 path")?;
     let destination = LocalDestination::new(into, false, false)?;
-    let node = repository.node_from_snapshot_and_path(&snapshot, "")?;
+    let node = repository.node_from_snapshot_and_path(snapshot, "")?;
     let entries = repository.ls(&node, &LsOptions::default())?;
-    let options = RestoreOptions::default().reader_threads(reader_threads);
     let (plan, planning) = timed(OperationPhase::RestorePlan, || {
-        repository.prepare_restore(&options, entries.clone(), &destination, false)
+        repository.prepare_restore(options, entries.clone(), &destination, false)
     })?;
     let files = plan.stats.files.restore;
     let dirs = plan.stats.dirs.restore;
     let bytes = plan.restore_size;
     let ((), writing) = timed(OperationPhase::Restore, || {
-        repository.restore(plan, &options, entries, &destination)
+        repository.restore(plan, options, entries, &destination)
     })?;
-    Ok(Some(RestoreReport {
+    Ok(RestoreReport {
         files,
         dirs,
         bytes,
-        phases: Box::new([open, lookup, index, planning, writing]),
-    }))
+        phases: Box::new([index, planning, writing]),
+    })
 }
 
 fn prune(

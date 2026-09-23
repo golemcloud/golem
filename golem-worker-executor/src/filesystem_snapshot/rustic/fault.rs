@@ -72,6 +72,24 @@ impl Display for ConfigExists {
 
 impl Error for ConfigExists {}
 
+/// The blob storage holds no file at the path that rustic reads, for example because a delete
+/// removed it after a listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FileMissing;
+
+impl Display for FileMissing {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the blob storage holds no file at the path")
+    }
+}
+
+impl Error for FileMissing {}
+
+/// Tells whether an error in the chain is [`FileMissing`].
+pub(super) fn is_file_missing(error: &(dyn Error + 'static)) -> bool {
+    chain(error).any(|error| error.is::<FileMissing>())
+}
+
 /// Tells whether an error in the chain is [`ConfigExists`].
 pub(super) fn is_config_exists(error: &(dyn Error + 'static)) -> bool {
     chain(error).any(|error| error.is::<ConfigExists>())
@@ -121,6 +139,20 @@ pub(super) fn classify(operation: Operation, error: anyhow::Error) -> SnapshotSt
             SnapshotStoreError::Corrupt(error)
         }
     }
+}
+
+/// Tells whether an error in the chain is a failed blob storage call.
+pub(super) fn is_storage_failure(error: &(dyn Error + 'static)) -> bool {
+    chain(error).any(|error| error.is::<BlobCallFailed>())
+}
+
+/// Gives the error of the store for a blob storage call that the store made without rustic. It is
+/// retryable unless a name error of the blob storage caused it.
+pub(super) fn storage_failure(error: anyhow::Error) -> SnapshotStoreError {
+    classify(
+        Operation::Repository,
+        anyhow::Error::new(BlobCallFailed::new(error)),
+    )
 }
 
 /// Gives the text of the error with the text of each of its sources.

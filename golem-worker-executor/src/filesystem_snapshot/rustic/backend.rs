@@ -19,7 +19,7 @@
 //! and each call waits for the blob storage on the runtime that the backend holds. Each call waits
 //! for at most a deadline, and a cancelled operation makes no more calls.
 
-use super::fault::{BlobCallFailed, ConfigExists, OperationCancelled};
+use super::fault::{BlobCallFailed, ConfigExists, FileMissing, OperationCancelled};
 use super::publish::{SnapshotStage, StagedSnapshot};
 use bytes::Bytes;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, PutIfAbsent};
@@ -32,6 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 
 /// The target label of each blob storage call of the backend.
 const TARGET_LABEL: &str = "filesystem_snapshot";
@@ -91,6 +92,8 @@ pub(super) struct BlobBackend {
     deadline: Duration,
     cancel: CancellationToken,
     stage: Option<Arc<SnapshotStage>>,
+    /// Counts the backend as work of a tracker, until the last owner drops the backend.
+    _tracked: Option<TaskTrackerToken>,
 }
 
 impl BlobBackend {
@@ -109,21 +112,29 @@ impl BlobBackend {
             deadline,
             cancel: CancellationToken::new(),
             stage: None,
+            _tracked: None,
         }
     }
 
     /// Gives the backend with the token of its operation. When the token is cancelled, a call that
     /// has not started gives an error at once, and a call that runs stops and gives an error.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn cancelled_by(self, cancel: CancellationToken) -> Self {
         Self { cancel, ..self }
     }
 
     /// Gives the backend with a stage for the snapshot file of a save.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn staging_in(self, stage: Arc<SnapshotStage>) -> Self {
         Self {
             stage: Some(stage),
+            ..self
+        }
+    }
+
+    /// Gives the backend with a token of a task tracker. The tracker counts the backend until the
+    /// last owner drops it, for example a thread of rustic.
+    pub(super) fn tracked_by(self, token: TaskTrackerToken) -> Self {
+        Self {
+            _tracked: Some(token),
             ..self
         }
     }
@@ -398,9 +409,10 @@ fn join(parts: &[Bytes]) -> Box<[u8]> {
 
 /// The error of a file that the blob storage does not hold.
 fn missing_file(path: &Path) -> Box<RusticError> {
-    RusticError::new(
+    RusticError::with_source(
         ErrorKind::Backend,
         "The blob storage holds no file at `{path}`.",
+        FileMissing,
     )
     .attach_context("path", path.display().to_string())
 }
