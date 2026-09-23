@@ -14,4 +14,8 @@
 
 //! Go bridge SDK generator.
 
+#[allow(clippy::module_inception)]
 pub mod go;
+pub mod type_name;
+
+pub use type_name::GoTypeName;
