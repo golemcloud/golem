@@ -450,6 +450,14 @@ pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, Error> {
         .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
 }
 
+/// Joins two blob path segments using the separator defined by the blob storage contract.
+///
+/// Building the full string before converting it to a `PathBuf` also prevents an absolute-looking
+/// child name from replacing its parent on Windows.
+pub fn join_blob_path(parent: &str, child: &str) -> PathBuf {
+    PathBuf::from(format!("{parent}/{child}"))
+}
+
 pub(crate) fn blob_parent_to_string(path: &Path) -> Result<String, Error> {
     match path.parent() {
         Some(parent) => blob_path_to_string(parent),
@@ -465,4 +473,35 @@ pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
                 .map(|s| s.to_string())
                 .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{join_blob_path, validate_relative_blob_path};
+    use test_r::test;
+
+    #[test]
+    fn join_blob_path_uses_contract_separator() {
+        assert_eq!(
+            join_blob_path("photos", "animals/cat.png").as_os_str(),
+            "photos/animals/cat.png"
+        );
+    }
+
+    #[test]
+    fn join_blob_path_does_not_replace_parent() {
+        let windows_absolute_name = join_blob_path("photos", r"C:\cats\kitten.png");
+        assert_eq!(
+            windows_absolute_name.as_os_str(),
+            r"photos/C:\cats\kitten.png"
+        );
+        assert!(validate_relative_blob_path(&windows_absolute_name).is_ok());
+
+        let unix_absolute_name = join_blob_path("photos", "/cats/kitten.png");
+        assert_eq!(unix_absolute_name.as_os_str(), "photos//cats/kitten.png");
+        assert!(validate_relative_blob_path(&unix_absolute_name).is_ok());
+
+        let traversal = join_blob_path("photos", "../kitten.png");
+        assert!(validate_relative_blob_path(&traversal).is_err());
+    }
 }

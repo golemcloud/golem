@@ -107,41 +107,19 @@ impl S3BlobStorage {
         }
     }
 
-    fn prefix_of(&self, namespace: &BlobStorageNamespace) -> PathBuf {
-        match namespace {
+    fn prefix_of(&self, namespace: &BlobStorageNamespace) -> String {
+        let namespace_prefix = match namespace {
             BlobStorageNamespace::CompilationCache { environment_id }
             | BlobStorageNamespace::CustomStorage { environment_id }
             | BlobStorageNamespace::InitialAgentFiles { environment_id }
-            | BlobStorageNamespace::Components { environment_id } => {
-                let environment_id_string = environment_id.to_string();
-                if self.config.object_prefix.is_empty() {
-                    Path::new(&environment_id_string).to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(environment_id_string)
-                        .to_path_buf()
-                }
-            }
+            | BlobStorageNamespace::Components { environment_id } => environment_id.to_string(),
             BlobStorageNamespace::OplogPayload {
                 environment_id,
                 agent_id,
                 agent_mode,
             } => {
-                let environment_id_string = environment_id.to_string();
-                let agent_id_string = agent_id.to_string();
                 let mode = super::agent_mode_prefix(*agent_mode);
-                if self.config.object_prefix.is_empty() {
-                    Path::new(mode)
-                        .join(environment_id_string)
-                        .join(agent_id_string)
-                        .to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(mode)
-                        .join(environment_id_string)
-                        .join(agent_id_string)
-                        .to_path_buf()
-                }
+                format!("{mode}/{environment_id}/{agent_id}")
             }
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
@@ -149,23 +127,51 @@ impl S3BlobStorage {
                 agent_mode,
                 ..
             } => {
-                let environment_id_string = environment_id.to_string();
-                let component_id_string = component_id.to_string();
                 let mode = super::agent_mode_prefix(*agent_mode);
-                if self.config.object_prefix.is_empty() {
-                    Path::new(mode)
-                        .join(environment_id_string)
-                        .join(component_id_string)
-                        .to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(mode)
-                        .join(environment_id_string)
-                        .join(component_id_string)
-                        .to_path_buf()
-                }
+                format!("{mode}/{environment_id}/{component_id}")
             }
+        };
+
+        if self.config.object_prefix.is_empty() {
+            namespace_prefix
+        } else {
+            format!(
+                "{}/{}",
+                self.config.object_prefix.trim_end_matches('/'),
+                namespace_prefix
+            )
         }
+    }
+
+    fn key_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> Result<String, Error> {
+        Ok(format!(
+            "{}/{}",
+            self.prefix_of(namespace),
+            blob_path_to_string(path)?
+        ))
+    }
+
+    fn child_key(parent: &str, child: &str) -> String {
+        format!("{}/{child}", parent.trim_end_matches('/'))
+    }
+
+    fn listed_path(namespace_root: &str, directory_key: &str, object_key: &str) -> Option<PathBuf> {
+        let is_dir_marker = object_key.ends_with("/__dir_marker");
+        let parent = object_key.rsplit_once('/').map(|(parent, _)| parent);
+        let is_nested = parent != Some(directory_key);
+
+        let listed_key = if is_nested {
+            is_dir_marker.then_some(parent?)
+        } else if is_dir_marker {
+            None
+        } else {
+            Some(object_key)
+        }?;
+
+        listed_key
+            .strip_prefix(namespace_root)
+            .and_then(|path| path.strip_prefix('/'))
+            .map(PathBuf::from)
     }
 
     fn encode_copy_source_key(key: &str) -> String {
@@ -186,22 +192,21 @@ impl S3BlobStorage {
         target_label: &'static str,
         op_label: &'static str,
         bucket: &str,
-        prefix: &Path,
+        prefix: &str,
     ) -> Result<Vec<Object>, Error> {
         let mut result = Vec::new();
         let mut cont: Option<String> = None;
-        let prefix_str = blob_path_to_string(prefix)?;
-        let prefix_with_slash = if prefix_str.ends_with('/') {
-            prefix_str.clone()
+        let prefix_with_slash = if prefix.ends_with('/') {
+            prefix.to_string()
         } else {
-            format!("{prefix_str}/")
+            format!("{prefix}/")
         };
 
         loop {
             let response = with_retries_customized(
                 target_label,
                 op_label,
-                Some(format!("{bucket} - {prefix_str}")),
+                Some(format!("{bucket} - {prefix}")),
                 &self.config.retries,
                 &(self.client.clone(), bucket, prefix_with_slash.clone(), cont),
                 |(client, bucket, prefix, cont)| {
@@ -240,19 +245,18 @@ impl S3BlobStorage {
         target_label: &'static str,
         op_label: &'static str,
         bucket: &str,
-        prefix: &Path,
+        prefix: &str,
     ) -> Result<bool, Error> {
-        let prefix_str = blob_path_to_string(prefix)?;
-        let prefix_with_slash = if prefix_str.ends_with('/') {
-            prefix_str.clone()
+        let prefix_with_slash = if prefix.ends_with('/') {
+            prefix.to_string()
         } else {
-            format!("{prefix_str}/")
+            format!("{prefix}/")
         };
 
         let response = with_retries_customized(
             target_label,
             op_label,
-            Some(format!("{bucket} - {prefix_str}")),
+            Some(format!("{bucket} - {prefix}")),
             &self.config.retries,
             &(self.client.clone(), bucket, prefix_with_slash),
             |(client, bucket, prefix)| {
@@ -392,15 +396,14 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -442,15 +445,14 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -493,15 +495,14 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -544,8 +545,7 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<BlobMetadata>, Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
         let op_id = format!("{bucket} - {key:?}");
 
         let file_head_result = with_retries_customized(
@@ -553,7 +553,7 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(op_id.clone()),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str.clone()),
+            &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -583,14 +583,13 @@ impl BlobStorage for S3BlobStorage {
             })),
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
-                    let marker = key.join("__dir_marker");
-                    let marker_str = blob_path_to_string(&marker)?;
+                    let marker = Self::child_key(&key, "__dir_marker");
                     let dir_marker_head_result = with_retries_customized(
                         target_label,
                         op_label,
                         Some(op_id),
                         &self.config.retries,
-                        &(self.client.clone(), bucket, marker_str),
+                        &(self.client.clone(), bucket, marker),
                         |(client, bucket, marker)| {
                             Box::pin(async move {
                                 client
@@ -643,8 +642,7 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
         let bytes = Bytes::copy_from_slice(data);
 
         with_retries_customized(
@@ -652,7 +650,7 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str, bytes),
+            &(self.client.clone(), bucket, key.clone(), bytes),
             |(client, bucket, key, bytes)| {
                 Box::pin(async move {
                     client
@@ -683,8 +681,7 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
 
         fn go<'a>(
             args: &'a (
@@ -731,7 +728,7 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str, stream),
+            &(self.client.clone(), bucket, key.clone(), stream),
             go,
             |err| err.is_retriable(Self::is_put_object_error_retriable),
             SdkErrorOrCustomError::as_loggable,
@@ -752,15 +749,14 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -796,8 +792,7 @@ impl BlobStorage for S3BlobStorage {
         let to_delete = paths
             .iter()
             .map(|path| {
-                let key = prefix.join(path);
-                let key = blob_path_to_string(&key)?;
+                let key = format!("{prefix}/{}", blob_path_to_string(path)?);
                 ObjectIdentifier::builder()
                     .key(key)
                     .build()
@@ -844,16 +839,15 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let marker = key.join("__dir_marker");
-        let marker_str = blob_path_to_string(&marker)?;
+        let key = self.key_of(&namespace, path)?;
+        let marker = Self::child_key(&key, "__dir_marker");
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, marker_str),
+            &(self.client.clone(), bucket, marker),
             |(client, bucket, marker)| {
                 Box::pin(async move {
                     client
@@ -884,34 +878,14 @@ impl BlobStorage for S3BlobStorage {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
-        let key = namespace_root.join(path);
+        let key = self.key_of(&namespace, path)?;
 
         Ok(self
             .list_objects(target_label, op_label, bucket, &key)
             .await?
             .iter()
-            .flat_map(|obj| obj.key.as_ref().map(|k| Path::new(k).to_path_buf()))
-            .filter_map(|path| {
-                let is_dir_marker =
-                    path.file_name().and_then(|s| s.to_str()) == Some("__dir_marker");
-                let is_nested = path.parent() != Some(&key);
-                if is_nested {
-                    if is_dir_marker {
-                        path.parent().map(|p| p.to_path_buf())
-                    } else {
-                        None
-                    }
-                } else if is_dir_marker {
-                    None
-                } else {
-                    Some(path)
-                }
-            })
-            .filter_map(|path| {
-                path.strip_prefix(&namespace_root)
-                    .ok()
-                    .map(|p| p.to_path_buf())
-            })
+            .filter_map(|object| object.key.as_deref())
+            .filter_map(|object_key| Self::listed_path(&namespace_root, &key, object_key))
             .collect::<Vec<_>>())
     }
 
@@ -929,7 +903,7 @@ impl BlobStorage for S3BlobStorage {
         }
 
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.key_of(&namespace, path)?;
 
         let to_delete = self
             .list_objects(target_label, op_label, bucket, &key)
@@ -984,8 +958,7 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<ExistsResult, Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
         let op_id = format!("{bucket} - {key:?}");
 
         let file_head_result = with_retries_customized(
@@ -993,7 +966,7 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(op_id.clone()),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str.clone()),
+            &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -1013,14 +986,13 @@ impl BlobStorage for S3BlobStorage {
             Ok(_) => Ok(ExistsResult::File),
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
-                    let marker = key.join("__dir_marker");
-                    let marker_str = blob_path_to_string(&marker)?;
+                    let marker = Self::child_key(&key, "__dir_marker");
                     let dir_marker_head_result = with_retries_customized(
                         target_label,
                         op_label,
                         Some(op_id),
                         &self.config.retries,
-                        &(self.client.clone(), bucket, marker_str),
+                        &(self.client.clone(), bucket, marker),
                         |(client, bucket, marker)| {
                             Box::pin(async move {
                                 client
@@ -1080,18 +1052,21 @@ impl BlobStorage for S3BlobStorage {
         validate_relative_blob_path(from)?;
         validate_relative_blob_path(to)?;
         let bucket = self.bucket_of(&namespace);
-        let from_key = self.prefix_of(&namespace).join(from);
-        let to_key = self.prefix_of(&namespace).join(to);
-        let from_key_str = blob_path_to_string(&from_key)?;
-        let to_key_str = blob_path_to_string(&to_key)?;
-        let encoded_from_key = Self::encode_copy_source_key(&from_key_str);
+        let from_key = self.key_of(&namespace, from)?;
+        let to_key = self.key_of(&namespace, to)?;
+        let encoded_from_key = Self::encode_copy_source_key(&from_key);
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {from_key:?} -> {to_key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, encoded_from_key, to_key_str),
+            &(
+                self.client.clone(),
+                bucket,
+                encoded_from_key,
+                to_key.clone(),
+            ),
             |(client, bucket, encoded_from_key, to_key)| {
                 Box::pin(async move {
                     client
@@ -1364,6 +1339,52 @@ mod tests {
         assert_eq!(
             bodies.lock().unwrap().as_slice(),
             [Bytes::new(), Bytes::new(), Bytes::new()]
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn storage_keys_use_contract_separator() {
+        let (mut storage, _, server) = test_storage(vec![]).await;
+        storage.config.object_prefix = "root/prefix".to_string();
+        let namespace = BlobStorageNamespace::CustomStorage {
+            environment_id: EnvironmentId(
+                uuid::Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
+            ),
+        };
+
+        let key = storage
+            .key_of(&namespace, Path::new(r"photos/animals\cat.png"))
+            .unwrap();
+        server.abort();
+
+        assert_eq!(
+            key,
+            r"root/prefix/4c8c5ff4-2a42-4e81-ac48-e63005f609fd/photos/animals\cat.png"
+        );
+
+        let namespace_root = storage.prefix_of(&namespace);
+        let directory_key = storage.key_of(&namespace, Path::new("photos")).unwrap();
+        assert_eq!(
+            S3BlobStorage::listed_path(
+                &namespace_root,
+                &directory_key,
+                &format!(r"{directory_key}/animals\cat.png")
+            )
+            .unwrap()
+            .as_os_str(),
+            r"photos/animals\cat.png"
+        );
+
+        let trailing_slash_key = storage.key_of(&namespace, Path::new("photos/")).unwrap();
+        assert_eq!(
+            S3BlobStorage::child_key(&trailing_slash_key, "__dir_marker"),
+            format!("{directory_key}/__dir_marker")
+        );
+        let root_key = storage.key_of(&namespace, Path::new("")).unwrap();
+        assert_eq!(
+            S3BlobStorage::child_key(&root_key, "__dir_marker"),
+            format!("{namespace_root}/__dir_marker")
         );
     }
 }
