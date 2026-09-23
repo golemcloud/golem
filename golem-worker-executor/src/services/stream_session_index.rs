@@ -63,6 +63,10 @@ fn stream_control_index_field(key: &StreamSessionKey) -> Result<String, String> 
     Ok(format!("control:{}", hex::encode(serialize(key)?)))
 }
 
+fn epoch_authority_field(key: &StreamSessionKey, epoch: u64) -> Result<String, String> {
+    Ok(format!("epoch:{}", hex::encode(serialize(&(key, epoch))?)))
+}
+
 fn topology_witness_field(
     key: &StreamSessionKey,
     binding: &StreamBindingRecord,
@@ -279,6 +283,33 @@ impl StreamSessionIndexService {
         })
         .await
         .map_err(|error| format!("durable resume lookup task failed: {error}"))?
+    }
+
+    /// Returns a retained Attached or ResumeAttempt establishing the requested historical epoch.
+    /// Copied fork history may share an epoch with a later authority; this grants no live authority.
+    pub(crate) async fn lookup_epoch_authority(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        key: &StreamSessionKey,
+        epoch: u64,
+    ) -> Result<Option<OplogIndex>, String> {
+        let this = self.clone();
+        let id = id.clone();
+        let key = key.clone();
+        spawn_with_activity(async move {
+            let oplog = this.oplog.upgrade().ok_or("oplog service is unavailable")?;
+            let horizon = oplog.get_last_index(&id, mode).await;
+            this.catch_up_inner(&id, mode, horizon).await?;
+            let offset: Option<OplogIndex> = this
+                .kv
+                .with_entity("stream_session_index", "lookup_epoch", "authority")
+                .get(Self::namespace(&id), &epoch_authority_field(&key, epoch)?)
+                .await?;
+            Ok(offset.filter(|index| *index <= horizon))
+        })
+        .await
+        .map_err(|error| format!("durable epoch lookup task failed: {error}"))?
     }
 
     /// Finds the earliest historical witness in the publication's lineage segment or a later one.
@@ -1036,6 +1067,7 @@ impl StreamSessionIndexService {
                 let mut controls = HashMap::<StreamSessionKey, SessionControlMetadata>::new();
                 let mut journal_pages = HashMap::<String, Vec<OplogIndex>>::new();
                 let mut resume_offsets = HashMap::<String, OplogIndex>::new();
+                let mut epoch_authorities = HashMap::<String, OplogIndex>::new();
                 let mut topology_witnesses = HashMap::<String, TopologyWitnessRow>::new();
                 let mut consumer_deleting = None;
                 for (idx, entry) in &entries {
@@ -1264,6 +1296,25 @@ impl StreamSessionIndexService {
                     if let StreamSessionRecord::ConsumerDeleting(record) = record {
                         consumer_deleting = Some(Some(record.clone()));
                     }
+                    let authority = match record {
+                        StreamSessionRecord::Attached(record) => Some((&record.session_key, record.epoch)),
+                        StreamSessionRecord::ResumeAttempt(record) => Some((&record.session_key, record.accepted_epoch)),
+                        _ => None,
+                    };
+                    if let Some((session_key, epoch)) = authority {
+                        let field = epoch_authority_field(&StreamSessionKey {
+                            callee_environment_id: id.environment_id,
+                            callee: id.agent_id.clone(),
+                            callee_fingerprint: producer_fingerprint,
+                            idempotency_key: session_key.clone(),
+                        }, epoch)?;
+                        if let std::collections::hash_map::Entry::Vacant(entry) = epoch_authorities.entry(field) {
+                            let old: Option<OplogIndex> = self.kv
+                                .with_entity("stream_session_index", "read_epoch", "authority")
+                                .get(namespace.clone(), entry.key()).await?;
+                            entry.insert(old.unwrap_or(*idx));
+                        }
+                    }
                     if let StreamSessionRecord::ResumeAttempt(record) = record {
                         let field = stream_resume_index_field(
                             &StreamSessionKey {
@@ -1429,6 +1480,9 @@ impl StreamSessionIndexService {
                     fields.push((field, serialize(&page)?));
                 }
                 for (field, offset) in resume_offsets {
+                    fields.push((field, serialize(&offset)?));
+                }
+                for (field, offset) in epoch_authorities {
                     fields.push((field, serialize(&offset)?));
                 }
                 for (field, witness) in topology_witnesses {

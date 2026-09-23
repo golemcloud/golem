@@ -2161,7 +2161,7 @@ async fn historical_topology_witness_survives_epoch_changes_and_fork_without_liv
         ),
         (prepare, activate, Some(authority))
     );
-    append_session(
+    let second_authority = append_session(
         oplog.as_ref(),
         StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
             format_version: 1,
@@ -2184,6 +2184,14 @@ async fn historical_topology_witness_survives_epoch_changes_and_fork_without_liv
     .await;
     let mut next_attachment = attachment.clone();
     next_attachment.epoch = 2;
+    assert_eq!(
+        index
+            .lookup_epoch_authority(&owner, AgentMode::Durable, &key, 2)
+            .await
+            .unwrap(),
+        None,
+        "an uncommitted resume cannot establish historical authority"
+    );
     append_session(
         oplog.as_ref(),
         StreamSessionRecord::TopologyPrepared(StreamTopologyPreparedRecord {
@@ -2240,6 +2248,15 @@ async fn historical_topology_witness_survives_epoch_changes_and_fork_without_liv
     .await;
     let retained_tip = append_noop(oplog.as_ref()).await;
     oplog.commit(CommitLevel::Always).await;
+    for (epoch, position) in [(1, authority), (2, second_authority)] {
+        assert_eq!(
+            index
+                .lookup_epoch_authority(&owner, AgentMode::Durable, &key, epoch)
+                .await
+                .unwrap(),
+            Some(position)
+        );
+    }
     assert_eq!(
         index
             .lookup_topology_witness(&owner, AgentMode::Durable, &key, &binding, publication)
@@ -2439,6 +2456,12 @@ async fn historical_topology_witness_survives_epoch_changes_and_fork_without_liv
         .unwrap();
     assert_eq!(fork_witness.attachment, fork_attachment);
     assert_eq!(fork_witness.epoch_authority, Some(fork_authority));
+    let retained_authority = index
+        .lookup_epoch_authority(&target, AgentMode::Durable, &target_key, 2)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!([second_authority, fork_authority].contains(&retained_authority));
     assert_eq!(
         index
             .lookup_topology_witness(
@@ -2535,6 +2558,21 @@ async fn historical_topology_witness_survives_epoch_changes_and_fork_without_liv
     .await;
     oplog.commit(CommitLevel::Always).await;
     for index in [index, &fresh] {
+        for (epoch, position) in [
+            (1, Some(authority)),
+            (2, None),
+            (3, None),
+            (4, Some(resumed_authority)),
+        ] {
+            assert_eq!(
+                index
+                    .lookup_epoch_authority(&owner, AgentMode::Durable, &key, epoch)
+                    .await
+                    .unwrap(),
+                position,
+                "epoch {epoch}: deleted authorities and the revert floor must not authorize"
+            );
+        }
         let witness = index
             .lookup_topology_witness(&owner, AgentMode::Durable, &key, &binding, publication)
             .await
