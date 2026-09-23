@@ -18,9 +18,10 @@ use super::{
 use crate::schema::schema_type::{NumericBound, NumericRestrictions};
 use crate::schema::validation::{is_equivalent_cross_graph, validate_graph, validate_value};
 use crate::schema::{
-    DurationValuePayload, MetadataEnvelope, NamedFieldType, PermissionCardSpec, QuantitySpec,
-    QuantityValue, QuotaTokenSpec, ResultSpec, SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue,
-    TextRestrictions, TextValuePayload, TypeId, VariantCaseType, VariantValuePayload,
+    BinaryRestrictions, DurationValuePayload, MetadataEnvelope, NamedFieldType, PermissionCardSpec,
+    QuantitySpec, QuantityValue, QuotaTokenSpec, ResultSpec, SchemaGraph, SchemaType,
+    SchemaTypeDef, SchemaValue, TextRestrictions, TextValuePayload, TypeId, VariantCaseType,
+    VariantValuePayload,
 };
 use proptest::prelude::*;
 use serde_json::{Value, json};
@@ -367,6 +368,7 @@ fn conformance_fixture(name: &str) -> SchemaGraph {
     let root = match name {
         "s64" => SchemaType::s64(),
         "u64" => SchemaType::u64(),
+        "binary" => SchemaType::binary(BinaryRestrictions::default()),
         "duration" => SchemaType::duration(),
         "quantity" => SchemaType::quantity(QuantitySpec {
             base_unit: "m".to_string(),
@@ -378,6 +380,10 @@ fn conformance_fixture(name: &str) -> SchemaGraph {
             field("pattern", SchemaType::string()),
             field("paths", SchemaType::list(SchemaType::string())),
             field("ignoreCase", SchemaType::option(SchemaType::bool())),
+        ]),
+        "config-entry" => SchemaType::record(vec![
+            field("path", SchemaType::list(SchemaType::string())),
+            field("value", SchemaType::s64()),
         ]),
         "constrained-u32" => SchemaType::U32 {
             restrictions: Some(NumericRestrictions {
@@ -589,14 +595,20 @@ fn reflection_conformance_corpus() {
             }
             "reject" => {
                 let graph = conformance_fixture(fixture);
-                let decoded = from_json_value(&graph, &graph.root, &case["input"]);
-                let rejected = match fixture {
-                    "constrained-u32" => decoded
-                        .as_ref()
-                        .is_ok_and(|value| validate_value(&graph, &graph.root, value).is_err()),
-                    _ => decoded.is_err(),
-                };
-                assert!(rejected, "{id} was accepted");
+                let inputs = case["inputs"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_else(|| vec![case["input"].clone()]);
+                for input in inputs {
+                    let decoded = from_json_value(&graph, &graph.root, &input);
+                    let rejected = match fixture {
+                        "constrained-u32" => decoded
+                            .as_ref()
+                            .is_ok_and(|value| validate_value(&graph, &graph.root, value).is_err()),
+                        _ => decoded.is_err(),
+                    };
+                    assert!(rejected, "{id} accepted {input}");
+                }
             }
             "json-schema" => {
                 let graph = conformance_fixture(fixture);

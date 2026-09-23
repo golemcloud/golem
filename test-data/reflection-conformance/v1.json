@@ -24,6 +24,7 @@
     "canonical/duration-max",
     "canonical/quantity-wide-mantissa",
     "canonical/omitted-options",
+    "canonical/binary-mime",
     "errors/s64-plus",
     "errors/s64-leading-zero",
     "errors/s64-negative-zero",
@@ -33,6 +34,7 @@
     "errors/wide-wrong-json-type",
     "errors/duration-legacy-string",
     "errors/quantity-negative-zero",
+    "errors/binary-noncanonical-base64",
     "json-schema/s64",
     "json-schema/u64",
     "json-schema/duration-nanoseconds",
@@ -43,6 +45,7 @@
     "schema/all-restrictions",
     "graph/references-validation-equivalence",
     "tool/canonical-input",
+    "config/canonical-entry",
     "constraints/rejected-value",
     "compatibility/result",
     "compatibility/custom-error"
@@ -96,6 +99,13 @@
       "fixture": "optional-record",
       "input": {},
       "expected": { "direct": null, "referenced": null }
+    },
+    {
+      "id": "canonical/binary-mime",
+      "operation": "roundtrip",
+      "fixture": "binary",
+      "input": { "bytes": "-_8", "mimeType": "application/octet-stream" },
+      "expected": { "bytes": "-_8", "mimeType": "application/octet-stream" }
     },
     {
       "id": "errors/s64-plus",
@@ -158,6 +168,16 @@
       "operation": "reject",
       "fixture": "quantity",
       "input": { "mantissa": "-0", "scale": 0, "unit": "m" },
+      "expected": { "kind": "invalid-json" }
+    },
+    {
+      "id": "errors/binary-noncanonical-base64",
+      "operation": "reject",
+      "fixture": "binary",
+      "inputs": [
+        { "bytes": "+/8", "mimeType": "application/octet-stream" },
+        { "bytes": "-_8=", "mimeType": "application/octet-stream" }
+      ],
       "expected": { "kind": "invalid-json" }
     },
     {
@@ -267,6 +287,13 @@
       "fixture": "tool-input",
       "input": { "pattern": "*.rs", "paths": ["src", "tests"] },
       "expected": { "pattern": "*.rs", "paths": ["src", "tests"], "ignoreCase": null }
+    },
+    {
+      "id": "config/canonical-entry",
+      "operation": "roundtrip",
+      "fixture": "config-entry",
+      "input": { "path": ["limits", "maximum"], "value": "9223372036854775807" },
+      "expected": { "path": ["limits", "maximum"], "value": "9223372036854775807" }
     },
     {
       "id": "constraints/rejected-value",

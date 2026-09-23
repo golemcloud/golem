@@ -87,6 +87,7 @@ private[reflection] object ReflectionConformanceCorpus {
     "canonical/duration-max",
     "canonical/quantity-wide-mantissa",
     "canonical/omitted-options",
+    "canonical/binary-mime",
     "errors/s64-plus",
     "errors/s64-leading-zero",
     "errors/s64-negative-zero",
@@ -96,6 +97,7 @@ private[reflection] object ReflectionConformanceCorpus {
     "errors/wide-wrong-json-type",
     "errors/duration-legacy-string",
     "errors/quantity-negative-zero",
+    "errors/binary-noncanonical-base64",
     "json-schema/s64",
     "json-schema/u64",
     "json-schema/duration-nanoseconds",
@@ -106,6 +108,7 @@ private[reflection] object ReflectionConformanceCorpus {
     "schema/all-restrictions",
     "graph/references-validation-equivalence",
     "tool/canonical-input",
+    "config/canonical-entry",
     "constraints/rejected-value",
     "compatibility/result",
     "compatibility/custom-error"
@@ -177,6 +180,19 @@ private[reflection] object ReflectionConformanceCorpus {
       "expected": {
         "direct": null,
         "referenced": null
+      }
+    },
+    {
+      "id": "canonical/binary-mime",
+      "operation": "roundtrip",
+      "fixture": "binary",
+      "input": {
+        "bytes": "-_8",
+        "mimeType": "application/octet-stream"
+      },
+      "expected": {
+        "bytes": "-_8",
+        "mimeType": "application/octet-stream"
       }
     },
     {
@@ -260,6 +276,24 @@ private[reflection] object ReflectionConformanceCorpus {
         "scale": 0,
         "unit": "m"
       },
+      "expected": {
+        "kind": "invalid-json"
+      }
+    },
+    {
+      "id": "errors/binary-noncanonical-base64",
+      "operation": "reject",
+      "fixture": "binary",
+      "inputs": [
+        {
+          "bytes": "+/8",
+          "mimeType": "application/octet-stream"
+        },
+        {
+          "bytes": "-_8=",
+          "mimeType": "application/octet-stream"
+        }
+      ],
       "expected": {
         "kind": "invalid-json"
       }
@@ -440,6 +474,25 @@ private[reflection] object ReflectionConformanceCorpus {
           "tests"
         ],
         "ignoreCase": null
+      }
+    },
+    {
+      "id": "config/canonical-entry",
+      "operation": "roundtrip",
+      "fixture": "config-entry",
+      "input": {
+        "path": [
+          "limits",
+          "maximum"
+        ],
+        "value": "9223372036854775807"
+      },
+      "expected": {
+        "path": [
+          "limits",
+          "maximum"
+        ],
+        "value": "9223372036854775807"
       }
     },
     {

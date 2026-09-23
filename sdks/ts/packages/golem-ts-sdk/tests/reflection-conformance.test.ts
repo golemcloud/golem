@@ -22,6 +22,7 @@ interface ConformanceCase {
   operation: 'roundtrip' | 'reject' | 'json-schema' | 'semantic';
   fixture: string;
   input?: JsonValue;
+  inputs?: JsonValue[];
   path?: string;
   expected: JsonValue;
 }
@@ -118,6 +119,8 @@ function fixture(name: string): SchemaRef {
       return schema(t.s64());
     case 'u64':
       return schema(t.u64());
+    case 'binary':
+      return schema(schemaType({ tag: 'binary', restrictions: {} }));
     case 'duration':
       return schema(t.duration());
     case 'quantity':
@@ -140,6 +143,8 @@ function fixture(name: string): SchemaRef {
           field('ignoreCase', t.option(t.bool())),
         ]),
       );
+    case 'config-entry':
+      return schema(t.record([field('path', t.list(t.string())), field('value', t.s64())]));
     case 'constrained-u32':
       return schema(t.u32({ max: { tag: 'unsigned', val: 10n } }));
     case 'result':
@@ -238,7 +243,9 @@ describe('reflection conformance corpus', () => {
         }
         case 'reject': {
           const ref = fixture(testCase.fixture);
-          expect(ref.validateJson(testCase.input!).success, testCase.id).toBe(false);
+          for (const input of testCase.inputs ?? [testCase.input!]) {
+            expect(ref.validateJson(input).success, testCase.id).toBe(false);
+          }
           break;
         }
         case 'json-schema':

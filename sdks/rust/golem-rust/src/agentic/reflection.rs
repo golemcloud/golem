@@ -1681,9 +1681,9 @@ mod tests {
     use crate::schema::schema_type::{NumericBound, NumericRestrictions};
     use crate::schema::validation::{is_equivalent_cross_graph, validate_graph};
     use crate::schema::{
-        MetadataEnvelope, NamedFieldType, PermissionCardSpec, QuantitySpec, QuotaTokenSpec,
-        ResultSpec, SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId, VariantCaseType,
-        VariantValuePayload,
+        BinaryRestrictions, MetadataEnvelope, NamedFieldType, PermissionCardSpec, QuantitySpec,
+        QuotaTokenSpec, ResultSpec, SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId,
+        VariantCaseType, VariantValuePayload,
     };
     use serde_json::{Value, json};
     use std::collections::HashSet;
@@ -1762,6 +1762,7 @@ mod tests {
         let root = match name {
             "s64" => SchemaType::s64(),
             "u64" => SchemaType::u64(),
+            "binary" => SchemaType::binary(BinaryRestrictions::default()),
             "duration" => SchemaType::duration(),
             "quantity" => SchemaType::quantity(QuantitySpec {
                 base_unit: "m".to_string(),
@@ -1773,6 +1774,10 @@ mod tests {
                 conformance_field("pattern", SchemaType::string()),
                 conformance_field("paths", SchemaType::list(SchemaType::string())),
                 conformance_field("ignoreCase", SchemaType::option(SchemaType::bool())),
+            ]),
+            "config-entry" => SchemaType::record(vec![
+                conformance_field("path", SchemaType::list(SchemaType::string())),
+                conformance_field("value", SchemaType::s64()),
             ]),
             "constrained-u32" => SchemaType::U32 {
                 restrictions: Some(NumericRestrictions {
@@ -1977,10 +1982,13 @@ mod tests {
                 }
                 "reject" => {
                     let schema = conformance_schema(fixture);
-                    assert!(
-                        schema.pack_json(&case["input"]).is_err(),
-                        "{id} was accepted"
-                    );
+                    let inputs = case["inputs"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_else(|| vec![case["input"].clone()]);
+                    for input in inputs {
+                        assert!(schema.pack_json(&input).is_err(), "{id} accepted {input}");
+                    }
                 }
                 "json-schema" => {
                     let schema = conformance_schema(fixture);

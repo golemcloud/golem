@@ -9,6 +9,7 @@ interface ConformanceCase {
   operation: "roundtrip" | "reject" | "json-schema" | "semantic"
   fixture: string
   input?: JsonValue
+  inputs?: JsonValue[]
   path?: string
   expected: JsonValue
 }
@@ -103,6 +104,8 @@ function fixture(name: string): SchemaRef {
       return ref(t.s64())
     case "u64":
       return ref(t.u64())
+    case "binary":
+      return ref(t.binary())
     case "duration":
       return ref(t.duration())
     case "quantity":
@@ -125,6 +128,8 @@ function fixture(name: string): SchemaRef {
           field("ignoreCase", t.option(t.bool())),
         ]),
       )
+    case "config-entry":
+      return ref(t.record([field("path", t.list(t.string())), field("value", t.s64())]))
     case "constrained-u32":
       return ref(t.u32({ max: { tag: "unsigned", val: 10n } }))
     case "result":
@@ -222,9 +227,9 @@ describe("reflection conformance corpus", () => {
           break
         }
         case "reject":
-          expect(fixture(testCase.fixture).validateJson(testCase.input!).success, testCase.id).toBe(
-            false,
-          )
+          for (const input of testCase.inputs ?? [testCase.input!]) {
+            expect(fixture(testCase.fixture).validateJson(input).success, testCase.id).toBe(false)
+          }
           break
         case "json-schema":
           expectSubset(

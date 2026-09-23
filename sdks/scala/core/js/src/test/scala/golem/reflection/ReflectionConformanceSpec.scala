@@ -45,6 +45,7 @@ object ReflectionConformanceSpec extends ZIOSpecDefault {
     val root = name match {
       case "s64"        => SchemaType(S64Type())
       case "u64"        => SchemaType(U64Type())
+      case "binary"     => SchemaType(BinaryType(BinaryRestrictions.empty))
       case "duration"   => SchemaType(DurationType)
       case "quantity"   => SchemaType(QuantityType(QuantitySpec("m", Nil, None, None)))
       case "tool-input" =>
@@ -54,6 +55,15 @@ object ReflectionConformanceSpec extends ZIOSpecDefault {
               field("pattern", SchemaType(StringType)),
               field("paths", SchemaType(ListType(SchemaType(StringType)))),
               field("ignoreCase", SchemaType(OptionType(SchemaType(BoolType))))
+            )
+          )
+        )
+      case "config-entry" =>
+        SchemaType(
+          RecordType(
+            List(
+              field("path", SchemaType(ListType(SchemaType(StringType)))),
+              field("value", SchemaType(S64Type()))
             )
           )
         )
@@ -247,7 +257,8 @@ object ReflectionConformanceSpec extends ZIOSpecDefault {
               schema.packJson(testCase("input")).fold(error => throw new AssertionError(s"$id: $error"), identity)
             Predef.assert(schema.unpackJson(packed) == Right(testCase("expected")), id)
           case "reject" =>
-            Predef.assert(fixture(name).validateJson(testCase("input")).isLeft, s"$id was accepted")
+            val inputs = testCase.get("inputs").map(elements).getOrElse(List(testCase("input")))
+            inputs.foreach(input => Predef.assert(fixture(name).validateJson(input).isLeft, s"$id accepted $input"))
           case "json-schema" =>
             assertSubset(
               atPointer(fixture(name).toJsonSchema(false), string(testCase("path"))),

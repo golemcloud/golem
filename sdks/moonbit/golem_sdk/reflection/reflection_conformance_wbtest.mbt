@@ -43,6 +43,10 @@ fn conformance_fixture(name : String) -> SchemaRef raise {
   let root = match name {
     "s64" => @model.schema_type(S64(None))
     "u64" => @model.schema_type(U64(None))
+    "binary" =>
+      @model.schema_type(
+        Binary({ mime_types: None, min_bytes: None, max_bytes: None, }),
+      )
     "duration" => @model.schema_type(Duration)
     "quantity" =>
       @model.schema_type(
@@ -60,6 +64,16 @@ fn conformance_fixture(name : String) -> SchemaRef raise {
             "ignoreCase",
             @model.schema_type(Option(@model.schema_type(Bool))),
           ),
+        ]),
+      )
+    "config-entry" =>
+      @model.schema_type(
+        Record([
+          corpus_field(
+            "path",
+            @model.schema_type(List(@model.schema_type(String))),
+          ),
+          corpus_field("value", @model.schema_type(S64(None))),
         ]),
       )
     "constrained-u32" =>
@@ -257,14 +271,19 @@ test "reflection conformance corpus executes the complete case-ID set" {
           test_case.get("expected").unwrap(),
         )
       }
-      "reject" =>
-        try
-          conformance_fixture(name).pack_json(test_case.get("input").unwrap())
-        catch {
-          _ => ()
-        } noraise {
-          _ => fail("conformance case was accepted: " + id)
+      "reject" => {
+        let inputs = match test_case.get("inputs") {
+          Some(values) => corpus_array(values)
+          None => [test_case.get("input").unwrap()]
         }
+        for input in inputs {
+          try conformance_fixture(name).pack_json(input) catch {
+            _ => ()
+          } noraise {
+            _ => fail("conformance case was accepted: " + id)
+          }
+        }
+      }
       "json-schema" =>
         assert_conformance_subset(
           conformance_at_pointer(

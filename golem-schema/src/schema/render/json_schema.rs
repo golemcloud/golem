@@ -1058,7 +1058,7 @@ fn text_schema(restrictions: &TextRestrictions) -> Map<String, Value> {
 }
 
 fn binary_schema(restrictions: &BinaryRestrictions) -> Map<String, Value> {
-    // Canonical Binary JSON shape: `{ bytes: base64url-string, mime_type?: string }`.
+    // Canonical Binary JSON shape: `{ bytes: base64url-string, mimeType?: string }`.
     // `min_bytes` / `max_bytes` count *raw* bytes; the JSON field is
     // base64url-no-pad-encoded, so the on-wire string length is
     // `base64url_no_pad_len(n) = 4*(n/3) + match n%3 { 0=>0, 1=>2, 2=>3 }`.
