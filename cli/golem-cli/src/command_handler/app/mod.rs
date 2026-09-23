@@ -36,6 +36,7 @@ use crate::command_handler::app::tool_middleware::{
     ResolvedToolMiddlewareGrants, grant_execution_decision,
 };
 use crate::command_handler::app::version_strategy::{ResolvedAppVersionSource, compute_version};
+use crate::command_handler::template::EnvVarRenderer;
 use crate::context::Context;
 use crate::error::service::{MapServiceError, ServiceError};
 use crate::error::{HintError, NonSuccessfulExit};
@@ -1843,8 +1844,6 @@ impl AppCommandHandler {
             }
         }
 
-        let resolved_agent_secret_defaults = resolve_secret_defaults(agent_secret_defaults)?;
-
         let retry_policy_defaults = app_ctx
             .application()
             .deployment_retry_policy_defaults(&deploy_diff.environment.environment_name);
@@ -1860,6 +1859,15 @@ impl AppCommandHandler {
             .await
             .map_service_error()?
             .values;
+        let existing_secret_paths = current_agent_secrets
+            .iter()
+            .map(|secret| secret.path.to_string())
+            .collect::<BTreeSet<_>>();
+        let agent_secret_defaults = resolve_missing_agent_secret_defaults(
+            agent_secret_defaults,
+            &existing_secret_paths,
+            &EnvVarRenderer::new(),
+        )?;
         let current_retry_policies = clients
             .retry_policies
             .list_environment_retry_policies(&deploy_diff.environment.environment_id.0)
@@ -1884,7 +1892,7 @@ impl AppCommandHandler {
 
         build_environment_setup_plan(
             self.ctx.masking_config(),
-            resolved_agent_secret_defaults,
+            agent_secret_defaults,
             retry_policy_defaults,
             resource_defaults,
             current_agent_secrets,
@@ -2946,6 +2954,18 @@ impl AppCommandHandler {
         let mut reset_fallback_applied = false;
         let mut replace_incompatible_agent_secrets = false;
         let result = loop {
+            let agent_secret_defaults = if replace_incompatible_agent_secrets {
+                let mut defaults = environment_setup.agent_secret_defaults.clone();
+                defaults.extend(resolve_secret_defaults(
+                    environment_setup
+                        .skipped_existing_agent_secret_defaults
+                        .clone(),
+                    &EnvVarRenderer::new(),
+                )?);
+                defaults
+            } else {
+                environment_setup.agent_secret_defaults.clone()
+            };
             let deploy_result = clients
                 .environment
                 .deploy_environment(
@@ -2987,17 +3007,7 @@ impl AppCommandHandler {
                             .diffable_local_deployment
                             .universal_tool_middlewares
                             .clone(),
-                        agent_secret_defaults: if replace_incompatible_agent_secrets {
-                            let mut defaults = environment_setup.agent_secret_defaults.clone();
-                            defaults.extend(
-                                environment_setup
-                                    .skipped_existing_agent_secret_defaults
-                                    .clone(),
-                            );
-                            defaults
-                        } else {
-                            environment_setup.agent_secret_defaults.clone()
-                        },
+                        agent_secret_defaults,
                         quota_resource_defaults: environment_setup.resource_defaults.clone(),
                         retry_policy_defaults: environment_setup.retry_policy_defaults.clone(),
                         replace_incompatible_agent_secrets,
@@ -3714,22 +3724,52 @@ impl AppCommandHandler {
     }
 }
 
-fn resolve_secret_defaults(
+/// Substitutes environment variables only in the defaults of secrets that do not exist yet,
+/// so defaults of existing secrets do not require their environment variables to be set.
+fn resolve_missing_agent_secret_defaults(
     defaults: Vec<DeploymentAgentSecretDefault>,
+    existing_secret_paths: &BTreeSet<String>,
+    renderer: &EnvVarRenderer,
 ) -> anyhow::Result<Vec<DeploymentAgentSecretDefault>> {
-    let renderer = crate::command_handler::template::EnvVarRenderer::new();
-
     defaults
         .into_iter()
         .map(|default| {
-            let resolved_value = renderer.render_json_value(&default.secret_value)
-                .map_err(|err| anyhow!("Failed to substitute environment variable(s) in secret default value: {err}"))?;
-            Ok(DeploymentAgentSecretDefault {
-                path: default.path,
-                secret_value: resolved_value,
-            })
+            let path = CanonicalAgentSecretPath::from(default.path.clone()).to_string();
+            if existing_secret_paths.contains(&path) {
+                Ok(default)
+            } else {
+                resolve_secret_default(default, renderer)
+            }
         })
         .collect()
+}
+
+fn resolve_secret_defaults(
+    defaults: Vec<DeploymentAgentSecretDefault>,
+    renderer: &EnvVarRenderer,
+) -> anyhow::Result<Vec<DeploymentAgentSecretDefault>> {
+    defaults
+        .into_iter()
+        .map(|default| resolve_secret_default(default, renderer))
+        .collect()
+}
+
+fn resolve_secret_default(
+    default: DeploymentAgentSecretDefault,
+    renderer: &EnvVarRenderer,
+) -> anyhow::Result<DeploymentAgentSecretDefault> {
+    let resolved_value = renderer
+        .render_json_value(&default.secret_value)
+        .map_err(|err| {
+            anyhow!(
+                "Failed to substitute environment variable(s) in secret default value for {}: {err}",
+                default.path.0.join(".").log_color_highlight()
+            )
+        })?;
+    Ok(DeploymentAgentSecretDefault {
+        path: default.path,
+        secret_value: resolved_value,
+    })
 }
 
 fn collect_declared_agent_secret_types(
@@ -3865,12 +3905,16 @@ fn render_tool_middleware_publication_plan_entry(
 mod tests {
     use super::{
         build_tool_grant_reconciliation_plan, duplicate_component_matches,
-        render_tool_middleware_publication_plan_entry,
+        render_tool_middleware_publication_plan_entry, resolve_missing_agent_secret_defaults,
+        resolve_secret_defaults,
     };
+    use crate::command_handler::template::EnvVarRenderer;
     use crate::fuzzy::Match;
     use crate::model::deploy::EnvironmentToolGrantPlanAction;
     use chrono::Utc;
     use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
+    use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
+    use golem_common::model::deployment::DeploymentAgentSecretDefault;
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::environment_tool_grant::{
@@ -3887,6 +3931,7 @@ mod tests {
     };
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use std::collections::{BTreeSet, HashMap};
     use test_r::test;
 
     fn matched(option: &str, pattern: &str) -> Match {
@@ -4102,5 +4147,83 @@ mod tests {
                 email: AccountEmail::new(owner_email),
             },
         }
+    }
+
+    fn secret_default(path: &[&str], value: &str) -> DeploymentAgentSecretDefault {
+        DeploymentAgentSecretDefault {
+            path: AgentSecretPath(path.iter().map(|s| s.to_string()).collect()),
+            secret_value: serde_json::json!(value),
+        }
+    }
+
+    fn canonical_secret_path(path: &[&str]) -> String {
+        CanonicalAgentSecretPath::from(AgentSecretPath(
+            path.iter().map(|s| s.to_string()).collect(),
+        ))
+        .to_string()
+    }
+
+    fn renderer(vars: &[(&str, &str)]) -> EnvVarRenderer {
+        EnvVarRenderer::with_env_vars(
+            vars.iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<HashMap<_, _>>(),
+        )
+    }
+
+    #[test]
+    fn existing_secret_defaults_do_not_require_env_vars() {
+        let defaults = vec![secret_default(&["db", "password"], "{{ DB_PASSWORD }}")];
+        let existing = BTreeSet::from([canonical_secret_path(&["db", "password"])]);
+
+        let resolved =
+            resolve_missing_agent_secret_defaults(defaults.clone(), &existing, &renderer(&[]))
+                .unwrap();
+
+        assert_eq!(resolved, defaults);
+    }
+
+    #[test]
+    fn missing_secret_defaults_require_env_vars() {
+        let defaults = vec![secret_default(&["db", "password"], "{{ DB_PASSWORD }}")];
+
+        let err = resolve_missing_agent_secret_defaults(defaults, &BTreeSet::new(), &renderer(&[]))
+            .unwrap_err();
+
+        assert!(err.to_string().contains("db.password"), "{err}");
+    }
+
+    #[test]
+    fn only_missing_secret_defaults_are_resolved() {
+        let defaults = vec![
+            secret_default(&["db", "password"], "{{ DB_PASSWORD }}"),
+            secret_default(&["api", "key"], "{{ API_KEY }}"),
+        ];
+        let existing = BTreeSet::from([canonical_secret_path(&["db", "password"])]);
+
+        let resolved = resolve_missing_agent_secret_defaults(
+            defaults,
+            &existing,
+            &renderer(&[("API_KEY", "key-value")]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolved,
+            vec![
+                secret_default(&["db", "password"], "{{ DB_PASSWORD }}"),
+                secret_default(&["api", "key"], "key-value"),
+            ]
+        );
+    }
+
+    #[test]
+    fn skipped_secret_defaults_are_resolved_for_replacement() {
+        let skipped = vec![secret_default(&["db", "password"], "{{ DB_PASSWORD }}")];
+
+        let resolved =
+            resolve_secret_defaults(skipped, &renderer(&[("DB_PASSWORD", "pwd")])).unwrap();
+
+        assert_eq!(resolved, vec![secret_default(&["db", "password"], "pwd")]);
     }
 }

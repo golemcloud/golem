@@ -158,6 +158,8 @@ pub struct EnvironmentSetupResourceDisplay {
 pub struct EnvironmentSetupPlan {
     pub display: EnvironmentSetupDisplay,
     pub agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
+    /// Values still contain unresolved environment variable references; they are only
+    /// resolved when incompatible existing secrets get replaced.
     pub skipped_existing_agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
     pub retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>,
     pub resource_defaults: Vec<ResourceDefinitionCreation>,
@@ -342,7 +344,7 @@ pub fn preferred_source_language_for_setup(
 
 pub fn build_environment_setup_plan(
     masking: MaskingConfig,
-    resolved_agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
+    agent_secret_defaults: Vec<DeploymentAgentSecretDefault>,
     retry_policy_defaults: Vec<DeploymentRetryPolicyDefault>,
     resource_defaults: Vec<ResourceDefinitionCreation>,
     current_agent_secrets: Vec<AgentSecretDto>,
@@ -353,7 +355,7 @@ pub fn build_environment_setup_plan(
 ) -> anyhow::Result<EnvironmentSetupPlan> {
     let mut display = EnvironmentSetupDisplay::default();
 
-    let local_secret_defaults = resolved_agent_secret_defaults
+    let local_secret_defaults = agent_secret_defaults
         .iter()
         .map(|default| {
             let canonical_path = CanonicalAgentSecretPath::from(default.path.clone());
@@ -393,7 +395,7 @@ pub fn build_environment_setup_plan(
         })
         .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
-    let secret_defaults_by_path = resolved_agent_secret_defaults
+    let secret_defaults_by_path = agent_secret_defaults
         .iter()
         .map(|default| {
             (
