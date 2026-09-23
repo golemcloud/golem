@@ -22,6 +22,8 @@ mod backend;
 #[cfg_attr(not(test), allow(dead_code))]
 mod fault;
 #[cfg_attr(not(test), allow(dead_code))]
+mod prune;
+#[cfg_attr(not(test), allow(dead_code))]
 mod publish;
 
 #[cfg(test)]
