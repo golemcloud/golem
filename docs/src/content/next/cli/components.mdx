@@ -93,7 +93,7 @@ golem component update-agents example:component
 
 The update request is enqueued and processed by the agents asynchronously. Use the `--await` flag to wait for the updates to finish, and `--update-mode manual` to use manual instead of automatic updates.
 
-To update the agents of all components of the application, use `golem update-agents`.
+To update the agents of multiple components, use `golem update-agents`. It selects the components based on the current directory (all components when run from the application root), or they can be passed as arguments.
 
 <Callout type="warning">
   Note that automatic agent update is not guaranteed to succeed, if the updated component differs
@@ -112,6 +112,6 @@ This workflow is supported by the `component redeploy-agents` command:
 golem component redeploy-agents example:component
 ```
 
-This command deletes all agents of the component and re-creates them with the same name, parameters and environment variables, using the current revision of the component.
+This command deletes all agents of the component and re-creates them with the same name, parameters, environment variables and configuration, using the current revision of the component.
 
-To redeploy the agents of all components of the application, use `golem redeploy-agents`, or pass `--redeploy-agents` to `golem deploy`.
+To redeploy the agents of multiple components, use `golem redeploy-agents` (components are selected the same way as for `golem update-agents`), or pass `--redeploy-agents` to `golem deploy`.

@@ -34,7 +34,7 @@ and every component can be deployed using
 golem deploy
 ```
 
-This is going to create a new **revision** of each changed component. If there are agents created already, those are not going to be updated automatically to these new revisions, unless `golem deploy` is called with `--update-agents`, `--redeploy-agents` or `--reset`. Check the [agents page](/next/concepts/agents) for more information about updating agents.
+This is going to create a new **revision** of each changed component. If there are agents created already, those are not going to be updated automatically to these new revisions, unless `golem deploy` is called with `--update-agents` (update the agents) or `--redeploy-agents` (delete and recreate the agents). Alternatively, `--reset` deletes the existing agents and the environment before deploying. Check the [agents page](/next/concepts/agents) for more information about updating agents.
 
 ## Defining APIs
 

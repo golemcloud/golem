@@ -25,7 +25,7 @@ golem agent new 'CounterAgent("my-counter")' --env A=1 --env B=2
 
 ### Using the agent ID
 
-You can get the agent metadata using the agent-id (the agent type and it's constructor parameters), optionally prefixed by the environment name (and application name) if it is not inferrable from the current context:
+You can get the agent metadata using the agent-id (the agent type and it's constructor parameters), optionally prefixed by the environment name (`<ENVIRONMENT>/`, `<APPLICATION>/<ENVIRONMENT>/` or `<ACCOUNT>/<APPLICATION>/<ENVIRONMENT>/`) if it is not inferrable from the current context:
 
 ```shell copy
 golem agent get 'CounterAgent("my-counter")'
@@ -56,7 +56,7 @@ The folowing section shows the basics of invoking agents through the CLI. See th
 You can invoke an agent function without waiting for function result using `agent invoke --trigger` command:
 
 ```shell copy
-golem agent invoke --trigger 'CounterAgent("my-counter")' incrementBy 5
+golem agent invoke --trigger 'CounterAgent("my-counter")' add 5
 ```
 
 ### Waiting for result
@@ -64,7 +64,7 @@ golem agent invoke --trigger 'CounterAgent("my-counter")' incrementBy 5
 You can invoke an agent method and wait for result using `agent invoke` command:
 
 ```shell copy
-golem agent invoke 'CounterAgent("my-counter")' getValue
+golem agent invoke 'CounterAgent("my-counter")' value
 ```
 
 ```
@@ -129,7 +129,7 @@ Please note that a next invocation to the same agent will recreate it with fresh
 
 ```shell
 golem agent delete 'CounterAgent("my-counter")'
-golem agent invoke 'CounterAgent("my-counter")' getValue
+golem agent invoke 'CounterAgent("my-counter")' value
 ```
 
 ```
@@ -172,11 +172,13 @@ The terms and fields are interpreted in the following way:
 | `Start` (durable host call started)                          | `start`, `imported-function`, match on the host function's name, match on request value(\*)                                                                   |
 | `End` (durable host call finished)                           | `end`, match on response value(\*)                                                                                                                            |
 | `Cancelled`                                                  | `cancelled`, match on partial value(\*)                                                                                                                       |
-| `AgentInvocationStarted`                                     | `agent-invocation-started`, `invoke`, `agent-initialization`, `agent-method-invocation`, `external-tool`, match on method or tool name, match on idempotency key |
-| `AgentInvocationFinished`                                    | `agent-invocation-finished`, `invoke`                                                                                                                         |
-| `PendingAgentInvocation`                                     | `pending-agent-invocation`, `invoke`, `agent-initialization`, `agent-method-invocation`, `external-tool`, match on method or tool name, match on idempotency key |
+| `CompletionDiscarded` / `CompletionDelivered`                | `completion-discarded` / `completion-delivered`                                                                                                               |
+| `AgentInvocationStarted`                                     | `agent-invocation-started`, `invoke`, and depending on the invocation kind: `agent-initialization`, `agent-method-invocation`, `external-tool`, `save-snapshot`, `load-snapshot`, `process-oplog-entries`; match on method or tool name, match on idempotency key, match on target revision (manual updates) |
+| `AgentInvocationFinished`                                    | `agent-invocation-finished`, `invoke`, match on consumed fuel                                                                                                 |
+| `PendingAgentInvocation`                                     | `pending-agent-invocation`, `invoke`, and the same invocation kind terms and matches as `AgentInvocationStarted` (pending external tool calls are not matched on idempotency key) |
 | `Suspend`                                                    | `suspend`                                                                                                                                                     |
 | `Error`                                                      | `error`, match on error message                                                                                                                               |
+| `RecoverySucceeded`                                          | `recovery-succeeded`                                                                                                                                          |
 | `NoOp`                                                       | `noop`                                                                                                                                                        |
 | `Jump`                                                       | `jump`                                                                                                                                                        |
 | `Interrupted`                                                | `interrupted`                                                                                                                                                 |
@@ -201,11 +203,14 @@ The terms and fields are interpreted in the following way:
 | `SetSpanAttribute`                                           | `set-span-attribute`, `setspanattribute`, match on key, match on value(\*)                                                                                    |
 | `SetRetryPolicy` / `RemoveRetryPolicy`                       | `set-retry-policy` / `remove-retry-policy`                                                                                                                    |
 | `Snapshot`                                                   | `snapshot`                                                                                                                                                    |
+| `OplogProcessorCheckpoint`                                   | `oplog-processor-checkpoint`                                                                                                                                  |
 | `BeginRemoteTransaction`, `CommittedRemoteTransaction`, etc. | `begin-remote-transaction`, `pre-commit-remote-transaction`, `pre-rollback-remote-transaction`, `committed-remote-transaction`, `rolled-back-remote-transaction` |
+| Card entries                                                 | `card-installed`, `card-install-failed`, `card-derived`, `card-revoked`, `card-revoked-cascade`, `card-expired`, `card-event-queued`, `card-transfer-started`, `card-transferred`, `card-transfer-confirmed`; match on card ID or transfer ID |
+| Stream entries                                               | `host-stream-frame`, `stream-registered`, `stream-items`, `stream-end`, `stream-cancel`, `stream-session`                                                     |
 
-Most entry kinds can also be matched by their name without dashes (for example `beginatomicregion`).
+Search terms are case-insensitive substring matches, so for example `start` also matches `agent-invocation-started` and `start-span` entries; combine terms with `AND` / `NOT` to narrow the results. Most entry kinds can also be matched by their name without dashes (for example `beginatomicregion`), except `CancelPendingInvocation`.
 
-The cases marked with **(\*)** can use the `field:value` syntax to look into the typed, structured values. The field path starts with `request`, `response` or `partial` and continues with record field names, for example `request.product-id:123`.
+The cases marked with **(\*)** can use the `field:value` syntax to look into the typed, structured values. For `Start`, `End` and `Cancelled` entries the field path starts with `request`, `response` or `partial` and continues with record field names, for example `request.product-id:123`. For span attributes, the field path is the attribute key, for example `http.method:GET`.
 
 For example to look for **durable host calls** whose request value is a **record** having a field `product-id` with either value `123` or `456`, we can use the following query:
 
