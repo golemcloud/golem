@@ -2229,6 +2229,103 @@ fn config_constructors_are_generated() {
     ));
 }
 
+#[test]
+fn reflection_corpus_drives_generated_runtime_wire_regressions() {
+    let corpus: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            workspace_root()
+                .unwrap()
+                .join("test-data/reflection-conformance/v1.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let case = |id: &str| {
+        corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == id)
+            .unwrap()
+    };
+    let binary_expected = case("canonical/binary-mime")["expected"].to_string();
+    let invalid_binary = case("errors/binary-noncanonical-base64")["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| serde_json::to_string(&value.to_string()).unwrap())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let config_expected = case("config/canonical-entry")["expected"].to_string();
+    let request_expected = format!(
+        "{{\"appName\":\"app\",\"envName\":\"env\",\"agentTypeName\":\"ConfigAgent\",\"parameters\":{{\"kind\":\"tuple\",\"value\":{{\"elements\":[]}}}},\"config\":[{config_expected}]}}"
+    );
+
+    let mut agent_type = agent(
+        "ConfigAgent",
+        "moonbit",
+        vec![],
+        vec![method("ping", vec![], None)],
+        vec![],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(vec!["limits", "maximum"], SchemaType::s64())];
+    let pkg = GeneratedPackage::new(agent_type);
+    let source = r#"test "reflection corpus bridge wire cases" {
+  let mime_type = "application/octet-stream"
+  let binary_value = BinaryValue(b"\xfb\xff", Some(mime_type))
+  assert_eq(
+    schema_value_to_json(binary_value).stringify(),
+    "{\"kind\":\"binary\",\"value\":{\"bytes\":[251,255],\"mimeType\":\"application/octet-stream\"}}",
+  )
+  let binary_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"binary\",\"value\":{\"restrictions\":{}}}}",
+  )
+  assert_eq(binary_codec.encode(binary_value).stringify(), __BINARY_EXPECTED__)
+  for input in [__INVALID_BINARY__] {
+    try binary_codec.decode(@json.parse(input)) catch {
+      BridgeError(_) => ()
+      _ => fail("expected noncanonical binary JSON to be rejected")
+    } noraise {
+      _ => fail("expected noncanonical binary JSON to be rejected")
+    }
+  }
+  let s64_codec = public_value_codec(
+    "{\"root\":{\"kind\":\"s64\",\"value\":{}}}",
+  )
+  let entry = AgentConfigEntry::{
+    path: ["limits", "maximum"],
+    value: S64Value(9223372036854775807L),
+    codec: s64_codec,
+  }
+  let request = encode_create_agent_request(
+    "app",
+    "env",
+    "ConfigAgent",
+    TupleValue([]),
+    None,
+    [entry],
+  )
+  assert_eq(request.stringify(), __REQUEST_EXPECTED__)
+}
+"#
+    .replace(
+        "__BINARY_EXPECTED__",
+        &serde_json::to_string(&binary_expected).unwrap(),
+    )
+    .replace("__INVALID_BINARY__", &invalid_binary)
+    .replace(
+        "__REQUEST_EXPECTED__",
+        &serde_json::to_string(&request_expected).unwrap(),
+    );
+    std::fs::write(
+        pkg.module_dir().join("runtime/reflection_wire_wbtest.mbt"),
+        source,
+    )
+    .unwrap();
+    pkg.test_native();
+}
+
 /// An ephemeral agent must not get a `get_with_config` (no parameter-addressable
 /// `get`), but still gets the phantom config variants.
 #[test]

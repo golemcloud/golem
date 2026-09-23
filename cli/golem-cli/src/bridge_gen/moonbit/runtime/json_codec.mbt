@@ -184,7 +184,7 @@ pub fn schema_value_to_json(value : SchemaValue) -> Json {
       }
       let fields : Array[(String, Json)] = [("bytes", Json::array(arr))]
       match mime_type {
-        Some(m) => fields.push(("mime_type", Json::string(m)))
+        Some(m) => fields.push(("mimeType", Json::string(m)))
         None => ()
       }
       node("binary", obj(fields))
@@ -417,7 +417,7 @@ pub fn schema_value_from_json(j : Json) -> SchemaValue raise {
       for b in arr {
         buf.write_byte(parse_int_range(b, 0, 255, "byte").to_byte())
       }
-      let mime = match field_opt(m, "mime_type") {
+      let mime = match field_opt(m, "mimeType") {
         Some(x) => Some(expect_string(x))
         None => None
       }

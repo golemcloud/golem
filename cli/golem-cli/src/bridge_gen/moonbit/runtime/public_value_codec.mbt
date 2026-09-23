@@ -673,9 +673,9 @@ fn pvc_b64_value(c : Char) -> Int {
     c.to_int() - 'a'.to_int() + 26
   } else if c >= '0' && c <= '9' {
     c.to_int() - '0'.to_int() + 52
-  } else if c == '+' {
+  } else if c == '-' {
     62
-  } else if c == '/' {
+  } else if c == '_' {
     63
   } else {
     -1
@@ -685,25 +685,25 @@ fn pvc_b64_value(c : Char) -> Int {
 ///|
 fn pvc_base64_decode(value : String) -> Bytes raise {
   let chars = value.to_array()
-  if chars.length() % 4 != 0 {
-    pvc_fail("base64 padding is missing")
+  if chars.length() % 4 == 1 {
+    pvc_fail("binary bytes are not canonical unpadded base64url")
   }
   let bytes : Array[Byte] = []
   for i = 0; i < chars.length(); i = i + 4 {
     let a = pvc_b64_value(chars[i])
     let b = pvc_b64_value(chars[i + 1])
-    let last = i + 4 == chars.length()
-    let c = if chars[i + 2] == '=' { -2 } else { pvc_b64_value(chars[i + 2]) }
-    let d = if chars[i + 3] == '=' { -2 } else { pvc_b64_value(chars[i + 3]) }
-    if a < 0 ||
-      b < 0 ||
-      c == -1 ||
-      d == -1 ||
-      (!last && (c < 0 || d < 0)) ||
-      (c == -2 && d != -2) ||
-      (c == -2 && (b & 15) != 0) ||
-      (d == -2 && c >= 0 && (c & 3) != 0) {
-      pvc_fail("binary bytes are not canonical padded base64")
+    let c = if i + 2 < chars.length() {
+      pvc_b64_value(chars[i + 2])
+    } else {
+      -2
+    }
+    let d = if i + 3 < chars.length() {
+      pvc_b64_value(chars[i + 3])
+    } else {
+      -2
+    }
+    if a < 0 || b < 0 || c == -1 || d == -1 {
+      pvc_fail("binary bytes are not canonical unpadded base64url")
     }
     bytes.push(((a << 2) | (b >> 4)).to_byte())
     if c >= 0 {
@@ -713,12 +713,16 @@ fn pvc_base64_decode(value : String) -> Bytes raise {
       }
     }
   }
-  Bytes::from_array(bytes)
+  let result = Bytes::from_array(bytes)
+  if pvc_base64_encode(result) != value {
+    pvc_fail("binary bytes are not canonical unpadded base64url")
+  }
+  result
 }
 
 ///|
 fn pvc_base64_encode(bytes : Bytes) -> String {
-  let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
   let out = StringBuilder()
   for i = 0; i < bytes.length(); i = i + 3 {
     let a = bytes[i].to_int()
@@ -728,20 +732,12 @@ fn pvc_base64_encode(bytes : Bytes) -> String {
     let c = if have_c { bytes[i + 2].to_int() } else { 0 }
     out.write_char(alphabet.get_char(a >> 2).unwrap())
     out.write_char(alphabet.get_char(((a & 3) << 4) | (b >> 4)).unwrap())
-    out.write_char(
-      if have_b {
-        alphabet.get_char(((b & 15) << 2) | (c >> 6)).unwrap()
-      } else {
-        '='
-      },
-    )
-    out.write_char(
-      if have_c {
-        alphabet.get_char(c & 63).unwrap()
-      } else {
-        '='
-      },
-    )
+    if have_b {
+      out.write_char(alphabet.get_char(((b & 15) << 2) | (c >> 6)).unwrap())
+    }
+    if have_c {
+      out.write_char(alphabet.get_char(c & 63).unwrap())
+    }
   }
   out.to_string()
 }
