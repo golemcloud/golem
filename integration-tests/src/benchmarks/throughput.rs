@@ -38,6 +38,7 @@ use indoc::indoc;
 use reqwest::{Body, Method, Request, Url};
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::time::Instant;
 use tracing::{Instrument, Level, info};
 
 pub struct ThroughputEcho {
@@ -797,7 +798,13 @@ impl ThroughputBenchmark {
                 })
                 .collect::<Vec<_>>();
 
+            let start = Instant::now();
             let results = result_futures.join().await;
+            recorder.duration(&format!("{prefix}batch-duration").into(), start.elapsed());
+            recorder.count(
+                &format!("{prefix}batch-completions").into(),
+                results.iter().map(Vec::len).sum::<usize>() as u64,
+            );
             for (idx, (results, target)) in results.iter().zip(targets).enumerate() {
                 let prefix = target.prefix(prefix, routing_table);
                 for result in results {
@@ -904,7 +911,13 @@ impl ThroughputBenchmark {
                 })
                 .collect::<Vec<_>>();
 
+            let start = Instant::now();
             let results = result_futures.join().await;
+            recorder.duration(&"rust-agent-http-batch-duration".into(), start.elapsed());
+            recorder.count(
+                &"rust-agent-http-batch-completions".into(),
+                results.iter().map(Vec::len).sum::<usize>() as u64,
+            );
             for (idx, results) in results.iter().enumerate() {
                 for result in results {
                     result.record(&recorder, "rust-agent-http-", idx.to_string().as_str());
@@ -937,7 +950,13 @@ impl ThroughputBenchmark {
                 })
                 .collect::<Vec<_>>();
 
+            let start = Instant::now();
             let results = result_futures.join().await;
+            recorder.duration(&"ts-agent-http-batch-duration".into(), start.elapsed());
+            recorder.count(
+                &"ts-agent-http-batch-completions".into(),
+                results.iter().map(Vec::len).sum::<usize>() as u64,
+            );
             for (idx, results) in results.iter().enumerate() {
                 for result in results {
                     result.record(&recorder, "ts-agent-http-", idx.to_string().as_str());
