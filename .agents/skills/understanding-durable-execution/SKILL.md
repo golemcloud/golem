@@ -192,9 +192,11 @@ retries by reloading persisted identity and pending initialization. Local succes
 resolved data and `Unloaded` state. Remote topology recovery and dependent finished-session recovery
 run together in the post-publication reconciler, preserving the deletion gate: attachment RPCs can
 acquire mutually referring cold workers on different executors, so awaiting them before publication
-would create a cycle. Local readiness does not authorize a merely prepared stream attachment.
+would create a cycle. Local readiness does not authorize a merely prepared stream attachment. Each
+reconciler uses a child of the executor shutdown token, so graph shutdown stops new periodic passes;
+worker retirement and deletion also cancel and join the reconciler's in-flight pass.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
-existing-only acquisition, and reciprocal cold topologies.
+existing-only acquisition, reciprocal cold topologies, and reconciler graph shutdown.
 
 Lifecycle operations acquire the cached or persisted `Worker` through an existing-only path, so
 interrupt, delete, resume, update, revert, and plugin changes never create an absent agent. Delete

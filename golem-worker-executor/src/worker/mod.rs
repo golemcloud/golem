@@ -95,8 +95,9 @@ use crate::services::{
     HasEnvironmentStateService, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
     HasKeyValueService, HasNativeToolCatalog, HasOplog, HasOplogService, HasPromiseService,
     HasQuotaService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService,
-    HasShardService, HasWasmtimeEngine, HasWebSocketConnectionPool, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWebSocketConnectionPool,
+    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    UsesAllDeps,
 };
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation_loop::{
@@ -876,13 +877,19 @@ impl DurableTopologyRecoveryCache {
 }
 
 /// Owns the periodic task so worker deletion can join it before removing oplog storage.
-#[derive(Default)]
 struct DurableStreamAttachmentReconciler {
     shutdown: CancellationToken,
     handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl DurableStreamAttachmentReconciler {
+    fn new(executor_shutdown: CancellationToken) -> Self {
+        Self {
+            shutdown: executor_shutdown.child_token(),
+            handle: Mutex::new(None),
+        }
+    }
+
     fn start(&self, handle: JoinHandle<()>) {
         let mut stored = self
             .handle
@@ -897,6 +904,10 @@ impl DurableStreamAttachmentReconciler {
 
     async fn stop(&self) {
         self.shutdown.cancel();
+        self.wait().await;
+    }
+
+    async fn wait(&self) {
         let mut stored = self.handle.lock().await;
         if let Some(handle) = stored.as_mut() {
             let _ = handle.await;
@@ -1996,7 +2007,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owner_retirement: tokio::sync::OnceCell::new(),
             owner_cleanup: Mutex::new(OwnerCleanupState::PreRemoval),
             owner_retirement_requested: CancellationToken::new(),
-            durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler::default(),
+            durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler::new(
+                deps.shutdown_token(),
+            ),
             durable_topology_recovery: Arc::new(
                 Mutex::new(DurableTopologyRecoveryCache::default()),
             ),
@@ -7407,6 +7420,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         this.durable_stream_attachment_reconciler.start(handle);
     }
 
+    #[cfg(feature = "test-utils")]
+    pub async fn wait_for_durable_stream_attachment_reconciler(&self) {
+        self.durable_stream_attachment_reconciler.wait().await;
+    }
+
     /// Appends an oplog entry without forcing a durable commit. Callers that
     /// require ordering must await the append before exposing subsequent work.
     pub async fn add_to_oplog(&self, entry: OplogEntry) -> OplogIndex {
@@ -11199,7 +11217,9 @@ mod tests {
 
     #[test]
     async fn stopping_durable_stream_reconciler_waits_for_in_flight_pass() {
-        let reconciler = Arc::new(DurableStreamAttachmentReconciler::default());
+        let reconciler = Arc::new(DurableStreamAttachmentReconciler::new(
+            CancellationToken::new(),
+        ));
         let shutdown = reconciler.shutdown.clone();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
@@ -11237,7 +11257,9 @@ mod tests {
 
     #[test]
     async fn cancelled_reconciler_stop_retains_the_in_flight_pass_barrier() {
-        let reconciler = Arc::new(DurableStreamAttachmentReconciler::default());
+        let reconciler = Arc::new(DurableStreamAttachmentReconciler::new(
+            CancellationToken::new(),
+        ));
         let shutdown = reconciler.shutdown.clone();
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
