@@ -28,9 +28,7 @@ import * as AgentRuntime from "../src/index.js"
 import * as MiddlewareRuntime from "../src/Middleware.js"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 
-void (AgentRuntime satisfies typeof import("agent-guest"))
-void (AgentRuntime satisfies typeof import("agent-tool-middleware-guest"))
-void (MiddlewareRuntime satisfies typeof import("tool-middleware-guest"))
+void ({ ...AgentRuntime, ...MiddlewareRuntime } satisfies typeof import("agent-guest"))
 
 /**
  * Structural mutual-assignability check, recursively normalising

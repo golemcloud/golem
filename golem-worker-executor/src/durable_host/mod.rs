@@ -5413,7 +5413,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 _ => None,
             };
 
-            self.public_state
+            let finished_index = self
+                .public_state
                 .worker()
                 .oplog()
                 .add_agent_invocation_finished(
@@ -5427,9 +5428,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     panic!("could not encode function result for {full_function_name}: {err}")
                 });
 
+            let commit_level = match self.public_state.worker().agent_mode() {
+                AgentMode::Durable => CommitLevel::Always,
+                AgentMode::Ephemeral => CommitLevel::Deferred,
+            };
             self.public_state
                 .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
+                .commit_oplog_before_status_update(commit_level)
                 .await;
 
             // Bump the read-only cache epoch after the
@@ -5448,13 +5453,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             // worker's per-instance fingerprint, so the response carries
             // an unambiguous identification of the agent state it was
             // produced from.
-            output.oplog_index = Some(
-                self.public_state
-                    .worker()
-                    .oplog()
-                    .current_oplog_index()
-                    .await,
-            );
+            output.oplog_index = Some(finished_index);
             output.agent_fingerprint = Some(
                 self.public_state
                     .worker()

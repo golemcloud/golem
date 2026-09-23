@@ -370,6 +370,8 @@ async fn durable_stream_cors_exposes_producer_outcomes_only_for_stream_routes() 
                     "Producer-Expected-Seq",
                     "Producer-Received-Seq",
                     "Stream-Next-Offset",
+                    "Stream-TTL",
+                    "Stream-Expires-At",
                     "Location",
                     "Retry-After",
                 ] {
@@ -785,6 +787,69 @@ fn durable_stream_fork_creation_documents_runtime_response_headers() {
         missing.is_empty(),
         "missing runtime response headers: {missing:?}"
     );
+}
+
+#[test]
+fn durable_stream_expiry_headers_are_documented_on_creation_and_head() {
+    use golem_common::schema::NamedField;
+
+    let mut route = call_agent_route(
+        Method::PUT,
+        vec![PathSegment::Literal {
+            value: "expiry-headers".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let RichRouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        panic!()
+    };
+    call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+    call.method_input.input_schema = InputSchema::parameters([NamedField::user_supplied(
+        "input",
+        SchemaType::stream(Some(str())),
+    )]);
+
+    let spec = spec_for(vec![route]);
+    let paths = &spec["paths"];
+    let cases = [
+        ("/expiry-headers", "put"),
+        ("/expiry-headers/invocations/{session}", "put"),
+        ("/expiry-headers/invocations/{session}/streams/input", "put"),
+        (
+            "/expiry-headers/invocations/{session}/streams/input",
+            "post",
+        ),
+        (
+            "/expiry-headers/forks/{fork}/invocations/{session}/streams/input",
+            "put",
+        ),
+    ];
+    for (path, method) in cases {
+        let names = paths[path][method]["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|parameter| parameter["name"].as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(names.contains("Stream-TTL"), "{method} {path}");
+        assert!(names.contains("Stream-Expires-At"), "{method} {path}");
+    }
+
+    for path in [
+        "/expiry-headers/invocations/{session}",
+        "/expiry-headers/invocations/{session}/streams/input",
+    ] {
+        let headers = &paths[path]["head"]["responses"]["200"]["headers"];
+        assert!(headers["Stream-TTL"].is_object(), "HEAD {path}");
+        assert!(headers["Stream-Expires-At"].is_object(), "HEAD {path}");
+    }
+    let get_headers = &paths["/expiry-headers/invocations/{session}/streams/input"]["get"]["responses"]
+        ["200"]["headers"];
+    assert!(get_headers["Stream-TTL"].is_null());
+    assert!(get_headers["Stream-Expires-At"].is_null());
 }
 
 #[test]

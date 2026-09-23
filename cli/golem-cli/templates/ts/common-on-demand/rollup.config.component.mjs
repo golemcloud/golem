@@ -52,21 +52,6 @@ function loadComponentTsConfig(componentDir) {
 }
 
 const sdkPackage = "@golemcloud/golem-ts-sdk";
-const middlewareSdkPackage = `${sdkPackage}/middleware`;
-const componentRoles = {
-    agent: {
-        template: "ts",
-        sdkImport: sdkPackage,
-    },
-    "tool-middleware": {
-        template: "ts-tool-middleware",
-        sdkImport: middlewareSdkPackage,
-    },
-    "agent-tool-middleware": {
-        template: "ts-agent-tool-middleware",
-        sdkImport: sdkPackage,
-    },
-};
 
 function visit(node, callback) {
     callback(node);
@@ -117,11 +102,6 @@ function normalizedFileName(fileName) {
     return ts.sys.useCaseSensitiveFileNames ? normalized : normalized.toLowerCase();
 }
 
-function declarationName(declaration) {
-    const name = declaration?.name;
-    return name && (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) ? name.text : undefined;
-}
-
 function isSdkModule(moduleName) {
     return moduleName === sdkPackage || moduleName.startsWith(`${sdkPackage}/`);
 }
@@ -135,19 +115,11 @@ function resolveModule(moduleName, sourceFile, compilerOptions) {
     ).resolvedModule;
 }
 
-function validateComponentRole(parsedTsConfig, roleName) {
-    const role = componentRoles[roleName];
-    if (!role) {
-        throw new Error(
-            `Unknown GOLEM_COMPONENT_ROLE ${JSON.stringify(roleName)}. Expected one of: ${Object.keys(componentRoles).join(", ")}`,
-        );
-    }
-
+function validateSdkImports(parsedTsConfig) {
     const program = ts.createProgram({
         rootNames: parsedTsConfig.fileNames,
         options: parsedTsConfig.options,
     });
-    const checker = program.getTypeChecker();
     const rootFileNames = new Set(parsedTsConfig.fileNames.map(normalizedFileName));
     const userSources = program
         .getSourceFiles()
@@ -155,16 +127,14 @@ function validateComponentRole(parsedTsConfig, roleName) {
         .filter((sourceFile) => rootFileNames.has(normalizedFileName(sourceFile.fileName)));
     const violations = [];
     const sdkEntriesBySource = new Map();
-    const sdkDeclarationFiles = new Set();
 
     for (const sourceFile of userSources) {
         const sdkEntries = new Map();
-        for (const sdkEntry of [sdkPackage, middlewareSdkPackage]) {
+        for (const sdkEntry of [sdkPackage, `${sdkPackage}/middleware`]) {
             const resolved = resolveModule(sdkEntry, sourceFile, parsedTsConfig.options);
             if (!resolved) continue;
             const resolvedFileName = normalizedFileName(resolved.resolvedFileName);
             sdkEntries.set(resolvedFileName, sdkEntry);
-            if (sdkEntry === sdkPackage) sdkDeclarationFiles.add(resolvedFileName);
         }
         sdkEntriesBySource.set(sourceFile, sdkEntries);
     }
@@ -179,7 +149,7 @@ function validateComponentRole(parsedTsConfig, roleName) {
             if (!resolved) {
                 if (directSdkModule) {
                     violations.push(
-                        `${sourceLocation(sourceFile, node)} cannot resolve ${JSON.stringify(moduleName)}, which is required to validate component template ${JSON.stringify(role.template)}.`,
+                        `${sourceLocation(sourceFile, node)} cannot resolve ${JSON.stringify(moduleName)}.`,
                     );
                 }
                 return;
@@ -192,42 +162,16 @@ function validateComponentRole(parsedTsConfig, roleName) {
                       ?.get(normalizedFileName(resolved.resolvedFileName));
             if (!sdkModule && resolved.packageId?.name === sdkPackage) {
                 violations.push(
-                    `${sourceLocation(sourceFile, node)} imports ${JSON.stringify(moduleName)}, which resolves to an unsupported ${JSON.stringify(sdkPackage)} entry point; component template ${JSON.stringify(role.template)} requires ${JSON.stringify(role.sdkImport)}.`,
+                    `${sourceLocation(sourceFile, node)} imports ${JSON.stringify(moduleName)}, which resolves to an unsupported ${JSON.stringify(sdkPackage)} entry point.`,
                 );
                 return;
             }
-            if (!sdkModule || sdkModule === role.sdkImport) return;
-
-            const resolvedThroughAlias = moduleName === sdkModule
-                ? ""
-                : `, which resolves to ${JSON.stringify(sdkModule)}`;
-            violations.push(
-                `${sourceLocation(sourceFile, node)} imports ${JSON.stringify(moduleName)}${resolvedThroughAlias}, but component template ${JSON.stringify(role.template)} requires ${JSON.stringify(role.sdkImport)}.`,
-            );
+            if (!sdkModule) return;
         });
     }
 
-    if (roleName === "agent") {
-        for (const sourceFile of userSources) {
-            visit(sourceFile, (node) => {
-                if (!ts.isCallExpression(node)) return;
-                const declaration = checker.getResolvedSignature(node)?.declaration;
-                if (
-                    !declaration ||
-                    !sdkDeclarationFiles.has(normalizedFileName(declaration.getSourceFile().fileName)) ||
-                    !["middleware", "universalToolMiddleware"].includes(declarationName(declaration))
-                ) {
-                    return;
-                }
-                violations.push(
-                    `${sourceLocation(sourceFile, node)} defines tool middleware, but component template "ts" does not export tool middleware. Use "ts-tool-middleware" for middleware only or "ts-agent-tool-middleware" for agents, tools, and middleware together.`,
-                );
-            });
-        }
-    }
-
     if (violations.length > 0) {
-        throw new Error(`Invalid TypeScript component role:\n${violations.join("\n")}`);
+        throw new Error(`Invalid TypeScript SDK import:\n${violations.join("\n")}`);
     }
 }
 
@@ -240,11 +184,6 @@ function componentRollupConfig() {
     if (!golemTemp) {
         throw new Error("GOLEM_TEMP is not set");
     }
-    const componentRole = process.env.GOLEM_COMPONENT_ROLE;
-    if (!componentRole) {
-        throw new Error("GOLEM_COMPONENT_ROLE is not set");
-    }
-
     const componentDir = process.cwd();
     const parsedTsConfig = loadComponentTsConfig(componentDir);
 
@@ -287,9 +226,9 @@ function componentRollupConfig() {
 
     const plugins = [
         {
-            name: "component-role",
+            name: "sdk-imports",
             buildStart() {
-                validateComponentRole(parsedTsConfig, componentRole);
+                validateSdkImports(parsedTsConfig);
             },
         },
         virtualAgentMainPlugin(),

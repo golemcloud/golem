@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Generates the QuickJS-based guest runtimes for every Scala component role.
+# Generates the QuickJS-based Scala guest runtime.
 #
 # Why this exists:
 # - The guest runtime is version-sensitive to the Golem server/CLI WIT surface.
 # - When upgrading Golem, regenerating the guest runtime avoids mysterious linker/discovery failures.
 #
 # This script:
-# 1) stages a WIT package for each role (using wit/main.wit + wit/deps/)
+# 1) stages the WIT package (using wit/main.wit + wit/deps/)
 # 2) runs `wasm-rquickjs generate-wrapper-crate` with a `@slot` for user JS injection.
 #    Unlike the TS SDK, we do NOT embed a separate SDK JS module here.
 #    Scala.js bundles the SDK into the user's `scala.js`, which golem-cli injects later.
@@ -71,11 +71,8 @@ else
   mkdir -p "$target_dir"
 fi
 
-# role|world|artifact
 roles=(
   "agent-guest|golem:agent-guest/agent-guest|agent_guest.wasm"
-  "tool-middleware-guest|golem:agent-guest/tool-middleware-guest|tool_middleware_guest.wasm"
-  "agent-tool-middleware-guest|golem:agent-guest/agent-tool-middleware-guest|agent_tool_middleware_guest.wasm"
 )
 
 for role_spec in "${roles[@]}"; do
@@ -162,11 +159,9 @@ for role_spec in "${roles[@]}"; do
   install -m 0644 "$out_wasm" "$sdk_root/sbt/src/main/resources/golem/wasm/$artifact"
   install -m 0644 "$out_wasm" "$sdk_root/mill/resources/golem/wasm/$artifact"
 
-  if [[ "$role" == "agent-guest" ]]; then
-    echo "[agent-guest] Copying ordinary TypeScript d.ts definitions to wit/dts/..." >&2
-    rm -rf "$sdk_root/wit/dts"
-    cp -r "$dts_dir" "$sdk_root/wit/dts"
-  fi
+  echo "[agent-guest] Copying TypeScript d.ts definitions to wit/dts/..." >&2
+  rm -rf "$sdk_root/wit/dts"
+  cp -r "$dts_dir" "$sdk_root/wit/dts"
 done
 
 "$sdk_root/scripts/test-agent-guest-export-contract.sh"

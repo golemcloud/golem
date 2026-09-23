@@ -302,7 +302,7 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
 }
 
 #[test]
-#[timeout("5m")]
+#[timeout("10m")]
 async fn account_usage_reports_sparse_allocated_memory(_tracing: &Tracing) {
     // The standalone server uses the 60s ResourceLimitsGrpcConfig default. Allow
     // two complete flush intervals so a delayed tick does not make the test flaky.

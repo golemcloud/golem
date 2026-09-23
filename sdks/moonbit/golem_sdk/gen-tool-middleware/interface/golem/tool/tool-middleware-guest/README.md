@@ -1,1 +1,0 @@
-Interface exported by components that provide tool middleware.

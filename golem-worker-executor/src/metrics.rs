@@ -951,6 +951,7 @@ pub mod scheduler {
             ScheduledAction::CompletePromise { .. } => "complete_promise",
             ScheduledAction::ArchiveOplog { .. } => "archive_oplog",
             ScheduledAction::Invoke { .. } | ScheduledAction::InvokeEphemeral { .. } => "invoke",
+            ScheduledAction::ExpireDurableStreamSession { .. } => "expire_stream_session",
             ScheduledAction::Resume { .. } => "resume",
         }
     }

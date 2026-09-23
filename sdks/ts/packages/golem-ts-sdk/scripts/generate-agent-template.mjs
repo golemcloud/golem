@@ -52,6 +52,7 @@ function useForkedWitBindgen(cargoTomlPath) {
 // ---------------------------------------------------------------------------
 
 const sourceWit = resolve(process.cwd(), '../../wit');
+const sharedModules = [['@golemcloud/golem-ts-sdk/middleware', 'dist/middleware.mjs']];
 
 function walk(dir) {
   return readdirSync(dir).flatMap((entry) => {
@@ -76,6 +77,8 @@ if (offenders.length > 0) {
 for (const template of templateMatrix) {
   rmSync(template.wrapperDirectory, { recursive: true, force: true });
 
+  const modules = [[template.sdkModuleName, template.sdkEntry], ...sharedModules];
+
   const result = spawnSync(
     'wasm-rquickjs',
     [
@@ -88,8 +91,7 @@ for (const template of templateMatrix) {
       template.world,
       '--target',
       'wasi-p3',
-      '--js-modules',
-      `${template.sdkModuleName}=${template.sdkEntry}`,
+      ...modules.flatMap(([name, entry]) => ['--js-modules', `${name}=${entry}`]),
       '--js-modules',
       'user=@slot',
     ],

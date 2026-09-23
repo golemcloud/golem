@@ -63,6 +63,33 @@ async fn build_and_deploy_all_templates_for_moonbit() {
     build_and_deploy_all_templates_for_lang(GuestLanguage::MoonBit).await;
 }
 
+#[test]
+async fn scala_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::Scala).await;
+}
+
+#[test]
+async fn moonbit_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::MoonBit).await;
+}
+
+async fn streaming_template_builds_for_lang(language: GuestLanguage) {
+    let mut ctx = TestContext::new();
+    let app_name = format!("{}-streaming-template", language.id());
+    let template = format!("{}/streaming", language.id());
+
+    fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, &template])
+        .await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+}
+
 async fn build_and_deploy_all_templates_for_lang(language: GuestLanguage) {
     let mut ctx = TestContext::new();
 

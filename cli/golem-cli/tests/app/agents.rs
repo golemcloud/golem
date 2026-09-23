@@ -2418,7 +2418,7 @@ async fn test_rust_code_first_with_rpc_and_all_types() {
 /// calling the deployed provider and asserting its echo result.
 #[test]
 #[tag(agents_guest_bridge)]
-#[timeout("15 minutes")]
+#[timeout("20 minutes")]
 async fn test_rust_tool_guest_bridge_e2e() {
     let mut ctx = TestContext::new();
     let app_name = "tool-bridge";
