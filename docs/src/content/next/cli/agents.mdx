@@ -15,31 +15,31 @@ Using `golem agent` command you can:
 ## Create a new agent
 
 Even though agents can automatically start on the first invocation, it is possible to explicitly start an agent.
-This allows specifying command line arguments and environment variables for the agent.
+This allows specifying environment variables (`--env`) and configuration values (`--config`) for the agent.
 
 ```shell copy
-golem agent new 'example:counter/CounterAgent("my-counter")' --env A=1 --env B=2
+golem agent new 'CounterAgent("my-counter")' --env A=1 --env B=2
 ```
 
 ## Get agent metadata
 
 ### Using the agent ID
 
-You can get the agent metadata using the agent-id (the agent type and it's constructor parameters) and (optionally prefixed by the component name, if it is not inferrable from the current context):
+You can get the agent metadata using the agent-id (the agent type and it's constructor parameters), optionally prefixed by the environment name (and application name) if it is not inferrable from the current context:
 
 ```shell copy
 golem agent get 'CounterAgent("my-counter")'
-golem agent get 'example:counter/CounterAgent("my-counter")'
+golem agent get 'staging/CounterAgent("my-counter")'
 ```
 
 ## Search agents
 
 You can search for agents of some components or agent types using the `agent list` command with one or more `--filter` arguments.
 
-For instance lets find idle agents with component version older than 2 of the component `example:counter`:
+For instance lets find idle agents with component revision older than 2 of the component `example:counter`:
 
 ```shell copy
-golem agent list --filter "status = Idle" --filter "version < 2" example:counter
+golem agent list --filter "status = Idle" --filter "revision < 2" --component-name example:counter
 ```
 
 <Callout type="warning">
@@ -68,13 +68,15 @@ golem agent invoke 'CounterAgent("my-counter")' getValue
 ```
 
 ```
-Invocation results in WAVE format:
-- '5'
+Invocation result in TypeScript syntax:
+5
 ```
+
+The result is rendered using the source-language syntax of the agent.
 
 ### Using idempotency key
 
-If you want to make sure function was called only once even if you called CLI multiple times (for instance due to retries on network errors) you can use `--idempotency-key` parameter for both `invoke` and `invoke-and-await` commands.
+If you want to make sure function was called only once even if you called CLI multiple times (for instance due to retries on network errors) you can use the `--idempotency-key` parameter of the `invoke` command, both with and without `--trigger`.
 
 You can use any string as idempotency key.
 
@@ -90,7 +92,7 @@ By default, the `invoke` command streams the agent's output. Use the `--no-strea
 
 ## Agent update
 
-To update the agent to a specific component version, use the `agent update` command:
+To update the agent to a specific component revision, use the `agent update` command:
 
 ```shell copy
 golem agent update 'CounterAgent("my-counter")' auto 2
@@ -131,8 +133,8 @@ golem agent invoke 'CounterAgent("my-counter")' getValue
 ```
 
 ```
-Invocation results in WAVE format:
-- '0'
+Invocation result in TypeScript syntax:
+0
 ```
 
 ## Oplog query
@@ -164,47 +166,51 @@ The same command can also be used to **search** for oplog entries, using the `--
 
 The terms and fields are interpreted in the following way:
 
-| Oplog entry                 | Matching queries                                                                                                                              |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Create`                    | `create`                                                                                                                                      |
-| `ImportedFunctionInvoked`   | `imported-function-invoked`, match on invoked function's name, match on function arguments(_), match on result value(_)                       |
-| `ExportedFunctionInvoked`   | `exported-function-invoked`, `exported-function`, match on invoked function's name, match on idempotency key, match on function arguments(\*) |
-| `ExportedFunctionCompleted` | `exported-function-completed`, `exported-function`, match on response value(\*)                                                               |
-| `Suspend`                   | `suspend`                                                                                                                                     |
-| `Error`                     | `error`, match on error message                                                                                                               |
-| `NoOp`                      | `noop`                                                                                                                                        |
-| `Jump`                      | `jump`                                                                                                                                        |
-| `Interrupted`               | `interrupted`                                                                                                                                 |
-| `Exited`                    | `exited`                                                                                                                                      |
-| `ChangeRetryPolicy`         | `change-retry-policy`                                                                                                                         |
-| `BeginAtomicRegion`         | `begin-atomic-region`                                                                                                                         |
-| `EndAtomicRegion`           | `end-atomic-region`                                                                                                                           |
-| `BeginRemoteWrite`          | `begin-remote-write`                                                                                                                          |
-| `EndRemoteWrite`            | `end-remote-write`                                                                                                                            |
-| `PendingWorkerInvocation`   | `pending-worker-invocation`, match on invoked function's name, match on idempotency key, match on function arguments(\*)                      |
-| `PendingUpdate`             | `pending-update`, `update`, match on target version                                                                                           |
-| `SuccessfulUpdate`          | `successful-update`, `update`, match on target version                                                                                        |
-| `FailedUpdate`              | `failed-update`, `update`, match on target version, match on error details                                                                    |
-| `GrowMemory`                | `grow-memory`                                                                                                                                 |
-| `CreateResource`            | `create-resource`                                                                                                                             |
-| `DropResource`              | `drop-resource`                                                                                                                               |
-| `DescribeResource`          | `describe-resource`, match on resource name, match on resource parameters(\*)                                                                 |
-| `Log`                       | `log`, match on context, match on message                                                                                                     |
-| `Restart`                   | `restart`                                                                                                                                     |
-| `ActivatePlugin`            | `activate-plugin`                                                                                                                             |
-| `DeactivatePlugin`          | `deactivate-plugin`
-| `Revert`                    | `revert`
-| `CancelInvocation`          | `cancel`, `cancel-invocation`, match on idempotency key
-| `StartSpan`                 | `start-span`, `startspan`, match on span ID, match on parent ID, match on linked context, match on attributes(\*)
-| `FinishSpan`                | `finish-span`, `finishspan`, match on span ID
-| `SetSpanAttribute`          | `set-span-attribute`, `setspanattribute`, match on key, match on value
+| Oplog entry                                                  | Matching queries                                                                                                                                              |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Create`                                                     | `create`                                                                                                                                                      |
+| `Start` (durable host call started)                          | `start`, `imported-function`, match on the host function's name, match on request value(\*)                                                                   |
+| `End` (durable host call finished)                           | `end`, match on response value(\*)                                                                                                                            |
+| `Cancelled`                                                  | `cancelled`, match on partial value(\*)                                                                                                                       |
+| `AgentInvocationStarted`                                     | `agent-invocation-started`, `invoke`, `agent-initialization`, `agent-method-invocation`, `external-tool`, match on method or tool name, match on idempotency key |
+| `AgentInvocationFinished`                                    | `agent-invocation-finished`, `invoke`                                                                                                                         |
+| `PendingAgentInvocation`                                     | `pending-agent-invocation`, `invoke`, `agent-initialization`, `agent-method-invocation`, `external-tool`, match on method or tool name, match on idempotency key |
+| `Suspend`                                                    | `suspend`                                                                                                                                                     |
+| `Error`                                                      | `error`, match on error message                                                                                                                               |
+| `NoOp`                                                       | `noop`                                                                                                                                                        |
+| `Jump`                                                       | `jump`                                                                                                                                                        |
+| `Interrupted`                                                | `interrupted`                                                                                                                                                 |
+| `Exited`                                                     | `exited`                                                                                                                                                      |
+| `BeginAtomicRegion`                                          | `begin-atomic-region`                                                                                                                                         |
+| `EndAtomicRegion`                                            | `end-atomic-region`                                                                                                                                           |
+| `PendingUpdate`                                              | `pending-update`, `update`, match on target revision                                                                                                          |
+| `SuccessfulUpdate`                                           | `successful-update`, `update`, match on target revision                                                                                                       |
+| `FailedUpdate`                                               | `failed-update`, `update`, match on target revision, match on error details                                                                                   |
+| `GrowMemory`                                                 | `grow-memory`                                                                                                                                                 |
+| `CreateResource`                                             | `create-resource`                                                                                                                                             |
+| `DropResource`                                               | `drop-resource`                                                                                                                                               |
+| `Log`                                                        | `log`, match on context, match on message                                                                                                                     |
+| `Restart`                                                    | `restart`                                                                                                                                                     |
+| `Resumed`                                                    | `resumed`                                                                                                                                                     |
+| `ActivatePlugin`                                             | `activate-plugin`                                                                                                                                             |
+| `DeactivatePlugin`                                           | `deactivate-plugin`                                                                                                                                           |
+| `Revert`                                                     | `revert`                                                                                                                                                      |
+| `CancelPendingInvocation`                                    | `cancel`, `cancel-invocation`, match on idempotency key                                                                                                       |
+| `StartSpan`                                                  | `start-span`, `startspan`, match on span ID, match on parent ID, match on linked context, match on attributes(\*)                                             |
+| `FinishSpan`                                                 | `finish-span`, `finishspan`, match on span ID                                                                                                                 |
+| `SetSpanAttribute`                                           | `set-span-attribute`, `setspanattribute`, match on key, match on value(\*)                                                                                    |
+| `SetRetryPolicy` / `RemoveRetryPolicy`                       | `set-retry-policy` / `remove-retry-policy`                                                                                                                    |
+| `Snapshot`                                                   | `snapshot`                                                                                                                                                    |
+| `BeginRemoteTransaction`, `CommittedRemoteTransaction`, etc. | `begin-remote-transaction`, `pre-commit-remote-transaction`, `pre-rollback-remote-transaction`, `committed-remote-transaction`, `rolled-back-remote-transaction` |
 
-The cases marked with **(\*)** can use the `field:value` syntax to look into the typed, structured parameter and result values.
+Most entry kinds can also be matched by their name without dashes (for example `beginatomicregion`).
 
-For example to look for oplog entries that contain parameters or return values of **exported functions** where any of these input/output values is a **record** having a field `product-id` with either value `123` or `456`, we can use the following query:
+The cases marked with **(\*)** can use the `field:value` syntax to look into the typed, structured values. The field path starts with `request`, `response` or `partial` and continues with record field names, for example `request.product-id:123`.
+
+For example to look for **durable host calls** whose request value is a **record** having a field `product-id` with either value `123` or `456`, we can use the following query:
 
 ```shell
-golem agent oplog --query 'exported-function AND (product-id:123 OR product-id:456)' 'CounterAgent("my-counter")'
+golem agent oplog --query 'start AND (request.product-id:123 OR request.product-id:456)' 'CounterAgent("my-counter")'
 ```
 
 ## Reverting an agent

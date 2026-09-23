@@ -6,7 +6,7 @@ The Golem REPL provides an interactive environment for testing and working with 
 
 ## TypeScript REPL
 
-The TypeScript REPL is the most feature-complete. Start it with:
+The REPL uses TypeScript. Start it with:
 
 ```shell
 golem repl
@@ -32,10 +32,12 @@ The REPL provides built-in commands prefixed with `:` that correspond to CLI com
 
 - `:build` — Build the application
 - `:deploy` — Deploy the application
-- `:logs <agent>` — Stream agent logs
-- `:status <agent>` — Check agent status
+- `:agent-stream <agent>` — Stream agent logs
+- `:agent-get <agent>` — Get agent metadata, including its status
+- `:stream-logs on|off` — Show or set streaming of the invoked agents' logs
+- `:reload` — Reload the REPL
 
-Use tab-completion to discover all available commands.
+Use `:help` or tab-completion to discover all available commands.
 
 ## Running scripts
 
@@ -56,33 +58,11 @@ golem repl --script-file test.ts --yes
 # Output: 2
 ```
 
-## Rust REPL
-
-A Rust REPL is also available but is slower due to continuous recompilation. It is most useful for running Rust scripts:
-
-```shell
-cat test.rs
-```
-
-```rust
-let c3 = CounterAgent::get("c3").await.unwrap();
-c3.increment().await;
-c3.increment().await;
-```
-
-```shell
-golem repl --script-file test.rs --language rust --yes
-# Output: 2
-```
+Short scripts can also be passed inline with `--script`.
 
 ## Language support
 
-| Language   | Interactive REPL          | Script mode |
-| ---------- | ------------------------- | ----------- |
-| TypeScript | ✅ Full support            | ✅           |
-| Rust       | ⚠️ Slow (recompilation)  | ✅           |
-| Scala      | ❌ Not available           | ❌           |
-| MoonBit    | ❌ Not available           | ❌           |
+The REPL currently supports TypeScript only.
 
 <Callout type="info">
 The TypeScript REPL can work with agents written in any language — you can use TypeScript syntax to invoke Scala, Rust, or MoonBit agents.

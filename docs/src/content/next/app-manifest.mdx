@@ -39,11 +39,11 @@ Note that on top of the above schema there are other checks performed by `golem`
 
 ## Loading of Application Manifest documents
 
-The _Golem CLI_ commands that use _Application Manifest_ start by searching for `golem.yaml` documents in the _current_ and the _parent_ directories. Once the top level manifest document is found, more manifests are searched based on the <FieldLink path="includes"/> fields.
+The _Golem CLI_ commands that use _Application Manifest_ start by searching for `golem.yaml` documents in the _current_ and the _parent_ directories. The outermost `golem.yaml` found this way is used as the root manifest document, then more manifests are searched based on its <FieldLink path="includes"/> field.
 
-After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by using `--component-name` CLI flags, or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
+After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by passing component names as positional arguments to the commands that accept them (e.g. `golem build <COMPONENT_NAME>...`), or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
 
-Application Manifest documents can also be explicitly passed to the CLI, using the `--app` flag. Note that when using explicit documents the `includes` field is not used, it is expected that all relevant documents are provided for the CLI.
+The root Application Manifest document can also be explicitly passed to the CLI, using the `--app-manifest-path` (`-A`) flag, in which case the directory search is skipped. Automatic manifest discovery can be disabled using the `--disable-app-manifest-discovery` (`-X`) flag.
 
 ## Template variables and functions
 

@@ -2,11 +2,9 @@ import { Callout } from "nextra/components"
 
 # Golem CLI Permissions
 
-<Callout type="info">This page only applies to the hosted **Golem Cloud**.</Callout>
+## API tokens
 
-## Tokens
-
-Tokens are API keys that allow accessing **Golem Cloud** APIs from external services. The `golem` CLI allows managing these tokens.
+API tokens allow accessing the Golem APIs from external services. The `golem api-token` command allows managing the tokens of the current account.
 To manage them programmatically, check [the token API](/next/rest-api/token).
 
 ### Listing existing tokens
@@ -14,7 +12,7 @@ To manage them programmatically, check [the token API](/next/rest-api/token).
 The following command lists all the tokens associated with your account:
 
 ```shell copy
-golem cloud token list
+golem api-token list
 ```
 
 ### Creating a new token
@@ -22,80 +20,75 @@ golem cloud token list
 To create a new token, use the following command:
 
 ```shell copy
-golem cloud token new
+golem api-token new
 ```
 
-```
-New token created with id 08bc0eac-5c51-40a5-8bc6-5c8928efb475 and expiration date 2100-01-01 00:00:00 UTC.
-Please save this token secret, you can't get this data later:
-64cf566c-ed72-48e5-b786-b88aa0298fb4
-```
+The command prints the new token's ID, expiration date and **secret**. The secret is only shown once, so make sure to save it.
 
-Optionally, an expiration date can be specified with `--expires-at`. If not specified, default expiration date is `2100-01-01 00:00:00 UTC`.
+Optionally, an expiration date can be specified with `--expires-at` in RFC 3339 format (for example `2027-01-01T00:00:00Z`). If not specified, the default expiration date is `2100-01-01T00:00:00Z`.
 
 ### Deleting a token
 
-Each token has a **token ID**. Use the `token delete` command to remove a token using it's identifier:
+Each token has a **token ID**. Use the `api-token delete` command to remove a token using its identifier:
 
 ```shell copy
-golem cloud token delete 08bc0eac-5c51-40a5-8bc6-5c8928efb475
+golem api-token delete 08bc0eac-5c51-40a5-8bc6-5c8928efb475
 ```
 
-## Project sharing
+## Sharing permissions with other accounts
 
-On **Golem Cloud** components are organized into **projects**.
-
-### Listing projects
-
-Existing projects can be listed using the `project list` subcommand:
+Applications, environments, components and agents belong to an **account**. The details of the current account can be queried with:
 
 ```shell copy
-golem project list
+golem account get
 ```
 
-### Adding projects
-
-A new project can be created using `project add`. The command expects a project name and description:
+Permissions can be shared with other accounts using **permission shares**, managed by the `golem account permission-share` command. A permission share has a **name**, a **target account** (identified by email) and a set of **permission grants**:
 
 ```shell copy
-golem project add --project-name "Golem Demo" --project-description "A new project for demonstrating the project feature"
+golem account permission-share new target@example.com staging-access \
+  --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
+  --lower-positive 'component(my-account/my-app/staging) @ target@example.com : view : *'
 ```
 
-When creating components or agents, the project can be specified with the `--project-name` flag. Every user has a **default project** which is used when no explicit project is specified.
+Each grant has the form `<class>(<owner>) @ <recipient> : <verb> : <resource>`, for example the first grant above allows `target@example.com` to **view** the `staging` environment of the `my-app` application owned by `my-account`. Grants passed with `--lower-positive` add permissions, while grants passed with `--lower-negative` exclude permissions from the share. Both flags can be specified multiple times.
 
-### Sharing projects with other accounts
-
-Projects can be shared among multiple Golem Cloud accounts.
-
-To share a project, use the `share` subcommand:
+Existing permission shares can be listed, inspected, updated and deleted:
 
 ```shell copy
-golem share --project-name "Golem Demo" --recipient-account-id 08bc0eac-5c51-40a5-8bc6-5c8928efb475 --project-actions ViewWorker --project-actions ViewComponent
-```
+# Shares owned by the current account
+golem account permission-share list
+# Shares received by the current account
+golem account permission-share list --received
 
-This example shares the "Golem Demo" project with the account identified by `08bc0eac-5c51-40a5-8bc6-5c8928efb475` and grants component and agent **view** permissions for it.
+golem account permission-share get <PERMISSION_SHARE_ID>
+golem account permission-share get-by-name staging-access
+golem account permission-share update <PERMISSION_SHARE_ID> --lower-positive '...'
+golem account permission-share delete <PERMISSION_SHARE_ID>
+```
 
 <Callout>
-  Alternatively it is possible to create and manage **project policies** using the `project-policy`
-  subcommand, and refer to these policies in the `share` command later.
+  `permission-share update` replaces the positive (or negative) grants of the share with the ones
+  provided in the command. Grant kinds not specified in the command are kept.
 </Callout>
 
-The following table lists all the **actions** that can be granted to a project. The REST API and permission action names still use "worker" for backwards compatibility.
+## Permission cards
 
-| Action                | Description                                   |
-| --------------------- | --------------------------------------------- |
-| `ViewComponent`       | List, download and get metadata of components |
-| `CreateComponent`     | Create new components                         |
-| `UpdateComponent`     | Update existing components                    |
-| `DeleteComponent`     | Delete components                             |
-| `ViewWorker`          | List and get metadata of agents               |
-| `CreateWorker`        | Create new agents                             |
-| `UpdateWorker`        | Update existing agents                        |
-| `DeleteWorker`        | Delete agents                                 |
-| `ViewProjectGrants`   | List existing project grants                  |
-| `CreateProjectGrants` | Grant more access for the project             |
-| `DeleteProjectGrants` | Revoke access for the project                 |
-| `ViewApiDefinition`   | View API definitions                          |
-| `CreateApiDefinition` | Create new API definitions                    |
-| `UpdateApiDefinition` | Update existing API definitions               |
-| `DeleteApiDefinition` | Delete API definitions                        |
+Granted permissions are represented by **cards**. Cards are owned by an account (for example the account's root card, cards created for permission shares and environment defaults, and the initial cards of agents), or are held in an agent's runtime wallet. Cards can be inspected and revoked with the `golem card` command:
+
+```shell copy
+# Cards owned by the current account
+golem card list
+# Only some kinds of cards
+golem card list --include-environment-defaults --include-agent-initials
+# Cards in an agent's wallet
+golem card list --agent 'CounterAgent("my-counter")'
+
+golem card get <CARD_ID>
+```
+
+A card can be revoked using `card revoke`. Revoking a card also revokes **all of its descendants**, so this is a destructive operation and asks for confirmation:
+
+```shell copy
+golem card revoke <CARD_ID>
+```

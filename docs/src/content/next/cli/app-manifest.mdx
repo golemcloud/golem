@@ -46,66 +46,89 @@ Golem Command Line Interface
 Usage: golem [OPTIONS] <COMMAND>
 
 Commands:
-  new               Create a new application, component, or agent
-  templates         List or search application templates
-  build             Build all or selected components in the application
-  generate-bridge   Generate bridge SDK(s) for the selected agent(s)
-  repl              Start REPL for a selected component
-  deploy            Deploy application
-  clean             Clean all components in the application or by selection
-  update-agents     Try to automatically update all existing agents of the application to the latest version
-  redeploy-agents   Redeploy all agents of the application using the latest version
-  list-agent-types  List all the deployed agent types
-  exec              Execute custom, application manifest defined commands
-  environment       Manage environments
-  component         Manage components
-  agent             Invoke and manage agents
-  api               Manage API gateway objects
-  plugin            Manage plugins
-  profile           Manage global CLI profiles
-  server            Run and manage the local Golem server
-  cloud             Manage Golem Cloud accounts and projects
-  secret            Manage secrets
-  retry-policy      Manage Retry Policies
-  resource          Manage quota resource definitions
-  completion        Generate shell completion
-  help              Print this message or the help of the given subcommand(s)
+  new              Create a new application, component, or agent
+  templates        List or search application templates
+  build            Build all or selected components in the application
+  generate-bridge  Generate Bridge SDK(s) for the selected agent(s)
+  repl             Start REPL for a selected component. This is an interactive command; the global `--format` flag is ignored
+  deploy           Deploy application
+  clean            DESTRUCTIVE: Removes all build artifacts under the application's working directories. Source files are not affected
+  update-agents    Try to automatically update all existing agents of the application to the current version
+  redeploy-agents  Redeploy all agents of the application using the current version
+  exec             Execute custom application-defined commands
+  environment      Manage environments
+  tool             Manage tools
+  component        Manage components
+  agent            Invoke and manage agents
+  agent-type       Manage deployed agent types
+  api              Manage API gateway objects
+  plugin           Manage plugins
+  profile          Manage global CLI profiles
+  server           Run and manage the local Golem server
+  account          Manage Golem accounts
+  api-token        Manage Golem API tokens
+  card             Manage permission cards
+  secret           Manage secrets
+  retry-policy     Manage retry policies
+  resource         Manage quota resource definitions
+  output-schema    Print the structured CLI output JSON schema to stdout
+  completion       Generate shell completion. The completion script is written to stdout as plain text; the global `--format` flag is ignored. Redirect the output into your shell's completions location (or `source` it from your shell init file). See examples below
+  help             Print this message or the help of the given subcommand(s)
 
 Options:
-  -F, --format <FORMAT>
-          Output format, defaults to text, unless specified by the selected profile
-  -E, --environment <ENVIRONMENT>
-          Select Golem environment by name
-  -L, --local
-          Select "local" environment from the manifest, or "local" profile
-  -C, --cloud
-          Select "cloud" environment from the manifest, or "cloud" profile
-  -A, --app-manifest-path <APP_MANIFEST_PATH>
-          Custom path to the root application manifest (golem.yaml)
-  -X, --disable-app-manifest-discovery
-          Disable automatic searching for application manifests
-  -P, --preset <PRESET>
-          Select custom component presets
-      --profile <PROFILE>
-          Select Golem profile by name
-      --config-dir <CONFIG_DIR>
-          Custom path to the config directory (defaults to $HOME/.golem)
-  -Y, --yes
-          Automatically answer "yes" to any interactive confirm questions
-      --show-sensitive
-          Disables filtering of potentially sensitive use values in text mode (e.g. component environment variable values)
-      --dev-mode
-          Enable experimental, development-only features
-      --template-group <TEMPLATE_GROUP>
-          Switch to experimental or development-only template groups
-  -v, --verbose...
-          Increase logging verbosity
-  -q, --quiet...
-          Decrease logging verbosity
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
+
   -V, --version
           Print version
+
+Global options:
+  -F, --format <FORMAT>
+          Output format, defaults to text, unless specified by the selected profile
+          
+          [possible values: json, pretty-json, yaml, pretty-yaml, toon, text]
+
+  -E, --environment <ENVIRONMENT>
+          Select Golem environment by name
+
+  -L, --local
+          Select "local" environment from the manifest, or "local" profile
+
+  -C, --cloud
+          Select "cloud" environment from the manifest, or "cloud" profile
+
+  -A, --app-manifest-path <APP_MANIFEST_PATH>
+          Custom path to the root application manifest (golem.yaml)
+
+  -X, --disable-app-manifest-discovery
+          Disable automatic searching for application manifests
+
+  -P, --preset <PRESET>
+          Select custom component presets
+
+      --profile <PROFILE>
+          Select Golem profile by name
+
+      --config-dir <CONFIG_DIR>
+          Custom path to the config directory (defaults to $HOME/.golem)
+
+  -Y, --yes
+          Automatically answer "yes" to any interactive confirm questions
+
+      --show-secrets
+          Show secret and sensitive values that are masked by default
+
+      --dev-mode
+          Enable experimental, development-only features
+
+  -v, --verbose...
+          Increase logging verbosity
+
+  -q, --quiet...
+          Decrease logging verbosity
+
+Concepts:
+<...>
 
 Application environments:
   cloud
@@ -129,17 +152,11 @@ Application components:
     Source:       /Users/noise64/workspace/golem-demo/myapp/components-ts/app-component-b/golem.yaml
     Layers:       ts, app:component-b
 
-Application API definitions:
-  app-component-a-api@0.0.1
-  app-component-b-api@0.0.1
-
 Application API deployments for environment local:
   subdomain: myapp -> myapp.localhost:9006
-    app-component-a-api
-    app-component-b-api
+    CounterAgent
 
 Application custom commands:
-  cargo-clean
   ts-npm-install
 ```
 
@@ -157,32 +174,21 @@ The above command will quickly boot the server, and then it will keep logging to
 
 ## Building and deploying the application
 
-Because the _ts_ components use npm, we have to use `npm install` before building the components. We can also see that this has a wrapper custom command in the manifest called `npm-install`, and `golem` itself will automatically run it before a build. Let's see an example for both:
+Because the _ts_ components use npm, we have to use `npm install` before building the components. We can also see that this has a wrapper custom command in the manifest called `ts-npm-install`, and `golem` itself will automatically run `npm install` before a build when needed. Let's see an example for both:
 
 ```sh
-$ golem exec npm-install
-<..>
-$ golem build
-Collecting sources
-  Found sources: /Users/<...>/app-demo/common-rust/golem.yaml, /Users/<...>/app-demo/common-ts/golem.yaml, /Users/<...>/app-demo/components-rust/app-component-a/golem.yaml, /Users/<...>/app-demo/components-ts/app-component-b/golem.yaml, /Users/<...>/app-demo/golem.yaml
-Collecting components
-  Found components: app:component-a, app:component-b
-Resolving application wit directories
-  Resolving component wit dirs for app:component-a (/Users/<...>/app-demo/components-rust/app-component-a/wit, /Users/<...>/app-demo/components-rust/app-component-a/wit-generated)
-  Resolving component wit dirs for app:component-b (/Users/<...>/app-demo/components-ts/app-component-b/wit, /Users/<...>/app-demo/components-ts/app-component-b/wit-generated)
-Selecting profiles, no profile was requested
-  Selected default profile debug for app:component-a using template cpp
-  Selected default build for app:component-b using template ts
+$ golem exec ts-npm-install
 <...>
-Linking RPC
-  Copying app:component-a without linking, no static WASM RPC dependencies were found
-  Copying app:component-b without linking, no static WASM RPC dependencies were found
+$ golem build
+<...>
 ```
+
+The `build` command first collects the application manifest documents and the components, then runs the build steps of the selected components using the selected presets.
 
 Then we can check that the components are built:
 
 ```sh
-$ ls golem-temp/components
+$ ls golem-temp/agents
 app_component_a_debug.wasm app_component_b.wasm
 ```
 
@@ -196,22 +202,22 @@ in the application root folder, and the CLI will apply all changes required.
 
 Note that `golem deploy` will also always implicitly check for source changes, and based on that will automatically build any changed components, so usually we can just run `golem deploy`.
 
-If we want to only build some components, we can do so by explicitly selecting them with the `--component-name` flag, or we can implicitly select them by changing our current working directory, e.g.:
+If we want to only build some components, we can do so by explicitly passing their names to the command (e.g. `golem build app:component-a`), or we can implicitly select them by changing our current working directory, e.g.:
 
 ```shell
 $ cd components-rust
 $ golem
 <...>
-Components:
+Application components:
   app:component-a
     Selected:     yes
-    Source:       /Users/noise64/workspace/examples/app-demo/components-rust/app-component-a/golem.yaml
-    Template:     cpp
-    Profiles:     debug, release
+    Source:       /Users/noise64/workspace/golem-demo/myapp/components-rust/app-component-a/golem.yaml
+    Layers:       rust, rust[debug], app:component-a
+
   app:component-b
     Selected:     no
-    Source:       /Users/noise64/workspace/examples/app-demo/components-ts/app-component-b/golem.yaml
-    Template:     ts
+    Source:       /Users/noise64/workspace/golem-demo/myapp/components-ts/app-component-b/golem.yaml
+    Layers:       ts, app:component-b
 <...>
 ```
 

@@ -29,7 +29,7 @@ In this mode the following global flags and environment variable can be used to 
 
 ```shell
 # Explicitly selecting an environment by name
-golem --enviroment <ENVIRONMENT_NAME>
+golem --environment <ENVIRONMENT_NAME>
 golem -E <ENVIRONMENT_NAME>
 
 # Using the convenience cloud and local flags:
@@ -46,8 +46,8 @@ export GOLEM_ENVIRONMENT=<ENVIRONMENT_NAME>
 ## Profiles
 
 The _Golem CLI_ can also be used without an Application Manifest, which is useful for supporting dev-ops use cases.
-The CLI has built-in profiles for accessing the _local_ and _cloud_ servers, and without a manifest, the `-local` and
-`-cloud` flags will select these profiles.
+The CLI has built-in profiles for accessing the _local_ and _cloud_ servers, and without a manifest, the `--local` and
+`--cloud` flags will select these profiles.
 
 For commands that also require and _Application Environment_ the longer forms of the `--environment` flag can be used.
 Note that the CLI will tell you, if such an environment reference is needed, and about the possible accepted formats, e.g.:
@@ -67,6 +67,8 @@ Accepted environment and profile flags and environment variables:
     is selected from the manifest.
 
     If there is no available application, then a more specific from has to be used.
+
+    It is not compatible with the --cloud and --local flags.
 
 
   --environment <APPLICATION_NAME>/<ENVIRONMENT_NAME>, -E <APPLICATION_NAME>/<ENVIRONMENT_NAME>:
@@ -110,7 +112,7 @@ Golem Cloud requires authentication to access our cloud servers. This happens au
 that requires authentication, but if you want to trigger authentication, the following command can be used:
 
 ```shell
-golem cloud account get --cloud
+golem account get --cloud
 ````
 
 Note that the `--cloud` is required to make sure that the authentication happens against the Golem Cloud servers.
@@ -131,7 +133,7 @@ Manage global CLI profiles
 Usage: golem profile [OPTIONS] <COMMAND>
 
 Commands:
-  new     Create a new global profile, call without <PROFILE_NAME> for interactive setup
+  new     Create a new global profile, call without <NAME> for interactive setup
   list    List global profiles
   switch  Set the active global default profile
   get     Show global profile details

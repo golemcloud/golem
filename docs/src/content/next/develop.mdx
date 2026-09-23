@@ -1,4 +1,4 @@
-import { Cards, Steps } from "nextra/components"
+import { Cards } from "nextra/components"
 
 # Develop an application Golem
 
@@ -12,10 +12,10 @@ This page summarizes the workflow of developing an application on Golem, with li
 ## Creating an application
 The primary tool for developing an application on Golem is the [Golem CLI](/next/cli).
 
-To create a new application, use the `golem new` command, passing the name of the application and it's default programming language (note: it is possible to add components using different languages later).
+To create a new application, use the `golem new` command, passing the application's directory and a template selecting the programming language of its first component (note: it is possible to add components using different languages later). Without `--template` the command asks for the template interactively, and `golem templates` lists all the available templates.
 
 ```shell copy
-golem new my-app
+golem new --template ts my-app
 ```
 
 ## Writing the code
@@ -34,7 +34,7 @@ and every component can be deployed using
 golem deploy
 ```
 
-This is going to create a new **version** of each component. If there are agents created already, those are not going to be updated automatically to these new versions. Check the [agents page](/next/concepts/agents) for more information about updating agents.
+This is going to create a new **revision** of each changed component. If there are agents created already, those are not going to be updated automatically to these new revisions, unless `golem deploy` is called with `--update-agents`, `--redeploy-agents` or `--reset`. Check the [agents page](/next/concepts/agents) for more information about updating agents.
 
 ## Defining APIs
 
@@ -42,47 +42,14 @@ Most applications require a public HTTP API (but this is not mandatory - you can
 
 ### Guidelines
 
-Check the [defining custom APIs](/next/invoke/making-custom-apis) page as a starting point for learning how to define custom APIs.
-
-The recommended way to manage these custom APIs is to create a single API definition YAML in the application's root directory. Future Golem versions will integrate API definitions into the _application manifest_ itself.
+HTTP endpoints are defined **directly in the agent code**, by adding a mount point to the agent and exposing its methods as endpoints. Check the [defining custom APIs](/next/invoke/making-custom-apis) page as a starting point for learning how to define custom APIs.
 
 ### Iterations
 
-Use the `golem api` commands to iterate on your APIs.
-
-<Steps>
-### Incrementing the version
-
-Every time you make changes, the API's version must be incremented in the YAML file.
-
-### Uploading
-
-Upload the new API definition using the `golem api upload` command:
+The HTTP APIs are part of the application: to make them accessible, add an `httpApi` deployment section to the [application manifest](/next/app-manifest) mapping agents to domains per environment (see [Deployments](/next/invoke/making-custom-apis#deployments)). Every time the code or the manifest changes, deploy the application again:
 
 ```shell copy
-golem api definition update api.yaml
+golem deploy
 ```
 
-(Use `golem api definition new api.yaml` the first time)
-
-### Deleting the previous deployment
-
-Before deploying the new API version, the previous deployment must be deleted using the `golem api deployment delete` command:
-
-```shell copy
-golem api deployment delete my-definition/0.0.1
-```
-
-### Deploying
-
-To try out the actual API, you also have to **deploy** it using the `golem api deploy` command:
-
-```shell copy
-golem api deployment deploy my-definition/0.0.2
-```
-
-### Breaking the component APIs
-
-When an API is using a component's **exported interface**, it is not possible to deploy a new version of that component if it is breaking that used interface (`golem deploy` will fail). To resolve this, delete the deployment first as shown above.
-
-</Steps>
+The deployed HTTP APIs can be inspected with the `golem api deployment` commands.
