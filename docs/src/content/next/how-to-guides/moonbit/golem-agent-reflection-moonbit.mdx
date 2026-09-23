@@ -31,7 +31,13 @@ Reflection clients do not pin that component ID. `SchemaRef::pack_json`
 converts canonical JSON into a schema-native value; `unpack_json` performs the
 awaited conversion back. `to_json_schema()` projects the canonical JSON carrier
 for introspection, including named definitions and representable restrictions;
-capabilities and streams have no JSON value representation. Discovery returns
+capabilities, futures, and streams have no JSON value representation and project
+to an unsatisfiable reflection JSON Schema. An omitted option record field and
+an explicit `null` both decode as absent; re-encoding may emit `null`, and the
+field is omitted from JSON Schema `required`. Canonical JSON encodes `s64` and
+`u64` as decimal strings, duration as `{ "nanoseconds": "..." }`, and quantity
+mantissas as decimal strings. These strings reject `+`, leading zeroes, `-0`,
+and overflow. Discovery returns
 an immutable snapshot; explicitly
 discover again when a newer deployment must be observed.
 

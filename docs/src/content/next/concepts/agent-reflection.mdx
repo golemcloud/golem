@@ -39,8 +39,21 @@ Static and discovered clients validate what they know before opening RPC.
 Discovered schemas include numeric and text restrictions, nested structures,
 defaults, and tool command constraints. Reflected JSON helpers provide
 canonical JSON conversion, and JSON Schema projections make the same shape
-available to JSON-based integrations. Streams and opaque capabilities cannot
-be represented as JSON and must use schema-native value APIs.
+available to JSON-based integrations. An omitted optional record field and an
+explicit `null` both decode as absent; re-encoding may include the field with
+`null`, and optional fields are omitted from JSON Schema `required`.
+
+Canonical JSON uses numbers for integers through 32 bits. Signed and unsigned
+64-bit integers are canonical decimal strings. Duration is
+`{ "nanoseconds": "..." }`, and a quantity's `mantissa` is also a signed decimal
+string. A leading `+`, leading zeroes, `-0`, the wrong JSON type, and values
+outside the declared integer range are rejected. Reflection JSON Schema uses
+matching string patterns and exact string-valued bounds.
+
+Streams, futures, and opaque capabilities cannot be represented as reflected
+JSON and must use schema-native value APIs. Their reflection-specific JSON
+Schema projection is unsatisfiable; other host JSON Schema projections retain
+their existing policies.
 
 The host remains authoritative for visibility, authorization, effective
 configuration, durable identity resolution, and the deployed target schema.

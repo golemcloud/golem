@@ -86,7 +86,7 @@ Effect errors preserve the boundary that failed:
 - The host remains authoritative for visibility, authorization, environment-scoped identity resolution, effective configuration, and the deployed input schema.
 - Awaited calls verify unit/non-unit cardinality and declared output shape. `RemoteCallError`, `ToolRuntimeError`, custom agent errors, and custom tool payloads remain tagged values in the Effect error channel.
 
-In Normal RPC and caller-defined static inputs, use `Schema.optional(...)` in a struct and omit the property. Canonical reflected JSON records contain every field, so represent an absent `option<T>` with `null`:
+In Normal RPC and caller-defined static inputs, use `Schema.optional(...)` in a struct and omit the property. Reflected JSON accepts either an omitted `option<T>` record field or an explicit `null` as absent; re-encoding may include the field with `null`. Reflection JSON Schema does not list that field in `required`:
 
 ```ts
 import { Effect } from "effect"
@@ -97,13 +97,15 @@ const optionalCall = Effect.scoped(Effect.gen(function* () {
   if (!type || type.mode !== "durable") return yield* Effect.fail("SearchAgent unavailable")
   const client = yield* type.client.get({ tenant: "docs" })
   const search = yield* client.method("search")
-  const checked = search.definition.input.validateJson({ query: "golem", cursor: null })
+  const checked = search.definition.input.validateJson({ query: "golem" })
   if (!checked.success) return yield* Effect.fail(checked.issues)
-  return yield* search.invoke({ query: "golem", cursor: null })
+  return yield* search.invoke({ query: "golem" })
 }))
 ```
 
 Canonical JSON represents `s64` and `u64` as base-10 strings. Duration is `{ nanoseconds: "..." }`; quantity uses a decimal-string `mantissa`. Smaller integers remain JSON numbers. JSON Schema projections expose the same canonical patterns and exact range metadata.
+
+Capabilities, futures, and streams cannot be packed or unpacked as reflected JSON. Their reflection JSON Schema projection is unsatisfiable; use schema-native value APIs for those leaves.
 
 ## Cancellation, streams, and cleanup
 

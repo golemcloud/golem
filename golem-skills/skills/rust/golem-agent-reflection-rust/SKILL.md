@@ -33,20 +33,25 @@ Validation happens at three different boundaries:
 | Completion | Result cardinality, resolved graph equivalence, declared custom-error payloads, and value decoding | Execution failures and undeclared remote errors |
 
 Normal RPC and caller-defined Rust values use `Option<T>`. Reflected canonical JSON
-omits an optional record field or supplies its ordinary JSON value; when using
+treats an omitted optional record field or an explicit `null` as absent; re-encoding
+may include that field with `null`, and reflection JSON Schema omits it from
+`required`. When using
 `SchemaValue` directly, use `SchemaValue::Option { inner: None }` or
 `SchemaValue::Option { inner: Some(Box::new(value)) }`. Optional tool scalar
 positionals and options use that option carrier. Repeatable/tail inputs use an
 empty list for absence, flags use their effective boolean/count value, and an
 explicit default is represented by the default value. Do not replace an absent
-optional carrier with a zero, empty string, or `null` unless its declared schema
-actually permits that value.
+optional carrier with a zero or empty string.
 
 Canonical JSON represents `s64`, `u64`, duration nanoseconds, and quantity
 mantissas as canonical base-10 strings. Smaller integers remain JSON numbers.
 Packing rejects leading `+`, non-canonical leading zeroes, and out-of-range
 values before transport; projected JSON Schema uses the same string patterns
 and exposes the exact range as metadata.
+
+Capabilities, futures, and streams cannot be packed or unpacked as reflected
+JSON. Their reflection JSON Schema projection is unsatisfiable; use
+schema-native value APIs for those leaves.
 
 ## Discover Agent Types
 
