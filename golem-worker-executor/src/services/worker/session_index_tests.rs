@@ -697,6 +697,113 @@ async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
 }
 
 #[test]
+#[test_r::timeout("60s")]
+async fn quiescent_recovery_caches_only_read_new_committed_suffixes() {
+    use crate::services::oplog::tests::ReadCountingIndexedStorage;
+
+    let storage = Arc::new(ReadCountingIndexedStorage::new());
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            10000,
+            10000,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let service = DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(ShardServiceDefault::new()),
+        oplog_service.clone(),
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let mut owners = Vec::new();
+    for number in 0..1025 {
+        let owner = owned_agent(&format!("quiescent-{number}"), ComponentId::new());
+        let key = IdempotencyKey::new("finished".into());
+        let session = session_key(&owner, &key);
+        let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
+        append_session(oplog.as_ref(), prepared_record(&owner, &key)).await;
+        let committed = append_session(
+            oplog.as_ref(),
+            StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+                format_version: 1,
+                session_key: local_registration(&session),
+                result: Ok(()),
+            }),
+        )
+        .await;
+        oplog.commit(CommitLevel::Always).await;
+        let mut cache = crate::worker::DurableTopologyRecoveryCache::default();
+        cache
+            .refresh_through(
+                committed,
+                oplog.as_ref(),
+                &service,
+                &owner,
+                AgentMode::Durable,
+                session.callee_fingerprint,
+            )
+            .await
+            .unwrap();
+        assert!(cache.dirty.is_empty());
+        owners.push((owner, session.callee_fingerprint, oplog, committed, cache));
+    }
+
+    storage.reset();
+    for (owner, fingerprint, oplog, committed, cache) in &mut owners {
+        cache
+            .refresh_through(
+                *committed,
+                oplog.as_ref(),
+                &service,
+                owner,
+                AgentMode::Durable,
+                *fingerprint,
+            )
+            .await
+            .unwrap();
+        assert!(cache.dirty.is_empty());
+    }
+    assert_eq!(storage.reads(), 0, "idle history must not reopen storage");
+
+    let (owner, fingerprint, oplog, committed, cache) = &mut owners[0];
+    let next = IdempotencyKey::new("new-session".into());
+    let suffix = append_session(oplog.as_ref(), prepared_record(owner, &next)).await;
+    cache
+        .refresh_through(
+            *committed,
+            oplog.as_ref(),
+            &service,
+            owner,
+            AgentMode::Durable,
+            *fingerprint,
+        )
+        .await
+        .unwrap();
+    assert!(
+        cache.dirty.is_empty(),
+        "buffered work is not published demand"
+    );
+    oplog.commit(CommitLevel::Always).await;
+    cache
+        .refresh_through(
+            suffix,
+            oplog.as_ref(),
+            &service,
+            owner,
+            AgentMode::Durable,
+            *fingerprint,
+        )
+        .await
+        .unwrap();
+    assert_eq!(cache.dirty, HashSet::from([session_key(owner, &next)]));
+}
+
+#[test]
 #[test_r::timeout("30s")]
 async fn recovery_cache_refolds_a_cut_committed_after_its_snapshot() {
     use golem_common::model::durable_stream::StreamForkCutRecord;

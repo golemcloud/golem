@@ -2480,7 +2480,7 @@ async fn attachment_slots_are_isolated_by_consumer_identity() {
 async fn active_attachment_count_spans_distinct_consumer_slots() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
-    let live = producer(oplog, &identity, None).await;
+    let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
         .register(None, root_registration(&identity))
         .await
@@ -2516,6 +2516,10 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     );
     live.activate_attachment(first.clone(), 110).await.unwrap();
     live.prepare_attachment(second.clone(), 100).await.unwrap();
+
+    drop(live);
+    let live = producer(oplog.clone(), &identity, None).await;
+    assert!(live.has_reconcilable_attachments().await);
     live.activate_attachment(second.clone(), 110).await.unwrap();
     assert!(
         live.has_active_attachment(&first.session_key, &handle)
@@ -2535,6 +2539,10 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
             .await
             .unwrap()
     );
+
+    drop(live);
+    let live = producer(oplog.clone(), &identity, None).await;
+    assert!(live.has_reconcilable_attachments().await);
     live.finalize_attachment(
         second,
         StreamAttachmentFinalizationReason::ConsumerFinalized,
@@ -2549,6 +2557,9 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
             .await
             .unwrap()
     );
+    drop(live);
+    let live = producer(oplog, &identity, None).await;
+    assert!(!live.has_reconcilable_attachments().await);
 }
 
 #[test]

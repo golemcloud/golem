@@ -2235,6 +2235,7 @@ mod tests {
         drop(producer);
 
         let cold = fixture.producer().await;
+        assert!(cold.has_reconcilable_attachments().await);
         assert!(
             cold.has_active_attachment(&key.session_key, &handle)
                 .await
@@ -2243,6 +2244,7 @@ mod tests {
         assert!(cold.index.lock().await.attachments.is_empty());
         key.epoch += 1;
         cold.prepare_attachment(key.clone(), 120).await.unwrap();
+        assert!(cold.has_reconcilable_attachments().await);
         assert!(
             !cold
                 .has_active_attachment(&key.session_key, &handle)
@@ -2267,6 +2269,7 @@ mod tests {
         )
         .await
         .unwrap();
+        assert!(!cold.has_reconcilable_attachments().await);
         assert!(
             !cold
                 .has_active_attachment(&key.session_key, &handle)
@@ -2275,6 +2278,13 @@ mod tests {
         );
         fixture.persist().await;
         drop(cold);
+        assert!(
+            !fixture
+                .producer()
+                .await
+                .has_reconcilable_attachments()
+                .await
+        );
         assert!(
             !fixture
                 .producer()

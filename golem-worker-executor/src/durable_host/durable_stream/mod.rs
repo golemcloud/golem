@@ -995,7 +995,21 @@ impl DurableStreamStore {
         }
 
         let open_stream_count = index.open_streams;
-        let reconcilable_attachment_count = index.active_attachment_count;
+        let reconcilable_attachment_count =
+            if index.loaded_metadata.contains(&ProducerMetadataKey::Global) {
+                index.active_attachment_count
+            } else {
+                index
+                    .attachments
+                    .values()
+                    .filter(|attachment| {
+                        !matches!(
+                            attachment.state,
+                            IndexedStreamAttachmentState::Finalized { .. }
+                        )
+                    })
+                    .count() as u64
+            };
         crate::metrics::durable_stream::add_open_streams(open_stream_count);
         if !index.streams.is_empty() {
             tracing::debug!(

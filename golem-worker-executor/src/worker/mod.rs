@@ -802,7 +802,7 @@ impl DurableTopologyRecoveryCache {
             .await
     }
 
-    async fn refresh_through(
+    pub(crate) async fn refresh_through(
         &mut self,
         current: OplogIndex,
         oplog: &dyn Oplog,
@@ -11476,6 +11476,42 @@ mod tests {
             )
             .await
             .expect("active maintenance did not wake at its periodic deadline")
+        );
+    }
+
+    #[test]
+    async fn durable_stream_maintenance_retains_changes_during_a_pass_and_stops_when_parked() {
+        let shutdown = CancellationToken::new();
+        let changed = tokio::sync::Notify::new();
+        let notification = changed.notified();
+        tokio::pin!(notification);
+        notification.as_mut().enable();
+        changed.notify_waiters();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                wait_for_durable_stream_maintenance(&shutdown, notification, None),
+            )
+            .await
+            .expect("a change during maintenance was lost before parking")
+        );
+
+        let mut parked = Box::pin(wait_for_durable_stream_maintenance(
+            &shutdown,
+            changed.notified(),
+            None,
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut parked)
+                .await
+                .is_err(),
+            "a consumed notification must not keep maintenance running"
+        );
+        shutdown.cancel();
+        assert!(
+            !tokio::time::timeout(Duration::from_secs(1), parked)
+                .await
+                .expect("shutdown did not wake parked maintenance")
         );
     }
 
