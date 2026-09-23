@@ -210,6 +210,36 @@ async fn a_saved_tree_comes_back_the_same() {
 }
 
 #[test]
+async fn a_restore_report_gives_each_phase_of_the_restore_in_order() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let repository = repository(&storage, &new_scope());
+    let tree = fixture_tree();
+    let into = Scratch::new();
+    repository.save(&name("first"), tree.path()).await.unwrap();
+
+    let restored = repository
+        .restore(&name("first"), into.path(), None)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        restored
+            .phases
+            .iter()
+            .map(|phase| phase.phase)
+            .collect::<Vec<_>>(),
+        vec![
+            OperationPhase::Open,
+            OperationPhase::Lookup,
+            OperationPhase::IndexLoad,
+            OperationPhase::RestorePlan,
+            OperationPhase::Restore,
+        ]
+    );
+}
+
+#[test]
 async fn a_second_save_has_the_first_as_parent_and_reads_only_the_changed_file() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let repository = repository(&storage, &new_scope());

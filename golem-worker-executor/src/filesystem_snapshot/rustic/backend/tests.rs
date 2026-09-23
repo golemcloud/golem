@@ -479,6 +479,24 @@ fn a_thread_that_is_not_a_thread_of_the_runtime_can_call_the_backend() {
 }
 
 #[test]
+fn a_tracked_backend_counts_in_its_tracker_until_it_drops() {
+    let fixture = Fixture::new();
+    let tracker = tokio_util::task::TaskTracker::new();
+    let backend = BlobBackend::new(
+        fixture.storage.clone(),
+        fixture.namespace.clone(),
+        fixture.runtime.handle().clone(),
+        STORAGE_CALL_DEADLINE,
+    )
+    .tracked_by(tracker.token());
+
+    let while_alive = tracker.len();
+    drop(backend);
+
+    assert_eq!((while_alive, tracker.len()), (1, 0));
+}
+
+#[test]
 fn a_cancelled_backend_makes_no_storage_call() {
     let runtime = Runtime::new().unwrap();
     let storage =

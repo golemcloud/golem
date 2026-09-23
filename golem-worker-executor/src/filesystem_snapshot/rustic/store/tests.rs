@@ -19,10 +19,10 @@
 
 use super::super::prune::{PruneLedger, read_ledger};
 use super::super::scripted::{Script, ScriptedBlobStorage};
-use super::super::{PruneSettings, RepackLimits, RepositoryKey, open_existing};
+use super::super::{PruneReport, PruneSettings, RepackLimits, RepositoryKey, open_existing};
 use super::{
-    RusticSnapshotStore, StorePolicy, scope_snapshots, store_backup_options, store_restore_options,
-    whole_millis_from,
+    RusticSnapshotStore, StorePolicy, leaves_marked_packs, scope_snapshots, store_backup_options,
+    store_restore_options, whole_millis_from,
 };
 use crate::filesystem_snapshot::contract_tests::fixture::{
     Listed, Scratch, Spec, fixture, listing, write_tree,
@@ -1112,5 +1112,240 @@ async fn a_dropped_operation_stops_its_blocking_work() {
             Dropped::Delete
         ]
         .map(|dropped| (dropped, true, true, true))
+    );
+}
+
+/// Gives the snapshot files of the scope that the bridge reads, on a blocking thread.
+async fn snapshot_files(
+    storage: Arc<dyn BlobStorage>,
+    scope: &SnapshotScope,
+) -> Vec<rustic_core::repofile::SnapshotFile> {
+    let namespace = scope.0.clone();
+    tokio::task::spawn_blocking(move || {
+        let backend = super::super::backend::BlobBackend::new(
+            storage,
+            namespace,
+            tokio::runtime::Handle::current(),
+            LONG_DEADLINE,
+        );
+        let repository = open_existing(Arc::new(backend), &key()).unwrap().unwrap();
+        scope_snapshots(&repository).unwrap().readable
+    })
+    .await
+    .unwrap()
+}
+
+#[test]
+async fn a_failed_read_of_a_snapshot_file_fails_stat_and_list_with_a_retryable_storage_error() {
+    let refuse = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let refuse = refuse.clone();
+        move |op_label, path| {
+            if refuse.load(Ordering::SeqCst) && op_label == "read" && path.starts_with("snapshots")
+            {
+                Script::Refuse
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let scope = new_scope();
+    let tree = one_file_tree("kept");
+    store
+        .save(&scope, &name("p-kept"), tree.path())
+        .await
+        .unwrap();
+    refuse.store(true, Ordering::SeqCst);
+
+    let stat = store.stat(&scope, &name("p-kept")).await;
+    let list = store.list(&scope).await;
+
+    assert!(
+        stat.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{stat:?}"
+    );
+    assert!(
+        list.as_ref().is_err_and(|error| is_storage(error, true)),
+        "{list:?}"
+    );
+}
+
+#[test]
+async fn a_snapshot_file_that_is_gone_after_the_listing_is_left_out() {
+    let gone = format!("snapshots/{}", "cd".repeat(32));
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let storage = ScriptedBlobStorage::new(inner.clone(), {
+        let gone = gone.clone();
+        move |op_label, path| {
+            if op_label == "read" && path == Path::new(&gone) {
+                Script::Vanish
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let scope = new_scope();
+    let tree = one_file_tree("kept");
+    store
+        .save(&scope, &name("p-kept"), tree.path())
+        .await
+        .unwrap();
+    inner
+        .put_raw("test", "test", scope.0.clone(), Path::new(&gone), b"listed")
+        .await
+        .unwrap();
+
+    let unknown = store.stat(&scope, &name("p-unknown")).await;
+    let names = listed_names(&store, &scope).await;
+
+    assert!(matches!(unknown, Ok(None)), "{unknown:?}");
+    assert_eq!(names, vec!["p-kept".to_string()]);
+}
+
+#[test]
+async fn a_delete_that_frees_nothing_writes_no_ledger() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = one_file_tree("kept");
+    store
+        .save(&scope, &name("p-kept"), tree.path())
+        .await
+        .unwrap();
+
+    store.delete(&scope, &name("p-unknown")).await.unwrap();
+
+    assert_eq!(
+        blobs(&*storage, &scope.0, "golem/").await,
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_prune_leaves_marked_packs_when_it_marks_repacks_or_keeps_marked_packs() {
+    let report = |packs_unused, packs_repacked, marked_packs_kept| PruneReport {
+        packs_unused,
+        packs_repacked,
+        marked_packs_kept,
+        ..PruneReport::default()
+    };
+
+    assert_eq!(
+        [
+            leaves_marked_packs(&report(0, 0, 0)),
+            leaves_marked_packs(&report(1, 0, 0)),
+            leaves_marked_packs(&report(0, 1, 0)),
+            leaves_marked_packs(&report(0, 0, 1)),
+            leaves_marked_packs(&PruneReport {
+                packs_used: 3,
+                marked_packs_deleted: 2,
+                ..PruneReport::default()
+            }),
+        ],
+        [false, true, true, true, false]
+    );
+}
+
+#[test]
+async fn a_save_of_a_relative_directory_path_gives_source_and_publishes_nothing() {
+    // Cargo runs the tests in the directory of the crate, so the path names a directory.
+    let relative = Path::new("src/filesystem_snapshot/contract_tests");
+    assert!(
+        relative.is_dir(),
+        "the test runs in the directory of the crate"
+    );
+    let store = store(
+        Arc::new(InMemoryBlobStorage::new()),
+        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+    );
+    let scope = new_scope();
+
+    let saved = store.save(&scope, &name("p-relative"), relative).await;
+    let names = listed_names(&store, &scope).await;
+
+    assert!(
+        matches!(saved, Err(SnapshotStoreError::Source(_))),
+        "{saved:?}"
+    );
+    assert_eq!(names, Vec::<String>::new());
+}
+
+#[test]
+async fn a_save_of_a_regular_file_gives_source_and_publishes_nothing() {
+    let tree = one_file_tree("a file, not a tree");
+    let store = store(
+        Arc::new(InMemoryBlobStorage::new()),
+        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+    );
+    let scope = new_scope();
+
+    let saved = store
+        .save(&scope, &name("p-file"), &tree.path().join("file.txt"))
+        .await;
+    let names = listed_names(&store, &scope).await;
+
+    assert!(
+        matches!(saved, Err(SnapshotStoreError::Source(_))),
+        "{saved:?}"
+    );
+    assert_eq!(names, Vec::<String>::new());
+}
+
+#[test]
+async fn the_ledger_counts_the_packed_bytes_that_the_deleted_snapshot_added() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, u64::MAX, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = fixture_tree();
+    store
+        .save(&scope, &name("p-deleted"), tree.path())
+        .await
+        .unwrap();
+    let added = snapshot_files(storage.clone(), &scope)
+        .await
+        .iter()
+        .filter_map(|snapshot| snapshot.summary.as_ref())
+        .map(|summary| summary.data_added_packed)
+        .sum::<u64>();
+
+    store.delete(&scope, &name("p-deleted")).await.unwrap();
+
+    assert_eq!(
+        (added > 1, ledger(&*storage, &scope).await.freed_bytes),
+        (true, added)
+    );
+}
+
+#[test]
+async fn a_config_write_that_fails_gives_a_storage_error_with_that_failure() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+            if op_label == "write" && path == Path::new("config") {
+                Script::Refuse
+            } else {
+                Script::Pass
+            }
+        });
+    let store = store(storage, policy(LONG_DEADLINE, u64::MAX, Duration::ZERO));
+    let scope = new_scope();
+    let tree = one_file_tree("never saved");
+
+    let saved = store.save(&scope, &name("p-1"), tree.path()).await;
+
+    assert!(
+        matches!(
+            &saved,
+            Err(SnapshotStoreError::Storage { retryable: true, source })
+                if format!("{source:#}").contains("the storage refused the call")
+        ),
+        "{saved:?}"
     );
 }
