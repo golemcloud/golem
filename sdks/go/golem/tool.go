@@ -15,6 +15,8 @@
 package golem
 
 import (
+	"reflect"
+
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -37,60 +39,104 @@ import (
 // do not.
 type toolRegistry struct {
 	order  []string
-	byName map[string]*toolDef
-}
-
-// toolDef is one registered tool: the metadata the host discovers, plus the
-// handlers invoke dispatches to.
-type toolDef struct {
-	name string
-	tool toolCommon.Tool
+	byName map[string]*toolEntry
 }
 
 func newToolRegistry() *toolRegistry {
-	return &toolRegistry{byName: map[string]*toolDef{}}
+	return &toolRegistry{byName: map[string]*toolEntry{}}
 }
 
 // toolDefs is the process-wide tool registry, mirroring defs for agents.
 var toolDefs = newToolRegistry()
 
-func (r *toolRegistry) discover() []toolCommon.Tool {
+// discover derives every registered tool's metadata, collecting problems on d
+// the same way agent discovery does. It reads the registry without mutating it,
+// so it is idempotent.
+func (r *toolRegistry) discover(d *definitions) ([]toolCommon.Tool, bool) {
 	out := make([]toolCommon.Tool, 0, len(r.order))
+	ok := true
 	for _, name := range r.order {
-		out = append(out, r.byName[name].tool)
+		tool, built := d.buildTool(r.byName[name])
+		if !built {
+			ok = false
+		}
+		out = append(out, tool)
 	}
-	return out
+	return out, ok
 }
 
-func (r *toolRegistry) get(name string) (*toolDef, bool) {
-	d, ok := r.byName[name]
-	return d, ok
+func (r *toolRegistry) get(name string) (*toolEntry, bool) {
+	e, ok := r.byName[name]
+	return e, ok
 }
 
 func init() {
 	toolExports.Exports.DiscoverTools = func() witTypes.Result[[]toolCommon.Tool, types.ToolError] {
-		return witTypes.Ok[[]toolCommon.Tool, types.ToolError](toolDefs.discover())
+		tools, ok := toolDefs.discover(defs)
+		if !ok {
+			return witTypes.Err[[]toolCommon.Tool](toolDefinitionError(defs))
+		}
+		return witTypes.Ok[[]toolCommon.Tool, types.ToolError](tools)
 	}
 
 	toolExports.Exports.GetTool = func(name string) witTypes.Result[toolCommon.Tool, types.ToolError] {
-		d, ok := toolDefs.get(name)
+		e, ok := toolDefs.get(name)
 		if !ok {
 			return witTypes.Err[toolCommon.Tool](types.MakeToolErrorInvalidToolName(name))
 		}
-		return witTypes.Ok[toolCommon.Tool, types.ToolError](d.tool)
+		tool, built := defs.buildTool(e)
+		if !built {
+			return witTypes.Err[toolCommon.Tool](toolDefinitionError(defs))
+		}
+		return witTypes.Ok[toolCommon.Tool, types.ToolError](tool)
 	}
 
 	toolExports.Exports.Invoke = func(
 		toolName string,
 		commandPath []string,
-		_ types.TypedSchemaValue,
+		input types.TypedSchemaValue,
 		_ toolExports.Stdin,
 		_ toolExports.Stdout,
 		_ common.Principal,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
-		if _, ok := toolDefs.get(toolName); !ok {
+		e, ok := toolDefs.get(toolName)
+		if !ok {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
 		}
-		return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidCommandPath(commandPath))
+		return defs.invokeCommand(e, commandPath, input)
 	}
+}
+
+// ToolContext is the per-invocation context handed to a command handler.
+type ToolContext struct {
+	tool string
+	path []string
+}
+
+// Tool returns the name of the tool being invoked.
+func (c *ToolContext) Tool() string { return c.tool }
+
+// CommandPath returns the path of the command being invoked, from the tool's
+// root; empty means the root command's own body.
+func (c *ToolContext) CommandPath() []string { return append([]string(nil), c.path...) }
+
+// toolDefinitionError reports a broken tool declaration. The WIT has no variant
+// for "this component's own metadata is wrong", so it travels as a custom error
+// whose payload carries the collected messages — the same information agent
+// discovery reports, in the shape a tool caller can read.
+func toolDefinitionError(d *definitions) types.ToolError {
+	return types.MakeToolErrorCustomError(types.CustomToolError{
+		Name:    "definition-errors",
+		Payload: typedString(d, allDefErrors(d.errs)),
+	})
+}
+
+// typedString packages a plain string as a self-contained typed value.
+func typedString(d *definitions, s string) types.TypedSchemaValue {
+	c := d.compile(reflect.TypeFor[string]())
+	g := graphBuilder{d: d}
+	root := g.node(c)
+	graph := g.build()
+	graph.Root = root
+	return types.TypedSchemaValue{Graph: graph, Value: encodeWith(c, reflect.ValueOf(s))}
 }
