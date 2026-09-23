@@ -2339,11 +2339,8 @@ impl SafeDisplay for FilesystemPressureConfig {
     }
 }
 
-/// The default of [`FilesystemSnapshotStoreConfig::storage_call_deadline`].
-///
-/// On S3, with the retries of the S3 storage, a write of a pack took at most 1.7 s with eight saves
-/// at the same time. A ranged read of a pack took at most 1.5 s under the CPU request of an
-/// executor. Keep the value at least 10 times the longest measured call.
+/// The default of [`FilesystemSnapshotStoreConfig::storage_call_deadline`]. The slowest measured
+/// call on S3 took 1.7 s, and the value stays at least 10 times the slowest measured call.
 pub const DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The default of [`FilesystemSnapshotStoreConfig::restore_reader_threads`].
