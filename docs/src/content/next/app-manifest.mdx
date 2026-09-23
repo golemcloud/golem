@@ -1836,21 +1836,7 @@ The generator reads only the release's safe tool definition and metadata digest.
     path: "secretDefaults.<environment-name>",
     since: Release.R_1_5_0
   }}>
-    ***Optional list of secret default entries*** for the environment.
-  </Field>
-
-  <Field meta={{
-    path: "secretDefaults.<environment-name>[*].path",
-    since: Release.R_1_5_0
-  }}>
-    ***Required array of strings*** defining the path to the secret.
-  </Field>
-
-  <Field meta={{
-    path: "secretDefaults.<environment-name>[*].value",
-    since: Release.R_1_5_0
-  }}>
-    ***Required value*** of the secret default.
+    ***Optional object of secret default values*** for the environment, nested by secret path (e.g. `db: { password: ... }` for the `db.password` secret). Defaults are only applied to secrets that do not exist yet in the environment. String values can reference environment variables with `{{ VAR }}`; these are only required for secrets that get created.
   </Field>
 
   <Field meta={{
