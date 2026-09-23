@@ -412,7 +412,7 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
                         .await
                         .map(|(new_cursor, workers)| {
                             (
-                                new_cursor.map(|cursor| (cursor.cursor, cursor.layer as u64)),
+                                new_cursor,
                                 workers
                                     .into_iter()
                                     .map(AgentMetadataForGuests::from)
@@ -424,13 +424,7 @@ impl<Ctx: WorkerCtx> HostGetAgents for DurableWorkerCtx<Ctx> {
                 })
                 .await?;
             let (new_cursor, workers) = match result.result {
-                Ok((cursor, workers)) => (
-                    cursor.map(|(cursor, layer)| ScanCursor {
-                        cursor,
-                        layer: layer as usize,
-                    }),
-                    workers,
-                ),
+                Ok((cursor, workers)) => (cursor, workers),
                 Err(error) => return Ok(Err(agent_operation_error(error))),
             };
 

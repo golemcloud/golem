@@ -25,7 +25,8 @@ use crate::services::oplog::reader::{OplogRead, OplogReadError, OplogReadSource,
 use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogLifecycleGuard,
-    OplogService, OrderedOplogStart, ReservedRawStartBuilder, downcast_oplog, scan_modes,
+    OplogService, OrderedOplogStart, ReservedRawStartBuilder, decode_scan_cursor, downcast_oplog,
+    first_scan_cursor,
 };
 use crate::storage::indexed::IndexedStorageMetaNamespace;
 use async_trait::async_trait;
@@ -618,6 +619,17 @@ impl OplogService for MultiLayerOplogService {
             .await
     }
 
+    async fn staged_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+    ) -> Result<bool, String> {
+        self.primary
+            .staged_exists(owned_agent_id, agent_mode, stage_id)
+            .await
+    }
+
     async fn publish_staged(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -834,76 +846,48 @@ impl OplogService for MultiLayerOplogService {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedAgentId>), WorkerExecutorError> {
-        // For multi-layer scans the active mode is encoded into the inner cursor;
-        // the layer field selects which layer is being scanned. We pass modes
-        // through to each layer, which decodes/encodes the mode bit itself.
-        match cursor.layer {
+        let state = decode_scan_cursor(&cursor, modes)?;
+        let layer = state.layer;
+        if layer > self.lower.len().get() {
+            return Err(WorkerExecutorError::invalid_request(format!(
+                "Invalid oplog layer in scan cursor: {layer}"
+            )));
+        }
+        let active_mode = state.mode;
+
+        match layer {
             0 => {
-                let raw_cursor_val = cursor.cursor;
                 let (new_cursor, unfiltered_ids) = self
                     .primary
-                    .scan_for_component(environment_id, component_id, modes, cursor, count)
+                    .scan_for_component(environment_id, component_id, modes, cursor.clone(), count)
                     .await?;
-
-                // The active mode for the just-scanned page is whatever the
-                // primary used (we replicate the same decode here so we know
-                // which mode to filter against on lower layers).
-                let (active_mode, _) = scan_modes(modes, raw_cursor_val);
                 let ids = self
                     .filter_ids_existing_on_lower_layers(unfiltered_ids, active_mode, 0)
                     .await?;
 
-                if new_cursor.is_active_layer_finished() {
-                    // Continuing with the first lower layer; preserve any mode
-                    // bits encoded by the primary scan in the cursor value.
-                    Ok((
-                        ScanCursor {
-                            cursor: new_cursor.cursor,
-                            layer: 1,
-                        },
-                        ids,
-                    ))
+                if new_cursor.is_finished() {
+                    Ok((first_scan_cursor(1, modes)?, ids))
                 } else {
-                    // Still scanning the primary layer
                     Ok((new_cursor, ids))
                 }
             }
             layer if layer <= self.lower.len().get() => {
-                let raw_cursor_val = cursor.cursor;
                 let (new_cursor, unfiltered_ids) = self.lower[layer - 1]
-                    .scan_for_component(environment_id, component_id, modes, cursor, count)
+                    .scan_for_component(environment_id, component_id, modes, cursor.clone(), count)
                     .await?;
 
-                let (active_mode, _) = scan_modes(modes, raw_cursor_val);
                 let ids = self
                     .filter_ids_existing_on_lower_layers(unfiltered_ids, active_mode, layer)
                     .await?;
-                if new_cursor.is_active_layer_finished() && (layer + 1) <= self.lower.len().get() {
-                    // Continuing with the next lower layer; preserve mode bits.
-                    Ok((
-                        ScanCursor {
-                            cursor: new_cursor.cursor,
-                            layer: layer + 1,
-                        },
-                        ids,
-                    ))
-                } else if new_cursor.is_active_layer_finished() {
-                    // Finished scanning the last layer
-                    Ok((
-                        ScanCursor {
-                            cursor: new_cursor.cursor,
-                            layer: 0,
-                        },
-                        ids,
-                    ))
+                if new_cursor.is_finished() && (layer + 1) <= self.lower.len().get() {
+                    Ok((first_scan_cursor(layer + 1, modes)?, ids))
+                } else if new_cursor.is_finished() {
+                    Ok((ScanCursor::default(), ids))
                 } else {
-                    // Still scanning the current layer
                     Ok((new_cursor, ids))
                 }
             }
-            layer => Err(WorkerExecutorError::unknown(format!(
-                "Invalid oplog layer in scan cursor: {layer}"
-            ))),
+            _ => unreachable!(),
         }
     }
 

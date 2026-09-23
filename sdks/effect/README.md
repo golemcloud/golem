@@ -43,14 +43,15 @@ Counter.implement({
 Read-only metadata may be `true` or `{ cache }`; principal-aware caching is derived from a declared
 `PrincipalSchema` input. Public modules are namespaces from
 the root (`Agent`, `Client`, `Config`, `Durability`, `Snapshot`, `Tool`, etc.); only
-`defineAgent`, `defineConfig`, and `method` are flat DSL aliases. Database adapters and standalone
+`defineAgent`, `defineAgentClient`, `defineConfig`, and `method` are flat DSL aliases. Database adapters and standalone
 middleware use the documented sub-imports. `internal/*` and `host/*` are not public imports.
 
 ## Typed clients
 
 Keep a definition in a module without calling `.implement` when another component only needs its
 client. Durable definitions expose `client.get`, `getPhantom`, and `newPhantom`; ephemeral
-definitions expose `newPhantom`. Calls, triggers, and schedules take one typed input object.
+definitions expose `getPhantom` and `newPhantom`, but not ordinary `get`. Calls, triggers, and
+schedules take one typed input object.
 
 ```ts
 const program = Effect.scoped(
@@ -70,8 +71,47 @@ schema contains a live stream is rejected because streams require an awaited inv
 ephemeral call returns `{ metadata, value }`, and an ephemeral trigger/schedule exposes invocation
 metadata. Config overrides are passed as the second argument to `client.get`/`newPhantom`.
 
+Use `defineAgentClient` for caller-owned clients. A full client definition has a declared name,
+constructor schema, lifecycle mode, and methods; it exposes `agentId` and `client` factories without
+registering an implementation. A method-only `{ methods }` definition has neither factory nor
+identity constructor; it binds without discovery and assumes durable result semantics. An
+unimplemented `defineAgent` spec remains usable as a shared implementation/caller definition.
+`identity.client(clientDefinition)` validates the declared name and constructor schema before opening RPC.
+`Client.bind(identity, clientDefinition)` and `DynamicClient.bind(identity)` remain lower-level functions.
+
+```ts
+import { Effect, Schema } from "effect"
+import { AgentIdentity, defineAgentClient, method } from "@golemcloud/effect-golem"
+import type * as CoreTypes from "golem:core/types@2.0.0"
+
+const Target = defineAgentClient({
+  name: "Target",
+  id: { name: Schema.String },
+  methods: { echo: method({ input: { message: Schema.String }, success: Schema.String }) },
+})
+
+const calls = (inputTree: CoreTypes.SchemaValueTree) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const identity = yield* Target.agentId({ name: "main" })
+      const full = yield* identity.client(Target)
+      const first = yield* full.echo({ message: "full" })
+      const methods = defineAgentClient({ methods: Target.methods })
+      const second = yield* (yield* identity.client(methods)).echo({ message: "method only" })
+      const parsed = yield* AgentIdentity.parse(identity.encoded)
+      const dynamic = yield* parsed.dynamicClient()
+      const raw = yield* dynamic.method("echo").invoke(inputTree)
+      // Dynamic methods accept native SchemaValueTree inputs and return metadata plus native values.
+      return { first, second, raw }
+    }),
+  )
+```
+
+Complete ephemeral specs require a phantom ID for `agentId(input, phantomId)` and reject generic
+existing-ID binding. Address known or fresh phantoms through their factories instead.
+
 For runtime-selected targets, use `Reflection.getAgentType(name)`,
-`getAgentTypeByAgentId(id)`, or `getAllAgentTypes`. Each immutable registration exposes
+`getAgentTypeByAgentId(parsedIdentity)`, or `getAllAgentTypes`. Each immutable registration exposes
 constructor/method `SchemaRef` values with JSON/value validation and JSON Schema rendering.
 Narrow `type.mode` to select its lifecycle factory:
 
@@ -84,19 +124,40 @@ const invokeCounter = Effect.scoped(
     const type = yield* Reflection.getAgentType("Counter")
     if (type === undefined || type.mode !== "durable") return undefined
     const client = yield* type.client.get({ name: "main" })
-    const increment = yield* client.method("increment")
-    return yield* increment.invoke({})
+    const add = yield* client.method("add")
+    return yield* add.invoke({ by: 1 })
   }),
 )
 ```
 
 Reflected invocation results contain metadata and, for non-unit outputs, `value`.
 Ephemeral `newPhantom` returns a client whose actual identity arrives in invocation metadata;
-durable `newPhantom` returns `{ client, agentId, phantomId }`. `invokeValue`, `triggerValue`,
+`getPhantom(input, phantomId)` addresses a known phantom without offering ordinary existing-ID
+binding. Durable `newPhantom` returns `{ client, agentId, phantomId }`, with a parsed `agentId`.
+Durable reflected types also bind through `Client.bind(identity, reflectedType)` after name and
+constructor validation. Discovery misses remain `undefined`; host and malformed-schema failures
+enter the typed error channel. `invokeValue`, `triggerValue`,
 and `scheduleValue` accept native WIT schema-value trees when JSON cannot represent capabilities.
-`DynamicClient.fromAgentId(id)` binds without discovery and uses value-only methods; callers
-must supply the correct remote contract. Both APIs use scopes and fiber interruption and expose
+`parsedIdentity.dynamicClient()` binds without discovery and uses value-only methods; callers
+must supply the correct remote method definitions. Both APIs use scopes and fiber interruption and expose
 the same structured remote-call errors as typed clients.
+
+The four client approaches are: Normal RPC through the ordinary client for a shared source
+definition; method-only or full caller-defined static clients; discovered clients backed by an
+immutable deployed schema snapshot; and fully dynamic schema-native clients for existing durable
+identities. Method-only clients do not own
+identity, lifecycle, mode, or config declarations. Full clients own those declarations and the
+matching durable, phantom, or ephemeral factories. Dynamic clients neither discover nor create.
+
+Normal RPC and caller-defined static clients encode through their local schemas before opening RPC;
+full binding also checks the declared name and constructor shape. Discovered clients apply all
+snapshot restrictions and validate
+declared result cardinality and shape. The host remains authoritative for visibility,
+authorization, effective configuration, durable identity resolution, and deployed input schemas.
+Typed inputs use `Schema.optional(...)` normally. Canonical reflected JSON records contain every
+field and use `null` for an absent option. Wide integers are decimal strings: duration is
+`{ nanoseconds: "..." }` and quantity uses a decimal-string `mantissa`; integers through 32 bits
+remain numbers. Streams and opaque capabilities require `*Value` APIs and transfer ownership once.
 
 ## Configuration and opaque secrets
 
@@ -373,6 +434,31 @@ Use `Tool.err(name, value)` for a declared tool error and `Tool.ok(value)` where
 carrier is needed. Tool clients cancel the host future and close owned streams when their scope
 ends.
 
+For a tool selected at runtime, `Reflection.getToolType(name)` and `getAllToolTypes` discover
+caller-visible registrations. The selected command exposes its canonical path, aliases, ordered
+arguments, input schema, result schema, and child commands. Namespace-only nodes remain visible
+but have no callable body.
+
+```ts
+import { Effect } from "effect"
+import { Reflection } from "@golemcloud/effect-golem"
+
+const call = Effect.gen(function* () {
+  const tool = yield* Reflection.getToolType("echo")
+  if (tool) {
+    const command = tool.client.command([])
+    return yield* command.invokeJson({ message: "hello" })
+  }
+})
+```
+
+`invokeJson` and `invokeValue` validate inputs before opening RPC and check declared outputs.
+Canonical JSON records include every argument key; use `null` for absent optional values.
+`startJson` and `startValue` expose scoped stdout, result, concurrent collection, and cancellation
+for pending calls. Use them when stdout is required. `Reflection.DynamicToolClient` accepts a
+caller-packed value when the deployed schema is unavailable and does not infer validation rules.
+Reflected failures are typed Effect errors, including `ToolReflectionError` for malformed output.
+
 `WitTypes.PermissionCard({ polymorphic })` represents a permission card. Cards are opaque affine
 capabilities: successful encoding transfers the exact handle across agent RPC, tool calls, and
 middleware. The sender must not inspect or reuse a transferred card. Transactional graph encoding
@@ -406,14 +492,12 @@ invocation.
 
 When a handler returns, the underlying rejects new admissions but does not implicitly cancel calls already admitted. Cleanup releases their observers after pending observation is safe. For a command declaring stdout, return/select a stream with the typed `context.stdout` callback (or the universal result's `stdout`). The SDK forwards it into the host-provided writer, calls `finish` after clean EOF, and calls `fail` on forwarding failure; middleware never owns that writer directly.
 
-There are three build worlds:
-
-- `agent-guest`: agents plus tool guests (`@golemcloud/effect-golem`)
-- `tool-middleware-guest`: standalone middleware (`@golemcloud/effect-golem/middleware`)
-- `agent-tool-middleware-guest`: combined agent/tool/middleware component
-
-The SDK and templates support all three worlds. The CLI accepts middleware metadata and manifest
-attachment; runtime traversal and invocation behavior remain separate deployment concerns.
+The single `agent-guest` build world exports agents, tools, snapshots, and tool middleware. It
+supports ordinary, standalone-middleware, and combined components; discovery returns empty lists
+for categories a component does not define. Middleware authoring APIs remain available from
+`@golemcloud/effect-golem/middleware`, and invocation-scoped underlying access still advances the
+pinned middleware chain. The CLI accepts middleware metadata and manifest attachment; runtime
+traversal and invocation behavior remain separate deployment concerns.
 
 ## Durability 1.6
 
@@ -467,15 +551,14 @@ npm test
 npm run build
 npm run build:bundle
 $env.WASI_SDK_PATH = "/opt/wasi-sdk"
-npm run build-agent-template # builds all three worlds
+npm run build-agent-template # builds the default world
 npm run check:dts
 npm run check:contracts
 npm run check:artifacts
 ```
 
-`build-agent-template` creates/checks `agent_guest.wasm`, `tool_middleware_guest.wasm`, and
-`agent_tool_middleware_guest.wasm`. `check:artifacts` compares committed/generated provenance and
-fails on stale world artifacts.
+`build-agent-template` creates/checks `agent_guest.wasm`. `check:artifacts` compares
+committed/generated provenance and fails on stale artifacts.
 
 Canonical WIT dependencies live at repository-root `wit/deps`; never edit `sdks/effect/wit/deps`
 by hand. From the repository root:
@@ -483,7 +566,7 @@ by hand. From the repository root:
 ```nu
 cargo make wit          # mirror canonical WIT into every SDK
 cd sdks/effect
-npm run generate-dts    # regenerate declarations for all three worlds
+npm run generate-dts    # regenerate declarations for the default world
 npm run check:dts       # fail if generated declarations drift
 npm run check:artifacts # fail if bundles/templates/WASM drift
 ```

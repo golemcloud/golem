@@ -15,6 +15,7 @@
 use crate::Tracing;
 use futures::poll;
 use golem_common::model::agent::{AgentMode, AgentPrincipal, Principal};
+use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
 use golem_common::model::durable_stream::*;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
@@ -27,6 +28,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor::model::LookupResult;
 use golem_worker_executor::services::oplog::OplogOps;
 use golem_worker_executor::services::{
     HasActiveAgents, HasOplog, HasOplogService, HasRpc, HasWorkerService, UsesAllDeps,
@@ -626,7 +628,10 @@ async fn prepare_session(
     for record in [
         StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
             format_version: 1,
+            public_session_id: idempotency_key.value.clone(),
             session_key: idempotency_key.clone(),
+            expiry_policy: StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
             attempt: StartAttemptDescriptor {
                 format_version: 1,
                 session_key: session_key.clone(),
@@ -693,7 +698,14 @@ async fn prepare_session(
                 trace_id,
                 trace_states,
                 invocation_context,
-                wallet_pin: None,
+                wallet_pin: Box::new(InvocationWalletPin {
+                    wallet_token: WalletVersionToken {
+                        wallet_id_hash: [0; 32],
+                        generation: 0,
+                    },
+                    pinned_card_ids: Vec::new(),
+                    scope_card_id: None,
+                }),
             })
             .await
             .unwrap();
@@ -711,6 +723,150 @@ async fn prepare_session(
             .unwrap();
     }
     Ok(session_key)
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn completion_receipt_precedes_fifo_status_fold(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let (_executor, worker, faults) = setup(last_unique_id, deps, component).await?;
+    let metadata = worker.get_initial_worker_metadata();
+    let idempotency_key = IdempotencyKey::new("direct-completion".into());
+    let payload = OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+        method_name: "increment".into(),
+        input: data_value!().value().clone(),
+        principal: Principal::anonymous(),
+        scope_card: None,
+    }));
+    let context = InvocationContextStack::fresh();
+    let invocation_context = context.to_oplog_data();
+
+    worker
+        .add_and_commit_oplog(OplogEntry::pending_agent_invocation(
+            idempotency_key.clone(),
+            payload.clone(),
+            context.trace_id.clone(),
+            context.trace_states.clone(),
+            invocation_context.clone(),
+        ))
+        .await
+        .unwrap();
+    worker
+        .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: idempotency_key.clone(),
+            payload,
+            trace_id: context.trace_id,
+            trace_states: context.trace_states,
+            invocation_context,
+            wallet_pin: Box::new(InvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 0,
+                },
+                pinned_card_ids: Vec::new(),
+                scope_card_id: None,
+            }),
+        })
+        .await
+        .unwrap();
+    let finished_index = worker
+        .add_to_oplog(OplogEntry::AgentInvocationFinished {
+            timestamp: Timestamp::now_utc(),
+            result: OplogPayload::Inline(Box::new(AgentInvocationResult::AgentMethod {
+                output: data_value!(1u32).value().clone(),
+            })),
+            method_name: Some("increment".into()),
+            consumed_fuel: 0,
+            component_revision: metadata.last_known_status.component_revision,
+        })
+        .await
+        .unwrap();
+
+    // Finishing changes Running to Idle, so the synchronous recovery-index update removes this
+    // worker. Holding that write deterministically pauses the actor after its durable commit and
+    // in-memory fold, but before the FIFO commit+fold job itself is complete.
+    let fold = faults.pause_next("remove");
+    let completion = tokio::spawn({
+        let worker = worker.clone();
+        async move {
+            worker
+                .commit_oplog_before_status_update(
+                    golem_worker_executor::services::oplog::CommitLevel::Always,
+                )
+                .await
+                .unwrap()
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(20), fold.entered()).await?;
+    tokio::time::timeout(Duration::from_secs(1), completion)
+        .await
+        .expect("completion receipt must not wait for status folding")?;
+    let persisted = worker
+        .oplog_service()
+        .read_exact(
+            &OwnedAgentId::new(metadata.environment_id, &metadata.agent_id),
+            AgentMode::Durable,
+            finished_index,
+            1,
+        )
+        .await;
+    assert!(matches!(
+        persisted.get(&finished_index),
+        Some(OplogEntry::AgentInvocationFinished { .. })
+    ));
+
+    // The receipt caller is gone, but actor-owned folding must continue. Both production reads
+    // are queued behind it rather than observing the already-swapped status out of FIFO order.
+    let status = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.get_last_known_status().await }
+    });
+    let result = tokio::spawn({
+        let worker = worker.clone();
+        let idempotency_key = idempotency_key.clone();
+        async move { worker.lookup_invocation_result(&idempotency_key).await }
+    });
+    let metadata_read = tokio::spawn({
+        let worker = worker.clone();
+        let owned_agent_id = OwnedAgentId::new(metadata.environment_id, &metadata.agent_id);
+        async move { Worker::get_latest_metadata(worker.all(), &owned_agent_id).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!status.is_finished(), "status read bypassed the FIFO fold");
+    assert!(
+        !result.is_finished(),
+        "result lookup bypassed the FIFO fold"
+    );
+    assert!(
+        !metadata_read.is_finished(),
+        "metadata read bypassed the FIFO fold"
+    );
+
+    fold.release();
+    let status = tokio::time::timeout(Duration::from_secs(20), status).await??;
+    assert_eq!(status.status, golem_common::model::AgentStatus::Idle);
+    assert_eq!(status.oplog_idx, finished_index);
+    let metadata = tokio::time::timeout(Duration::from_secs(20), metadata_read).await???;
+    assert_eq!(metadata.unwrap().last_known_status, *status);
+    let LookupResult::Complete(Ok(output)) =
+        tokio::time::timeout(Duration::from_secs(20), result).await??
+    else {
+        panic!("expected the completed invocation result");
+    };
+    assert_eq!(output.oplog_index, Some(finished_index));
+    assert_eq!(
+        output.result,
+        AgentInvocationResult::AgentMethod {
+            output: data_value!(1u32).value().clone(),
+        }
+    );
+    Ok(())
 }
 
 #[test]

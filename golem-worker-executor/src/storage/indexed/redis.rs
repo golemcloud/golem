@@ -14,7 +14,7 @@
 
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanCursor, ScanResume, WriterId,
+    ScanResume, WriterId,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -400,17 +400,23 @@ impl IndexedStorage for RedisIndexedStorage {
             .map_err(|e| IndexedStorageError::Other(e.to_string()))
     }
 
-    async fn scan(
+    async fn scan_stable(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         namespace: IndexedStorageMetaNamespace,
         prefix: Option<&str>,
-        cursor: ScanCursor,
+        resume: Option<ScanResume>,
         count: u64,
-    ) -> Result<(ScanCursor, Vec<String>), IndexedStorageError> {
+    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        // A Redis SCAN cursor walks the hash space, so deleting keys behind it moves nothing, and
+        // a key present for the whole iteration comes back at least once.
+        let cursor = resume
+            .map(|resume| resume.into_cursor("Redis"))
+            .transpose()?
+            .unwrap_or(0);
         let pattern = Self::to_scan_pattern(prefix);
-        let (cursor, keys) = self
+        let (next, keys) = self
             .redis
             .with(svc_name, api_name)
             .scan(
@@ -422,29 +428,8 @@ impl IndexedStorage for RedisIndexedStorage {
             .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
         let keys = keys
             .into_iter()
-            .map(|k| Self::parse_composite_meta_key(namespace.clone(), &k))
+            .map(|key| Self::parse_composite_meta_key(namespace.clone(), &key))
             .collect();
-        Ok((cursor, keys))
-    }
-
-    async fn scan_stable(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        namespace: IndexedStorageMetaNamespace,
-        prefix: Option<&str>,
-        resume: Option<ScanResume>,
-        count: u64,
-    ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
-        // Plain `scan`: a `SCAN` cursor walks the hash space, so deleting keys behind it moves
-        // nothing, and a key present for the whole iteration comes back at least once.
-        let cursor = resume
-            .map(|resume| resume.into_cursor("Redis"))
-            .transpose()?
-            .unwrap_or(0);
-        let (next, keys) = self
-            .scan(svc_name, api_name, namespace, prefix, cursor, count)
-            .await?;
         let next = (next != 0).then_some(ScanResume::Cursor(next));
         Ok((next, keys))
     }

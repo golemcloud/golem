@@ -39,6 +39,7 @@ impl DurableStreamStore {
                     payload,
                     close,
                     producer,
+                    None,
                 )
                 .await
         })
@@ -100,6 +101,7 @@ impl DurableStreamStore {
         payload: Option<StreamItemsPayload>,
         close: bool,
         producer: Option<ExternalProducer>,
+        expiry_refresh: Option<StreamSessionExpiryRefreshedRecord>,
     ) -> Result<ExternalAppendOutcome, StreamStoreError> {
         let session_key = session_key.clone();
         admission
@@ -112,6 +114,7 @@ impl DurableStreamStore {
                         payload,
                         close,
                         producer,
+                        expiry_refresh,
                     )
                     .await
             })
@@ -126,6 +129,7 @@ impl DurableStreamStore {
         payload: Option<StreamItemsPayload>,
         close: bool,
         producer: Option<ExternalProducer>,
+        expiry_refresh: Option<StreamSessionExpiryRefreshedRecord>,
     ) -> Result<ExternalAppendOutcome, StreamStoreError> {
         let mut keys = vec![ProducerMetadataKey::Stream(stream_id)];
         if let Some(producer) = &producer {
@@ -174,6 +178,9 @@ impl DurableStreamStore {
                 )
             {
                 if payload.is_none() && producer.is_none() {
+                    if let Some(refresh) = expiry_refresh {
+                        self.commit_expiry_refresh(context, refresh).await?;
+                    }
                     return Ok(ExternalAppendOutcome::Duplicate {
                         offset: event.offset,
                         highest_sequence: None,
@@ -186,6 +193,9 @@ impl DurableStreamStore {
                         && head.last_sequence == request.sequence
                         && head.last_offset == event.offset
                     {
+                        if let Some(refresh) = expiry_refresh {
+                            self.commit_expiry_refresh(context, refresh).await?;
+                        }
                         return Ok(ExternalAppendOutcome::Duplicate {
                             offset: event.offset,
                             highest_sequence: Some(head.last_sequence),
@@ -225,6 +235,9 @@ impl DurableStreamStore {
                                 "external producer sequence has no original offset".into(),
                             )
                         })?;
+                    if let Some(refresh) = expiry_refresh {
+                        self.commit_expiry_refresh(context, refresh).await?;
+                    }
                     return Ok(ExternalAppendOutcome::Duplicate {
                         offset,
                         highest_sequence: Some(head.last_sequence),
@@ -374,6 +387,12 @@ impl DurableStreamStore {
                                 resulting_offset,
                             },
                         )),
+                    ));
+                }
+                if let Some(refresh) = expiry_refresh {
+                    records.push(DurableStreamOplogRecord::Session(
+                        None,
+                        Box::new(StreamSessionRecord::ExpiryRefreshed(refresh)),
                     ));
                 }
                 records

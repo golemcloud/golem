@@ -2611,6 +2611,9 @@ pub(crate) fn build_durable_streaming_request(
         })?,
     };
     Ok(DurableStreamingInvocationRequest {
+        public_session_id: idempotency_key.value.clone(),
+        expiry_policy: golem_common::base_model::durable_stream::StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
         attempt,
         registrations,
         foreign_mappings,

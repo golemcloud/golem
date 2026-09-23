@@ -32,16 +32,19 @@ use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::durable_stream::{
     AttachmentId, AttemptId, LocalStreamReaderId, PersistedStreamInvocationDescriptor,
-    ResumeAttemptDescriptor, StartAttemptDescriptor, StreamInvocationId,
-    StreamRegistrationInvocation, StreamResumeOperation, StreamSessionAttachedRecord,
-    StreamSessionDetachedRecord, StreamSessionFinishedRecord, StreamSessionInvocationResultRecord,
-    StreamSessionPreparedRecord, StreamSessionRecord, StreamSessionResumeAttemptRecord,
+    ResumeAttemptDescriptor, StartAttemptDescriptor, StreamExportForkInitializedRecord,
+    StreamForkCutRecord, StreamInvocationId, StreamRegistrationInvocation, StreamResumeOperation,
+    StreamSessionAttachedRecord, StreamSessionDetachedRecord, StreamSessionExpiredRecord,
+    StreamSessionExpiryPolicy, StreamSessionExpiryRefreshedRecord, StreamSessionFinishedRecord,
+    StreamSessionInvocationResultRecord, StreamSessionPreparedRecord, StreamSessionRecord,
+    StreamSessionResumeAttemptRecord,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::OplogPayload;
 use golem_common::model::{
-    AgentFingerprint, AgentInvocationPayload, AgentMetadata, DurableStreamSessionIndex,
+    AgentFingerprint, AgentInvocationPayload, AgentMetadata, DurableStreamPublicBinding,
+    DurableStreamSessionIndex,
 };
 use golem_common::read_only_lock;
 use golem_service_base::model::component::Component;
@@ -103,6 +106,29 @@ fn owned_agent(name: &str, component_id: ComponentId) -> OwnedAgentId {
             agent_id: name.to_string(),
         },
     )
+}
+
+fn create_entry(
+    id: &OwnedAgentId,
+    created_by: AccountId,
+    fingerprint: AgentFingerprint,
+) -> OplogEntry {
+    OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+        agent_id: id.agent_id.clone(),
+        owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
+        agent_mode: AgentMode::Durable,
+        component_revision: ComponentRevision::INITIAL,
+        env: vec![],
+        environment_id: id.environment_id,
+        created_by,
+        parent: None,
+        component_size: 100,
+        initial_total_linear_memory_size: 100,
+        initial_active_plugins: Default::default(),
+        local_agent_config: vec![],
+        original_phantom_id: None,
+        instance_id: fingerprint.0,
+    }))
 }
 
 fn local_registration(key: &StreamInvocationId) -> StreamRegistrationInvocation {
@@ -244,22 +270,7 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             &mut oplog_service.lock_lifecycle(&owner.agent_id).await,
             &owner,
             AgentMode::Durable,
-            OplogEntry::create(
-                owner.agent_id.clone(),
-                golem_common::model::agent::OwnerKind::ComponentAgent,
-                AgentMode::Durable,
-                ComponentRevision::INITIAL,
-                vec![],
-                owner.environment_id,
-                metadata.created_by,
-                None,
-                100,
-                100,
-                Default::default(),
-                vec![],
-                None,
-                key.callee_fingerprint.0,
-            ),
+            create_entry(&owner, metadata.created_by, key.callee_fingerprint),
             metadata,
             stale_status(),
             suspended_status(),
@@ -389,21 +400,10 @@ async fn committed_cancellation_probe_preserves_exact_authority_after_takeover()
             &mut oplog_service.lock_lifecycle(&foreign.agent_id).await,
             &foreign,
             AgentMode::Durable,
-            OplogEntry::create(
-                foreign.agent_id.clone(),
-                golem_common::model::agent::OwnerKind::ComponentAgent,
-                AgentMode::Durable,
-                ComponentRevision::INITIAL,
-                vec![],
-                foreign.environment_id,
+            create_entry(
+                &foreign,
                 foreign_metadata.created_by,
-                None,
-                100,
-                100,
-                Default::default(),
-                vec![],
-                None,
-                consumer_invocation.callee_fingerprint.0,
+                consumer_invocation.callee_fingerprint,
             ),
             foreign_metadata,
             stale_status(),
@@ -554,7 +554,10 @@ fn prepared_record(id: &OwnedAgentId, key: &IdempotencyKey) -> StreamSessionReco
     let session_key = session_key(id, key);
     StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
         format_version: 1,
+        public_session_id: key.value.clone(),
         session_key: key.clone(),
+        expiry_policy: StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {
             format_version: 1,
             session_key: session_key.clone(),
@@ -654,22 +657,7 @@ async fn create_oplog(service: &dyn OplogService, id: &OwnedAgentId) -> Arc<dyn 
             &mut service.lock_lifecycle(&id.agent_id).await,
             id,
             AgentMode::Durable,
-            OplogEntry::create(
-                id.agent_id.clone(),
-                golem_common::model::agent::OwnerKind::ComponentAgent,
-                AgentMode::Durable,
-                ComponentRevision::INITIAL,
-                vec![],
-                id.environment_id,
-                metadata.created_by,
-                None,
-                100,
-                100,
-                Default::default(),
-                vec![],
-                None,
-                metadata.fingerprint.0,
-            ),
+            create_entry(id, metadata.created_by, metadata.fingerprint),
             metadata,
             stale_status(),
             suspended_status(),
@@ -693,6 +681,113 @@ async fn append_noop(oplog: &dyn Oplog) -> OplogIndex {
         })
         .await
         .expect("oplog write")
+}
+
+#[test]
+#[test_r::timeout("60s")]
+async fn quiescent_recovery_caches_only_read_new_committed_suffixes() {
+    use crate::services::oplog::tests::ReadCountingIndexedStorage;
+
+    let storage = Arc::new(ReadCountingIndexedStorage::new());
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            10000,
+            10000,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let service = DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(ShardServiceDefault::new()),
+        oplog_service.clone(),
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let mut owners = Vec::new();
+    for number in 0..1025 {
+        let owner = owned_agent(&format!("quiescent-{number}"), ComponentId::new());
+        let key = IdempotencyKey::new("finished".into());
+        let session = session_key(&owner, &key);
+        let oplog = create_oplog(oplog_service.as_ref(), &owner).await;
+        append_session(oplog.as_ref(), prepared_record(&owner, &key)).await;
+        let committed = append_session(
+            oplog.as_ref(),
+            StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+                format_version: 1,
+                session_key: local_registration(&session),
+                result: Ok(()),
+            }),
+        )
+        .await;
+        oplog.commit(CommitLevel::Always).await.unwrap();
+        let mut cache = crate::worker::DurableTopologyRecoveryCache::default();
+        cache
+            .refresh_through(
+                committed,
+                oplog.as_ref(),
+                &service,
+                &owner,
+                AgentMode::Durable,
+                session.callee_fingerprint,
+            )
+            .await
+            .unwrap();
+        assert!(cache.dirty.is_empty());
+        owners.push((owner, session.callee_fingerprint, oplog, committed, cache));
+    }
+
+    storage.reset();
+    for (owner, fingerprint, oplog, committed, cache) in &mut owners {
+        cache
+            .refresh_through(
+                *committed,
+                oplog.as_ref(),
+                &service,
+                owner,
+                AgentMode::Durable,
+                *fingerprint,
+            )
+            .await
+            .unwrap();
+        assert!(cache.dirty.is_empty());
+    }
+    assert_eq!(storage.reads(), 0, "idle history must not reopen storage");
+
+    let (owner, fingerprint, oplog, committed, cache) = &mut owners[0];
+    let next = IdempotencyKey::new("new-session".into());
+    let suffix = append_session(oplog.as_ref(), prepared_record(owner, &next)).await;
+    cache
+        .refresh_through(
+            *committed,
+            oplog.as_ref(),
+            &service,
+            owner,
+            AgentMode::Durable,
+            *fingerprint,
+        )
+        .await
+        .unwrap();
+    assert!(
+        cache.dirty.is_empty(),
+        "buffered work is not published demand"
+    );
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    cache
+        .refresh_through(
+            suffix,
+            oplog.as_ref(),
+            &service,
+            owner,
+            AgentMode::Durable,
+            *fingerprint,
+        )
+        .await
+        .unwrap();
+    assert_eq!(cache.dirty, HashSet::from([session_key(owner, &next)]));
 }
 
 #[test]
@@ -819,22 +914,7 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
                 &mut oplog_service.lock_lifecycle(&id.agent_id).await,
                 &id,
                 AgentMode::Durable,
-                OplogEntry::create(
-                    id.agent_id.clone(),
-                    golem_common::model::agent::OwnerKind::ComponentAgent,
-                    AgentMode::Durable,
-                    ComponentRevision::INITIAL,
-                    vec![],
-                    id.environment_id,
-                    metadata.created_by,
-                    None,
-                    100,
-                    100,
-                    Default::default(),
-                    vec![],
-                    None,
-                    fingerprint.0,
-                ),
+                create_entry(&id, metadata.created_by, fingerprint),
                 metadata,
                 stale_status(),
                 suspended_status(),
@@ -943,22 +1023,7 @@ async fn self_revert_retains_foreign_consumer_prefix_across_partial_page_and_rep
             &mut oplog_service.lock_lifecycle(&owner.agent_id).await,
             &owner,
             AgentMode::Durable,
-            OplogEntry::create(
-                owner.agent_id.clone(),
-                golem_common::model::agent::OwnerKind::ComponentAgent,
-                AgentMode::Durable,
-                ComponentRevision::INITIAL,
-                vec![],
-                owner.environment_id,
-                metadata.created_by,
-                None,
-                100,
-                100,
-                Default::default(),
-                vec![],
-                None,
-                fingerprint.0,
-            ),
+            create_entry(&owner, metadata.created_by, fingerprint),
             metadata,
             stale_status(),
             suspended_status(),
@@ -1156,22 +1221,7 @@ async fn concurrent_index_services_refold_same_paired_revert_without_stale_rows(
             &mut oplog_service.lock_lifecycle(&owner.agent_id).await,
             &owner,
             AgentMode::Durable,
-            OplogEntry::create(
-                owner.agent_id.clone(),
-                golem_common::model::agent::OwnerKind::ComponentAgent,
-                AgentMode::Durable,
-                ComponentRevision::INITIAL,
-                vec![],
-                owner.environment_id,
-                metadata.created_by,
-                None,
-                100,
-                100,
-                Default::default(),
-                vec![],
-                None,
-                fingerprint.0,
-            ),
+            create_entry(&owner, metadata.created_by, fingerprint),
             metadata,
             stale_status(),
             suspended_status(),
@@ -2059,6 +2109,437 @@ fn bounded_status_evicts_old_completed_sessions_but_retains_unfinished_session()
     );
     assert_eq!(index.iter().count(), 129);
     assert!(index.get(&unfinished).is_some());
+}
+
+#[test]
+async fn public_binding_projection_is_fenced_and_rebuildable() {
+    let (service, _kv, oplog_service) = service_with_oplog().await;
+    let id = owned_agent("public-binding", ComponentId::new());
+    let oplog = create_oplog(oplog_service.as_ref(), &id).await;
+    let first = IdempotencyKey::new("internal-1".into());
+    let second = IdempotencyKey::new("internal-2".into());
+    let public = "report-42";
+
+    let mut prepared = prepared_record(&id, &first);
+    let StreamSessionRecord::Prepared(record) = &mut prepared else {
+        unreachable!()
+    };
+    record.public_session_id = public.into();
+    record.expiry_policy = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 };
+    record.expiry_deadline_millis = Some(10_000);
+    append_session(oplog.as_ref(), prepared.clone()).await;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
+            format_version: 1,
+            session_key: first.clone(),
+            public_session_id: public.into(),
+            expected_deadline_millis: 10_000,
+            refreshed_at_millis: 10_000,
+            deadline_millis: 20_000,
+        }),
+    )
+    .await;
+    append_session(oplog.as_ref(), prepared.clone()).await;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::Expired(StreamSessionExpiredRecord {
+            format_version: 1,
+            session_key: first.clone(),
+            public_session_id: public.into(),
+            expected_deadline_millis: 10_000,
+            expired_at_millis: 20_000,
+        }),
+    )
+    .await;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::Expired(StreamSessionExpiredRecord {
+            format_version: 1,
+            session_key: first.clone(),
+            public_session_id: public.into(),
+            expected_deadline_millis: 20_000,
+            expired_at_millis: 20_000,
+        }),
+    )
+    .await;
+    append_session(oplog.as_ref(), prepared).await;
+    append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
+            format_version: 1,
+            public_session_id: public.into(),
+            session_key: second.clone(),
+            source_invocation: session_key(&id, &first),
+            request_hash: vec![7; 32],
+            expiry_policy: StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let expected = DurableStreamPublicBinding::Live {
+        session_key: second.clone(),
+        expiry_policy: StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
+    };
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_public_binding(&id, AgentMode::Durable, public)
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_latest(&id, AgentMode::Durable, &second)
+            .await
+            .unwrap()
+            .and_then(|status| status.public_session_id),
+        Some(public.into())
+    );
+
+    service.stream_session_index.clear(&id).await.unwrap();
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_public_binding(&id, AgentMode::Durable, public)
+            .await
+            .unwrap(),
+        Some(expected)
+    );
+}
+
+#[test]
+async fn target_only_public_binding_status_survives_transitions_and_rebuild() {
+    let (service, _kv, oplog_service) = service_with_oplog().await;
+    let id = owned_agent("target-only-binding", ComponentId::new());
+    let oplog = create_oplog(oplog_service.as_ref(), &id).await;
+    let key = IdempotencyKey::new("internal".into());
+    let public = "report-42";
+    let initialize = |deadline| {
+        StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
+            format_version: 1,
+            public_session_id: public.into(),
+            session_key: key.clone(),
+            source_invocation: session_key(&id, &key),
+            request_hash: vec![7; 32],
+            expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
+            expiry_deadline_millis: Some(deadline),
+        })
+    };
+    let records = vec![
+        initialize(10_000),
+        StreamSessionRecord::ExpiryRefreshed(StreamSessionExpiryRefreshedRecord {
+            format_version: 1,
+            session_key: key.clone(),
+            public_session_id: public.into(),
+            expected_deadline_millis: 10_000,
+            refreshed_at_millis: 10_000,
+            deadline_millis: 20_000,
+        }),
+        initialize(10_000),
+        StreamSessionRecord::Expired(StreamSessionExpiredRecord {
+            format_version: 1,
+            session_key: key.clone(),
+            public_session_id: public.into(),
+            expected_deadline_millis: 20_000,
+            expired_at_millis: 20_000,
+        }),
+        initialize(30_000),
+    ];
+    let mut indexed_records = Vec::new();
+    for record in records {
+        let index = append_session(oplog.as_ref(), record.clone()).await;
+        indexed_records.push((index, record));
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    assert!(matches!(
+        service
+            .stream_session_index
+            .lookup_public_binding(&id, AgentMode::Durable, public)
+            .await
+            .unwrap(),
+        Some(DurableStreamPublicBinding::Retired { session_key }) if session_key == key
+    ));
+    let expired = service
+        .stream_session_index
+        .lookup_latest(&id, AgentMode::Durable, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(expired.expiry_deadline_millis, Some(20_000));
+    assert_eq!(
+        expired.export_source_invocation,
+        Some(session_key(&id, &key))
+    );
+    assert!(expired.expired);
+
+    append_noop(oplog.as_ref()).await;
+    let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
+        format_version: 1,
+        request_hash: vec![1; 32],
+        creation_fingerprint: AgentFingerprint(id.agent_id.component_id.0),
+        export: None,
+        cut_index: oplog.current_oplog_index().await,
+        revert: None,
+        epoch_floor: 1,
+        selected_stream_id: None,
+        retained_through: None,
+    });
+    let cut_index = append_session(oplog.as_ref(), cut.clone()).await;
+    indexed_records.push((cut_index, cut));
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let inherited = service
+        .stream_session_index
+        .lookup_latest(&id, AgentMode::Durable, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(inherited.first_prepared.is_none());
+    assert!(inherited.public_session_id.is_none());
+    assert!(inherited.export_fork_initialized);
+    assert_eq!(inherited.expiry_policy, StreamSessionExpiryPolicy::None);
+    assert_eq!(inherited.expiry_deadline_millis, None);
+    assert!(!inherited.expired);
+
+    let replacement = initialize(40_000);
+    let replacement_index = append_session(oplog.as_ref(), replacement.clone()).await;
+    indexed_records.push((replacement_index, replacement));
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let expected = DurableStreamPublicBinding::Live {
+        session_key: key.clone(),
+        expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 10 },
+        expiry_deadline_millis: Some(40_000),
+    };
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_public_binding(&id, AgentMode::Durable, public)
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+    let status = service
+        .stream_session_index
+        .lookup_latest(&id, AgentMode::Durable, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.public_session_id.as_deref(), Some(public));
+    assert_eq!(status.expiry_deadline_millis, Some(40_000));
+    assert!(!status.expired);
+
+    service.stream_session_index.clear(&id).await.unwrap();
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_public_binding(&id, AgentMode::Durable, public)
+            .await
+            .unwrap(),
+        Some(expected)
+    );
+    let rebuilt = service
+        .stream_session_index
+        .lookup_latest(&id, AgentMode::Durable, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rebuilt.public_session_id.as_deref(), Some(public));
+    assert_eq!(rebuilt.expiry_deadline_millis, Some(40_000));
+    assert!(!rebuilt.expired);
+
+    let mut in_memory = DurableStreamSessionIndex::default();
+    for (index, record) in indexed_records {
+        in_memory.apply_record(index, &record);
+    }
+    let status = in_memory.get(&key).unwrap();
+    assert_eq!(status.public_session_id.as_deref(), Some(public));
+    assert_eq!(status.expiry_deadline_millis, Some(40_000));
+    assert!(!status.expired);
+}
+
+#[test]
+async fn fork_cut_clears_public_bindings_after_partial_catch_up() {
+    let (service, _kv, oplog_service) = service_with_oplog().await;
+    let id = owned_agent("public-binding-fork", ComponentId::new());
+    let oplog = create_oplog(oplog_service.as_ref(), &id).await;
+    let key = IdempotencyKey::new("internal".into());
+    let public = "report-42";
+    let mut prepared = prepared_record(&id, &key);
+    let StreamSessionRecord::Prepared(record) = &mut prepared else {
+        unreachable!()
+    };
+    record.public_session_id = public.into();
+    record.expiry_policy = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 };
+    record.expiry_deadline_millis = Some(40_000);
+    append_session(oplog.as_ref(), prepared).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    assert!(matches!(
+        service
+            .stream_session_index
+            .lookup_public_binding(&id, AgentMode::Durable, public)
+            .await
+            .unwrap(),
+        Some(DurableStreamPublicBinding::Live { session_key, .. }) if session_key == key
+    ));
+
+    append_noop(oplog.as_ref()).await;
+    let cut = StreamSessionRecord::ForkCut(StreamForkCutRecord {
+        format_version: 1,
+        request_hash: vec![1; 32],
+        creation_fingerprint: AgentFingerprint(id.agent_id.component_id.0),
+        export: None,
+        cut_index: oplog.current_oplog_index().await,
+        revert: None,
+        epoch_floor: 1,
+        selected_stream_id: None,
+        retained_through: None,
+    });
+    append_session(oplog.as_ref(), cut).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_public_binding(&id, AgentMode::Durable, public)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_latest(&id, AgentMode::Durable, &key)
+            .await
+            .unwrap()
+            .and_then(|status| status.public_session_id),
+        Some(public.into())
+    );
+    let inherited = service
+        .stream_session_index
+        .lookup_latest(&id, AgentMode::Durable, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(inherited.first_prepared.is_some());
+    assert_eq!(inherited.expiry_policy, StreamSessionExpiryPolicy::None);
+    assert_eq!(inherited.expiry_deadline_millis, None);
+    assert_eq!(inherited.attachment_attached, Some(false));
+    service.stream_session_index.clear(&id).await.unwrap();
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_public_binding(&id, AgentMode::Durable, public)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_latest(&id, AgentMode::Durable, &key)
+            .await
+            .unwrap()
+            .and_then(|status| status.public_session_id),
+        Some(public.into())
+    );
+    let rebuilt = service
+        .stream_session_index
+        .lookup_latest(&id, AgentMode::Durable, &key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(rebuilt.first_prepared.is_some());
+    assert_eq!(rebuilt.expiry_policy, StreamSessionExpiryPolicy::None);
+    assert_eq!(rebuilt.expiry_deadline_millis, None);
+    assert_eq!(rebuilt.attachment_attached, Some(false));
+}
+
+#[test]
+async fn self_revert_preserves_retained_public_binding_in_warm_and_cold_indexes() {
+    use golem_common::model::durable_stream::StreamForkCutRecord;
+    use golem_common::model::regions::OplogRegion;
+
+    let (service, _kv, oplog_service) = service_with_oplog().await;
+    let id = owned_agent("public-binding-self-revert", ComponentId::new());
+    let oplog = create_oplog(oplog_service.as_ref(), &id).await;
+    let key = IdempotencyKey::new("internal".into());
+    let public = "retained-public";
+    let mut prepared = prepared_record(&id, &key);
+    let StreamSessionRecord::Prepared(record) = &mut prepared else {
+        unreachable!()
+    };
+    record.public_session_id = public.into();
+    record.expiry_policy = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 };
+    record.expiry_deadline_millis = Some(40_000);
+    append_session(oplog.as_ref(), prepared).await;
+    let discarded = append_noop(oplog.as_ref()).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let expected = DurableStreamPublicBinding::Live {
+        session_key: key.clone(),
+        expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 30 },
+        expiry_deadline_millis: Some(40_000),
+    };
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_public_binding(&id, AgentMode::Durable, public)
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+
+    let region = OplogRegion {
+        start: discarded,
+        end: discarded,
+    };
+    let marker = DurableStreamOplogRecord::Session(
+        None,
+        Box::new(StreamSessionRecord::ForkCut(StreamForkCutRecord {
+            format_version: 1,
+            request_hash: vec![0; 32],
+            creation_fingerprint: session_key(&id, &key).callee_fingerprint,
+            export: None,
+            cut_index: discarded.previous(),
+            revert: Some(region.clone()),
+            epoch_floor: 2,
+            selected_stream_id: None,
+            retained_through: None,
+        })),
+    )
+    .into_inline_entry();
+    oplog
+        .add_pair(OplogEntry::revert(region), Box::new(move |_| marker))
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_public_binding(&id, AgentMode::Durable, public)
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+    service.stream_session_index.clear(&id).await.unwrap();
+    assert_eq!(
+        service
+            .stream_session_index
+            .lookup_public_binding(&id, AgentMode::Durable, public)
+            .await
+            .unwrap(),
+        Some(expected)
+    );
 }
 
 #[test]

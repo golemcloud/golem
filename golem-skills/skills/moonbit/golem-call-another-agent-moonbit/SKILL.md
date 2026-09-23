@@ -76,7 +76,60 @@ To create multiple distinct instances with the same constructor parameters, use 
 
 ## Cross-Component RPC
 
-When calling agents defined in a **different component**, the generated client type is available after running `golem build` — the build step generates bridge SDK code for inter-component dependencies declared in `golem.yaml`.
+MoonBit does **not** currently support putting an agent definition in a shared package and importing its generated client from two separate components. `#derive.agent` describes the concrete implementation type, and `golem_sdk_tools agents` emits the registration, dispatch, and client code together in the component package.
+
+Use an internal guest bridge instead. Given a provider component `example:weather` containing `WeatherAgent`, declare the caller's dependency in `golem.yaml`:
+
+```yaml
+components:
+  example:weather:
+    dir: weather
+    templates: moonbit
+  example:caller:
+    dir: caller
+    templates: moonbit
+    dependencies:
+      agents:
+        - example:weather/WeatherAgent
+```
+
+`golem build` generates `golem-temp/bridge-sdk/moonbit/internal/weather-agent-guest-client`. Add it as a local module dependency in the application's `moon.mod.json`:
+
+```json
+{
+  "name": "example/weather-app",
+  "preferred-target": "wasm",
+  "deps": {
+    "golemcloud/golem_sdk": "0.5.1",
+    "weather-agent-guest-client": {
+      "path": "golem-temp/bridge-sdk/moonbit/internal/weather-agent-guest-client"
+    }
+  }
+}
+```
+
+Import its client package from the caller's `moon.pkg`:
+
+```moonbit
+import {
+  "weather-agent-guest-client/client" @weather,
+  // ...the caller's Golem SDK imports
+}
+```
+
+Then call the provider through the generated typed client:
+
+```moonbit
+pub async fn ExampleAgent::weather_in_london(self : Self) -> String {
+  let _ = self
+  @weather.WeatherAgentClient::scoped(
+    "London",
+    async fn(remote) { remote.current_weather() },
+  )
+}
+```
+
+This client is generated from the built provider's discovered schema before the caller is compiled. It uses the guest RPC host API directly, not the external REST bridge transport. Do not import the provider component's executable MoonBit package into the caller.
 
 ## Avoiding Deadlocks
 

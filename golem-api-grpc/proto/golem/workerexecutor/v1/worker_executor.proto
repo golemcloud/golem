@@ -69,7 +69,7 @@ service WorkerExecutor {
 
   rpc ControlDurableStreamAttachment(DurableStreamAttachmentControlRequest) returns (DurableStreamAttachmentControlResponse);
   rpc ReadDurableStreamSegment(DurableStreamSegmentReadRequest) returns (DurableStreamSegmentReadResponse);
-  rpc CreateStreamSession(golem.worker.InvocationStart) returns (CreateStreamSessionResponse);
+  rpc CreateStreamSession(CreateStreamSessionRequest) returns (CreateStreamSessionResponse);
   rpc ReadStreamSlot(ReadStreamSlotRequest) returns (stream ReadStreamSlotResponse);
   rpc AppendToStreamSlot(AppendToStreamSlotRequest) returns (AppendToStreamSlotResponse);
   rpc ForkStreamSlot(ForkStreamSlotRequest) returns (ForkStreamSlotResponse);
@@ -553,10 +553,34 @@ message DurableStreamSegmentReadResponse {
   }
 }
 
+message StreamSessionExpiryPolicy {
+  oneof kind {
+    golem.common.Empty none = 1;
+    uint64 ttl_seconds = 2;
+    uint64 expires_at_millis = 3;
+  }
+}
+
+enum StreamSessionCreationIntent {
+  STREAM_SESSION_CREATION_INTENT_UNSPECIFIED = 0;
+  STREAM_SESSION_CREATION_INTENT_EXPLICIT_PUT = 1;
+  STREAM_SESSION_CREATION_INTENT_LAZY_POST = 2;
+}
+
+message CreateStreamSessionRequest {
+  string public_session_id = 1;
+  StreamSessionExpiryPolicy expiry_policy = 2;
+  StreamSessionCreationIntent creation_intent = 3;
+  golem.worker.InvocationStart invocation = 4;
+}
+
 message CreateStreamSessionSuccess {
   string session = 1;
   bool replayed = 2;
   uint64 component_revision = 3;
+  golem.worker.IdempotencyKey invocation_key = 4;
+  StreamSessionExpiryPolicy expiry_policy = 5;
+  optional uint64 expiry_deadline_millis = 6;
 }
 
 message CreateStreamSessionResponse {
@@ -582,6 +606,15 @@ message ReadStreamSlotRequest {
   uint64 wait_millis = 9;
   // Restricts the session to the method authorized by the HTTP route.
   string expected_method = 10;
+  StreamSlotReadAdmission admission = 11;
+  optional golem.worker.IdempotencyKey invocation_key = 12;
+}
+
+enum StreamSlotReadAdmission {
+  STREAM_SLOT_READ_ADMISSION_UNSPECIFIED = 0;
+  STREAM_SLOT_READ_ADMISSION_TOUCHING_ORIGIN_GET = 1;
+  STREAM_SLOT_READ_ADMISSION_HEAD = 2;
+  STREAM_SLOT_READ_ADMISSION_CONTINUATION = 3;
 }
 
 message StreamSlotItem {
@@ -614,6 +647,9 @@ message ReadStreamSlotSuccess {
   bool writable = 12;
   // Creation provenance for an exported fork, independent of subsequent progress.
   ForkStreamSlotSuccess fork = 13;
+  golem.worker.IdempotencyKey invocation_key = 14;
+  StreamSessionExpiryPolicy expiry_policy = 15;
+  optional uint64 expiry_deadline_millis = 16;
 }
 
 message ReadStreamSlotResponse {
@@ -644,6 +680,7 @@ message ForkStreamSlotRequest {
   uint64 max_copied_bytes = 14;
   bytes initial_content = 15;
   bool closed = 16;
+  StreamSessionExpiryPolicy expiry_policy = 17;
 }
 
 message ForkStreamSlotSuccess {
@@ -652,6 +689,7 @@ message ForkStreamSlotSuccess {
   bytes fork_offset = 3;
   uint64 sub_offset = 4;
   uint64 oplog_index = 5;
+  golem.worker.IdempotencyKey invocation_key = 6;
 }
 
 message ForkStreamSlotRejection {
@@ -724,6 +762,11 @@ message AppendToStreamSlotResponse {
     golem.common.Empty gone = 8;
     golem.common.Empty read_only = 9;
   }
+  golem.worker.IdempotencyKey invocation_key = 10;
+  StreamSessionExpiryPolicy expiry_policy = 11;
+  optional uint64 expiry_deadline_millis = 12;
+  bytes stream_head_offset = 13;
+  optional bool stream_closed = 14;
 }
 
 message ProcessOplogEntriesRequest {

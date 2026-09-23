@@ -488,8 +488,9 @@ pub(crate) mod tests {
     use golem_common::model::durable_stream::{
         AttachmentId, AttemptId, PersistedInvocationTarget, PersistedStreamInvocationDescriptor,
         StartAttemptDescriptor, StreamForkCutRecord, StreamItemsPayload, StreamOffset,
-        StreamRegistrationRecordCoordinate, StreamRootKind, StreamSessionFinishedRecord,
-        StreamSessionKey, StreamSessionPreparedRecord, StreamSourceKind,
+        StreamRegistrationRecordCoordinate, StreamRootKind, StreamSessionExpiryPolicy,
+        StreamSessionFinishedRecord, StreamSessionKey, StreamSessionPreparedRecord,
+        StreamSourceKind,
     };
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::{
@@ -532,22 +533,23 @@ pub(crate) mod tests {
                 fingerprint,
                 agent_mode: AgentMode::Durable,
             };
-            let create = OplogEntry::create(
-                owner.agent_id.clone(),
-                OwnerKind::ComponentAgent,
-                AgentMode::Durable,
-                ComponentRevision::INITIAL,
-                vec![],
-                owner.environment_id,
-                account,
-                None,
-                100,
-                100,
-                HashSet::new(),
-                vec![],
-                None,
-                fingerprint.0,
-            );
+            let create =
+                OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+                    agent_id: owner.agent_id.clone(),
+                    owner_kind: OwnerKind::ComponentAgent,
+                    agent_mode: AgentMode::Durable,
+                    component_revision: ComponentRevision::INITIAL,
+                    env: vec![],
+                    environment_id: owner.environment_id,
+                    created_by: account,
+                    parent: None,
+                    component_size: 100,
+                    initial_total_linear_memory_size: 100,
+                    initial_active_plugins: HashSet::new(),
+                    local_agent_config: vec![],
+                    original_phantom_id: None,
+                    instance_id: fingerprint.0,
+                }));
             let oplog = service
                 .create_fresh(
                     &mut service.lock_lifecycle(&owner.agent_id).await,
@@ -609,6 +611,9 @@ pub(crate) mod tests {
         StreamSessionPreparedRecord {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: key.idempotency_key.clone(),
+            public_session_id: key.idempotency_key.value.clone(),
+            expiry_policy: StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
             attempt: StartAttemptDescriptor {
                 format_version: DURABLE_STREAM_FORMAT_VERSION,
                 session_key: key.clone(),

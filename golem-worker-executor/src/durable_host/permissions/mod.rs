@@ -957,7 +957,7 @@ where
     }
 
     if !ctx.state.snapshotting_mode {
-        let wallet_generation = Some(ctx.state.wallet_generation);
+        let wallet_generation = ctx.state.wallet_generation;
         if let Some((replayed_card, replayed_generation)) = ctx
             .state
             .replay_state
@@ -978,7 +978,7 @@ where
                 .add_and_commit_oplog(OplogEntry::CardDerived {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: ctx.entity_parent_start_index(),
-                    card: created.clone(),
+                    card: Box::new(created.clone()),
                     wallet_generation,
                 })
                 .await?;
@@ -1488,7 +1488,7 @@ async fn source_transfer_progress<Ctx: WorkerCtx>(
                     && transfer.installed_card_provenance.is_some() =>
             {
                 if !installed_card_matches_request(
-                    card,
+                    card.as_ref(),
                     &transfer.installed_card,
                     transfer.installed_card_provenance.as_ref(),
                 ) {
@@ -1500,19 +1500,22 @@ async fn source_transfer_progress<Ctx: WorkerCtx>(
                 if progress
                     .derived_card
                     .as_ref()
-                    .is_some_and(|existing| existing != card)
+                    .is_some_and(|existing| existing != card.as_ref())
                 {
                     return Err(transfer_progress_mismatch(format!(
                         "transfer {} has multiple distinct derived card payloads",
                         transfer.transfer_id
                     )));
                 }
-                progress.derived_card = Some(card.clone());
+                progress.derived_card = Some(card.as_ref().clone());
             }
-            OplogEntry::CardEventQueued {
-                event: QueuedCardEvent::TransferStarted(event),
-                ..
-            } if event.transfer_id == transfer.transfer_id => {
+            OplogEntry::CardEventQueued { event, .. } => {
+                let QueuedCardEvent::TransferStarted(event) = event.as_ref() else {
+                    continue;
+                };
+                if event.transfer_id != transfer.transfer_id {
+                    continue;
+                }
                 let Some(queued_card) = event.card.as_ref() else {
                     return Err(transfer_progress_mismatch(format!(
                         "queued transfer {} is missing its installed card payload",
@@ -1553,7 +1556,7 @@ async fn source_transfer_progress<Ctx: WorkerCtx>(
                 ..
             } if *transfer_id == transfer.transfer_id => {
                 if *card_id != source_card_id
-                    || recorded_source_holder.as_ref() != Some(&source_holder)
+                    || recorded_source_holder != &source_holder
                     || *recorded_target_holder != target_holder
                 {
                     return Err(transfer_progress_mismatch(format!(
@@ -1742,11 +1745,11 @@ async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
             entity_parent_start_index,
             transfer_id,
             source_card_id,
-            Some(CardHolder::Agent(AgentCardHolder {
+            CardHolder::Agent(AgentCardHolder {
                 agent_id: ctx.owned_agent_id.agent_id.clone(),
-            })),
+            }),
             target_holder.clone(),
-            Some(ctx.state.wallet_generation),
+            ctx.state.wallet_generation,
         ))
         .await?;
 
@@ -1797,8 +1800,8 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
                 .add_and_commit_oplog(OplogEntry::CardDerived {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: ctx.entity_parent_start_index(),
-                    card: installed_card.clone(),
-                    wallet_generation: Some(ctx.state.wallet_generation),
+                    card: Box::new(installed_card.clone()),
+                    wallet_generation: ctx.state.wallet_generation,
                 })
                 .await?;
         }
@@ -1807,12 +1810,12 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
             .worker()
             .add_and_commit_oplog(OplogEntry::card_event_queued(
                 ctx.entity_parent_start_index(),
-                QueuedCardEvent::transfer_started_with_source(
+                Box::new(QueuedCardEvent::transfer_started_with_source(
                     transfer.transfer_id,
                     transfer.source_card.card_id(),
                     installed_card.clone(),
                     transfer.target_holder(),
-                ),
+                )),
             ))
             .await?;
     }
@@ -1871,10 +1874,13 @@ async fn pending_source_transfer_progress(
 
         for entry in entries.values() {
             match entry {
-                OplogEntry::CardEventQueued {
-                    event: QueuedCardEvent::TransferStarted(recorded),
-                    ..
-                } if recorded.transfer_id == transfer.transfer_id => {
+                OplogEntry::CardEventQueued { event, .. } => {
+                    let QueuedCardEvent::TransferStarted(recorded) = event.as_ref() else {
+                        continue;
+                    };
+                    if recorded.transfer_id != transfer.transfer_id {
+                        continue;
+                    }
                     if recorded.card_id != transfer.card_id
                         || recorded.card.as_ref() != Some(installed_card)
                         || recorded.target_holder != target_holder
@@ -1894,9 +1900,7 @@ async fn pending_source_transfer_progress(
                     ..
                 } if *transfer_id == transfer.transfer_id => {
                     if *card_id != transfer.card_id
-                        || !recorded_source_holder
-                            .as_ref()
-                            .is_none_or(|holder| holder == &source_holder)
+                        || recorded_source_holder != &source_holder
                         || *recorded_target_holder != target_holder
                     {
                         return Err(transfer_progress_mismatch(format!(

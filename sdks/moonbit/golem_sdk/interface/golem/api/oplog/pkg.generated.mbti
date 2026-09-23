@@ -95,6 +95,7 @@ pub(all) enum AgentInvocationResult {
 pub(all) struct AgentInvocationStartedParameters {
   timestamp : @system-clock.Instant
   invocation : AgentInvocation
+  wallet_pin : PublicInvocationWalletPin
 } derive(Eq, @debug.Debug)
 
 pub(all) struct AgentMethodInvocationParameters {
@@ -148,6 +149,7 @@ pub(all) struct CardEventQueuedParameters {
 pub(all) struct CardExpiredParameters {
   timestamp : @system-clock.Instant
   card_id : @types.CardId
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CardInstallFailedParameters {
@@ -170,12 +172,14 @@ pub(all) struct CardInstalledParameters {
   timestamp : @system-clock.Instant
   queued_event_index : UInt64?
   card_id : @types.CardId
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CardRevokedParameters {
   timestamp : @system-clock.Instant
   queued_event_index : UInt64
   card_id : @types.CardId
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct CompletionDeliveredParameters {
@@ -492,6 +496,11 @@ pub(all) struct ProcessOplogEntriesParameters {
   idempotency_key : String
 } derive(Eq, @debug.Debug)
 
+pub(all) struct PublicInvocationWalletPin {
+  wallet_token : WalletVersionToken
+  scope_card_id : @types.CardId?
+} derive(Eq, @debug.Debug)
+
 pub(all) enum PublicOplogEntry {
   Create(CreateParameters)
   Start(StartParameters)
@@ -582,6 +591,7 @@ pub(all) struct RawAgentInvocationStartedParameters {
   trace_id : String
   trace_states : Array[String]
   invocation_context : Array[SpanData]
+  wallet_pin : RawInvocationWalletPin
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawBeginRemoteTransactionParameters {
@@ -600,6 +610,7 @@ pub(all) struct RawCardInstalledParameters {
   timestamp : @system-clock.Instant
   queued_event_index : UInt64?
   card : FixedArray[Byte]
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawCompletionDeliveredParameters {
@@ -675,6 +686,12 @@ pub(all) struct RawHostStreamFrameParameters {
   payload : OplogPayload
 } derive(Eq, @debug.Debug)
 
+pub(all) struct RawInvocationWalletPin {
+  wallet_token : WalletVersionToken
+  pinned_card_ids : Array[@types.CardId]
+  scope_card_id : @types.CardId?
+} derive(Eq, @debug.Debug)
+
 pub(all) struct RawLocalAgentConfigEntry {
   path : Array[String]
   value : @types.SchemaValueTree
@@ -713,6 +730,8 @@ pub(all) struct RawSnapshotParameters {
   timestamp : @system-clock.Instant
   data : OplogPayload
   mime_type : String
+  active_cards : Array[FixedArray[Byte]]
+  wallet_generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) struct RawStartParameters {
@@ -847,6 +866,11 @@ pub(all) struct ToolInvocationResult {
 pub(all) enum UpdateDescription {
   AutoUpdate
   SnapshotBased(@host.Snapshot)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct WalletVersionToken {
+  wallet_id_hash : FixedArray[Byte]
+  generation : UInt64
 } derive(Eq, @debug.Debug)
 
 pub(all) enum WrappedFunctionType {

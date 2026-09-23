@@ -6,6 +6,7 @@
 
 mod append;
 mod encoding;
+mod expiry;
 mod fork;
 mod load;
 mod read;
@@ -79,9 +80,16 @@ impl DurableStreamsHandler {
         if suffix.reserved {
             return Ok(response(StatusCode::NOT_FOUND));
         }
-        if has_header(request, "stream-ttl") || has_header(request, "stream-expires-at") {
+        let expiry_policy = if matches!(request.underlying.method(), &Method::PUT | &Method::POST) {
+            match expiry::parse_expiry_policy(request) {
+                Ok(policy) => policy,
+                Err(()) => return Ok(response(StatusCode::BAD_REQUEST)),
+            }
+        } else if has_header(request, "stream-ttl") || has_header(request, "stream-expires-at") {
             return Ok(response(StatusCode::BAD_REQUEST));
-        }
+        } else {
+            None
+        };
         if suffix.fork.is_none()
             && [
                 "stream-forked-from",
@@ -143,6 +151,7 @@ impl DurableStreamsHandler {
                     suffix.fork.as_deref().unwrap(),
                     &session,
                     &slot,
+                    expiry_policy,
                 )
                 .await
             }
@@ -155,6 +164,7 @@ impl DurableStreamsHandler {
                     &session,
                     &slot,
                     suffix.fork.is_none(),
+                    expiry_policy,
                 )
                 .await
             }
@@ -163,8 +173,15 @@ impl DurableStreamsHandler {
                 self.delete(route, &agent_id, session, slot).await
             }
             (&Method::PUT, Some(session), None) if generated_session => {
-                self.create_generated(request, route, behaviour, &agent_id, &session)
-                    .await
+                self.create_generated(
+                    request,
+                    route,
+                    behaviour,
+                    &agent_id,
+                    &session,
+                    expiry_policy,
+                )
+                .await
             }
             (&Method::PUT, Some(session), slot) => {
                 if suffix.fork.is_some() {
@@ -177,6 +194,7 @@ impl DurableStreamsHandler {
                     &agent_id,
                     &session,
                     slot.as_deref(),
+                    expiry_policy,
                 )
                 .await
             }
@@ -203,6 +221,32 @@ impl DurableStreamsHandler {
         max_items: u32,
         wait_millis: u64,
     ) -> Result<Option<ReadStreamSlotSuccess>, RequestHandlerError> {
+        self.read_slot_admitted(
+            route,
+            agent_id,
+            session,
+            slot,
+            from_offset,
+            max_items,
+            wait_millis,
+            golem_api_grpc::proto::golem::workerexecutor::v1::StreamSlotReadAdmission::Head,
+            None,
+        )
+        .await
+    }
+
+    async fn read_slot_admitted(
+        &self,
+        route: &ResolvedRouteEntry,
+        agent_id: &AgentId,
+        session: &str,
+        slot: &str,
+        from_offset: Vec<u8>,
+        max_items: u32,
+        wait_millis: u64,
+        admission: golem_api_grpc::proto::golem::workerexecutor::v1::StreamSlotReadAdmission,
+        invocation_key: Option<golem_api_grpc::proto::golem::worker::IdempotencyKey>,
+    ) -> Result<Option<ReadStreamSlotSuccess>, RequestHandlerError> {
         let result = self
             .worker_service
             .read_stream_slot(
@@ -218,6 +262,8 @@ impl DurableStreamsHandler {
                     max_bytes: MAX_BYTES,
                     wait_millis,
                     expected_method: route_method(route).to_owned(),
+                    admission: admission as i32,
+                    invocation_key,
                 },
             )
             .await;
@@ -239,6 +285,9 @@ pub(super) fn error_response(
         RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
             WorkerExecutorError::InvalidRequest { details },
         )) if details.starts_with("IdempotencyConflict:") => StatusCode::CONFLICT,
+        RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
+            WorkerExecutorError::InvalidRequest { details },
+        )) if details.starts_with("NotFound:") => StatusCode::NOT_FOUND,
         RequestHandlerError::AgentInvocationFailed(WorkerServiceError::AgentNotFound(_))
         | RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
             WorkerExecutorError::AgentNotFound { .. }
@@ -352,22 +401,21 @@ fn stable_phantom(session: &str) -> Uuid {
 }
 
 fn response(status: StatusCode) -> RouteExecutionResult {
+    let headers = HashMap::from([(http::header::CACHE_CONTROL, "no-store".into())]);
     RouteExecutionResult {
         status,
-        headers: HashMap::new(),
+        headers,
         body: ResponseBody::NoBody,
     }
 }
 
 fn body_response(status: StatusCode, body: Vec<u8>, ct: &'static str) -> RouteExecutionResult {
-    RouteExecutionResult {
-        status,
-        headers: HashMap::new(),
-        body: ResponseBody::PoemBody {
-            body: poem::Body::from_bytes(body.into()),
-            content_type: Some(ct),
-        },
-    }
+    let mut result = response(status);
+    result.body = ResponseBody::PoemBody {
+        body: poem::Body::from_bytes(body.into()),
+        content_type: Some(ct),
+    };
+    result
 }
 
 fn rejection_response(rejection: LoadRejection) -> RouteExecutionResult {

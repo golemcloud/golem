@@ -30,7 +30,7 @@ use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, ScanCursor, WriterId,
+    IndexedStorageNamespace, ScanResume, WriterId,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
@@ -430,6 +430,7 @@ fn ns2() -> IndexedStorageNamespaces {
 inherit_test_dep!(WorkerExecutorTestDependencies);
 
 define_matrix_dimension!(is: Arc<dyn GetIndexedStorage + Send + Sync> -> "in_memory", "redis", "sqlite", "multi_sqlite", "postgres");
+define_matrix_dimension!(sql_is: Arc<dyn GetIndexedStorage + Send + Sync> -> "sqlite", "postgres");
 
 #[test]
 async fn staged_publication_preserves_atomic_visibility(
@@ -511,12 +512,12 @@ async fn staged_publication_preserves_atomic_visibility(
     }
     assert!(
         storage
-            .scan(
+            .scan_stable(
                 "test",
                 "scan",
                 IndexedStorageMetaNamespace::Oplog { agent_mode: mode },
                 None,
-                0,
+                None,
                 100
             )
             .await
@@ -831,14 +832,7 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
                 Some((17, value.to_vec()))
             );
             let (_, keys) = storage
-                .scan(
-                    "svc",
-                    "api",
-                    ns.meta.clone(),
-                    Some(key),
-                    ScanCursor::default(),
-                    10,
-                )
+                .scan_stable("svc", "api", ns.meta.clone(), Some(key), None, 10)
                 .await
                 .unwrap();
             assert_eq!(keys, vec![key.to_string()]);
@@ -1150,17 +1144,17 @@ async fn scan_empty(
     let is = is.get_indexed_storage().await;
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     assert_eq!(result, Vec::<String>::new());
@@ -1189,17 +1183,17 @@ async fn scan_with_no_pattern_single_paged(
         .unwrap();
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     result.sort();
@@ -1274,16 +1268,16 @@ async fn scan_with_no_pattern_paginated(
     .unwrap();
 
     let mut r1: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r1.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if !r1.is_empty() || cursor == 0 {
+        if !r1.is_empty() || resume.is_none() {
             break;
         }
     }
@@ -1291,13 +1285,13 @@ async fn scan_with_no_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r2.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }
@@ -1305,13 +1299,13 @@ async fn scan_with_no_pattern_paginated(
     let mut r3: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), None, cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), None, resume, 1)
             .await
             .unwrap();
         r3.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }
@@ -1673,22 +1667,156 @@ async fn scan_with_prefix_pattern_single_paged(
         .unwrap();
 
     let mut result: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 10)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 10)
             .await
             .unwrap();
         result.extend(chunk);
-        cursor = next;
-        if next == 0 {
+        if next.is_none() {
             break;
         }
+        resume = next;
     }
 
     result.sort();
     assert!(result.contains(&key1.to_string()));
     assert!(result.contains(&key3.to_string()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn sql_scan_prefix_is_literal_bounded_and_deletion_safe(
+    #[dimension(sql_is)] storage: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let storage = storage.get_indexed_storage().await;
+    let keys = [
+        "A-prefix",
+        "a",
+        "a%",
+        "a%tail",
+        "a\\tail",
+        "a_tail",
+        "aa",
+        "ae\u{301}",
+        "aé",
+        "a😀",
+        "b",
+        "á",
+        "\u{10ffff}",
+        "\u{10ffff}tail",
+    ];
+    for key in keys {
+        storage
+            .append("svc", "api", "entity", ns.ns.clone(), key, 1, vec![1], None)
+            .await
+            .unwrap();
+    }
+    storage
+        .append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            "aa",
+            2,
+            vec![2],
+            None,
+        )
+        .await
+        .unwrap();
+
+    let expected: Vec<String> = keys
+        .into_iter()
+        .filter(|key| key.starts_with('a'))
+        .map(str::to_string)
+        .collect();
+    let (_, literal_wildcard) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("a%"), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(literal_wildcard, ["a%", "a%tail"]);
+
+    let (resume, first) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("a"), None, 2)
+        .await
+        .unwrap();
+    assert_eq!(first, expected[..2]);
+
+    let deleted_marker = first.last().unwrap().clone();
+    storage
+        .delete("svc", "api", ns.ns.clone(), &deleted_marker)
+        .await
+        .unwrap();
+
+    let mut actual = first;
+    let mut resume = resume;
+    loop {
+        let (next, page) = storage
+            .scan_stable("svc", "api", ns.meta.clone(), Some("a"), resume, 2)
+            .await
+            .unwrap();
+        actual.extend(page);
+        resume = next;
+        if resume.is_none() {
+            break;
+        }
+    }
+    assert_eq!(actual, expected);
+
+    let (_, from_before_prefix) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("a"),
+            Some(ScanResume::Marker("A".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        from_before_prefix,
+        expected
+            .iter()
+            .filter(|key| **key != deleted_marker)
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+
+    let (_, at_upper_bound) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("a"),
+            Some(ScanResume::Marker("b".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert!(at_upper_bound.is_empty());
+
+    let (_, maximum_prefix) = storage
+        .scan_stable("svc", "api", ns.meta.clone(), Some("\u{10ffff}"), None, 20)
+        .await
+        .unwrap();
+    assert_eq!(maximum_prefix, ["\u{10ffff}", "\u{10ffff}tail"]);
+
+    let (_, resumed_maximum_prefix) = storage
+        .scan_stable(
+            "svc",
+            "api",
+            ns.meta.clone(),
+            Some("\u{10ffff}"),
+            Some(ScanResume::Marker("\u{10ffff}".to_string())),
+            20,
+        )
+        .await
+        .unwrap();
+    assert_eq!(resumed_maximum_prefix, ["\u{10ffff}tail"]);
 }
 
 #[test]
@@ -1719,16 +1847,16 @@ async fn scan_with_prefix_pattern_paginated(
         .unwrap();
 
     let mut r1: Vec<String> = Vec::new();
-    let mut cursor = ScanCursor::default();
+    let mut resume = None;
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 1)
             .await
             .unwrap();
         r1.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if r1.len() == 1 || cursor == 0 {
+        if r1.len() == 1 || resume.is_none() {
             break;
         }
     }
@@ -1736,13 +1864,13 @@ async fn scan_with_prefix_pattern_paginated(
     let mut r2: Vec<String> = Vec::new();
     loop {
         let (next, chunk) = is
-            .scan("svc", "api", ns.meta.clone(), Some("key"), cursor, 1)
+            .scan_stable("svc", "api", ns.meta.clone(), Some("key"), resume, 1)
             .await
             .unwrap();
         r2.extend(chunk);
-        cursor = next;
+        resume = next;
 
-        if cursor == 0 {
+        if resume.is_none() {
             break;
         }
     }

@@ -36,8 +36,8 @@ use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ActivatePluginRequest, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
-    CreateStreamSessionSuccess, CreateWorkerRequest, DeactivatePluginRequest,
-    DeliverCardTransferRequest, DurableStreamAttachmentControlRequest,
+    CreateStreamSessionRequest, CreateStreamSessionSuccess, CreateWorkerRequest,
+    DeactivatePluginRequest, DeliverCardTransferRequest, DurableStreamAttachmentControlRequest,
     DurableStreamSegmentReadRequest, ExportStreamControlResult, ForkWorkerRequest,
     InterruptWorkerRequest, ProcessOplogEntriesRequest, ReadStreamSlotRequest,
     ReadStreamSlotSuccess, ResolveRevertLastInvocationsRequest, ResumeWorkerRequest,
@@ -85,6 +85,17 @@ fn freshness_disposition_for_dispatch(
         InvocationFreshnessDisposition::KnownFresh
     } else {
         InvocationFreshnessDisposition::MayExist
+    }
+}
+
+fn validate_agent_enumeration_count(count: u64) -> Result<(), WorkerExecutorError> {
+    if count == 0 || count > i64::MAX as u64 {
+        Err(WorkerExecutorError::invalid_request(format!(
+            "Agent enumeration count must be between 1 and {}",
+            i64::MAX
+        )))
+    } else {
+        Ok(())
     }
 }
 
@@ -172,6 +183,12 @@ fn routing_miss_error(rejected: &InvocationRejected) -> Option<WorkerExecutorErr
     .then_some(error)
 }
 
+fn protocol_executor_error(details: impl Into<String>) -> WorkerExecutorError {
+    WorkerExecutorError::Unknown {
+        details: details.into(),
+    }
+}
+
 fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceError {
     match InvocationRejectionReason::try_from(rejected.reason) {
         Ok(InvocationRejectionReason::NotFound) => rejected
@@ -205,7 +222,7 @@ fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceErr
 
 fn decode_invocation_failure(failure: InvocationFailure) -> WorkerExecutorError {
     if failure.kind == InvocationFailureKind::Protocol as i32 {
-        WorkerExecutorError::invalid_request(failure.message)
+        protocol_executor_error(failure.message)
     } else if let Some(worker_error) = failure.worker_error {
         worker_error
             .try_into()
@@ -593,7 +610,7 @@ pub trait WorkerClient: Send + Sync {
     async fn create_stream_session(
         &self,
         _agent_id: &AgentId,
-        _request: InvocationStart,
+        _request: CreateStreamSessionRequest,
     ) -> WorkerResult<CreateStreamSessionSuccess> {
         Err(WorkerServiceError::Internal(
             "durable stream sessions are not supported by this worker client".to_string(),
@@ -624,7 +641,7 @@ pub trait WorkerClient: Send + Sync {
         &self,
         _agent_id: &AgentId,
         _request: workerexecutor::v1::AppendToStreamSlotRequest,
-    ) -> WorkerResult<workerexecutor::v1::append_to_stream_slot_response::Result> {
+    ) -> WorkerResult<workerexecutor::v1::AppendToStreamSlotResponse> {
         Err(WorkerServiceError::Internal(
             "durable stream appends are not supported by this worker client".to_string(),
         ))
@@ -1219,7 +1236,9 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<AgentMetadataDto>)> {
-        if filter.as_ref().is_some_and(is_filter_with_running_status) {
+        validate_agent_enumeration_count(count)?;
+
+        if can_use_running_metadata_fast_path(&filter, &cursor) {
             let result = self
                 .find_running_metadata_internal(component_id, filter, auth_ctx)
                 .await?;
@@ -1913,7 +1932,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn create_stream_session(
         &self,
         agent_id: &AgentId,
-        request: InvocationStart,
+        request: CreateStreamSessionRequest,
     ) -> WorkerResult<CreateStreamSessionSuccess> {
         self.call_worker_executor(
             agent_id.clone(),
@@ -1948,6 +1967,68 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         agent_id: &AgentId,
         request: ReadStreamSlotRequest,
     ) -> WorkerResult<Option<ReadStreamSlotSuccess>> {
+        if request.admission
+            == workerexecutor::v1::StreamSlotReadAdmission::TouchingOriginGet as i32
+        {
+            let routing_table = self
+                .routing_table_service
+                .get_routing_table()
+                .await
+                .map_err(|error| {
+                    WorkerServiceError::InternalCallError(
+                        CallWorkerExecutorError::FailedToGetRoutingTable(error),
+                    )
+                })?;
+            let pod = routing_table.lookup(agent_id).ok_or_else(|| {
+                WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToConnectToPod(Status::unavailable(format!(
+                        "no active shard for agent {agent_id}"
+                    ))),
+                )
+            })?;
+            let response = self
+                .worker_executor_clients
+                .call_without_retry(
+                    "read_stream_slot",
+                    pod.uri(self.worker_executor_clients.uses_tls()),
+                    move |client| {
+                        let request = request.clone();
+                        Box::pin(async move {
+                            client
+                                .read_stream_slot(request)
+                                .await?
+                                .into_inner()
+                                .message()
+                                .await?
+                                .ok_or_else(|| {
+                                    Status::internal("Empty read stream slot response stream")
+                                })
+                        })
+                    },
+                )
+                .await
+                .map_err(|status| {
+                    WorkerServiceError::InternalCallError(
+                        CallWorkerExecutorError::FailedToConnectToPod(status),
+                    )
+                })?;
+            return match response.result {
+                Some(workerexecutor::v1::read_stream_slot_response::Result::Success(success)) => {
+                    Ok(Some(success))
+                }
+                Some(workerexecutor::v1::read_stream_slot_response::Result::Failure(error)) => {
+                    let error: WorkerExecutorError =
+                        error.try_into().map_err(WorkerServiceError::Internal)?;
+                    Err(WorkerServiceError::GolemError(error))
+                }
+                Some(workerexecutor::v1::read_stream_slot_response::Result::NotFound(_)) => {
+                    Ok(None)
+                }
+                None => Err(WorkerServiceError::Internal(
+                    "Empty read stream slot response".into(),
+                )),
+            };
+        }
         self.call_worker_executor(
             agent_id.clone(),
             "read_stream_slot",
@@ -2092,7 +2173,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         Err(decode_invocation_failure(failure).into())
                     }
                     OneShotInvocationSessionResult::ProtocolFailure(details) => {
-                        Err(WorkerExecutorError::invalid_request(details).into())
+                        Err(protocol_executor_error(details).into())
                     }
                 },
                 WorkerServiceError::InternalCallError,
@@ -2258,7 +2339,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         request: workerexecutor::v1::AppendToStreamSlotRequest,
-    ) -> WorkerResult<workerexecutor::v1::append_to_stream_slot_response::Result> {
+    ) -> WorkerResult<workerexecutor::v1::AppendToStreamSlotResponse> {
         let routing_table = self
             .routing_table_service
             .get_routing_table()
@@ -2288,13 +2369,16 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     CallWorkerExecutorError::FailedToConnectToPod(status),
                 )
             })?;
-        match response.into_inner().result {
+        let response = response.into_inner();
+        match response.result.as_ref() {
             Some(workerexecutor::v1::append_to_stream_slot_response::Result::Failure(error)) => {
-                let error: WorkerExecutorError =
-                    error.try_into().map_err(WorkerServiceError::Internal)?;
+                let error: WorkerExecutorError = error
+                    .clone()
+                    .try_into()
+                    .map_err(WorkerServiceError::Internal)?;
                 Err(WorkerServiceError::GolemError(error))
             }
-            Some(result) => Ok(result),
+            Some(_) => Ok(response),
             None => Err(WorkerServiceError::Internal(
                 "Empty append stream response".into(),
             )),
@@ -2638,6 +2722,37 @@ fn is_filter_with_running_status(filter: &AgentFilter) -> bool {
     }
 }
 
+fn can_use_running_metadata_fast_path(filter: &Option<AgentFilter>, cursor: &ScanCursor) -> bool {
+    cursor.is_finished() && filter.as_ref().is_some_and(is_filter_with_running_status)
+}
+
+#[cfg(test)]
+mod running_metadata_fast_path_tests {
+    use super::can_use_running_metadata_fast_path;
+    use golem_common::base_model::worker_filter::FilterComparator;
+    use golem_common::model::{AgentFilter, AgentStatus, ScanCursor};
+    use test_r::test;
+
+    fn running_filter() -> Option<AgentFilter> {
+        Some(AgentFilter::new_status(
+            FilterComparator::Equal,
+            AgentStatus::Running,
+        ))
+    }
+
+    #[test]
+    fn running_filter_uses_fast_path_only_without_a_cursor() {
+        assert!(can_use_running_metadata_fast_path(
+            &running_filter(),
+            &ScanCursor::default()
+        ));
+        assert!(!can_use_running_metadata_fast_path(
+            &running_filter(),
+            &ScanCursor::new("malformed".to_string())
+        ));
+    }
+}
+
 #[cfg(test)]
 mod freshness_tests {
     use super::freshness_disposition_for_dispatch;
@@ -2690,7 +2805,7 @@ mod freshness_tests {
 mod one_shot_session_tests {
     use super::{
         OneShotInvocationSessionResult, collect_one_shot_invocation_session,
-        decode_invocation_failure,
+        decode_invocation_failure, protocol_executor_error,
     };
     use futures::stream;
     use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
@@ -2864,6 +2979,21 @@ mod one_shot_session_tests {
     }
 
     #[test]
+    fn invocation_protocol_failures_are_internal_errors() {
+        let decoded = decode_invocation_failure(InvocationFailure {
+            kind: InvocationFailureKind::Protocol as i32,
+            code: "protocol".to_string(),
+            message: "invalid session sequence".to_string(),
+            worker_error: None,
+        });
+        assert!(matches!(decoded, WorkerExecutorError::Unknown { .. }));
+        assert!(matches!(
+            protocol_executor_error("session ended before publishing a result"),
+            WorkerExecutorError::Unknown { .. }
+        ));
+    }
+
+    #[test]
     async fn session_is_drained_and_rejects_frames_after_completion() {
         let responses = stream::iter([
             frame(accepted()),
@@ -2927,6 +3057,7 @@ mod one_shot_session_tests {
 mod rejection_mapping_tests {
     use super::{
         WorkerClient, WorkerExecutorWorkerClient, WorkerServiceError, decode_invocation_rejection,
+        validate_agent_enumeration_count,
     };
     use futures::{Stream, StreamExt, stream};
     use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
@@ -2982,6 +3113,14 @@ mod rejection_mapping_tests {
         };
         let error: AgentError = decode_invocation_rejection(rejection).into();
         error.error.expect("missing public error")
+    }
+
+    #[test]
+    fn agent_enumeration_count_bounds_are_validated() {
+        assert!(validate_agent_enumeration_count(1).is_ok());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64).is_ok());
+        assert!(validate_agent_enumeration_count(0).is_err());
+        assert!(validate_agent_enumeration_count(i64::MAX as u64 + 1).is_err());
     }
 
     #[test]
@@ -3197,7 +3336,7 @@ mod rejection_mapping_tests {
         );
         unimplemented_unary!(
             create_stream_session,
-            golem_api_grpc::proto::golem::worker::InvocationStart,
+            golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionRequest,
             golem_api_grpc::proto::golem::workerexecutor::v1::CreateStreamSessionResponse
         );
 

@@ -635,6 +635,8 @@ fn subtree_client_macro_keep_param(
         quote! {}
     } else if is_subtree_command {
         let name = canonical_value_name(ir, cmd, param, tool_name);
+        let from_root = !cmd.params.iter().any(|own| own.ident == param.ident);
+        let schema = captured_schema_expr(ir, cmd, tool_name, &name, from_root);
         let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
         let aliases = aliases.iter();
         let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
@@ -643,9 +645,7 @@ fn subtree_client_macro_keep_param(
                 name: #name.to_string(),
                 aliases: ::std::vec![#(#aliases.to_string()),*],
                 short: #short,
-                schema: <#ty as golem_rust::agentic::Schema>::get_type()
-                    .get_schema_graph()
-                    .expect("tool parameter must have a concrete schema graph"),
+                schema: #schema,
                 value: <#ty as golem_rust::agentic::Schema>::to_schema_value(#ident)
                     .expect("failed to encode tool parameter"),
             });
@@ -678,6 +678,34 @@ fn subtree_client_macro_keep_param(
             #macro_ident!(@#next_state $client_ident, $omitted_tag, $omitted_ty, $param_values, [$($all)*], [$($args)* #arg], [$($values)* #value] ; $($all)*);
         }
     }
+}
+
+fn captured_schema_expr(
+    ir: &ToolDefinitionIr,
+    cmd: &CommandIr,
+    tool_name: &str,
+    name: &str,
+    from_root: bool,
+) -> TokenStream {
+    let descriptor_fn_ident = crate::tool::descriptor::descriptor_fn_ident(&ir.trait_ident);
+    let source_command = command_name(cmd, tool_name);
+    let source_path = if from_root || source_command == tool_name {
+        quote! { ::std::vec::Vec::<::std::string::String>::new() }
+    } else {
+        quote! { ::std::vec![#source_command.to_string()] }
+    };
+    quote! {{
+        let __tool = #descriptor_fn_ident(&mut golem_rust::agentic::ToolBuildCtx::new())
+            .expect("tool descriptor build failed");
+        let __source_path = #source_path;
+        let __source_index = __tool.node_index_by_path(&__source_path)
+            .expect("captured tool command must exist in its descriptor");
+        __tool.canonical_input_fields(__source_index)
+            .into_iter()
+            .find(|field| field.name == #name)
+            .expect("captured tool field must exist in its descriptor")
+            .schema
+    }}
 }
 
 fn subtree_client_macro_omit_param(
@@ -949,14 +977,16 @@ fn prefix_value_builders(
     tool_name: &str,
     omitted_names: &[String],
 ) -> Vec<TokenStream> {
-    let mut inherited: Vec<&ParamIr> = inherited_params.iter().collect();
-    inherited.sort_by_key(|param| if is_flag_param(cmd, param) { 1 } else { 0 });
-    let mut current: Vec<&ParamIr> = cmd.params.iter().collect();
-    current.sort_by_key(|param| if is_flag_param(cmd, param) { 1 } else { 0 });
+    let mut inherited: Vec<(&ParamIr, bool)> =
+        inherited_params.iter().map(|param| (param, true)).collect();
+    inherited.sort_by_key(|(param, _)| if is_flag_param(cmd, param) { 1 } else { 0 });
+    let mut current: Vec<(&ParamIr, bool)> =
+        cmd.params.iter().map(|param| (param, false)).collect();
+    current.sort_by_key(|(param, _)| if is_flag_param(cmd, param) { 1 } else { 0 });
     inherited
         .into_iter()
         .chain(current)
-        .filter_map(|param| {
+        .filter_map(|(param, from_root)| {
             if is_principal_type(&param.ty) || is_stream_type(&param.ty) {
                 return None;
             }
@@ -969,6 +999,7 @@ fn prefix_value_builders(
             let ident = &param.ident;
             let ty = &param.ty;
             let name = canonical_value_name(ir, cmd, param, tool_name);
+            let schema = captured_schema_expr(ir, cmd, tool_name, &name, from_root);
             let aliases = canonical_param_aliases(ir, cmd, param, tool_name);
             let aliases = aliases.iter();
             let short = option_char_tokens(canonical_param_short(ir, cmd, param, tool_name));
@@ -977,9 +1008,7 @@ fn prefix_value_builders(
                     name: #name.to_string(),
                     aliases: ::std::vec![#(#aliases.to_string()),*],
                     short: #short,
-                    schema: <#ty as golem_rust::agentic::Schema>::get_type()
-                        .get_schema_graph()
-                        .expect("tool parameter must have a concrete schema graph"),
+                    schema: #schema,
                     value: <#ty as golem_rust::agentic::Schema>::to_schema_value(#ident)
                         .expect("failed to encode tool parameter"),
                 });
@@ -1222,7 +1251,7 @@ fn start_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                     &__input,
                     #stdin_expr,
                     #decode,
-                    <#err as golem_rust::agentic::ToolErrorSchema>::from_error_payload_value,
+                    golem_rust::agentic::decode_declared_tool_error::<#err>,
                 )
             }
         },
@@ -1252,7 +1281,7 @@ fn invoke_call(output: &ReturnType, stdin_expr: TokenStream) -> TokenStream {
                     &__input,
                     (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
                     ::std::option::Option::None,
-                    <#err as golem_rust::agentic::ToolErrorSchema>::from_error_payload_value,
+                    golem_rust::agentic::decode_declared_tool_error::<#err>,
                 ).await
             }
         },

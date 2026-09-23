@@ -1,4 +1,4 @@
-import { Context, Effect, Fiber, Option, Schema, SchemaGetter, SchemaIssue, Stream } from "effect"
+import { Context, Effect, Fiber, Schema, SchemaGetter, SchemaIssue, Stream } from "effect"
 import { describe, expect, it, vi } from "vitest"
 import { compile } from "../src/WitCodec.js"
 import * as WitTypes from "../src/WitTypes.js"
@@ -71,15 +71,13 @@ describe("stream item schemas", () => {
     const encoded = Schema.String
     const serviceful = encoded.pipe(
       Schema.decodeTo(Schema.String, {
-        decode: SchemaGetter.transformOrFail((value) =>
+        decode: SchemaGetter.transformEffect((value) =>
           Effect.gen(function* () {
             yield* Effect.sleep("1 millis")
             const expected = yield* Expected
             return value === expected.value
               ? value
-              : yield* Effect.fail(
-                  new SchemaIssue.InvalidValue(Option.none(), { message: "wrong" }),
-                )
+              : yield* Effect.fail(new SchemaIssue.InvalidValue({ message: "wrong" }, value))
           }),
         ),
         encode: SchemaGetter.transform((value) => value),
@@ -100,7 +98,7 @@ describe("stream item schemas", () => {
       let decoding!: () => void
       const decodingStarted = new Promise<void>((resolve) => (decoding = resolve))
       let finalized = 0
-      const waiting = SchemaGetter.transformOrFail<string, string>(() =>
+      const waiting = SchemaGetter.transformEffect<string, string>(() =>
         Effect.acquireUseRelease(
           Effect.sync(decoding),
           () => Effect.never,

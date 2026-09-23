@@ -182,7 +182,7 @@ async fn path_and_query(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Res
         body,
         json!({
             "id": "item-123",
-            "limit": 10
+            "limit": "10"
         })
     );
 
@@ -230,7 +230,7 @@ async fn json_body(#[dimension(db)] agent: &HttpTestContext) -> anyhow::Result<(
         )
         .json(&json!({
             "name": "test",
-            "count": 42
+            "count": "42"
         }))
         .send()
         .await?;
@@ -306,7 +306,7 @@ async fn unrestricted_unstructured_binary_inline(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(5));
+    assert_eq!(body, json!("5"));
 
     Ok(())
 }
@@ -330,7 +330,7 @@ async fn unrestricted_unstructured_binary_missing_body(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(0));
+    assert_eq!(body, json!("0"));
 
     Ok(())
 }
@@ -355,7 +355,7 @@ async fn unrestricted_unstructured_binary_json_content_type(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(13));
+    assert_eq!(body, json!("13"));
 
     Ok(())
 }
@@ -381,7 +381,7 @@ async fn restricted_unstructured_binary_inline(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(5));
+    assert_eq!(body, json!("5"));
 
     Ok(())
 }
@@ -405,7 +405,7 @@ async fn restricted_unstructured_binary_missing_body(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!(0));
+    assert_eq!(body, json!("0"));
 
     Ok(())
 }
@@ -952,7 +952,7 @@ async fn webhook_callback(#[dimension(db)] agent: &HttpTestContext) -> anyhow::R
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!({ "payload_length": 5 }));
+    assert_eq!(body, json!({ "payload_length": "5" }));
 
     http_server.abort();
 
@@ -1045,7 +1045,7 @@ async fn webhook_callback_accepts_query_only_test_server_url(
     assert_json_content_type(&response);
 
     let body: serde_json::Value = response.json().await?;
-    assert_eq!(body, json!({ "payload_length": 5 }));
+    assert_eq!(body, json!({ "payload_length": "5" }));
     assert_eq!(received_query.lock().await.as_deref(), Some("query-only"));
 
     http_server.abort();

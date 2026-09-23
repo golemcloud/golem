@@ -126,7 +126,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn set_retry_policy(&mut self, policy: WitNamedRetryPolicy) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::retry", "set_retry_policy");
 
-        let named_policy: NamedRetryPolicy = policy.into();
+        let named_policy: NamedRetryPolicy = policy.try_into().map_err(anyhow::Error::msg)?;
 
         if self.state.durability_is_suppressed() {
             // Apply the in-memory change without creating durable history.
@@ -145,7 +145,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .worker()
                 .add_and_commit_oplog(OplogEntry::set_retry_policy(
                     self.entity_parent_start_index(),
-                    named_policy.clone(),
+                    Box::new(named_policy.clone()),
                 ))
                 .await?;
         }

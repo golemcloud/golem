@@ -352,6 +352,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         rpc
     }
 
+    fn wrap_worker_enumeration_service(
+        &self,
+        service: Arc<dyn WorkerEnumerationService>,
+    ) -> Arc<dyn WorkerEnumerationService> {
+        service
+    }
+
     async fn create_services(
         &self,
         direct_invocation_auth_service: Arc<dyn DirectInvocationAuthService>,
@@ -983,12 +990,13 @@ pub async fn create_worker_executor_impl<
         component_service.clone(),
         golem_config.clone(),
     ));
-    let worker_enumeration_service = Arc::new(DefaultWorkerEnumerationService::new(
-        worker_service.clone(),
-        oplog_service.clone(),
-        component_service.clone(),
-        golem_config.clone(),
-    ));
+    let worker_enumeration_service =
+        bootstrap.wrap_worker_enumeration_service(Arc::new(DefaultWorkerEnumerationService::new(
+            worker_service.clone(),
+            oplog_service.clone(),
+            component_service.clone(),
+            golem_config.clone(),
+        )));
 
     let promise_service = Arc::new(LazyPromiseService::new());
 

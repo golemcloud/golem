@@ -60,16 +60,11 @@ pub(crate) async fn existing_fork(
     let initial = service
         .read_source(target, mode, OplogIndex::INITIAL, 1)
         .await;
-    let Some(OplogEntry::Create {
-        instance_id,
-        agent_id,
-        environment_id,
-        ..
-    }) = initial.get(&OplogIndex::INITIAL)
-    else {
+    let Some(OplogEntry::Create { parameters, .. }) = initial.get(&OplogIndex::INITIAL) else {
         return Err(conflict());
     };
-    if *agent_id != target.agent_id || *environment_id != target.environment_id {
+    if parameters.agent_id != target.agent_id || parameters.environment_id != target.environment_id
+    {
         return Err(conflict());
     }
     let entries = service.read_source(target, mode, cut.next(), 1).await;
@@ -87,7 +82,7 @@ pub(crate) async fn existing_fork(
         StreamSessionRecord::ForkCut(record)
             if record.request_hash == hash
                 && record.cut_index == cut
-                && record.creation_fingerprint.0 == *instance_id =>
+                && record.creation_fingerprint.0 == parameters.instance_id =>
         {
             Ok(true)
         }
@@ -275,22 +270,24 @@ mod tests {
             .await
             .unwrap();
         stage
-            .add(OplogEntry::create(
-                target.agent_id.clone(),
-                OwnerKind::ComponentAgent,
-                AgentMode::Durable,
-                ComponentRevision::INITIAL,
-                vec![],
-                target.environment_id,
-                account,
-                None,
-                100,
-                100,
-                Default::default(),
-                vec![],
-                None,
-                fingerprint.0,
-            ))
+            .add(OplogEntry::create(Box::new(
+                golem_common::model::oplog::CreateParameters {
+                    agent_id: target.agent_id.clone(),
+                    owner_kind: OwnerKind::ComponentAgent,
+                    agent_mode: AgentMode::Durable,
+                    component_revision: ComponentRevision::INITIAL,
+                    env: vec![],
+                    environment_id: target.environment_id,
+                    created_by: account,
+                    parent: None,
+                    component_size: 100,
+                    initial_total_linear_memory_size: 100,
+                    initial_active_plugins: Default::default(),
+                    local_agent_config: vec![],
+                    original_phantom_id: None,
+                    instance_id: fingerprint.0,
+                },
+            )))
             .await
             .unwrap();
         stage.add(OplogEntry::suspend()).await.unwrap();

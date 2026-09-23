@@ -227,6 +227,26 @@ stdout; dropping it while still open selects `Abandoned`. See the
 [`golem_sdk_tools` documentation](https://mooncakes.io/docs/#/golemcloud/golem_sdk_tools/) and the
 canonical `grep`/`git` examples for the complete annotation surface.
 
+#### Call a tool discovered at runtime
+
+`@reflection.get_tool_type(name)` returns the tool descriptor visible to the caller. Select a
+command with `tool.command(path)`; path segments may use command aliases, and the returned
+`ToolCommand.path` contains their canonical names. Its `arguments`, `input_schema`, and `result`
+describe the selected command. Supply every canonical input field in declaration order. An absent
+optional argument is an option value of `None`, while a defaulted argument carries its default.
+
+Use `command.pack_json(input)` and `command.invoke_json(input)` for canonical JSON, or
+`command.invoke_value(input)` for schema-native values. The command validates inputs locally before
+opening RPC and validates declared results after invocation. `start_value` returns an invocation
+whose `stdout`, `collect`, `get`, and `cancel` methods handle pending and streaming calls. A command
+with required stdout must use `start_value`; `collect` drains stdout while awaiting its result.
+`trigger_value` is available only when the command does not require caller-readable stdout.
+
+`@reflection.DynamicToolClient::new(name)` accepts a caller-packed `TypedSchemaValue` and a
+command path when no descriptor is available. It cannot validate the input or output against a
+deployed schema. Reflected and dynamic calls return `Result` errors, including malformed remote
+output; generated `WeatherClient` methods keep their ordinary typed call behavior.
+
 ### 5. Define a tool middleware component
 
 A **monomorphic middleware** presents one statically declared `#derive.tool` shape. Its generated
@@ -325,20 +345,20 @@ options(
 )
 ```
 
-Select the pure component template in `golem.yaml`:
+Select the default component template in `golem.yaml`:
 
 ```yaml
 components:
   myorg:message-middlewares:
-    templates: moonbit-tool-middleware
+    templates: moonbit
     dir: message_middlewares
 ```
 
-Then run `golem build`. The build uses the `tool-middleware` code-generation role, embeds the
-`tool-middleware-guest` world, and creates a `.tool-middleware.wasm` component. Generated startup
-code registers every declared middleware when the component loads. Do not import `tool` or use
-`ToolClient` in a pure package: pure middleware has no ambient `golem:tool/host` dispatch, and the
-runtime-provided `underlying` capability is its only path to the next inner layer.
+Then run `golem build`. The build uses the single code-generation path and `agent-guest` world.
+Generated startup code registers every declared middleware when the component loads, while unused
+agent and tool discovery returns empty lists. The world imports ambient `golem:tool/host`, but the
+runtime-provided `underlying` capability remains the only path to the next pinned middleware layer;
+ambient calls remain subject to runtime permissions.
 
 The underlying capability and invocation streams belong to one middleware invocation. Generated
 wrappers enforce once-only transfer, cleanup, and revocation when the handler returns, but MoonBit
@@ -400,6 +420,7 @@ Use `golem build` and `golem deploy` with a `golem.yaml` application manifest. S
 - **Agent registry** — register multiple agent types in a single component via `#derive.agent`
 - **Custom data types** — `#derive.golem_schema` implements every nexessary trait to use custom data types on the public interface of your agents
 - **Agent-to-agent RPC** — auto-generated client stubs (`CounterClient`); stream-bearing methods are awaited, while stream-free methods also support fire-and-forget and scheduled invocations
+- **Runtime reflection** — discover agent types, pack reflected schemas, define caller-codec clients, or invoke direct `SchemaValue`s
 - **Agent tools** — code-first tool descriptors, command trees, constraints, custom errors, runtime dispatch, and typed tool RPC clients via `#derive.tool`
 - **Tool middleware** — monomorphic policy/adapter middleware and universal transparent middleware with invocation-scoped underlying capabilities
 - **Multimodal input** — accept mixed text, binary, and custom modality data via `#derive.multimodal` and `@multimodal.Multimodal[T]`
@@ -446,6 +467,7 @@ one host-managed retry sequence.
 | `logging` | Structured logging with named loggers and level filtering |
 | `context` | Span-based tracing and invocation context |
 | `rpc` | Agent-to-agent RPC helpers |
+| `reflection` | Runtime discovery, reflected JSON packing, caller-defined static clients, and fully dynamic value invocation |
 | `tool-core` | Host-neutral tool descriptors, schemas, canonical input handling, and error model |
 | `tool` | Ordinary tool registry, dispatch, help rendering, and ambient typed RPC client runtime |
 | `tool-middleware` | Host-neutral middleware registry, opaque invocation carriers, typed/universal underlying capabilities, and ownership enforcement |

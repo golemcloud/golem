@@ -1027,7 +1027,7 @@ impl DurableStreamStore {
                     newly_registered_by_coordinate.insert(coordinate, local_id);
                     records.push(DurableStreamOplogRecord::Registered(
                         entity_parent_start_index,
-                        registration,
+                        Box::new(registration),
                     ));
                 }
                 let nested_stream_ids = nested_for_entry
@@ -1238,7 +1238,8 @@ impl DurableStreamStore {
                         StreamSessionRecord::ExternalProducerState(record) => {
                             index.apply_external_producer_state(&record);
                         }
-                        StreamSessionRecord::InputHighWater(_) => {}
+                        StreamSessionRecord::InputHighWater(_)
+                        | StreamSessionRecord::ExpiryRefreshed(_) => {}
                         _ => unreachable!("write batch contains an unrelated session record"),
                     }
                 }
