@@ -31,6 +31,8 @@ pub(crate) mod benchmark;
 mod contract_tests;
 mod memory;
 mod rustic;
+#[cfg(test)]
+mod time_zone_tests;
 
 #[allow(unused_imports)]
 pub(crate) use memory::InMemorySnapshotStore;

@@ -16,6 +16,10 @@ LABEL cloud.golem.cpu.features="neon,crc,lse,aes,sha2,dotprod"
 
 FROM platform-${TARGETARCH} AS final
 
+# The image has no time zone database. jiff reads this POSIX rule without one, so the snapshot
+# store writes no time zone warning for each timestamp.
+ENV TZ=UTC0
+
 WORKDIR /app
 COPY /target/$RUST_TARGET/release/worker-executor ./
 COPY /golem-worker-executor/config/worker-executor.toml ./config/worker-executor.toml
