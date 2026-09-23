@@ -6191,6 +6191,225 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
 }
 
 #[test]
+async fn reverted_result_replay_preserves_foreign_handles_without_live_authority() {
+    for mixed in [false, true] {
+        for retained_stage in 0..3 {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let before_source = oplog.add(OplogEntry::no_op(None)).await;
+            let live = producer(oplog.clone(), &identity, None).await;
+            let source_request = root_registration(&identity);
+            let stale = live
+                .register(None, source_request.clone())
+                .await
+                .unwrap()
+                .value;
+            let after_source = oplog.current_oplog_index().await;
+            let mut request = source_request.clone();
+            let StreamRegistrationCoordinate::Root {
+                recursive_value_path,
+                ..
+            } = &mut request.coordinate
+            else {
+                unreachable!()
+            };
+            recursive_value_path.push(StreamValuePathStep::RecordField(1));
+            let outputs = |handle, cancellation_epoch| {
+                let mut outputs = Vec::new();
+                if mixed {
+                    outputs.push(ProducerOutputRegistration {
+                        transport_stream_id: 31,
+                        source: ProducerOutputSource::New(request.clone()),
+                        cancellation_epoch,
+                    });
+                }
+                outputs.push(ProducerOutputRegistration {
+                    transport_stream_id: 12,
+                    source: ProducerOutputSource::Existing(handle),
+                    cancellation_epoch,
+                });
+                outputs
+            };
+            let original = live
+                .register_result_streams(
+                    None,
+                    identity.invocation.clone(),
+                    vec![4, 5],
+                    outputs(stale.clone(), None),
+                    None,
+                )
+                .await
+                .unwrap();
+            let after_result = oplog.current_oplog_index().await;
+            oplog.add(OplogEntry::no_op(None)).await;
+            oplog.commit(CommitLevel::Always).await;
+            let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
+            let cut = DurableStreamStore::prepare_fork_cut(
+                oplog.as_ref(),
+                (&owner, identity.fingerprint),
+                (&owner, identity.fingerprint),
+                oplog.current_oplog_index().await,
+                [before_source, after_source, after_result][retained_stage],
+                None,
+                [0; 32],
+                true,
+            )
+            .await
+            .unwrap();
+            let marker = DurableStreamOplogRecord::Session(
+                None,
+                Box::new(StreamSessionRecord::ForkCut(cut.clone())),
+            )
+            .into_inline_entry();
+            oplog
+                .add_pair(
+                    OplogEntry::revert(cut.revert.unwrap()),
+                    Box::new(move |_| marker),
+                )
+                .await;
+            oplog.commit(CommitLevel::Always).await;
+            drop(live);
+            let recovered = producer(oplog.clone(), &identity, None).await;
+            let tip = oplog.current_oplog_index().await;
+            let commits = oplog.commit_count();
+            let result = recovered
+                .register_result_streams(
+                    None,
+                    identity.invocation.clone(),
+                    vec![4, 5],
+                    outputs(stale.clone(), Some(7)),
+                    None,
+                )
+                .await;
+            if retained_stage == 2 {
+                let replay = result.unwrap();
+                assert_eq!(replay.session_record, original.session_record);
+                assert_eq!(replay.handles.len(), usize::from(mixed));
+                for handle in replay.handles {
+                    assert_eq!(handle.producer_generation, recovered.generation());
+                    assert_ne!(handle.producer_generation, stale.producer_generation);
+                }
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![4, 5],
+                            outputs(stale.clone(), Some(0)),
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::InvalidAttachmentState
+                );
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![9, 5],
+                            outputs(stale.clone(), None),
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::RegistrationDivergence
+                );
+                let refreshed = recovered
+                    .handle_for_coordinate(&source_request.coordinate)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![4, 5],
+                            outputs(refreshed.clone(), None),
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::RegistrationDivergence
+                );
+                let mut changed_mapping = outputs(stale.clone(), None);
+                changed_mapping.last_mut().unwrap().transport_stream_id = 13;
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![4, 5],
+                            changed_mapping,
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::RegistrationDivergence
+                );
+                if mixed {
+                    let mut changed_registration = outputs(stale.clone(), None);
+                    let ProducerOutputSource::New(request) = &mut changed_registration[0].source
+                    else {
+                        unreachable!()
+                    };
+                    request.element_schema_fingerprint = SchemaFingerprintV1([99; 32]);
+                    assert_eq!(
+                        recovered
+                            .register_result_streams(
+                                None,
+                                identity.invocation.clone(),
+                                vec![4, 5],
+                                changed_registration,
+                                None,
+                            )
+                            .await
+                            .unwrap_err(),
+                        StreamStoreError::InvalidHandle
+                    );
+                }
+                // Cancellation hints on exact replay must not change an open source.
+                let head = recovered.stream_head(&refreshed).await.unwrap();
+                assert!(!head.closed && !head.cancelled);
+                assert_eq!(
+                    recovered
+                        .local_binding(12, &stale, SessionStreamRole::Output)
+                        .await,
+                    Err(StreamStoreError::InvalidHandle)
+                );
+            } else {
+                // Includes a discarded source and a mixed new registration: neither may write.
+                assert_eq!(result.unwrap_err(), StreamStoreError::InvalidHandle);
+            }
+            assert_eq!(oplog.current_oplog_index().await, tip);
+            assert_eq!(oplog.commit_count(), commits);
+            recovered
+                .commit_deletion_barrier(1_000, true)
+                .await
+                .unwrap();
+            let tip = oplog.current_oplog_index().await;
+            let commits = oplog.commit_count();
+            assert_eq!(
+                recovered
+                    .register_result_streams(
+                        None,
+                        identity.invocation.clone(),
+                        vec![4, 5],
+                        outputs(stale, Some(7)),
+                        None,
+                    )
+                    .await
+                    .unwrap_err(),
+                StreamStoreError::ProducerDeleting
+            );
+            assert_eq!(oplog.current_oplog_index().await, tip);
+            assert_eq!(oplog.commit_count(), commits);
+        }
+    }
+}
+
+#[test]
 async fn result_registration_cancels_outputs_before_publishing_the_result() {
     for new_output in [false, true] {
         let identity = identity();
