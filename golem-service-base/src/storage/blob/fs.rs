@@ -328,7 +328,11 @@ impl BlobStorage for FileSystemBlobStorage {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        let mut entries = async_fs::read_dir(&full_path).await?;
+        let mut entries = match async_fs::read_dir(&full_path).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
 
         let mut result = Vec::new();
         while let Some(entry) = TryStreamExt::try_next(&mut entries).await? {

@@ -59,6 +59,7 @@ use golem_registry_service::services::registry_change_notifier::RegistryChangeNo
 use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::storage::blob::BlobStorage;
 use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
@@ -80,7 +81,8 @@ pub struct Deps {
     pub agent_secret_repo: Box<dyn AgentSecretRepo>,
     pub retry_policy_repo: Box<dyn RetryPolicyRepo>,
     pub application_repo: Box<dyn ApplicationRepo>,
-    pub environment_repo: Box<dyn EnvironmentRepo>,
+    pub environment_repo: Arc<dyn EnvironmentRepo>,
+    pub blob_storage: Arc<dyn BlobStorage>,
     pub environment_tool_grant_repo: Box<dyn EnvironmentToolGrantRepo>,
     pub environment_tool_middleware_grant_repo: Box<dyn EnvironmentToolMiddlewareGrantRepo>,
     pub plan_repo: Box<dyn PlanRepo>,
@@ -176,6 +178,7 @@ impl Deps {
                 total_component_count: 15.into(),
                 total_worker_connection_count: 25.into(),
                 total_component_storage_bytes: 1000.into(),
+                total_blob_storage_bytes: 1_000_000_000_000_000_000u64.into(),
                 monthly_gas_limit: 2000.into(),
                 monthly_component_upload_limit_bytes: 3000.into(),
                 max_memory_per_worker: 4000.into(),
@@ -204,7 +207,23 @@ impl Deps {
     }
 
     pub fn account_usage_service(&self) -> AccountUsageService {
-        AccountUsageService::new(self.account_usage_repo.clone(), self.account_service())
+        self.account_usage_service_with_reconciliation_interval(
+            golem_registry_service::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
+        )
+    }
+
+    pub fn account_usage_service_with_reconciliation_interval(
+        &self,
+        reconciliation_interval: std::time::Duration,
+    ) -> AccountUsageService {
+        AccountUsageService::new(
+            self.account_usage_repo.clone(),
+            self.account_service(),
+            self.environment_repo.clone(),
+            self.blob_storage.clone(),
+            true,
+            reconciliation_interval,
+        )
     }
 
     pub fn account_service(&self) -> Arc<AccountService> {

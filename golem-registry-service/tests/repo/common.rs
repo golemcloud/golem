@@ -2681,6 +2681,10 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
             let account_usage_service = Arc::new(AccountUsageService::new(
                 Arc::new(DbAccountUsageRepo::new(pool.clone())),
                 account_service.clone(),
+                Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                Arc::new(InMemoryBlobStorage::new()),
+                false,
+                golem_registry_service::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
             ));
             let application_service = Arc::new(ApplicationService::new(
                 Arc::new(DbApplicationRepo::new(pool.clone())),
@@ -2745,6 +2749,10 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
             let account_usage_service = Arc::new(AccountUsageService::new(
                 Arc::new(DbAccountUsageRepo::new(pool.clone())),
                 account_service.clone(),
+                Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                Arc::new(InMemoryBlobStorage::new()),
+                false,
+                golem_registry_service::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
             ));
             let application_service = Arc::new(ApplicationService::new(
                 Arc::new(DbApplicationRepo::new(pool.clone())),
@@ -4306,6 +4314,7 @@ async fn create_disk_override_plan(deps: &Deps, account_id: Uuid, user_configura
             total_component_count: 15.into(),
             total_worker_connection_count: 25.into(),
             total_component_storage_bytes: 1000.into(),
+            total_blob_storage_bytes: 1_000_000_000_000_000_000u64.into(),
             monthly_gas_limit: 2000.into(),
             monthly_component_upload_limit_bytes: 3000.into(),
             max_memory_per_worker: 4000.into(),
@@ -4453,6 +4462,7 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::TotalComponentCount => 15,
             UsageType::TotalWorkerConnectionCount => 25,
             UsageType::TotalComponentStorageBytes => 1000,
+            UsageType::TotalBlobStorageBytes => 1_000_000_000_000_000_000,
             UsageType::MonthlyGasLimit => 2000,
             UsageType::MonthlyComponentUploadLimitBytes => 3000,
             UsageType::MonthlyHttpCalls => 5000,
@@ -4522,6 +4532,7 @@ pub async fn test_account_usage(deps: &Deps) {
                 usage_type,
                 UsageType::MonthlyDurableAgentStorageByteSeconds
                     | UsageType::MonthlyEphemeralStorageByteSeconds
+                    | UsageType::TotalBlobStorageBytes
             );
             check!(usage.add_change(usage_type, 1000000) == within_limit);
         }
@@ -4624,6 +4635,124 @@ pub async fn test_account_usage(deps: &Deps) {
         check!(usage.usage(UsageType::TotalEnvCount) == 1);
         check!(usage.usage(UsageType::TotalComponentCount) == 1);
     }
+
+    deps.account_usage_repo
+        .set_total_usage(
+            user.revision.account_id,
+            UsageType::TotalBlobStorageBytes,
+            41,
+        )
+        .await
+        .unwrap();
+    deps.account_usage_repo
+        .set_total_usage(
+            user.revision.account_id,
+            UsageType::TotalBlobStorageBytes,
+            7,
+        )
+        .await
+        .unwrap();
+    let usage = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(usage.usage(UsageType::TotalBlobStorageBytes) == 7);
+
+    let application = deps.create_application(user.revision.account_id).await;
+    let environment = deps.create_env(application.revision.application_id).await;
+    let custom_namespace = golem_service_base::storage::blob::BlobStorageNamespace::CustomStorage {
+        environment_id: EnvironmentId(environment.revision.environment_id),
+    };
+    deps.blob_storage
+        .create_dir(
+            "test",
+            "blob_usage_reconciliation",
+            custom_namespace.clone(),
+            std::path::Path::new("container"),
+        )
+        .await
+        .unwrap();
+    deps.blob_storage
+        .put_raw(
+            "test",
+            "blob_usage_reconciliation",
+            custom_namespace,
+            std::path::Path::new("container/object"),
+            &[1, 2, 3, 4, 5],
+        )
+        .await
+        .unwrap();
+    deps.blob_storage
+        .put_raw(
+            "test",
+            "blob_usage_reconciliation",
+            golem_service_base::storage::blob::BlobStorageNamespace::InitialAgentFiles {
+                environment_id: EnvironmentId(environment.revision.environment_id),
+            },
+            std::path::Path::new("not-chargeable"),
+            &[0; 100],
+        )
+        .await
+        .unwrap();
+
+    let reconciliation_interval = std::time::Duration::from_secs(1);
+    let account_usage_service =
+        deps.account_usage_service_with_reconciliation_interval(reconciliation_interval);
+    account_usage_service
+        .get_resouce_limits(
+            AccountId(user.revision.account_id),
+            &golem_service_base::model::auth::AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    let reconciled = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(reconciled.usage(UsageType::TotalBlobStorageBytes) == 5);
+
+    let mut delayed_updates = std::collections::HashMap::new();
+    delayed_updates.insert(
+        AccountId(user.revision.account_id),
+        golem_registry_service::services::account_usage::ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 5,
+            metering: ResourceUsageMetering::all_enabled(),
+        },
+    );
+    account_usage_service
+        .update_resource_usage(delayed_updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let temporarily_overcounted = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(temporarily_overcounted.usage(UsageType::TotalBlobStorageBytes) == 10);
+
+    tokio::time::sleep(reconciliation_interval).await;
+    account_usage_service
+        .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    let converged = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(converged.usage(UsageType::TotalBlobStorageBytes) == 5);
 }
 
 pub async fn test_account_usage_history(deps: &Deps) {
@@ -8157,6 +8286,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8191,6 +8321,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8216,6 +8347,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8240,6 +8372,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 123,
             ephemeral_storage_byte_seconds_delta: 456,
             memory_gb_seconds_delta: 12,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8257,6 +8390,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 10,
             ephemeral_storage_byte_seconds_delta: 20,
             memory_gb_seconds_delta: 3,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8316,6 +8450,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8350,6 +8485,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8375,6 +8511,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8413,6 +8550,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8425,6 +8563,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8457,6 +8596,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8469,6 +8609,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );

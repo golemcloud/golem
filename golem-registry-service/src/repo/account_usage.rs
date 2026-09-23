@@ -91,6 +91,13 @@ pub trait AccountUsageRepo: Send + Sync {
     ) -> RepoResult<Vec<AccountUsageRecord>>;
 
     async fn add(&self, account_usage: &AccountUsage) -> RepoResult<()>;
+
+    async fn set_total_usage(
+        &self,
+        account_id: Uuid,
+        usage_type: UsageType,
+        value: u64,
+    ) -> RepoResult<()>;
 }
 
 pub struct LoggedAccountUsageRepo<Repo: AccountUsageRepo> {
@@ -159,6 +166,18 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
             .instrument(Self::span_account_id(account_usage.account_id))
             .await
     }
+
+    async fn set_total_usage(
+        &self,
+        account_id: Uuid,
+        usage_type: UsageType,
+        value: u64,
+    ) -> RepoResult<()> {
+        self.repo
+            .set_total_usage(account_id, usage_type, value)
+            .instrument(Self::span_account_id(account_id))
+            .await
+    }
 }
 
 pub struct DbAccountUsageRepo<DBP: Pool> {
@@ -181,6 +200,10 @@ impl<DBP: Pool> DbAccountUsageRepo<DBP> {
 
     fn with_ro(&self, api_name: &'static str) -> DBP::LabelledApi {
         self.db_pool.with_ro(METRICS_SVC_NAME, api_name)
+    }
+
+    fn with_rw(&self, api_name: &'static str) -> DBP::LabelledApi {
+        self.db_pool.with_rw(METRICS_SVC_NAME, api_name)
     }
 
     async fn with_tx<R, F>(&self, api_name: &'static str, f: F) -> RepoResult<R>
@@ -663,6 +686,36 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
         })
         .await
     }
+
+    async fn set_total_usage(
+        &self,
+        account_id: Uuid,
+        usage_type: UsageType,
+        value: u64,
+    ) -> RepoResult<()> {
+        self.with_rw("set_total_usage")
+            .execute(
+                sqlx::query(indoc! { r#"
+                    INSERT INTO account_usage_stats (
+                        account_id,
+                        usage_type,
+                        usage_key,
+                        value,
+                        updated_at
+                    ) VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (account_id, usage_type, usage_key) DO UPDATE
+                    SET value = excluded.value,
+                        updated_at = excluded.updated_at
+                "#})
+                .bind(account_id)
+                .bind(usage_type)
+                .bind(USAGE_KEY_TOTAL)
+                .bind(NumericU64::new(value))
+                .bind(SqlDateTime::now()),
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -698,7 +751,8 @@ impl AccountUsageRepoInternal for DbAccountUsageRepo<PostgresPool> {
                     p.max_concurrent_agents_per_executor,
                     p.total_app_count,
                     p.total_env_count, p.total_component_count, p.total_worker_connection_count,
-                    p.total_component_storage_bytes, p.monthly_gas_limit, p.monthly_component_upload_limit_bytes,
+                    p.total_component_storage_bytes, p.total_blob_storage_bytes,
+                    p.monthly_gas_limit, p.monthly_component_upload_limit_bytes,
                     p.per_invocation_http_call_limit, p.per_invocation_rpc_call_limit,
                     p.monthly_http_call_limit, p.monthly_rpc_call_limit,
                     p.oplog_writes_per_second

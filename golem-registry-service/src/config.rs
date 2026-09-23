@@ -196,6 +196,7 @@ impl Default for RegistryServiceConfig {
                 component_limit: 100,
                 worker_connection_limit: 100,
                 storage_limit: 500000000,
+                blob_storage_limit: default_unlimited(),
                 monthly_gas_limit: 1000000000000000000,
                 monthly_upload_limit: 1000000000,
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
@@ -543,6 +544,7 @@ pub struct PrecreatedPlan {
     pub component_limit: u64,
     pub worker_connection_limit: u64,
     pub storage_limit: u64,
+    pub blob_storage_limit: u64,
     pub monthly_gas_limit: u64,
     pub monthly_upload_limit: u64,
     pub max_memory_per_worker: u64,
