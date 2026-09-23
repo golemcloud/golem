@@ -32,6 +32,7 @@ if (!appRootDir) throw new Error("GOLEM_APP_ROOT env var is not set")
 
 const externalPackages = (id) =>
   id === "@golemcloud/effect-golem" ||
+  id === "@golemcloud/effect-golem/middleware" ||
   id === "@golemcloud/effect-golem/sqlite" ||
   id === "@golemcloud/effect-golem/postgres" ||
   id === "@golemcloud/effect-golem/mysql" ||

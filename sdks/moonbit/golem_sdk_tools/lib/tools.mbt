@@ -1472,7 +1472,9 @@ pub fn parse_tools(
           Some({ name: Ident(name=owner), .. }) =>
             match by_source.get(owner) {
               Some(idx) if fun_decl.vis is Pub(..) => {
-                if fun_decl.name.name == "new" || fun_decl.name.name == "drop" {
+                if fun_decl.name.name == "new" ||
+                  fun_decl.name.name == "new_for" ||
+                  fun_decl.name.name == "drop" {
                   tool_fail(
                     "Tool command '" +
                     owner +

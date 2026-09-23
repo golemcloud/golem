@@ -326,6 +326,15 @@ export function schemaGraphToWit(graph: SchemaGraph): WitSchemaGraph {
 
 /** Decode a Component Model carrier into the recursive SDK model. */
 export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
+  const decoded = schemaGraphRootsFromWit(wit, [wit.root])
+  return { defs: decoded.defs, root: decoded.roots[0] }
+}
+
+/** Decode selected roots once against one shared definition pool. */
+export function schemaGraphRootsFromWit(
+  wit: WitSchemaGraph,
+  roots: readonly TypeNodeIndex[],
+): { readonly defs: SchemaGraph["defs"]; readonly roots: readonly SchemaType[] } {
   const nodes = wit.typeNodes
   const witDefs = wit.defs
   // See `schemaValueFromWit`: a flat on-path `Uint8Array` (`1` = on the current
@@ -334,6 +343,7 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
   // (which resolves to a def id without recursing here), so only a structural
   // back-edge in raw type-node indices is reported as a cycle.
   const onPath = new Uint8Array(nodes.length)
+  const decoded: Array<SchemaType | undefined> = new Array(nodes.length)
 
   function idByDefIndex(di: DefIndex): TypeId {
     if (di < 0 || di >= witDefs.length) {
@@ -349,10 +359,12 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
     if (onPath[idx] === 1) {
       throw new SchemaDecodeError(`cyclic type node reference at index ${idx}`)
     }
+    if (decoded[idx] !== undefined) return decoded[idx]
     onPath[idx] = 1
     const node = nodes[idx]
     const result = { body: fromBody(node.body), metadata: node.metadata }
     onPath[idx] = 0
+    decoded[idx] = result
     return result
   }
 
@@ -476,8 +488,8 @@ export function schemaGraphFromWit(wit: WitSchemaGraph): SchemaGraph {
     }
     defs.set(d.id, { name: d.name, body: fromType(d.body) })
   }
-  const root = fromType(wit.root)
-  return { defs, root }
+  const selected = roots.map(fromType)
+  return { defs, roots: selected }
 }
 
 // ============================================================

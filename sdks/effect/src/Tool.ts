@@ -12,6 +12,7 @@ import {
   canonicalInputFields,
   type CommandModel,
   type ToolDefinition,
+  registerToolClientFactory,
 } from "./internal/tool/model.js"
 import { compile } from "./WitCodec.js"
 
@@ -115,10 +116,14 @@ export const liveToolStart = (
   input: Common.TypedSchemaValue,
   stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
   withStdout: boolean,
+  reflected = false,
 ) =>
   Effect.gen(function* () {
     const host = yield* ToolClient
-    const rpc = host.rpc(tool)
+    const rpc = yield* Effect.try({
+      try: () => (reflected ? host.createRpc(tool) : host.rpc(tool)),
+      catch: (cause) => new ToolClientError("invoke", cause),
+    })
     const inputEndpoints = stdin ? host.createStdin() : undefined
     const output = withStdout ? host.createStdout() : undefined
     const future = yield* Effect.try({
@@ -292,6 +297,34 @@ export function client<D extends ToolDefinition<any, any>>(
   }
   return build(definition.model, [])
 }
+
+registerToolClientFactory(client)
+
+/** A caller-owned typed subset of a remote tool's commands. @since 1.6.0 @category models */
+export interface ToolClientDefinition<D extends ToolDefinition<any, any>> {
+  readonly name?: string
+  readonly definition: D
+  readonly client: (
+    targetName?: string,
+    options?: Omit<ClientOptions, "lookupName">,
+  ) => Client<D, ToolClient>
+}
+
+/** Bind a typed command subset optimistically, without discovery. @since 1.6.0 @category constructors */
+export const toolClientDefinition = <D extends ToolDefinition<any, any>>(
+  definition: D,
+  name?: string,
+): ToolClientDefinition<D> =>
+  Object.freeze({
+    name,
+    definition,
+    client: (targetName?: string, options: Omit<ClientOptions, "lookupName"> = {}) => {
+      const lookupName = name ?? targetName
+      if (!lookupName)
+        throw new TypeError("a nameless tool client definition requires a target name")
+      return client(definition, { ...options, lookupName })
+    },
+  })
 
 const isToolError = (value: unknown): value is Common.ToolError =>
   typeof value === "object" && value !== null && "tag" in value

@@ -37,8 +37,8 @@ use golem_api_grpc::proto::golem::worker::{
     ExternalToolInvocation, InvocationContext, InvocationRequest, InvocationStart, ResumeAttach,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest, ExportStreamControlResult,
-    ReadStreamSlotRequest, ReadStreamSlotSuccess,
+    CreateStreamSessionRequest, CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest,
+    ExportStreamControlResult, ReadStreamSlotRequest, ReadStreamSlotSuccess,
 };
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::AgentInvocationOutput;
@@ -1858,9 +1858,12 @@ impl WorkerService {
     pub async fn create_stream_session(
         &self,
         agent_id: &AgentId,
-        request: InvocationStart,
+        request: CreateStreamSessionRequest,
     ) -> WorkerResult<CreateStreamSessionSuccess> {
         let auth_ctx: AuthCtx = request
+            .invocation
+            .as_ref()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("invocation not found"))?
             .auth_ctx
             .clone()
             .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
@@ -1935,9 +1938,8 @@ impl WorkerService {
         &self,
         agent_id: &AgentId,
         request: golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest,
-    ) -> WorkerResult<
-        golem_api_grpc::proto::golem::workerexecutor::v1::append_to_stream_slot_response::Result,
-    > {
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotResponse>
+    {
         let auth_ctx: AuthCtx = request
             .auth_ctx
             .clone()

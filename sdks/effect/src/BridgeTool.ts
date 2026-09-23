@@ -4,7 +4,7 @@ import type * as Common from "golem:tool/common@0.1.0"
 import { Effect, Option, Stream } from "effect"
 import * as Bridge from "./Bridge.js"
 import { ToolClient } from "./host/ToolClient.js"
-import { liveToolStart, ToolTransport } from "./Tool.js"
+import { liveToolStart, ToolClientError, ToolTransport } from "./Tool.js"
 import { deepEqual, type TypedSchemaValue } from "./internal/schema-model/model.js"
 import { schemaValueMatches } from "./internal/reflection/schemaValidation.js"
 import {
@@ -63,6 +63,13 @@ const protocol = (context: string, error: unknown): ToolRuntimeError<never> => (
   },
 })
 
+const runtimeError = <E>(context: string, error: unknown): ToolRuntimeError<E> => {
+  const cause = error instanceof ToolClientError ? error.cause : error
+  return isRpcError(cause)
+    ? { tag: "rpc", error: cause }
+    : (protocol(context, error) as ToolRuntimeError<E>)
+}
+
 const byteStream = <E>(source: AsyncIterator<Host.ByteStreamItem>) =>
   Stream.fromAsyncIterable({ [Symbol.asyncIterator]: () => source }, (error) =>
     protocol("tool stdout failed", error),
@@ -75,7 +82,7 @@ const byteStream = <E>(source: AsyncIterator<Host.ByteStreamItem>) =>
   ) as Stream.Stream<Uint8Array, ToolRuntimeError<E>>
 
 /** Adapt the contextual Effect tool transport to the exact generated-client runtime. @since 1.6.0 @category constructors */
-export const createToolClientRuntime = (tool: string): ToolClientRuntime => ({
+export const createToolClientRuntime = (tool: string, reflected = false): ToolClientRuntime => ({
   start: <E>(
     path: readonly string[],
     input: TypedSchemaValue,
@@ -96,23 +103,22 @@ export const createToolClientRuntime = (tool: string): ToolClientRuntime => ({
           catch: (error) => protocol("failed to encode tool input", error),
         }),
       }
-      const invocation = yield* Option.isSome(transport)
-        ? transport.value
-            .start(tool, path, wireInput, inputStream, stdout)
-            .pipe(Effect.mapError((error) => protocol("tool invocation failed", error)))
-        : liveToolStart(tool, path, wireInput, inputStream, stdout).pipe(
-            Effect.mapError((error) => protocol("tool invocation failed", error)),
-          )
+      const invocation = yield* Effect.acquireRelease(
+        Option.isSome(transport)
+          ? transport.value
+              .start(tool, path, wireInput, inputStream, stdout)
+              .pipe(Effect.mapError((error) => runtimeError<E>("tool invocation failed", error)))
+          : liveToolStart(tool, path, wireInput, inputStream, stdout, reflected).pipe(
+              Effect.mapError((error) => runtimeError<E>("tool invocation failed", error)),
+            ),
+        (started) => started.cancel.pipe(Effect.ignoreCause),
+      )
       const stdoutIterator = invocation.stdout?.[Symbol.asyncIterator]()
       return {
         stdout: stdoutIterator ? byteStream<E>(stdoutIterator) : undefined,
         result: invocation.result.pipe(
           Effect.map((result) => ({ result: result.result })),
-          Effect.mapError((error) =>
-            isRpcError(error)
-              ? ({ tag: "rpc", error } as ToolRuntimeError<E>)
-              : protocol("tool result failed", error),
-          ),
+          Effect.mapError((error) => runtimeError<E>("tool result failed", error)),
         ),
         cancel: invocation.cancel,
       }

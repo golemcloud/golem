@@ -38,6 +38,7 @@ pub(all) struct RegisteredTool {
 
 pub(all) struct ToolRpc(Int) derive(Eq, @debug.Debug)
 pub fn ToolRpc::async_invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> FutureInvokeResult
+pub fn ToolRpc::create(String) -> Result[Self, @types.ToolRpcError]
 pub fn ToolRpc::drop(Self) -> Unit
 pub fn ToolRpc::invoke(Self, Array[String], @types.TypedSchemaValue, ToolStdin?) -> Result[Unit, @types.ToolRpcError]
 pub async fn ToolRpc::invoke_and_await(Self, Array[String], @types.TypedSchemaValue, ToolStdin?, ToolStdout?) -> Result[@common.InvocationResult, @types.ToolRpcError]

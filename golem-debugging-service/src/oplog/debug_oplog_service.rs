@@ -67,6 +67,17 @@ impl OplogService for DebugOplogService {
         self.inner.stream_session_index()
     }
 
+    async fn staged_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+    ) -> Result<bool, String> {
+        self.inner
+            .staged_exists(owned_agent_id, agent_mode, stage_id)
+            .await
+    }
+
     async fn create(
         &self,
         _lifecycle: &mut OplogLifecycleGuard,

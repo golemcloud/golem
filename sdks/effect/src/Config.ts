@@ -43,15 +43,32 @@ type ConfigShapeField<S extends Schema.Top, Optional extends boolean = false> =
 export type ConfigShape<F extends ConfigFields, Optional extends boolean = false> = {
   readonly [K in keyof F]: ConfigShapeField<F[K], Optional>
 }
-export type NonSecretOverride<F extends ConfigFields> = {
-  readonly [K in keyof F as F[K] extends Schema.Redacted<any>
+type UnwrapOptional<S extends Schema.Top> =
+  S extends Schema.optional<infer Inner> ? (Inner extends Schema.Top ? Inner : S) : S
+type ConfigFieldsOf<S extends Schema.Top> =
+  UnwrapOptional<S> extends {
+    readonly fields: infer Fields
+  }
+    ? Fields
+    : never
+type IsRedacted<S extends Schema.Top> =
+  UnwrapOptional<S> extends { readonly value: Schema.Top } ? true : false
+type OverrideField<S extends Schema.Top> =
+  IsRedacted<S> extends true
     ? never
-    : K]?: F[K] extends Schema.Struct<infer SF>
-    ? SF extends ConfigFields
-      ? NonSecretOverride<SF>
-      : never
-    : F[K]["Type"]
-}
+    : [ConfigFieldsOf<S>] extends [never]
+      ? S["Type"]
+      : ConfigFieldsOf<S> extends ConfigFields
+        ? NonSecretOverride<ConfigFieldsOf<S>>
+        : never
+type OverrideKey<F extends ConfigFields> = {
+  readonly [K in keyof F]: OverrideField<F[K]> extends never ? never : K
+}[keyof F]
+export type NonSecretOverride<F extends ConfigFields> = [OverrideKey<F>] extends [never]
+  ? Readonly<Record<string, never>>
+  : {
+      readonly [K in OverrideKey<F>]?: OverrideField<F[K]>
+    }
 
 export interface ConfigLeaf {
   readonly source: AgentCommon.AgentConfigSource
@@ -77,9 +94,9 @@ export interface CompiledConfig {
 const redactedInner = (schema: Schema.Top): Schema.Top | undefined => {
   const ast = schema.ast
   if (ast._tag !== "Declaration") return undefined
-  const tag = (ast.annotations as { typeConstructor?: { _tag?: string } } | undefined)
-    ?.typeConstructor?._tag
-  return tag === "effect/Redacted" && ast.typeParameters[0] !== undefined
+  const id = (ast.annotations as { representation?: { id?: string } } | undefined)?.representation
+    ?.id
+  return id === "effect/schema/Redacted" && ast.typeParameters[0] !== undefined
     ? (Schema.make(ast.typeParameters[0]) as Schema.Top)
     : undefined
 }

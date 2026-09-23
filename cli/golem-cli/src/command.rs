@@ -1639,10 +1639,10 @@ pub mod worker {
             ///
             /// Cursor can be used to get the next page of results, use the cursor returned
             /// in the previous response.
-            /// The cursor has the format 'layer/position' where both layer and position are numbers.
+            /// The cursor is an opaque string and must be passed back unchanged.
             ///
             /// Returned cursors: in `--format json/yaml/toon` the response includes a
-            /// `cursors` map of the form `{ "<component-name>": "<layer>/<position>", ... }`
+            /// `cursors` map of the form `{ "<component-name>": "<opaque-cursor>", ... }`
             /// (one entry per component that still has more results). Pass any of
             /// those values back as `--scan-cursor` to fetch the next page.
             /// An entry being absent means that component has been fully scanned.

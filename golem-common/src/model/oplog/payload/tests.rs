@@ -14,8 +14,10 @@
 
 use test_r::test;
 
-use super::{HostRequestGolemApiRevertAgent, HostRequestGolemRpcInvoke};
-use crate::model::Timestamp;
+use super::{
+    HostRequestGolemApiGetAgents, HostRequestGolemApiRevertAgent, HostRequestGolemRpcInvoke,
+    HostResponseGolemApiAgents,
+};
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
@@ -77,6 +79,7 @@ use crate::model::worker::{
     ResolvedRevert, RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget,
 };
 use crate::model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
+use crate::model::{ScanCursor, Timestamp};
 use crate::schema::tool::{CommandNode, CommandTree, DiscoveredTool, Doc, Globals, Tool};
 use crate::schema::{
     FromSchema, IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
@@ -1044,6 +1047,19 @@ where
     let function_name_roundtrip: host_functions::HostFunctionName =
         desert_rust::deserialize(&function_name_bytes).unwrap();
     assert_eq!(function_name_roundtrip, Pair::HOST_FUNCTION_NAME);
+}
+
+#[test]
+fn get_agents_page_preserves_opaque_cursor_in_durable_payload() {
+    let cursor = ScanCursor::new("gsc1_recorded-token_雪".to_string());
+    assert_host_payload_pair_roundtrip::<host_functions::GolemApiGetAgents>(
+        HostRequestGolemApiGetAgents {
+            component_id: ComponentId::new(),
+        },
+        HostResponseGolemApiAgents {
+            result: Ok((Some(cursor), Vec::new())),
+        },
+    );
 }
 
 #[test]
