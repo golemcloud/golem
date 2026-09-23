@@ -91,6 +91,7 @@ impl DebugConfig {
             public_worker_api: self.public_worker_api,
             memory: self.memory,
             filesystem_storage: Default::default(),
+            filesystem_snapshots: Default::default(),
             resource_usage_metering: Default::default(),
             rdbms: self.rdbms,
             resource_limits: self.resource_limits,

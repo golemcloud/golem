@@ -89,6 +89,8 @@ pub struct GolemConfig {
     pub memory: MemoryConfig,
     pub filesystem_storage: FilesystemStorageConfig,
     #[serde(default)]
+    pub filesystem_snapshots: FilesystemSnapshotsConfig,
+    #[serde(default)]
     pub resource_usage_metering: ResourceUsageMeteringConfig,
     pub rdbms: RdbmsConfig,
     pub resource_limits: ResourceLimitsConfig,
@@ -267,6 +269,12 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.filesystem_storage.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "filesystem snapshots:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.filesystem_snapshots.to_safe_string_indented()
+        );
         let _ = writeln!(&mut result, "resource usage metering:");
         let _ = writeln!(
             &mut result,
@@ -388,6 +396,7 @@ impl Default for GolemConfig {
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
             filesystem_storage: FilesystemStorageConfig::default(),
+            filesystem_snapshots: FilesystemSnapshotsConfig::default(),
             resource_usage_metering: ResourceUsageMeteringConfig::default(),
             rdbms: RdbmsConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
@@ -2330,6 +2339,204 @@ impl SafeDisplay for FilesystemPressureConfig {
     }
 }
 
+/// The default of [`FilesystemSnapshotStoreConfig::storage_call_deadline`].
+///
+/// On S3, with the retries of the S3 storage, a write of a pack took at most 1.7 s with eight saves
+/// at the same time. A ranged read of a pack took at most 1.5 s under the CPU request of an
+/// executor. Keep the value at least 10 times the longest measured call.
+pub const DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE: Duration = Duration::from_secs(30);
+
+/// The default of [`FilesystemSnapshotStoreConfig::restore_reader_threads`].
+const DEFAULT_FILESYSTEM_SNAPSHOT_RESTORE_READER_THREADS: usize = 4;
+
+/// The default of [`FilesystemSnapshotStoreConfig::save_threads`].
+const DEFAULT_FILESYSTEM_SNAPSHOT_SAVE_THREADS: usize = 4;
+
+/// Tells whether the executor keeps filesystem snapshots, and gives the settings of the store.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum FilesystemSnapshotsConfig {
+    Disabled(FilesystemSnapshotsDisabledConfig),
+    Managed(FilesystemSnapshotStoreConfig),
+}
+
+impl Default for FilesystemSnapshotsConfig {
+    fn default() -> Self {
+        Self::Disabled(FilesystemSnapshotsDisabledConfig {})
+    }
+}
+
+impl SafeDisplay for FilesystemSnapshotsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            Self::Disabled(_) => {
+                let _ = writeln!(&mut result, "disabled");
+            }
+            Self::Managed(store) => {
+                let _ = writeln!(&mut result, "managed:");
+                let _ = writeln!(&mut result, "{}", store.to_safe_string_indented());
+            }
+        }
+        result
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FilesystemSnapshotsDisabledConfig {}
+
+/// The settings of the store of filesystem snapshots.
+#[derive(Clone, Debug, Serialize)]
+pub struct FilesystemSnapshotStoreConfig {
+    /// The key that encrypts each repository, as 128 hex characters. The key is a secret.
+    repository_key: FilesystemSnapshotRepositoryKey,
+    /// The longest time that one blob storage call of the store waits for an answer.
+    #[serde(with = "humantime_serde")]
+    storage_call_deadline: Duration,
+    /// The number of threads that read packs in a restore.
+    restore_reader_threads: NonZeroUsize,
+    /// The number of threads of each parallel stage of a save.
+    save_threads: NonZeroUsize,
+}
+
+#[derive(Deserialize)]
+struct RawFilesystemSnapshotStoreConfig {
+    repository_key: String,
+    #[serde(
+        with = "humantime_serde",
+        default = "default_filesystem_snapshot_storage_call_deadline"
+    )]
+    storage_call_deadline: Duration,
+    #[serde(default = "default_filesystem_snapshot_restore_reader_threads")]
+    restore_reader_threads: usize,
+    #[serde(default = "default_filesystem_snapshot_save_threads")]
+    save_threads: usize,
+}
+
+fn default_filesystem_snapshot_storage_call_deadline() -> Duration {
+    DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE
+}
+
+fn default_filesystem_snapshot_restore_reader_threads() -> usize {
+    DEFAULT_FILESYSTEM_SNAPSHOT_RESTORE_READER_THREADS
+}
+
+fn default_filesystem_snapshot_save_threads() -> usize {
+    DEFAULT_FILESYSTEM_SNAPSHOT_SAVE_THREADS
+}
+
+impl FilesystemSnapshotStoreConfig {
+    pub fn new(
+        repository_key: &str,
+        storage_call_deadline: Duration,
+        restore_reader_threads: usize,
+        save_threads: usize,
+    ) -> Result<Self, String> {
+        let repository_key = FilesystemSnapshotRepositoryKey::parse(repository_key)?;
+        if storage_call_deadline.is_zero() {
+            return Err("storage_call_deadline must be greater than zero".to_string());
+        }
+        let restore_reader_threads = NonZeroUsize::new(restore_reader_threads)
+            .ok_or_else(|| "restore_reader_threads must be greater than zero".to_string())?;
+        let save_threads = NonZeroUsize::new(save_threads)
+            .ok_or_else(|| "save_threads must be greater than zero".to_string())?;
+        Ok(Self {
+            repository_key,
+            storage_call_deadline,
+            restore_reader_threads,
+            save_threads,
+        })
+    }
+
+    pub fn repository_key(&self) -> &FilesystemSnapshotRepositoryKey {
+        &self.repository_key
+    }
+
+    pub const fn storage_call_deadline(&self) -> Duration {
+        self.storage_call_deadline
+    }
+
+    pub const fn restore_reader_threads(&self) -> NonZeroUsize {
+        self.restore_reader_threads
+    }
+
+    pub const fn save_threads(&self) -> NonZeroUsize {
+        self.save_threads
+    }
+}
+
+impl<'de> Deserialize<'de> for FilesystemSnapshotStoreConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawFilesystemSnapshotStoreConfig::deserialize(deserializer)?;
+        Self::new(
+            &raw.repository_key,
+            raw.storage_call_deadline,
+            raw.restore_reader_threads,
+            raw.save_threads,
+        )
+        .map_err(D::Error::custom)
+    }
+}
+
+impl SafeDisplay for FilesystemSnapshotStoreConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "repository key: ****");
+        let _ = writeln!(
+            &mut result,
+            "storage call deadline: {:?}",
+            self.storage_call_deadline
+        );
+        let _ = writeln!(
+            &mut result,
+            "restore reader threads: {}",
+            self.restore_reader_threads
+        );
+        let _ = writeln!(&mut result, "save threads: {}", self.save_threads);
+        result
+    }
+}
+
+/// The key that encrypts the repositories of filesystem snapshots. It has 64 bytes.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FilesystemSnapshotRepositoryKey([u8; 64]);
+
+impl FilesystemSnapshotRepositoryKey {
+    /// Gives the key from its 128 hex characters.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        if text.is_empty() {
+            return Err("repository_key must not be empty".to_string());
+        }
+        hex::decode(text)
+            .ok()
+            .and_then(|bytes| <[u8; 64]>::try_from(bytes).ok())
+            .map(Self)
+            .ok_or_else(|| "repository_key must be 128 hex characters".to_string())
+    }
+
+    pub const fn bytes(&self) -> &[u8; 64] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for FilesystemSnapshotRepositoryKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("FilesystemSnapshotRepositoryKey(****)")
+    }
+}
+
+impl Serialize for FilesystemSnapshotRepositoryKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&hex::encode(self.0))
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct FilesystemObjectLimitPolicyConfig {
     /// Number of filesystem objects granted per GiB of allocated storage.
@@ -2663,9 +2870,13 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DurableStreamConfig, InvocationResultsConfig, Limits};
+    use super::{
+        DurableStreamConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig, GolemConfig,
+        InvocationResultsConfig, Limits,
+    };
     use golem_common::SafeDisplay;
-    use serde_json::Value;
+    use serde_json::{Value, json};
+    use std::time::Duration;
     use test_r::test;
 
     #[test]
@@ -2740,5 +2951,137 @@ mod tests {
         );
 
         assert!(serde_json::from_value::<Limits>(serialized).is_err());
+    }
+    const KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\
+                       202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f";
+
+    fn managed(config: Value) -> Result<FilesystemSnapshotStoreConfig, String> {
+        serde_json::from_value::<FilesystemSnapshotsConfig>(json!({
+            "type": "Managed",
+            "config": config,
+        }))
+        .map_err(|error| error.to_string())
+        .and_then(|parsed| match parsed {
+            FilesystemSnapshotsConfig::Managed(store) => Ok(store),
+            FilesystemSnapshotsConfig::Disabled(_) => Err("disabled".to_string()),
+        })
+    }
+
+    fn refusal(config: Value) -> String {
+        managed(config).unwrap_err()
+    }
+
+    #[test]
+    fn filesystem_snapshots_are_disabled_by_default() {
+        let config = GolemConfig::default().filesystem_snapshots;
+
+        assert!(
+            matches!(config, FilesystemSnapshotsConfig::Disabled(_)),
+            "{config:?}"
+        );
+    }
+
+    #[test]
+    fn filesystem_snapshots_managed_config_reads_the_key_the_deadline_and_the_thread_counts() {
+        let store = managed(json!({
+            "repository_key": KEY,
+            "storage_call_deadline": "45s",
+            "restore_reader_threads": 7,
+            "save_threads": 3,
+        }))
+        .unwrap();
+
+        assert_eq!(
+            (
+                store.repository_key().bytes().to_vec(),
+                store.storage_call_deadline(),
+                store.restore_reader_threads().get(),
+                store.save_threads().get(),
+            ),
+            ((0..64).collect::<Vec<u8>>(), Duration::from_secs(45), 7, 3)
+        );
+    }
+
+    #[test]
+    fn filesystem_snapshots_managed_config_gives_the_defaults_of_the_fields_it_does_not_set() {
+        let store = managed(json!({ "repository_key": KEY })).unwrap();
+
+        assert_eq!(
+            (
+                store.storage_call_deadline(),
+                store.restore_reader_threads().get(),
+                store.save_threads().get(),
+            ),
+            (Duration::from_secs(30), 4, 4)
+        );
+    }
+
+    #[test]
+    fn filesystem_snapshots_managed_config_refuses_a_zero_deadline() {
+        assert!(
+            refusal(json!({ "repository_key": KEY, "storage_call_deadline": "0s" }))
+                .contains("storage_call_deadline must be greater than zero")
+        );
+    }
+
+    #[test]
+    fn filesystem_snapshots_managed_config_refuses_zero_restore_reader_threads() {
+        assert!(
+            refusal(json!({ "repository_key": KEY, "restore_reader_threads": 0 }))
+                .contains("restore_reader_threads must be greater than zero")
+        );
+    }
+
+    #[test]
+    fn filesystem_snapshots_managed_config_refuses_zero_save_threads() {
+        assert!(
+            refusal(json!({ "repository_key": KEY, "save_threads": 0 }))
+                .contains("save_threads must be greater than zero")
+        );
+    }
+
+    #[test]
+    fn filesystem_snapshots_managed_config_refuses_an_empty_short_or_non_hex_key() {
+        let non_hex = format!("{}g", &KEY[..127]);
+        let cases = [
+            (json!({ "repository_key": "" }), "must not be empty"),
+            (
+                json!({ "repository_key": &KEY[..126] }),
+                "must be 128 hex characters",
+            ),
+            (
+                json!({ "repository_key": format!("{KEY}00") }),
+                "must be 128 hex characters",
+            ),
+            (
+                json!({ "repository_key": non_hex }),
+                "must be 128 hex characters",
+            ),
+            (json!({}), "missing field `repository_key`"),
+        ];
+
+        let unexpected = cases
+            .into_iter()
+            .map(|(config, reason)| (refusal(config), reason))
+            .filter(|(error, reason)| !error.contains(reason))
+            .collect::<Vec<_>>();
+
+        assert_eq!(unexpected, Vec::<(String, &str)>::new());
+    }
+
+    #[test]
+    fn filesystem_snapshots_managed_config_hides_the_key() {
+        let store = managed(json!({ "repository_key": KEY })).unwrap();
+        let shown = FilesystemSnapshotsConfig::Managed(store.clone()).to_safe_string();
+        let debugged = format!("{store:?}");
+
+        assert_eq!(
+            (
+                shown.contains("0001020304"),
+                debugged.contains("0001020304"),
+                shown.contains("repository key: ****"),
+            ),
+            (false, false, true)
+        );
     }
 }
