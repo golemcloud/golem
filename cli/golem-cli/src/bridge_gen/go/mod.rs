@@ -16,6 +16,8 @@
 
 #[allow(clippy::module_inception)]
 pub mod go;
+pub mod go_writer;
 pub mod type_name;
+pub mod type_ref;
 
 pub use type_name::GoTypeName;
