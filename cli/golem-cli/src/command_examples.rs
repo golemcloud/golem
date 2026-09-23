@@ -883,23 +883,23 @@ pub const RETRY_POLICY_DELETE: &str = "Examples:
 pub const RESOURCE_CREATE: &str = "Examples:
   # A rate-based quota: 100 calls per minute, capped at 1000
   golem-cli resource create api-calls \\
-    --limit '{\"type\":\"rate\",\"value\":100,\"period\":\"minute\",\"max\":1000}'
+    --limit '{\"type\":\"Rate\",\"value\":100,\"period\":\"minute\",\"max\":1000}'
 
   # A capacity-based quota with a custom unit label
   golem-cli resource create tokens \\
-    --limit '{\"type\":\"capacity\",\"value\":500000}' --unit token --units tokens
+    --limit '{\"type\":\"Capacity\",\"value\":500000}' --unit token --units tokens
 
   # A concurrency cap that rejects extra requests instead of throttling them
   golem-cli resource create concurrent-jobs \\
-    --limit '{\"type\":\"concurrency\",\"value\":4}' --enforcement-action reject
+    --limit '{\"type\":\"Concurrency\",\"value\":4}' --enforcement-action reject
 
   # Create the resource definition, or update it if it already exists
   golem-cli resource create concurrent-jobs \\
-    --limit '{\"type\":\"concurrency\",\"value\":8}' --update-existing";
+    --limit '{\"type\":\"Concurrency\",\"value\":8}' --update-existing";
 
 pub const RESOURCE_UPDATE: &str = "Examples:
   # Raise the limit on an existing rate quota
-  golem-cli resource update api-calls --limit '{\"type\":\"rate\",\"value\":200,\"period\":\"minute\",\"max\":2000}'
+  golem-cli resource update api-calls --limit '{\"type\":\"Rate\",\"value\":200,\"period\":\"minute\",\"max\":2000}'
 
   # Switch the enforcement action
   golem-cli resource update api-calls --enforcement-action terminate";
