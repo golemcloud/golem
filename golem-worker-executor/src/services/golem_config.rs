@@ -2952,6 +2952,7 @@ mod tests {
 
         assert!(serde_json::from_value::<Limits>(serialized).is_err());
     }
+
     const KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\
                        202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f";
 
