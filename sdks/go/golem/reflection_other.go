@@ -36,3 +36,11 @@ func (r ReflectedAgentType) Bind(map[string]any, ...ClientOpt) (*ReflectedAgentC
 func (r ReflectedAgentType) BindPhantom(map[string]any, UUID, ...ClientOpt) (*ReflectedAgentClient, error) {
 	return nil, fmt.Errorf("golem: agent discovery is only available inside a component")
 }
+
+func DiscoverTools() []ReflectedTool { return nil }
+
+func DiscoverTool(string) (ReflectedTool, bool) { return ReflectedTool{}, false }
+
+func (r ReflectedTool) Bind() (*ReflectedToolClient, error) {
+	return nil, fmt.Errorf("golem: tool discovery is only available inside a component")
+}

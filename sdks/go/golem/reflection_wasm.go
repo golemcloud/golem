@@ -22,6 +22,7 @@ import (
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	toolHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_host"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -128,4 +129,55 @@ func reflectedAgentConfig(r ReflectedAgentType, o clientOpts) ([]common.TypedAge
 	}
 	return nil, fmt.Errorf(
 		"golem: %s: configuration overrides are not available on reflected clients yet", r.Name())
+}
+
+// DiscoverTools returns a snapshot of every tool the calling agent may reach in
+// its environment.
+func DiscoverTools() []ReflectedTool {
+	registered := toolHost.GetAllTools()
+	out := make([]ReflectedTool, 0, len(registered))
+	for _, r := range registered {
+		out = append(out, ReflectedTool{lookupName: r.LookupName, wit: r.Definition})
+	}
+	return out
+}
+
+// DiscoverTool looks one tool up by its lookup name.
+func DiscoverTool(name string) (ReflectedTool, bool) {
+	found := toolHost.GetTool(name)
+	if found.IsNone() {
+		return ReflectedTool{}, false
+	}
+	return ReflectedTool{lookupName: found.Some().LookupName, wit: found.Some().Definition}, true
+}
+
+// witToolRPC invokes through the host's tool RPC resource.
+type witToolRPC struct {
+	rpc  *toolHost.ToolRpc
+	name string
+}
+
+func (w witToolRPC) invokeAndAwait(commandPath []string, input types.TypedSchemaValue) (types.TypedSchemaValue, bool, error) {
+	res := w.rpc.InvokeAndAwait(commandPath, input,
+		witTypes.None[*toolHost.ToolStdin](), witTypes.None[*toolHost.ToolStdout]())
+	if res.Tag() == witTypes.ResultErr {
+		return types.TypedSchemaValue{}, false, fmt.Errorf("golem: tool %s %s: %s",
+			w.name, commandLabel(commandPath), toolRPCErrorMessage(res.Err()))
+	}
+	out := res.Ok().Result
+	if out.IsNone() {
+		return types.TypedSchemaValue{}, false, nil
+	}
+	return out.Some(), true, nil
+}
+
+// Bind connects to the discovered tool.
+func (r ReflectedTool) Bind() (*ReflectedToolClient, error) {
+	// The fallible form is the reflective one: a snapshot that has gone stale
+	// should give an error rather than a trap.
+	created := toolHost.ToolRpcCreate(r.lookupName)
+	if created.Tag() == witTypes.ResultErr {
+		return nil, fmt.Errorf("golem: tool %s: %s", r.lookupName, toolRPCErrorMessage(created.Err()))
+	}
+	return &ReflectedToolClient{tool: r, rpc: witToolRPC{rpc: created.Ok(), name: r.lookupName}}, nil
 }

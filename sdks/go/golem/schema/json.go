@@ -923,11 +923,22 @@ func pathOrRoot(path string) string {
 	return path
 }
 
+// BoolParameterNode marks a parameter whose type is fixed as boolean rather
+// than named by a node in the graph. A tool flag is the case that needs it: the
+// WIT gives a flag no type index because its type can only be bool, so a graph
+// carrying flags need not contain a bool node at all.
+const BoolParameterNode int32 = -1
+
 // Parameter is one field of a named parameter list: its wire name and the type
-// node in the graph that its value is read against.
+// node in the graph that its value is read against, or [BoolParameterNode].
 type Parameter struct {
 	Name string
 	Node int32
+}
+
+// BoolParameter describes a parameter whose type is fixed as boolean.
+func BoolParameter(name string) Parameter {
+	return Parameter{Name: name, Node: BoolParameterNode}
 }
 
 // PackParameters builds the value tree an invocation carries: a record whose
@@ -953,7 +964,13 @@ func (r Ref) PackParameters(params []Parameter, args map[string]any) (types.Sche
 			issues = append(issues, Issue{Path: param.Name, Message: "missing argument"})
 			continue
 		}
-		idx, err := p.build(param.Node, value, param.Name)
+		var idx int32
+		var err error
+		if param.Node == BoolParameterNode {
+			idx, err = p.buildBool(value, param.Name)
+		} else {
+			idx, err = p.build(param.Node, value, param.Name)
+		}
 		if err != nil {
 			var ve *ValidationError
 			if errors.As(err, &ve) {
@@ -972,8 +989,12 @@ func (r Ref) PackParameters(params []Parameter, args map[string]any) (types.Sche
 	root := p.push(types.MakeSchemaValueNodeRecordValue(idxs))
 	tree := types.SchemaValueTree{ValueNodes: p.nodes, Root: root}
 	// Each parameter is validated against its own node, since the record is an
-	// invocation envelope rather than a type in the graph.
+	// invocation envelope rather than a type in the graph. A fixed-type
+	// parameter was already checked when it was built.
 	for i, param := range params {
+		if param.Node == BoolParameterNode {
+			continue
+		}
 		if err := r.WithRoot(param.Node).Validate(types.SchemaValueTree{
 			ValueNodes: tree.ValueNodes, Root: idxs[i],
 		}); err != nil {
@@ -999,6 +1020,17 @@ func (r Ref) UnpackParameters(params []Parameter, tree types.SchemaValueTree) (m
 	}
 	out := make(map[string]any, len(params))
 	for i, param := range params {
+		if param.Node == BoolParameterNode {
+			node, err := nodeAt(tree, idxs[i])
+			if err != nil {
+				return nil, err
+			}
+			if node.Tag() != types.SchemaValueNodeBoolValue {
+				return nil, fmt.Errorf("golem: parameter %q: expected a boolean", param.Name)
+			}
+			out[param.Name] = node.BoolValue()
+			continue
+		}
 		value, err := r.WithRoot(param.Node).UnpackJSON(types.SchemaValueTree{
 			ValueNodes: tree.ValueNodes, Root: idxs[i],
 		})
@@ -1016,6 +1048,11 @@ func (r Ref) ParametersJSONSchema(params []Parameter, includeDraftMarker bool) (
 	props := obj{}
 	required := make([]string, 0, len(params))
 	for _, param := range params {
+		if param.Node == BoolParameterNode {
+			props[param.Name] = obj{"type": "boolean"}
+			required = append(required, param.Name)
+			continue
+		}
 		rendered, err := r.renderSchema(param.Node)
 		if err != nil {
 			return nil, err
@@ -1072,4 +1109,13 @@ func nodeAt(tree types.SchemaValueTree, idx int32) (types.SchemaValueNode, error
 			"golem: value node index %d out of range (%d nodes)", idx, len(tree.ValueNodes))
 	}
 	return tree.ValueNodes[idx], nil
+}
+
+// buildBool packs a parameter whose type is fixed as boolean.
+func (p *packer) buildBool(value any, path string) (int32, error) {
+	b, ok := value.(bool)
+	if !ok {
+		return 0, &ValidationError{Issues: []Issue{{Path: path, Message: "expected a boolean"}}}
+	}
+	return p.push(types.MakeSchemaValueNodeBoolValue(b)), nil
 }

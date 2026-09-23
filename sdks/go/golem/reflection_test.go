@@ -22,6 +22,7 @@ import (
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	"github.com/golemcloud/golem/sdks/go/golem/schema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -287,3 +288,186 @@ func TestDiscoveryOffTarget(t *testing.T) {
 }
 
 var _ = witTypes.Unit{}
+
+// toolSnapshotOf derives a tool the way the host publishes it, so the tool
+// reflection tests read against real metadata.
+func toolSnapshotOf(t *testing.T) ReflectedTool {
+	t.Helper()
+	r, d := newToolRegistry(), newDefinitions()
+	def := defineToolInto(r, d, "files", ToolSpec{Version: "1.0.0", Summary: "File utilities"})
+	declareGroup(r, d, def, []string{"index"}, []CommandOpt{Summary("Manage the index")})
+
+	type AddArgs struct {
+		Path    Positional[string]
+		Force   Flag
+		Retries Opt[int32]
+	}
+	add := declareCommand[AddArgs, string](r, d, def, []string{"index", "add"}, "add", AddArgs{
+		Force:   Flag{Short: 'f'},
+		Retries: Opt[int32]{Default: Some(int32(1))},
+	}, []CommandOpt{Summary("Add a file"), Aliases("a")})
+	handleCommandInto(r, d, add, func(_ *ToolContext, in AddArgs) string { return in.Path.Get() })
+
+	tools, ok := r.discover(d)
+	if !ok {
+		t.Fatalf("tool discovery failed: %s", allDefErrors(d.errs))
+	}
+	return ReflectedTool{lookupName: "files", wit: tools[0]}
+}
+
+// TestToolSnapshotWalksTheCommandTree — a caller with no Go types for the tool
+// navigates it by name, including through namespace nodes and aliases.
+func TestToolSnapshotWalksTheCommandTree(t *testing.T) {
+	r := toolSnapshotOf(t)
+	if r.Name() != "files" || r.Version() != "1.0.0" {
+		t.Errorf("snapshot is %q/%q", r.Name(), r.Version())
+	}
+
+	// The root and the group dispatch only.
+	if r.Root().Callable() {
+		t.Error("the root gained a body it never declared")
+	}
+	group, found := r.Command([]string{"index"})
+	if !found || group.Callable() {
+		t.Errorf("index is found=%v callable=%v, want found and not callable", found, group.Callable())
+	}
+
+	add, found := r.Command([]string{"index", "add"})
+	if !found || !add.Callable() {
+		t.Fatalf("index add is found=%v callable=%v", found, add.Callable())
+	}
+	if add.Description() != "Add a file" {
+		t.Errorf("description %q", add.Description())
+	}
+	if got := strings.Join(add.Path(), " "); got != "index add" {
+		t.Errorf("path %q", got)
+	}
+
+	// Aliases resolve too.
+	if _, found := r.Command([]string{"index", "a"}); !found {
+		t.Error("the alias did not resolve")
+	}
+	if _, found := r.Command([]string{"index", "nope"}); found {
+		t.Error("an undeclared command resolved")
+	}
+
+	// Commands enumerates the whole tree, namespaces included.
+	if n := len(r.Commands()); n != 3 {
+		t.Errorf("enumerated %d commands, want 3", n)
+	}
+}
+
+// TestToolArgumentsAreOneParameterList — positionals, options and flags all
+// become fields of the single record an invocation carries.
+func TestToolArgumentsAreOneParameterList(t *testing.T) {
+	r := toolSnapshotOf(t)
+	add, _ := r.Command([]string{"index", "add"})
+
+	params, err := add.Arguments()
+	if err != nil {
+		t.Fatalf("Arguments: %v", err)
+	}
+	var names []string
+	for _, p := range params {
+		names = append(names, p.Name)
+	}
+	if strings.Join(names, ",") != "path,retries,force" {
+		t.Errorf("parameters are %v, want positionals then options then flags", names)
+	}
+
+	// A flag's type is fixed rather than named by the graph.
+	for _, p := range params {
+		if p.Name == "force" && p.Node != schema.BoolParameterNode {
+			t.Errorf("the flag names graph node %d instead of being a fixed bool", p.Node)
+		}
+	}
+}
+
+func TestToolCommandPacksAndRendersItsArguments(t *testing.T) {
+	r := toolSnapshotOf(t)
+	add, _ := r.Command([]string{"index", "add"})
+
+	input, err := add.PackJSON(map[string]any{"path": "/tmp/a", "force": true, "retries": 3})
+	if err != nil {
+		t.Fatalf("PackJSON: %v", err)
+	}
+	root := input.Value.ValueNodes[input.Value.Root]
+	if root.Tag() != types.SchemaValueNodeRecordValue || len(root.RecordValue()) != 3 {
+		t.Fatalf("input root is %v", root)
+	}
+
+	rendered, err := add.ToJSONSchema(false)
+	if err != nil {
+		t.Fatalf("ToJSONSchema: %v", err)
+	}
+	data, _ := json.Marshal(rendered)
+	var doc map[string]any
+	_ = json.Unmarshal(data, &doc)
+	props, _ := doc["properties"].(map[string]any)
+	force, _ := props["force"].(map[string]any)
+	if force["type"] != "boolean" {
+		t.Errorf("the flag rendered as %v, want a boolean", force)
+	}
+}
+
+// fakeToolRPC replays a scripted invocation result.
+type fakeToolRPC struct {
+	gotPath []string
+	out     types.TypedSchemaValue
+	has     bool
+	err     error
+}
+
+func (f *fakeToolRPC) invokeAndAwait(path []string, _ types.TypedSchemaValue) (types.TypedSchemaValue, bool, error) {
+	f.gotPath = path
+	return f.out, f.has, f.err
+}
+
+func TestReflectedToolClientInvokes(t *testing.T) {
+	r := toolSnapshotOf(t)
+	result, err := EncodeTypedValue("/tmp/a")
+	if err != nil {
+		t.Fatalf("EncodeTypedValue: %v", err)
+	}
+	rpc := &fakeToolRPC{out: result.wit, has: true}
+	client := &ReflectedToolClient{tool: r, rpc: rpc}
+
+	got, err := client.InvokeAndAwait([]string{"index", "add"},
+		map[string]any{"path": "/tmp/a", "force": false, "retries": 1})
+	if err != nil {
+		t.Fatalf("InvokeAndAwait: %v", err)
+	}
+	if strings.Join(rpc.gotPath, " ") != "index add" {
+		t.Errorf("invoked %v", rpc.gotPath)
+	}
+	if got != "/tmp/a" {
+		t.Errorf("result %v", got)
+	}
+}
+
+// TestReflectedToolClientRefusesANamespace — a dispatch-only node is
+// discoverable but has nothing to run.
+func TestReflectedToolClientRefusesANamespace(t *testing.T) {
+	r := toolSnapshotOf(t)
+	client := &ReflectedToolClient{tool: r, rpc: &fakeToolRPC{}}
+
+	_, err := client.InvokeAndAwait([]string{"index"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "only dispatches to subcommands") {
+		t.Errorf("error is %v", err)
+	}
+}
+
+func TestReflectedToolClientValidatesBeforeSending(t *testing.T) {
+	r := toolSnapshotOf(t)
+	rpc := &fakeToolRPC{}
+	client := &ReflectedToolClient{tool: r, rpc: rpc}
+
+	_, err := client.InvokeAndAwait([]string{"index", "add"},
+		map[string]any{"path": "/tmp/a", "force": "yes", "retries": 1})
+	if err == nil {
+		t.Fatal("an invalid flag reached the target")
+	}
+	if rpc.gotPath != nil {
+		t.Error("the call was sent despite failing validation")
+	}
+}
