@@ -138,7 +138,7 @@ secretDefaults:
 - Secrets use the same `Config<T>` constructor injection mechanism as regular typed config
 - If the agent also needs non-secret typed config guidance, use `golem-add-config-rust` alongside this skill
 - Secret paths use **camelCase** — Rust `snake_case` fields are converted automatically (e.g., `api_key` → `apiKey`)
-- The `--type` argument accepts Rust type names: `String`, `i32`, `bool`, `Vec<String>`, `Option<i32>` (JSON-encoded analysed types like `'{"type":"Str"}'` are also supported as a fallback)
+- The `--type` argument accepts Rust type names: `String`, `i32`, `bool`, `Vec<String>`, `Option<i32>` (if parsing as Rust fails, the other supported languages' type syntax is tried)
 - Secrets are stored **per-environment**, not per-agent-instance
 - Missing required secrets cause agent creation/deployment to fail — use `Option<Secret<T>>` for optional secrets
 - Secrets are revealed on `.get()`, and each reveal pins the resolved secret revision for deterministic retries and replay

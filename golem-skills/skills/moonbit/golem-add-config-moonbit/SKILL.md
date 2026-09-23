@@ -110,7 +110,7 @@ secretDefaults:
 ### Secrets via CLI
 
 ```shell
-golem secret create database.password --type string --value "pwd"
+golem secret create database.password --type String --value "pwd"
 golem secret update database.password --value "new-pwd"
 ```
 

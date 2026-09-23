@@ -118,7 +118,7 @@ object MyAgentConfig {
 Then manage it via the CLI:
 
 ```shell
-golem secret create apiKey --type string --value "sk-..."
+golem secret create apiKey --type String --value "sk-..."
 ```
 
 Access in code with `config.value.apiKey.get`.

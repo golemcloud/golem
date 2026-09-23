@@ -96,6 +96,6 @@ secretDefaults:
 - The `Secret[T]` companion provides an implicit `Schema` so `Schema.derived` works on parent case classes
 - Missing required secrets cause agent creation to fail
 - Secret paths use camelCase (matching Scala field names)
-- The `--type` argument accepts Scala type names: `String`, `Int`, `Boolean`, `List[String]`, `Option[Int]` (JSON-encoded analysed types like `'{"type":"Str"}'` are also supported as a fallback)
+- The `--type` argument accepts Scala type names: `String`, `Int`, `Boolean`, `List[String]`, `Option[Int]` (if parsing as Scala fails, the other supported languages' type syntax is tried)
 - Use `secretDefaults` in `golem.yaml` only for development; manage production secrets via CLI
 - If the agent also needs non-secret typed config guidance, use `golem-add-config-scala` alongside this skill

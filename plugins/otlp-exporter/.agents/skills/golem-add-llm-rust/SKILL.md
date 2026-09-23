@@ -160,7 +160,7 @@ pub struct MyAgentConfig {
 Then manage the secret via the CLI:
 
 ```shell
-golem secret create api_key --type String --value "sk-..."
+golem secret create apiKey --type String --value "sk-..."
 ```
 
 ## Usage: LLM Chat Completion
