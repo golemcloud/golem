@@ -858,6 +858,49 @@ fn copy_flat_tree(from: &Path, to: &Path) {
     });
 }
 
+/// Gives the change time of the file as seconds and nanoseconds.
+fn changed_at(path: &Path) -> (i64, i64) {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(path).unwrap();
+    (metadata.ctime(), metadata.ctime_nsec())
+}
+
+/// The longest time that [`wait_past_change_times`] waits.
+const CHANGE_TIME_WAIT: Duration = Duration::from_secs(10);
+
+/// Waits until a file that changes now gets a later change time than each of the files.
+///
+/// The kernel takes the change time from a clock that moves in ticks of some milliseconds, so two
+/// changes within one tick get the same change time. The wait changes a probe file in its own
+/// directory until the change time of the probe is later than the latest change time of the
+/// files. It fails the test when that does not happen within [`CHANGE_TIME_WAIT`].
+fn wait_past_change_times(files: &[PathBuf]) {
+    let latest = files.iter().map(|file| changed_at(file)).max().unwrap();
+    let probe_directory = Scratch::new();
+    let probe = probe_directory.path().join("probe");
+    let started = std::time::Instant::now();
+    let passed = std::iter::repeat_with(|| {
+        std::fs::write(&probe, b"probe").unwrap();
+        changed_at(&probe)
+    })
+    .take_while(|_| started.elapsed() < CHANGE_TIME_WAIT)
+    .find(|probe_time| *probe_time > latest);
+    assert!(
+        passed.is_some(),
+        "the change time of a new change did not pass {latest:?} within {CHANGE_TIME_WAIT:?}"
+    );
+}
+
+/// Gives the path of each entry of the directory, in the order of the names.
+fn entries(directory: &Path) -> Vec<PathBuf> {
+    let mut paths = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
 /// Writes a tree of three files into a new directory, and gives the directory.
 fn three_file_tree() -> Scratch {
     let tree = Scratch::new();
@@ -1102,7 +1145,18 @@ async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_file_and_a_ctime_save_r
     let storage = Arc::new(InMemoryBlobStorage::new());
     let tree = three_file_tree();
     let copy = Scratch::new();
+    wait_past_change_times(&entries(tree.path()));
     copy_flat_tree(tree.path(), copy.path());
+    let same_change_time = entries(tree.path())
+        .iter()
+        .zip(entries(copy.path()))
+        .filter(|(original, copied)| changed_at(original) == changed_at(copied))
+        .map(|(original, _)| original.display().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        same_change_time.is_empty(),
+        "a copy has the change time of its original: {same_change_time:?}"
+    );
     let second_save = async |detection| {
         let repository = repository(&storage, &new_scope());
         repository.save(&name("first"), tree.path()).await.unwrap();
@@ -1140,8 +1194,15 @@ async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mt
     let rewrite = |tree: &Path| {
         let path = tree.join("a.txt");
         let old = modified(&path);
+        let old_change_time = changed_at(&path);
+        wait_past_change_times(std::slice::from_ref(&path));
         std::fs::write(&path, b"A.TXT").unwrap();
         set_modified(&path, old);
+        assert_ne!(
+            changed_at(&path),
+            old_change_time,
+            "the rewrite kept the change time of the file"
+        );
     };
     let changed = async |detection: SaveSettings| {
         let tree = three_file_tree();
