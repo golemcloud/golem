@@ -11,6 +11,7 @@ let instance;
 let context = 0;
 let snapshot;
 let invocation;
+let snapshotLoad;
 const streamBytes = Uint8Array.from([0, 1, 63, 64, 65, 4096, 65537].flatMap(size => Array.from({length: size}, (_, i) => i % 251)));
 let streamOffset = 0, streamWrites = 0, streamFinishes = 0, streamDrops = 0;
 const imports = {};
@@ -42,6 +43,11 @@ for (const entry of WebAssembly.Module.imports(module)) {
     }
     if (entry.name === "[task-return]save") {
       snapshot = {length: args[1], mime: Buffer.from(instance.exports.memory.buffer, args[2], args[3] * 2).toString("utf16le")};
+      return;
+    }
+    if (entry.name === "[task-return]load") {
+      assert.equal(args[0], 1);
+      snapshotLoad = Buffer.from(instance.exports.memory.buffer, args[1], args[2] * 2).toString("utf16le");
       return;
     }
     if (entry.module === "[export]golem:tool/guest@0.1.0" && entry.name === "[task-return]invoke") {
@@ -80,6 +86,43 @@ for (let step = 0; callback !== 0 && step < 100; step++) {
 }
 assert.equal(callback, 0);
 assert.deepEqual(snapshot, {length: 0, mime: "application/octet-stream"});
+const lowerString = value => {
+  const bytes = Buffer.from(value, "utf16le");
+  const ptr = e.cabi_realloc(0, 0, 2, Math.max(1, bytes.length));
+  new Uint8Array(e.memory.buffer, ptr, bytes.length).set(bytes);
+  return ptr;
+};
+// Lengths are code units, not UTF-8 bytes or Unicode scalar counts. Repeated
+// large misses catch a missing post-return free as linear-memory growth.
+const misses = ["", "absent-é-🦀", "missing-".repeat(8192)];
+let missMemory;
+for (let round = 0; round < 40; round++) {
+  for (const name of misses) {
+    for (const target of ["golem:tool/guest@0.1.0#get-tool", "golem:tool/tool-middleware-guest@0.1.0#get-tool-middleware"]) {
+      const ptr = e[target](lowerString(name), name.length);
+      const view = new DataView(e.memory.buffer);
+      assert.equal(view.getUint8(ptr), 1);
+      assert.equal(view.getUint8(ptr + 4), 0);
+      const len = view.getUint32(ptr + 12, true);
+      assert.equal(len, name.length);
+      assert.equal(Buffer.from(e.memory.buffer, view.getUint32(ptr + 8, true), len * 2).toString("utf16le"), name);
+      e[`cabi_post_${target}`](ptr);
+    }
+  }
+  if (round === 9) missMemory = e.memory.buffer.byteLength;
+}
+assert.equal(e.memory.buffer.byteLength, missMemory);
+if (!Number(agents)) {
+  for (const payload of ["", "asymmetric-snapshot-🦀"]) {
+    snapshotLoad = undefined;
+    const mime = "not/a-snapshot";
+    const state = e["[async-lift]golem:api/load-snapshot@1.5.0#load"](
+      lowerString(payload), payload.length * 2, lowerString(mime), mime.length,
+    );
+    assert.equal(state, 0, "absent load must resolve immediately without a callback");
+    assert.equal(snapshotLoad, "Component defines no agents");
+  }
+}
 const invoke = (commandName = "ping") => {
   const alloc = size => {
     const ptr = e.cabi_realloc(0, 0, 8, size);

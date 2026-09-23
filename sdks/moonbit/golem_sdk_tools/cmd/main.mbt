@@ -612,7 +612,14 @@ fn run_reexports(sdk_path : String, target_dir : String) -> Unit raise {
       }
     }
   }
-  let impls = @lib.generate_reexports(fns, "gen")
+  let files = @lib.scan_package({ rel_path: "", dir: target_dir, }).files
+  let has_agents = !@lib.parse_agents(files).is_empty()
+  let has_tools = !@lib.parse_tools(files).is_empty()
+  let has_middlewares = @lib.has_middleware_annotations(files) &&
+    !@lib.parse_tool_middlewares(files).is_empty()
+  let impls = @lib.generate_component_reexports(
+    fns, has_agents, has_tools, has_middlewares,
+  )
   let formatted = @formatter.impls_to_string(impls)
   let output = generated_file_banner + "\n\n" + formatted
   let output_path = "\{target_dir}/golem_reexports.mbt"
@@ -632,7 +639,10 @@ fn run_reexports(sdk_path : String, target_dir : String) -> Unit raise {
     "golemcloud/golem_sdk/\{gen_package}",
     "@gen",
   )
-  let updated = @lib.update_pkg_link(with_gen_import, exports)
+  let with_minimal_import = @lib.ensure_pkg_import(
+    with_gen_import, "golemcloud/golem_sdk/minimal-exports", "@minimalExports",
+  )
+  let updated = @lib.update_pkg_link(with_minimal_import, exports)
   if updated != target_pkg_content {
     @fs.write_string_to_file(target_pkg_path, updated)
     println("Updated \{target_pkg_path} with \{exports.length()} exports")

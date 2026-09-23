@@ -7,7 +7,7 @@ pub fn cabi_realloc(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {
 
 ///|
 pub fn wasmExportAsyncInitialize(p0 : Int, p1 : Int, p2 : Int) -> Int {
-  @gen.wasmExportAsyncInitialize(p0, p1, p2)
+  @minimalExports.callback(p0, p1, p2)
 }
 
 ///|
@@ -16,7 +16,7 @@ pub fn wasmExportAsyncInvokeGolemAgentGuest(
   p1 : Int,
   p2 : Int,
 ) -> Int {
-  @gen.wasmExportAsyncInvokeGolemAgentGuest(p0, p1, p2)
+  @minimalExports.callback(p0, p1, p2)
 }
 
 ///|
@@ -26,37 +26,37 @@ pub fn wasmExportAsyncInvokeGolemToolGuest(p0 : Int, p1 : Int, p2 : Int) -> Int 
 
 ///|
 pub fn wasmExportAsyncInvokeToolMiddleware(p0 : Int, p1 : Int, p2 : Int) -> Int {
-  @gen.wasmExportAsyncInvokeToolMiddleware(p0, p1, p2)
+  @minimalExports.callback(p0, p1, p2)
 }
 
 ///|
 pub fn wasmExportAsyncLoad(p0 : Int, p1 : Int, p2 : Int) -> Int {
-  @gen.wasmExportAsyncLoad(p0, p1, p2)
+  @minimalExports.callback(p0, p1, p2)
 }
 
 ///|
 pub fn wasmExportAsyncSave(p0 : Int, p1 : Int, p2 : Int) -> Int {
-  @gen.wasmExportAsyncSave(p0, p1, p2)
+  @minimalExports.callback(p0, p1, p2)
 }
 
 ///|
 pub fn wasmExportDiscoverAgentTypes() -> Int {
-  @gen.wasmExportDiscoverAgentTypes()
+  @minimalExports.discover()
 }
 
 ///|
 pub fn wasmExportDiscoverAgentTypesPostReturn(p0 : Int) -> Unit {
-  @gen.wasmExportDiscoverAgentTypesPostReturn(p0)
+  @minimalExports.post_discover(p0)
 }
 
 ///|
 pub fn wasmExportDiscoverToolMiddlewares() -> Int {
-  @gen.wasmExportDiscoverToolMiddlewares()
+  @minimalExports.discover()
 }
 
 ///|
 pub fn wasmExportDiscoverToolMiddlewaresPostReturn(p0 : Int) -> Unit {
-  @gen.wasmExportDiscoverToolMiddlewaresPostReturn(p0)
+  @minimalExports.post_discover(p0)
 }
 
 ///|
@@ -71,12 +71,12 @@ pub fn wasmExportDiscoverToolsPostReturn(p0 : Int) -> Unit {
 
 ///|
 pub fn wasmExportGetDefinition() -> Int {
-  @gen.wasmExportGetDefinition()
+  @minimalExports.definition()
 }
 
 ///|
 pub fn wasmExportGetDefinitionPostReturn(p0 : Int) -> Unit {
-  @gen.wasmExportGetDefinitionPostReturn(p0)
+  @minimalExports.post_definition(p0)
 }
 
 ///|
@@ -86,12 +86,12 @@ pub fn wasmExportGetTool(p0 : Int, p1 : Int) -> Int {
 
 ///|
 pub fn wasmExportGetToolMiddleware(p0 : Int, p1 : Int) -> Int {
-  @gen.wasmExportGetToolMiddleware(p0, p1)
+  @minimalExports.get(p0, p1)
 }
 
 ///|
 pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
-  @gen.wasmExportGetToolMiddlewarePostReturn(p0)
+  @minimalExports.post_get(p0)
 }
 
 ///|
@@ -101,12 +101,12 @@ pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
 
 ///|
 pub fn wasmExportInitialize(p0 : Int) -> Int {
-  @gen.wasmExportInitialize(p0)
+  @minimalExports.invoke(p0)
 }
 
 ///|
 pub fn wasmExportInvokeGolemAgentGuest(p0 : Int) -> Int {
-  @gen.wasmExportInvokeGolemAgentGuest(p0)
+  @minimalExports.invoke(p0)
 }
 
 ///|
@@ -116,15 +116,15 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
 
 ///|
 pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
-  @gen.wasmExportInvokeToolMiddleware(p0)
+  @minimalExports.invoke(p0)
 }
 
 ///|
 pub fn wasmExportLoad(p0 : Int, p1 : Int, p2 : Int, p3 : Int) -> Int {
-  @gen.wasmExportLoad(p0, p1, p2, p3)
+  @minimalExports.load(p0, p1, p2, p3)
 }
 
 ///|
 pub fn wasmExportSave() -> Int {
-  @gen.wasmExportSave()
+  @minimalExports.save()
 }

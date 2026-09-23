@@ -98,6 +98,8 @@ pub fn install_tool_exports() {
             ))
         },
     });
+    #[cfg(target_arch = "wasm32")]
+    super::exports::raw::tool_exports::install::<ToolRuntime>();
 }
 
 #[cfg(feature = "export_golem_agentic")]

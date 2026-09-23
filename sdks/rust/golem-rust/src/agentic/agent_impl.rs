@@ -150,6 +150,8 @@ pub fn install_agent_exports() {
         load: |snapshot| Box::pin(AgentRuntime::load(snapshot)),
         save: || Box::pin(AgentRuntime::save()),
     });
+    #[cfg(target_arch = "wasm32")]
+    super::exports::raw::agent_exports::install::<AgentRuntime>();
 }
 
 impl Guest for AgentRuntime {

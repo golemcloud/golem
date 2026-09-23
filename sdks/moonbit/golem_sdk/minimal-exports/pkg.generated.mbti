@@ -1,0 +1,31 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "golemcloud/golem_sdk/minimal-exports"
+
+// Values
+pub fn callback(Int, Int, Int) -> Int
+
+pub fn definition() -> Int
+
+pub fn discover() -> Int
+
+pub fn get(Int, Int) -> Int
+
+pub fn invoke(Int) -> Int
+
+pub fn load(Int, Int, Int, Int) -> Int
+
+pub fn post_definition(Int) -> Unit
+
+pub fn post_discover(Int) -> Unit
+
+pub fn post_get(Int) -> Unit
+
+pub fn save() -> Int
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

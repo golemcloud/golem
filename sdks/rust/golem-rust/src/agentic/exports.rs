@@ -217,6 +217,5 @@ impl middleware::Guest for Component {
     }
 }
 
-crate::golem_agentic::export_golem_agentic!(Component with_types_in crate::golem_agentic);
-crate::save_snapshot::export_save_snapshot!(Component with_types_in crate::save_snapshot);
-crate::load_snapshot::export_load_snapshot!(Component with_types_in crate::load_snapshot);
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod raw;

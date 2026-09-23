@@ -171,6 +171,9 @@ pub fn install_middleware_exports() {
             ))
         },
     });
+    #[cfg(target_arch = "wasm32")]
+    crate::agentic::exports::raw::middleware_exports::install::<crate::agentic::exports::Component>(
+    );
 }
 
 #[cfg(test)]
