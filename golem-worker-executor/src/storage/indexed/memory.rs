@@ -383,6 +383,13 @@ impl IndexedStorage for InMemoryIndexedStorage {
         // them, so nobody can record a new generation between the check and the deletes.
         let record = self.key_epochs.entry_async(composite_key.clone()).await;
         if let Some(expected) = expected_epoch {
+            // Neither a record nor entries: already gone, most often by an earlier attempt of
+            // this same deletion (see the trait).
+            if matches!(record, scc::hash_map::Entry::Vacant(_))
+                && !self.data.contains_async(&composite_key).await
+            {
+                return Ok(());
+            }
             self.check_record(key, expected, &record)?;
         }
         self.data.remove_async(&composite_key).await;

@@ -116,6 +116,9 @@ return redis.error_reply('FENCED ' .. epoch .. ' 0')
 if #ARGV > 0 then
   local stored = redis.call('HMGET', KEYS[2], 'epoch', 'writer')
   if stored[1] == false then
+    if redis.call('EXISTS', KEYS[1]) == 0 then
+      return redis.status_reply('OK')
+    end
     return redis.error_reply('FENCED - 0')
   end
   if stored[1] ~= ARGV[1] then

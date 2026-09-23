@@ -3082,6 +3082,49 @@ async fn a_delete_asserting_an_epoch_on_a_key_without_a_record_deletes_nothing(
 
 #[test]
 #[tracing::instrument]
+async fn a_delete_asserting_an_epoch_on_a_key_that_is_already_gone_is_accepted(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    // Neither a record nor entries: nothing is left for a writer that lost the key to destroy, so
+    // a deletion retried after its own earlier attempt removed the key can finish.
+    let is = is.get_indexed_storage().await;
+    let key = "fence-delete-gone";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(3))
+        .await
+        .unwrap();
+    append_fenced(&is, &ns.ns, key, &[1, 2], Some(ShardEpoch(3)))
+        .await
+        .unwrap();
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(3)))
+        .await
+        .unwrap();
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(3)))
+        .await
+        .expect("a repeated delete of a key that is already gone is accepted");
+    is.delete_with_epoch(
+        "svc",
+        "api",
+        ns.ns.clone(),
+        "fence-delete-never-written",
+        Some(ShardEpoch(3)),
+    )
+    .await
+    .expect("a delete of a key that was never written is accepted");
+
+    assert!(!is.exists("svc", "api", ns.ns.clone(), key).await.unwrap());
+    // Accepting the delete recorded nothing: the old epoch still writes nothing back.
+    assert_fenced(
+        append_fenced(&is, &ns.ns, key, &[3], Some(ShardEpoch(3))).await,
+        3,
+        None,
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn an_unfenced_delete_removes_the_key_and_its_record(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,

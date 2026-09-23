@@ -520,6 +520,25 @@ impl IndexedStorage for PostgresIndexedStorage {
                                 .bind(key.clone()),
                             )
                             .await?;
+                        // Neither a record nor entries: the key is already gone, most often taken
+                        // by an earlier attempt of this same deletion whose later steps failed, and
+                        // a writer that lost the key has nothing here to destroy. Refusing would
+                        // leave that deletion unable to finish.
+                        if stored.is_none() {
+                            let (has_entries,): (bool,) = tx
+                                .fetch_one_as(
+                                    sqlx::query_as(
+                                        "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN ($1, $2) AND key = $3);",
+                                    )
+                                    .bind(format!("{namespace}-present"))
+                                    .bind(namespace.clone())
+                                    .bind(key.clone()),
+                                )
+                                .await?;
+                            if !has_entries {
+                                return Ok(());
+                            }
+                        }
                         FencedTxError::check_record(
                             &key,
                             expected,

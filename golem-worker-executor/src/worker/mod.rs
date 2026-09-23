@@ -3076,11 +3076,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             self.before_deletion_stage(WorkerDeletionStage::DurableStateRemoved)
                 .await?;
-            // A shard that left while the deletion ran took the agent with it, and a given-up
-            // agent writes nothing more - removing its state included.
-            if self.is_given_up() {
-                return Err(self.leave_deletion_to_new_owner(None).await);
-            }
             let mut lifecycle = self
                 .oplog_service()
                 .lock_lifecycle(&self.owned_agent_id.agent_id)
@@ -3098,6 +3093,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await;
                 result.map_err(WorkerExecutorError::runtime)?;
             }
+            // Attempted even when the agent was given up while the deletion ran: a revoke alone
+            // hands the shard to nobody, and the fenced delete below is what tells the two cases
+            // apart. It succeeds while the key is still this executor's, and is refused once
+            // another executor has taken it.
             let removed = self
                 .worker_service()
                 .remove(
@@ -3109,7 +3108,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if let Err(error) = removed {
                 drop(lifecycle);
                 return Err(match shard_lost_give_up_reason(&error, None) {
-                    Some(reason) => self.leave_deletion_to_new_owner(Some(reason)).await,
+                    Some(reason) => self.leave_deletion_to_new_owner(reason).await,
                     None => error,
                 });
             }
@@ -3140,11 +3139,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// sends the delete to the new owner.
     async fn leave_deletion_to_new_owner(
         self: &Arc<Self>,
-        reason: Option<GiveUpReason>,
+        reason: GiveUpReason,
     ) -> WorkerExecutorError {
-        if let Some(reason) = reason {
-            self.mark_given_up(reason);
-        }
+        self.mark_given_up(reason);
         self.active_agents().remove_worker(self, true).await;
         self.give_up_error()
     }

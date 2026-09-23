@@ -8166,6 +8166,88 @@ async fn a_deletion_that_outlived_the_shard_leaves_the_agent_to_its_new_owner(
     Ok(())
 }
 
+/// A deletion removes the agent's oplog first and its cached status after. When the second step
+/// fails, the retry has to finish the job: the oplog delete it repeats asserts this executor's
+/// epoch against a key whose record the first attempt already removed, and that has to count as
+/// deleted rather than as a key another executor took over.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn a_deletion_retried_after_it_removed_the_oplog_finishes_the_cleanup(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+    use golem_worker_executor::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let name = agent_id!("Clocks", "deletion-retried-after-the-oplog-went");
+    let worker_id = executor.start_agent(&component.id, name.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &name, "sleep_for", data_value!(0.0f64))
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+
+    // Armed once the deletion reaches the durable state, so the failure lands between the oplog
+    // delete and the removal of the cached status rather than in an earlier stage.
+    let hook = Arc::new(DeletionStageHook::new(
+        owned.clone(),
+        Some(WorkerDeletionStage::DurableStateRemoved),
+        None,
+    ));
+    executor.set_worker_deletion_hook(hook.clone());
+    let deleting = tokio::spawn({
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        async move { executor.delete_worker(&worker_id).await }.in_current_span()
+    });
+    tokio::time::timeout(Duration::from_secs(10), hook.wait_until_gated())
+        .await
+        .map_err(|_| anyhow!("the deletion never reached the removal of the durable state"))?;
+    faults.fail(
+        "remove",
+        1,
+        KeyValueStorageError::Other("injected: key-value storage unavailable".to_string()),
+    );
+    hook.release();
+
+    let first = tokio::time::timeout(Duration::from_secs(30), deleting).await??;
+    assert!(
+        first.is_err(),
+        "the injected failure has to fail the first attempt"
+    );
+    assert_eq!(
+        agent_oplog_length(deps, &context, &owned).await?,
+        0,
+        "the first attempt failed after it had removed the oplog"
+    );
+
+    executor.delete_worker(&worker_id).await?;
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    Ok(())
+}
+
 /// A stop can be the first write to find that the shard has a new owner. Its final commit is
 /// then refused, and the waiters of the invocations it cuts short have to be told to retry on the
 /// new owner - not handed the stop's own error, which is cached as a failure the new owner's run

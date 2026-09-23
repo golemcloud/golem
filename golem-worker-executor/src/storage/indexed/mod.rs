@@ -544,6 +544,9 @@ pub trait IndexedStorage: Debug + Sync {
     /// otherwise nothing is deleted and the call is refused with [`IndexedStorageError::Fenced`],
     /// on exactly the terms an append asserting that epoch would be - an absent record refuses
     /// too. A writer that has lost the key can therefore no more delete it than write to it.
+    /// The one exception is a key with neither a record nor entries: it is already gone, so the
+    /// call succeeds without deleting anything. That lets a deletion retried after an earlier
+    /// attempt removed the key, then failed a later step, run to the end.
     /// Without an epoch the delete is unconditional and idempotent.
     ///
     /// Both go in one step so that no writer can find the record gone while the entries are still
