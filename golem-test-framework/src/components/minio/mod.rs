@@ -12,7 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod grpc_client;
-pub mod registry;
+use async_trait::async_trait;
 
-test_r::enable!();
+mod docker;
+
+pub use docker::DockerMinio;
+
+#[async_trait]
+pub trait Minio: Send + Sync {
+    fn endpoint(&self) -> String;
+    fn access_key_id(&self) -> &str;
+    fn secret_access_key(&self) -> &str;
+    async fn kill(&self);
+}

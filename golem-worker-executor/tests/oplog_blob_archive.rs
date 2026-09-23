@@ -24,15 +24,12 @@ use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
 use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
 use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use golem_service_base::storage::blob::{BlobStorage, s3};
+use golem_test_framework::components::minio::{DockerMinio, Minio};
 use golem_worker_executor::services::oplog::{BlobOplogArchiveService, OplogArchiveService};
 use pretty_assertions::assert_eq;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::time::Duration;
 use test_r::{define_matrix_dimension, test, test_dep};
-use testcontainers::core::{IntoContainerPort, WaitFor};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use tokio::sync::Mutex;
 
 #[async_trait]
@@ -60,11 +57,8 @@ fn in_memory() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(InMemoryTest)
 }
 
-/// Spins up a fresh MinIO container per `get_blob_storage` call and keeps it
-/// alive for the lifetime of this (per-worker) dependency, so the returned S3
-/// blob storage remains usable for the whole test.
 struct S3Test {
-    containers: Mutex<Vec<ContainerAsync<GenericImage>>>,
+    minio_instances: Mutex<Vec<DockerMinio>>,
 }
 
 impl Debug for S3Test {
@@ -76,51 +70,40 @@ impl Debug for S3Test {
 #[async_trait]
 impl GetBlobStorage for S3Test {
     async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
-        let container = tryhard::retry_fn(|| {
-            GenericImage::new("minio/minio", "RELEASE.2025-01-20T14-49-07Z")
-                .with_exposed_port(9000.tcp())
-                .with_wait_for(WaitFor::message_on_stderr("API:"))
-                .with_env_var("MINIO_CONSOLE_ADDRESS", ":9001")
-                .with_cmd(["server", "/data"])
-                .start()
-        })
-        .retries(5)
-        .exponential_backoff(Duration::from_millis(10))
-        .max_delay(Duration::from_secs(10))
-        .await
-        .expect("Failed to start MinIO");
-        let host_port = container
-            .get_host_port_ipv4(9000)
-            .await
-            .expect("Failed to get host port");
+        let minio = DockerMinio::new().await;
 
         let config = S3BlobStorageConfig {
             retries: Default::default(),
             region: "us-east-1".to_string(),
             object_prefix: String::new(),
-            aws_endpoint_url: Some(format!("http://127.0.0.1:{host_port}")),
+            aws_endpoint_url: Some(minio.endpoint()),
             aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
-                "minioadmin",
-                "minioadmin",
+                minio.access_key_id(),
+                minio.secret_access_key(),
                 "test",
             )),
             ..std::default::Default::default()
         };
-        create_buckets(host_port, &config).await;
+        create_buckets(&minio, &config).await;
         let storage = s3::S3BlobStorage::new(config).await;
 
-        self.containers.lock().await.push(container);
+        self.minio_instances.lock().await.push(minio);
         Arc::new(storage)
     }
 }
 
-async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
-    let endpoint_uri = format!("http://127.0.0.1:{host_port}");
+async fn create_buckets(minio: &dyn Minio, config: &S3BlobStorageConfig) {
     let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
-    let creds = Credentials::new("minioadmin", "minioadmin", None, None, "test");
+    let creds = Credentials::new(
+        minio.access_key_id(),
+        minio.secret_access_key(),
+        None,
+        None,
+        "test",
+    );
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
         .region(region_provider)
-        .endpoint_url(endpoint_uri)
+        .endpoint_url(minio.endpoint())
         .credentials_provider(creds)
         .load()
         .await;
@@ -134,7 +117,7 @@ async fn create_buckets(host_port: u16, config: &S3BlobStorageConfig) {
 #[test_dep(scope = PerWorker, tagged_as = "s3")]
 fn s3() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(S3Test {
-        containers: Mutex::new(Vec::new()),
+        minio_instances: Mutex::new(Vec::new()),
     })
 }
 
