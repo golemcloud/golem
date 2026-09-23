@@ -604,7 +604,7 @@ impl DurableStreamStore {
                     });
                     result.push(DurableStreamOplogRecord::Registered(
                         entity_parent_start_index,
-                        record,
+                        Box::new(record),
                     ));
                 }
                 let prepared = prepared_without_registrations.unwrap_or_else(|| {

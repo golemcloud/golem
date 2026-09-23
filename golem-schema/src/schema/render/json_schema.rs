@@ -238,14 +238,16 @@ fn collect_union_branch_defs(
                 if emitted.insert(key.clone()) {
                     let mut body = render_type(graph, &branch.body, false, table, config);
                     attach_metadata(&mut body, &branch.metadata);
-                    if let Some(obj) = body.as_object_mut() {
-                        // Constrain the branch schema further with the
-                        // discriminator. For record-shaped rules this adds
-                        // an extra constraint on the discriminator field;
-                        // for string rules it adds a `pattern`/`const`.
-                        apply_discriminator_constraint(obj, &branch.discriminator);
-                    }
-                    defs.insert(key, body);
+                    defs.insert(
+                        key,
+                        obj_inline([(
+                            "allOf",
+                            Value::Array(vec![
+                                body,
+                                discriminator_constraint(&branch.discriminator),
+                            ]),
+                        )]),
+                    );
                 }
                 collect_union_branch_defs(graph, &branch.body, defs, emitted, table, config);
             }
@@ -559,38 +561,37 @@ fn sanitise_to_upper_camel(s: &str) -> String {
     }
 }
 
-fn apply_discriminator_constraint(obj: &mut Map<String, Value>, rule: &DiscriminatorRule) {
+fn discriminator_constraint(rule: &DiscriminatorRule) -> Value {
+    let mut obj = Map::new();
     match rule {
         DiscriminatorRule::Prefix { prefix } => {
-            obj.entry("pattern")
-                .or_insert(Value::String(format!("^{}", regex_escape(prefix))));
+            obj.insert(
+                "pattern".to_string(),
+                Value::String(format!("^{}", regex_escape(prefix))),
+            );
         }
         DiscriminatorRule::Suffix { suffix } => {
-            obj.entry("pattern")
-                .or_insert(Value::String(format!("{}$", regex_escape(suffix))));
+            obj.insert(
+                "pattern".to_string(),
+                Value::String(format!("{}$", regex_escape(suffix))),
+            );
         }
         DiscriminatorRule::Contains { substring } => {
-            obj.entry("pattern")
-                .or_insert(Value::String(regex_escape(substring)));
+            obj.insert(
+                "pattern".to_string(),
+                Value::String(regex_escape(substring)),
+            );
         }
         DiscriminatorRule::Regex { regex } => {
-            obj.entry("pattern").or_insert(Value::String(regex.clone()));
+            obj.insert("pattern".to_string(), Value::String(regex.clone()));
         }
         DiscriminatorRule::FieldEquals(disc) => {
             // Constrain the field's value with `const` if a literal is set;
             // otherwise just require the field to be present.
-            let mut required = obj
-                .get("required")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            if !required
-                .iter()
-                .any(|v| v.as_str() == Some(disc.field_name.as_str()))
-            {
-                required.push(Value::String(disc.field_name.clone()));
-            }
-            obj.insert("required".to_string(), Value::Array(required));
+            obj.insert(
+                "required".to_string(),
+                Value::Array(vec![Value::String(disc.field_name.clone())]),
+            );
             if let Some(lit) = &disc.literal {
                 let props = obj
                     .entry("properties")
@@ -601,9 +602,7 @@ fn apply_discriminator_constraint(obj: &mut Map<String, Value>, rule: &Discrimin
                     .entry(disc.field_name.clone())
                     .or_insert_with(|| obj_inline([("type", Value::String("string".to_string()))]));
                 if let Some(field_obj) = field.as_object_mut() {
-                    field_obj
-                        .entry("const")
-                        .or_insert(Value::String(lit.clone()));
+                    field_obj.insert("const".to_string(), Value::String(lit.clone()));
                 }
             }
         }
@@ -616,6 +615,7 @@ fn apply_discriminator_constraint(obj: &mut Map<String, Value>, rule: &Discrimin
             obj.insert("not".to_string(), not);
         }
     }
+    Value::Object(obj)
 }
 
 pub(super) fn render_type(
@@ -632,7 +632,7 @@ pub(super) fn render_type(
         SchemaType::S8 { .. } => integer_schema(i8::MIN as i64, i8::MAX as i64),
         SchemaType::S16 { .. } => integer_schema(i16::MIN as i64, i16::MAX as i64),
         SchemaType::S32 { .. } => integer_schema(i32::MIN as i64, i32::MAX as i64),
-        SchemaType::S64 { .. } => integer_schema(i64::MIN, i64::MAX),
+        SchemaType::S64 { .. } => signed_64_schema(),
         SchemaType::U8 { .. } => integer_schema(0, u8::MAX as i64),
         SchemaType::U16 { .. } => integer_schema(0, u16::MAX as i64),
         SchemaType::U32 { .. } => integer_schema(0, u32::MAX as i64),
@@ -777,8 +777,17 @@ pub(super) fn render_type(
             ("format", Value::String("date-time".to_string())),
         ]),
         SchemaType::Duration { .. } => obj([
-            ("type", Value::String("string".to_string())),
-            ("format", Value::String("duration".to_string())),
+            ("type", Value::String("object".to_string())),
+            ("properties", obj([("nanoseconds", signed_64_schema())])),
+            (
+                "required",
+                Value::Array(vec![Value::String("nanoseconds".to_string())]),
+            ),
+            ("additionalProperties", Value::Bool(false)),
+            (
+                "title",
+                Value::String("Duration in nanoseconds".to_string()),
+            ),
         ]),
         SchemaType::Quantity { spec, .. } => Value::Object(quantity_schema(spec)),
 
@@ -868,9 +877,24 @@ fn integer_schema(min: i64, max: i64) -> Value {
 
 fn unsigned_64_schema() -> Value {
     obj([
-        ("type", Value::String("integer".to_string())),
-        ("minimum", Value::Number(Number::from(0u64))),
-        ("maximum", Value::Number(Number::from(u64::MAX))),
+        ("type", Value::String("string".to_string())),
+        ("format", Value::String("uint64".to_string())),
+        ("pattern", Value::String("^(?:0|[1-9][0-9]*)$".to_string())),
+        ("x-golem-minimum", Value::String("0".to_string())),
+        ("x-golem-maximum", Value::String(u64::MAX.to_string())),
+    ])
+}
+
+fn signed_64_schema() -> Value {
+    obj([
+        ("type", Value::String("string".to_string())),
+        ("format", Value::String("int64".to_string())),
+        (
+            "pattern",
+            Value::String("^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$".to_string()),
+        ),
+        ("x-golem-minimum", Value::String(i64::MIN.to_string())),
+        ("x-golem-maximum", Value::String(i64::MAX.to_string())),
     ])
 }
 
@@ -1099,10 +1123,7 @@ fn url_schema(restrictions: &UrlRestrictions) -> Map<String, Value> {
 
 fn quantity_schema(spec: &QuantitySpec) -> Map<String, Value> {
     let mut props = Map::new();
-    props.insert(
-        "mantissa".to_string(),
-        obj([("type", Value::String("integer".to_string()))]),
-    );
+    props.insert("mantissa".to_string(), signed_64_schema());
     props.insert(
         "scale".to_string(),
         obj([("type", Value::String("integer".to_string()))]),

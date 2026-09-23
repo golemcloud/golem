@@ -106,6 +106,12 @@ Tool.toolDefinition("effect-cross-streaming")
       }),
   })
 
+Tool.toolDefinition("effect-optional-reflection")
+  .body((body) => body.option("maybe", Schema.String).returns(Schema.String))
+  .implement({
+    effectOptionalReflection: ({ maybe }) => Effect.succeed(maybe ?? "omitted"),
+  })
+
 defineAgent({
   name: "EffectFixture",
   id: { tenant: Schema.String },

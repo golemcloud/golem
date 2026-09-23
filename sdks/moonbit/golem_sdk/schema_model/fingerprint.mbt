@@ -117,6 +117,30 @@ fn reachable_definitions(
 }
 
 ///|
+/// Project a graph to the named definitions reachable from its root while
+/// preserving their source order. This is used when a root is selected from a
+/// larger shared descriptor graph and exact graph identity is part of a wire
+/// protocol.
+#doc(hidden)
+pub fn schema_graph_closure(graph : SchemaGraph) -> SchemaGraph {
+  let wanted : Map[String, Unit] = Map([])
+  let expanded : Map[String, Unit] = Map([])
+  collect_refs(graph.root, wanted)
+  let mut changed = true
+  while changed {
+    changed = false
+    for def in graph.defs {
+      if wanted.contains(def.id) && !expanded.contains(def.id) {
+        expanded[def.id] = ()
+        collect_refs(def.body, wanted)
+        changed = true
+      }
+    }
+  }
+  { defs: graph.defs.filter(def => wanted.contains(def.id)), root: graph.root, }
+}
+
+///|
 fn collect_refs(ty : SchemaType, refs : Map[String, Unit]) -> Unit {
   match ty.body {
     Ref(id) => refs[id] = ()

@@ -73,6 +73,7 @@ use crate::model::oplog::public_oplog_entry::{
     StreamCancelParams, StreamEndParams, StreamItemsParams, StreamRegisteredParams,
     StreamSessionParams, SuccessfulUpdateParams, SuspendParams,
 };
+use crate::model::oplog::raw_types::CreateParameters;
 use crate::model::oplog::{
     AgentTerminatedByQuotaError, DurableFunctionType, EphemeralCannotSuspendError,
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, HostStreamKind, OplogEntry,
@@ -334,7 +335,9 @@ fn raw_queued_card_event_from_proto(
             Ok(QueuedCardEvent::TransferReceived(
                 QueuedCardEventTransferReceived {
                     transfer_id: event.transfer_id.ok_or("Missing transfer_id")?.into(),
-                    source_card_id: event.source_card_id.map(|card_id| CardId(card_id.into())),
+                    source_card_id: CardId(
+                        event.source_card_id.ok_or("Missing source_card_id")?.into(),
+                    ),
                     card_id,
                     card: Some(card),
                 },
@@ -417,7 +420,7 @@ fn raw_queued_card_event_to_proto(
                 transfer_id: Some(event.transfer_id.into()),
                 card_id: Some(event.card_id.0.into()),
                 card: crate::serialization::serialize(&card)?,
-                source_card_id: event.source_card_id.map(|card_id| card_id.0.into()),
+                source_card_id: Some(event.source_card_id.0.into()),
             })
         }
     };
@@ -835,10 +838,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .invocation
                         .ok_or("Missing invocation field")?
                         .try_into()?,
-                    wallet_pin: agent_invocation_started
-                        .wallet_pin
-                        .map(public_invocation_wallet_pin_from_proto)
-                        .transpose()?,
+                    wallet_pin: public_invocation_wallet_pin_from_proto(
+                        agent_invocation_started
+                            .wallet_pin
+                            .ok_or("Missing wallet_pin field")?,
+                    )?,
                 }),
             ),
             oplog_entry::Entry::AgentInvocationFinished(agent_invocation_finished) => Ok(
@@ -1272,7 +1276,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                         .transfer_id
                         .ok_or("Missing transfer_id field")?
                         .into(),
-                    source_card_id: params.source_card_id.map(|id| CardId(id.into())),
+                    source_card_id: CardId(
+                        params
+                            .source_card_id
+                            .ok_or("Missing source_card_id field")?
+                            .into(),
+                    ),
                     installed_card_id: CardId(
                         params
                             .installed_card_id
@@ -1467,9 +1476,9 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::AgentInvocationStartedParameters {
                             timestamp: Some(agent_invocation_started.timestamp.into()),
                             invocation: Some(agent_invocation_started.invocation.try_into()?),
-                            wallet_pin: agent_invocation_started
-                                .wallet_pin
-                                .map(public_invocation_wallet_pin_to_proto),
+                            wallet_pin: Some(public_invocation_wallet_pin_to_proto(
+                                agent_invocation_started.wallet_pin,
+                            )),
                         },
                     )),
                 }
@@ -1987,7 +1996,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         golem_api_grpc::proto::golem::worker::CardTransferredParameters {
                             timestamp: Some(params.timestamp.into()),
                             transfer_id: Some(params.transfer_id.into()),
-                            source_card_id: params.source_card_id.map(|id| id.0.into()),
+                            source_card_id: Some(params.source_card_id.0.into()),
                             installed_card_id: Some(params.installed_card_id.0.into()),
                             target_holder: Some(card_holder_to_proto(params.target_holder)),
                             target_wallet_generation: params.target_wallet_generation,
@@ -3311,28 +3320,30 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
         match value {
             PublicOplogEntry::Create(create) => Ok(OplogEntry::Create {
                 timestamp: create.timestamp,
-                agent_id: create.agent_id,
-                owner_kind: create.owner_kind,
-                agent_mode: create.agent_mode,
-                component_revision: create.component_revision,
-                env: create.env.into_iter().collect(),
-                environment_id: create.environment_id,
-                created_by: create.created_by,
-                local_agent_config: create
-                    .local_agent_config
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<Result<Vec<_>, _>>()?,
-                parent: create.parent,
-                component_size: create.component_size,
-                initial_total_linear_memory_size: create.initial_total_linear_memory_size,
-                initial_active_plugins: create
-                    .initial_active_plugins
-                    .into_iter()
-                    .map(|p| p.environment_plugin_grant_id)
-                    .collect(),
-                original_phantom_id: create.original_phantom_id,
-                instance_id: create.instance_id
+                parameters: Box::new(CreateParameters {
+                    agent_id: create.agent_id,
+                    owner_kind: create.owner_kind,
+                    agent_mode: create.agent_mode,
+                    component_revision: create.component_revision,
+                    env: create.env.into_iter().collect(),
+                    environment_id: create.environment_id,
+                    created_by: create.created_by,
+                    local_agent_config: create
+                        .local_agent_config
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<Vec<_>, _>>()?,
+                    parent: create.parent,
+                    component_size: create.component_size,
+                    initial_total_linear_memory_size: create.initial_total_linear_memory_size,
+                    initial_active_plugins: create
+                        .initial_active_plugins
+                        .into_iter()
+                        .map(|p| p.environment_plugin_grant_id)
+                        .collect(),
+                    original_phantom_id: create.original_phantom_id,
+                    instance_id: create.instance_id,
+                }),
             }),
             PublicOplogEntry::Start(start) => {
                 let durable_function_type = match start.durable_function_type {
@@ -3661,7 +3672,7 @@ impl TryFrom<PublicOplogEntry> for OplogEntry {
             PublicOplogEntry::SetRetryPolicy(p) => Ok(OplogEntry::SetRetryPolicy {
                 timestamp: p.timestamp,
                 entity_parent_start_index: None,
-                policy: p.policy.into(),
+                policy: Box::new(p.policy.into()),
             }),
             PublicOplogEntry::RemoveRetryPolicy(p) => Ok(OplogEntry::RemoveRetryPolicy {
                 timestamp: p.timestamp,
@@ -4164,48 +4175,50 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
         let proto_ts: prost_types::Timestamp = timestamp.into();
 
         let entry = match value {
-            OplogEntry::Create {
-                agent_id,
-                owner_kind,
-                agent_mode,
-                component_revision,
-                env,
-                environment_id,
-                created_by,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins,
-                local_agent_config,
-                original_phantom_id,
-                instance_id,
-                ..
-            } => Entry::Create(RawCreateParameters {
-                agent_id: Some(agent_id.into()),
-                owner_kind: owner_kind.into(),
-                agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
-                    as i32,
-                component_revision: component_revision.into(),
-                env: env
-                    .into_iter()
-                    .map(|(k, v)| RawEnvVar { key: k, value: v })
-                    .collect(),
-                environment_id: Some(environment_id.into()),
-                created_by: Some(created_by.into()),
-                parent: parent.map(Into::into),
-                component_size,
-                initial_total_linear_memory_size,
-                initial_active_plugins: initial_active_plugins
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                local_agent_config: local_agent_config
-                    .into_iter()
-                    .map(|e| crate::serialization::serialize(&e))
-                    .collect::<Result<Vec<_>, _>>()?,
-                original_phantom_id: original_phantom_id.map(Into::into),
-                instance_id: Some(instance_id.into()),
-            }),
+            OplogEntry::Create { parameters, .. } => {
+                let CreateParameters {
+                    agent_id,
+                    owner_kind,
+                    agent_mode,
+                    component_revision,
+                    env,
+                    environment_id,
+                    created_by,
+                    parent,
+                    component_size,
+                    initial_total_linear_memory_size,
+                    initial_active_plugins,
+                    local_agent_config,
+                    original_phantom_id,
+                    instance_id,
+                } = *parameters;
+                Entry::Create(RawCreateParameters {
+                    agent_id: Some(agent_id.into()),
+                    owner_kind: owner_kind.into(),
+                    agent_mode: golem_api_grpc::proto::golem::component::AgentMode::from(agent_mode)
+                        as i32,
+                    component_revision: component_revision.into(),
+                    env: env
+                        .into_iter()
+                        .map(|(k, v)| RawEnvVar { key: k, value: v })
+                        .collect(),
+                    environment_id: Some(environment_id.into()),
+                    created_by: Some(created_by.into()),
+                    parent: parent.map(Into::into),
+                    component_size,
+                    initial_total_linear_memory_size,
+                    initial_active_plugins: initial_active_plugins
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                    local_agent_config: local_agent_config
+                        .into_iter()
+                        .map(|e| crate::serialization::serialize(&e))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    original_phantom_id: original_phantom_id.map(Into::into),
+                    instance_id: Some(instance_id.into()),
+                })
+            }
             OplogEntry::Start {
                 parent_start_index,
                 function_name,
@@ -4267,7 +4280,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .into_iter()
                     .map(span_data_to_proto)
                     .collect(),
-                wallet_pin: wallet_pin.map(invocation_wallet_pin_to_proto),
+                wallet_pin: Some(invocation_wallet_pin_to_proto(*wallet_pin)),
             }),
             OplogEntry::AgentInvocationFinished {
                 result,
@@ -4524,7 +4537,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
             }),
             OplogEntry::SetRetryPolicy { policy, .. } => {
                 Entry::SetRetryPolicy(RawSetRetryPolicyParameters {
-                    policy: Some(policy.into()),
+                    policy: Some((*policy).into()),
                 })
             }
             OplogEntry::RemoveRetryPolicy { name, .. } => {
@@ -4546,7 +4559,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 timestamp, event, ..
             } => Entry::CardEventQueued(RawCardEventQueuedParameters {
                 timestamp: Some(timestamp.into()),
-                event: Some(raw_queued_card_event_to_proto(event)?),
+                event: Some(raw_queued_card_event_to_proto(*event)?),
             }),
             OplogEntry::CardInstalled {
                 timestamp,
@@ -4594,7 +4607,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 timestamp: Some(timestamp.into()),
                 transfer_id: Some(transfer_id.into()),
                 card_id: Some(card_id.0.into()),
-                source_holder: source_holder.map(card_holder_to_proto),
+                source_holder: Some(card_holder_to_proto(source_holder)),
                 target_holder: Some(card_holder_to_proto(target_holder)),
                 source_wallet_generation,
             }),
@@ -4616,7 +4629,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                 Entry::CardTransferred(RawCardTransferredParameters {
                     timestamp: Some(timestamp.into()),
                     transfer_id: Some(transfer_id.into()),
-                    source_card_id: source_card_id.map(|id| id.0.into()),
+                    source_card_id: Some(source_card_id.0.into()),
                     installed_card_id: Some(installed_card_id.0.into()),
                     target_holder: Some(card_holder_to_proto(target_holder)),
                     card: crate::serialization::serialize(&card)?,
@@ -4636,7 +4649,6 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     .into_iter()
                     .map(card_holder_to_proto)
                     .collect(),
-                generation_bumps: Vec::new(),
                 local_wallet_generation,
             }),
             OplogEntry::CardTransferConfirmed {
@@ -4762,20 +4774,22 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
 
                 Ok(OplogEntry::Create {
                     timestamp,
-                    agent_id,
-                    owner_kind,
-                    agent_mode,
-                    component_revision,
-                    env,
-                    environment_id,
-                    created_by,
-                    parent,
-                    component_size: p.component_size,
-                    initial_total_linear_memory_size: p.initial_total_linear_memory_size,
-                    initial_active_plugins,
-                    local_agent_config,
-                    original_phantom_id,
-                    instance_id,
+                    parameters: Box::new(CreateParameters {
+                        agent_id,
+                        owner_kind,
+                        agent_mode,
+                        component_revision,
+                        env,
+                        environment_id,
+                        created_by,
+                        parent,
+                        component_size: p.component_size,
+                        initial_total_linear_memory_size: p.initial_total_linear_memory_size,
+                        initial_active_plugins,
+                        local_agent_config,
+                        original_phantom_id,
+                        instance_id,
+                    }),
                 })
             }
             Entry::Start(p) => {
@@ -4843,10 +4857,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     trace_id,
                     trace_states: p.trace_states,
                     invocation_context,
-                    wallet_pin: p
-                        .wallet_pin
-                        .map(invocation_wallet_pin_from_proto)
-                        .transpose()?,
+                    wallet_pin: Box::new(invocation_wallet_pin_from_proto(
+                        p.wallet_pin.ok_or("Missing wallet_pin")?,
+                    )?),
                 })
             }
             Entry::AgentInvocationFinished(p) => {
@@ -5145,7 +5158,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 Ok(OplogEntry::SetRetryPolicy {
                     timestamp,
                     entity_parent_start_index,
-                    policy,
+                    policy: Box::new(policy),
                 })
             }
             Entry::RemoveRetryPolicy(p) => Ok(OplogEntry::RemoveRetryPolicy {
@@ -5163,13 +5176,15 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             Entry::CardEventQueued(p) => Ok(OplogEntry::CardEventQueued {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
                 entity_parent_start_index,
-                event: raw_queued_card_event_from_proto(p.event.ok_or("Missing event")?)?,
+                event: Box::new(raw_queued_card_event_from_proto(
+                    p.event.ok_or("Missing event")?,
+                )?),
             }),
             Entry::CardInstalled(p) => Ok(OplogEntry::CardInstalled {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
                 entity_parent_start_index,
                 queued_event_index: p.queued_event_index.map(OplogIndex::from_u64),
-                card: deserialize_stored_card(&p.card, "installed card")?,
+                card: Box::new(deserialize_stored_card(&p.card, "installed card")?),
                 wallet_generation: p.wallet_generation,
             }),
             Entry::CardInstallFailed(p) => Ok(OplogEntry::CardInstallFailed {
@@ -5185,7 +5200,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
             Entry::CardDerived(p) => Ok(OplogEntry::CardDerived {
                 timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
                 entity_parent_start_index,
-                card: deserialize_stored_card(&p.card, "derived card")?,
+                card: Box::new(deserialize_stored_card(&p.card, "derived card")?),
                 wallet_generation: p.wallet_generation,
             }),
             Entry::CardTransferStarted(p) => Ok(OplogEntry::CardTransferStarted {
@@ -5193,7 +5208,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                 entity_parent_start_index,
                 transfer_id: p.transfer_id.ok_or("Missing transfer_id")?.into(),
                 card_id: CardId(p.card_id.ok_or("Missing card_id")?.into()),
-                source_holder: p.source_holder.map(card_holder_from_proto).transpose()?,
+                source_holder: card_holder_from_proto(
+                    p.source_holder.ok_or("Missing source_holder")?,
+                )?,
                 target_holder: card_holder_from_proto(
                     p.target_holder.ok_or("Missing target_holder")?,
                 )?,
@@ -5215,12 +5232,14 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     timestamp: p.timestamp.map(Into::into).unwrap_or(timestamp),
                     entity_parent_start_index,
                     transfer_id: p.transfer_id.ok_or("Missing transfer_id")?.into(),
-                    source_card_id: p.source_card_id.map(|id| CardId(id.into())),
+                    source_card_id: CardId(
+                        p.source_card_id.ok_or("Missing source_card_id")?.into(),
+                    ),
                     installed_card_id,
                     target_holder: card_holder_from_proto(
                         p.target_holder.ok_or("Missing target_holder")?,
                     )?,
-                    card,
+                    card: Box::new(card),
                     target_wallet_generation: p.target_wallet_generation,
                 })
             }
@@ -5584,7 +5603,7 @@ mod queued_card_event_proto_tests {
         let source_card_id = CardId::new();
         let event = QueuedCardEvent::TransferReceived(QueuedCardEventTransferReceived {
             transfer_id: Uuid::new_v4(),
-            source_card_id: Some(source_card_id),
+            source_card_id,
             card_id,
             card: Some(stored_card(card_id)),
         });
@@ -5600,7 +5619,7 @@ mod queued_card_event_proto_tests {
         let card_id = CardId::new();
         let event = QueuedCardEvent::TransferReceived(QueuedCardEventTransferReceived {
             transfer_id: Uuid::new_v4(),
-            source_card_id: Some(CardId::new()),
+            source_card_id: CardId::new(),
             card_id,
             card: Some(stored_card(card_id)),
         });
