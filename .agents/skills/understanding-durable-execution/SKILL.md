@@ -213,7 +213,11 @@ retries by reloading persisted identity and pending initialization. Local succes
 resolved data and `Unloaded` state. Remote topology recovery and dependent finished-session recovery
 run together in the post-publication reconciler, preserving the deletion gate: attachment RPCs can
 acquire mutually referring cold workers on different executors, so awaiting them before publication
-would create a cycle. Local readiness does not authorize a merely prepared stream attachment.
+would create a cycle. Local readiness does not authorize a merely prepared stream attachment. The
+reconciler folds only through the committed `last_known_status.oplog_idx`. Once its topology cache
+has no dirty sessions and the producer has no active attachments, it parks on committed stream-state
+notifications instead of polling the oplog; active attachments retain the configured renewal
+deadline, and failed recovery retains periodic retry.
 Tests: `tests/worker_initialization.rs` exercises shared failure, real actor completion, cancellation,
 existing-only acquisition, and reciprocal cold topologies.
 
@@ -591,12 +595,14 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
   The persisted request also retains the original logical streaming origin, so retries and caller
   forks do not rewrite who originated the logical RPC.
 
-Forks copy ordinary oplog entries and append only the cut marker. That marker clips retained stream
-history, resets live controls, and stores the creation receipt; it does not carry handle aliases or
-authorship mappings. Revert raises the generation/epoch fence before reconstruction, so handles
-issued by the discarded generation cannot control the rebuilt streams. Hidden staged publication
-and immutable retry receipts remain the separately tracked GOL-609 work; do not model staging by
-adding provenance to stream records.
+Forks copy ordinary oplog entries and append a `ForkCut`. That marker clips retained stream history,
+resets live controls, and stores the creation receipt; it does not carry handle aliases or authorship
+mappings. Export forks also append `ExportForkInitialized`, which binds their new public session ID,
+fresh invocation key and expiry policy. Revert raises the generation/epoch fence before reconstruction,
+so handles issued by the discarded generation cannot control the rebuilt streams. Export targets
+are built in hidden staged oplogs and published atomically; matching retries trust the immutable
+target receipt while that target remains live. Do not model staging by adding provenance to stream
+records.
 
 Tests: `tests/rpc.rs::durable_streaming_{output,input}_recovers_after_executor_restart`; full
 mechanics and crash windows: `reference/streams.md`.
@@ -613,6 +619,17 @@ cancellable completion-delivery boundary; dropping a resource only deletes its t
 Completed replay performs no HTTP or secret fetch. Golem forks retain external URLs and producer
 identities; they do not issue DS-level forks. See `reference/streams.md` for protocol, auth and
 memory boundaries.
+
+The custom Durable Streams HTTP surface maps an opaque public session ID to a concrete invocation
+key through `DurableStreamPublicBinding::{Live, Retired}` in the independently persisted session
+index. A durable session creation uses a fresh UUID invocation key, so an expired public ID can be
+recreated without reusing the old invocation. Ephemeral sessions retain public ID = invocation key
+and are fail-stop, so recreation is rejected. `ExpiryRefreshed` and `Expired` are durable session
+records; expiry scheduling uses `ExpireDurableStreamSession` fenced by agent fingerprint, invocation
+key and expected deadline. Sliding refreshes are coalesced until they extend the deadline by at
+least 10% of the TTL. Only a new origin GET and an accepted or duplicate append count as sliding
+activity; HEAD, continuation reads (including long-poll/SSE), repeat PUT, and agent-side production
+do not.
 
 ## Tool invocations and entity bodies
 
