@@ -19,6 +19,12 @@ use crate::model::application::ApplicationName;
 use crate::model::component::ComponentName;
 use crate::model::environment::EnvironmentName;
 
+/// The last segment of an agent owner.
+///
+/// The owner text holds a concrete agent name in percent-encoding. A render writes `%`, `/` and
+/// `?` as `%25`, `%2F` and `%3F`. So the name is one owner segment and holds no slot variable. A
+/// parse decodes the name. In the text, each `%` before two hex digits gives one byte of the name.
+/// `Agent` holds the name after the decode.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum AgentOwnerLeafPattern {
@@ -27,6 +33,9 @@ pub enum AgentOwnerLeafPattern {
 }
 
 impl AgentOwnerLeafPattern {
+    /// Reads the last segment of an agent owner. A segment that ends with `(*)` is an agent type
+    /// wildcard. The function decodes each other segment as an agent name in percent-encoding. A
+    /// name that does not decode to UTF-8 gives an error.
     pub fn parse(value: &str) -> Result<Self, String> {
         let value = parse_concrete_segment(value)?;
         if let Some(agent_type) = value.strip_suffix("(*)")
@@ -36,7 +45,9 @@ impl AgentOwnerLeafPattern {
                 agent_type.to_string(),
             )));
         }
-        Ok(Self::Agent(value.to_string()))
+        urlencoding::decode(value)
+            .map(|agent| Self::Agent(agent.into_owned()))
+            .map_err(|_| value.to_string())
     }
 
     fn subsumes(&self, other: &Self) -> bool {

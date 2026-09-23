@@ -3785,10 +3785,10 @@ async fn the_filesystem_snapshots_namespace_gives_each_agent_its_own_location(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
 ) {
     // Each namespace holds a blob at the same path with its own bytes. The agents differ in their
-    // name, their environment or their component. The last two namespaces are other kinds of
-    // namespace of the same environment and agent. One agent name holds a `..` segment, which the
-    // rules of a blob name refuse. So its location must not hold the name. The oplog payloads of
-    // such an agent are not in the test, because their S3 location holds the agent name.
+    // name, their environment or their component. The last three namespaces are other kinds of
+    // namespace of the same environment. One agent name holds a `..` segment, which the rules of a
+    // blob name refuse. So a location of that agent must not hold the name. The two oplog payload
+    // namespaces are of that agent name in two components.
     let storage = test.get_blob_storage().await;
     let label = "the_filesystem_snapshots_namespace_gives_each_agent_its_own_location";
     let environment = "0a8cd1b1-5c35-4f0e-9c67-2bb4c0f0f3a1";
@@ -3796,19 +3796,22 @@ async fn the_filesystem_snapshots_namespace_gives_each_agent_its_own_location(
     let component = "2caef3d3-7e57-4b2a-9e89-4dd6e212b5c3";
     let other_component = "3dbf04e4-8f68-4c3b-8f9a-5ee7f323c6d4";
     let agent = r#"counter("a")"#;
+    let dot_segment_agent = r#"counter("a/../b")"#;
+    let oplog_payload_of = |component: &str| BlobStorageNamespace::OplogPayload {
+        environment_id: EnvironmentId(Uuid::parse_str(environment).unwrap()),
+        agent_id: AgentId {
+            component_id: ComponentId(Uuid::parse_str(component).unwrap()),
+            agent_id: dot_segment_agent.to_string(),
+        },
+        agent_mode: AgentMode::Durable,
+    };
     let namespaces = [
         filesystem_snapshots_of(environment, component, agent),
-        filesystem_snapshots_of(environment, component, r#"counter("a/../b")"#),
+        filesystem_snapshots_of(environment, component, dot_segment_agent),
         filesystem_snapshots_of(other_environment, component, agent),
         filesystem_snapshots_of(environment, other_component, agent),
-        BlobStorageNamespace::OplogPayload {
-            environment_id: EnvironmentId(Uuid::parse_str(environment).unwrap()),
-            agent_id: AgentId {
-                component_id: ComponentId(Uuid::parse_str(component).unwrap()),
-                agent_id: agent.to_string(),
-            },
-            agent_mode: AgentMode::Durable,
-        },
+        oplog_payload_of(component),
+        oplog_payload_of(other_component),
         BlobStorageNamespace::CustomStorage {
             environment_id: EnvironmentId(Uuid::parse_str(environment).unwrap()),
         },

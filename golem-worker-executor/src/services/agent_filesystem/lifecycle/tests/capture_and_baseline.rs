@@ -1451,7 +1451,7 @@ impl UnmanagedAgents {
             .path()
             .join(agent.environment_id.to_string())
             .join(agent.agent_id.component_id.to_string())
-            .join(agent.agent_id.agent_name_encoded())
+            .join(agent_path_segment(&agent.agent_id))
     }
 
     /// Starts a resident filesystem with the baseline of `files` and `restore`.

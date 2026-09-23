@@ -281,8 +281,10 @@ impl AgentId {
         format!("urn:worker:{}/{}", self.component_id, self.agent_id)
     }
 
-    /// Returns the agent name percent-encoded so it is safe to use as a
-    /// single filesystem path component.
+    /// Gives the agent name in percent-encoding. The function encodes each character that is not
+    /// an unreserved URL character, so the result is one segment of a URL path.
+    ///
+    /// The result can be longer than a file name can be, so it is not a directory name.
     pub fn agent_name_encoded(&self) -> String {
         urlencoding::encode(&self.agent_id).into_owned()
     }
@@ -291,16 +293,16 @@ impl AgentId {
 impl FromStr for AgentId {
     type Err = String;
 
+    /// Reads `<component_id>:<agent_name>`. The function splits the text at its first `:`,
+    /// because a component id holds no `:` and an agent name can hold one.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() == 2 {
-            let component_id_uuid = Uuid::from_str(parts[0])
+        if let Some((component_id, agent_name)) = s.split_once(':') {
+            let component_id_uuid = Uuid::from_str(component_id)
                 .map_err(|_| format!("invalid component id: {s} - expected uuid"))?;
             let component_id = ComponentId(component_id_uuid);
-            let agent_name = parts[1].to_string();
             Ok(Self {
                 component_id,
-                agent_id: agent_name,
+                agent_id: agent_name.to_string(),
             })
         } else {
             Err(format!(
@@ -865,4 +867,31 @@ fn canonicalize_agent_path(path: &[String]) -> Vec<String> {
     path.iter()
         .map(|segment| segment.to_lower_camel_case())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentId, ComponentId};
+    use std::str::FromStr;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    fn an_agent_id_text_splits_at_its_first_colon() {
+        let component_id = Uuid::from_u128(0x0d9f6c1e2b8a4f3d9e7c5a4b3c2d1e0f);
+
+        assert_eq!(
+            (
+                AgentId::from_str(&format!(r#"{component_id}:counter("a:b")"#)),
+                AgentId::from_str(r#"counter("a")"#).is_err(),
+            ),
+            (
+                Ok(AgentId {
+                    component_id: ComponentId(component_id),
+                    agent_id: r#"counter("a:b")"#.to_string(),
+                }),
+                true,
+            )
+        );
+    }
 }

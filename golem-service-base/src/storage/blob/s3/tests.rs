@@ -39,6 +39,7 @@ use axum::routing::put;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use golem_common::model::AgentId;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use http_body::Frame;
@@ -319,6 +320,24 @@ fn scripted_storage_with(
 
 fn sent(requests: &SentRequests) -> Vec<SentRequest> {
     requests.lock().unwrap().clone()
+}
+
+/// Gives the path of the URI of each request, without the endpoint and the query. The path style
+/// of the client puts the bucket first in the path.
+fn request_paths(requests: &SentRequests) -> Vec<String> {
+    sent(requests)
+        .iter()
+        .map(|request| {
+            request
+                .uri
+                .strip_prefix("http://s3.test")
+                .unwrap_or(&request.uri)
+                .split('?')
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect()
 }
 
 /// Gives the `BlobRangeError` of an error of the blob storage, or `None` for another error.
@@ -2989,23 +3008,11 @@ async fn a_filesystem_snapshot_blob_goes_to_its_own_bucket_and_to_the_key_of_its
         .await
         .unwrap();
 
-    let path_of = |requests: &SentRequests| {
-        sent(requests)
-            .iter()
-            .map(|request| {
-                request
-                    .uri
-                    .strip_prefix("http://s3.test")
-                    .unwrap_or(&request.uri)
-                    .split('?')
-                    .next()
-                    .unwrap_or_default()
-                    .to_string()
-            })
-            .collect::<Vec<_>>()
-    };
     assert_eq!(
-        (path_of(&plain_requests), path_of(&prefixed_requests)),
+        (
+            request_paths(&plain_requests),
+            request_paths(&prefixed_requests)
+        ),
         (
             vec![format!(
                 "/filesystem-snapshots/{}/{segment}/config",
@@ -3013,6 +3020,61 @@ async fn a_filesystem_snapshot_blob_goes_to_its_own_bucket_and_to_the_key_of_its
             )],
             vec![format!(
                 "/filesystem-snapshots/prefix/{}/{segment}/config",
+                Uuid::nil()
+            )]
+        )
+    );
+}
+
+#[test]
+async fn an_oplog_payload_goes_to_the_key_of_its_agent_path_segment() {
+    // The agent name holds a `..` segment, which the rules of a key refuse. So the key holds the
+    // path segment of the agent, and not the component id and the agent name. The path style of
+    // the client puts the bucket first in the URI.
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::nil()),
+        agent_id: r#"counter("a/../b")"#.to_string(),
+    };
+    let namespace = BlobStorageNamespace::OplogPayload {
+        environment_id: EnvironmentId(Uuid::nil()),
+        agent_id: agent_id.clone(),
+        agent_mode: AgentMode::Durable,
+    };
+    let segment = agent_path_segment(&agent_id);
+    let (plain, plain_requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+    let (prefixed, prefixed_requests) = scripted_storage("prefix", |_, _| Answer::new(200, ""));
+
+    let written = (
+        plain
+            .put_raw(
+                "test",
+                "put-raw",
+                namespace.clone(),
+                Path::new("payload"),
+                b"x",
+            )
+            .await
+            .map_err(|error| error.to_string()),
+        prefixed
+            .put_raw("test", "put-raw", namespace, Path::new("payload"), b"x")
+            .await
+            .map_err(|error| error.to_string()),
+    );
+
+    assert_eq!(
+        (
+            written,
+            request_paths(&plain_requests),
+            request_paths(&prefixed_requests)
+        ),
+        (
+            (Ok(()), Ok(())),
+            vec![format!(
+                "/oplog-payload/durable/{}/{segment}/payload",
+                Uuid::nil()
+            )],
+            vec![format!(
+                "/oplog-payload/prefix/durable/{}/{segment}/payload",
                 Uuid::nil()
             )]
         )
