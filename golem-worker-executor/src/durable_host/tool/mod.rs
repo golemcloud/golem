@@ -796,6 +796,17 @@ fn option_args(
     option: &OptionSpec,
     value: &SchemaValue,
 ) -> Result<Vec<ToolArgPattern>, String> {
+    let value = if !option.required && option.default.is_none() {
+        match value {
+            SchemaValue::Option { inner } => match inner.as_deref() {
+                Some(value) => value,
+                None => return Ok(Vec::new()),
+            },
+            _ => value,
+        }
+    } else {
+        value
+    };
     let name = ToolIdentifier::parse(&option.long)?;
     let argument = |value| ToolArgPattern::LongFlag {
         name: name.clone(),
@@ -1009,10 +1020,23 @@ fn resolve_tool_command(
                 )
                 .map_err(SerializableToolError::InvalidInput)?,
             ),
-            CanonicalSurfaceRef::BodyPositional { index } => args.push(ToolArgPattern::Positional(
-                render_tool_value(tool, &body.positionals.fixed[index].type_, &field.value)
-                    .map_err(SerializableToolError::InvalidInput)?,
-            )),
+            CanonicalSurfaceRef::BodyPositional { index } => {
+                let positional = &body.positionals.fixed[index];
+                let value = if !positional.required && positional.default.is_none() {
+                    match &field.value {
+                        SchemaValue::Option { inner } => inner.as_deref(),
+                        value => Some(value),
+                    }
+                } else {
+                    Some(&field.value)
+                };
+                if let Some(value) = value {
+                    args.push(ToolArgPattern::Positional(
+                        render_tool_value(tool, &positional.type_, value)
+                            .map_err(SerializableToolError::InvalidInput)?,
+                    ));
+                }
+            }
             CanonicalSurfaceRef::BodyTail => {
                 let tail = body
                     .positionals
@@ -5483,9 +5507,25 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostUnderlyingInvokeResultWithStore<U>
 impl<Ctx: WorkerCtx> HostToolRpc for DurableWorkerCtx<Ctx> {
     async fn new(&mut self, tool_name: String) -> anyhow::Result<Resource<ToolRpcEntry>> {
         self.observe_function_call("golem::tool::host::tool-rpc", "new");
-        let tool_name = ToolName::try_from(tool_name).map_err(|error| anyhow!(error))?;
+        let tool_name = ToolName::try_from(tool_name).map_err(anyhow::Error::msg)?;
         let rpc = tool_rpc_for_current_owner(self, tool_name)?;
         Ok(self.table().push(rpc)?)
+    }
+
+    async fn create(
+        &mut self,
+        tool_name: String,
+    ) -> anyhow::Result<Result<Resource<ToolRpcEntry>, ToolRpcError>> {
+        self.observe_function_call("golem::tool::host::tool-rpc", "create");
+        let tool_name = match ToolName::try_from(tool_name) {
+            Ok(name) => name,
+            Err(error) => return Ok(Err(ToolRpcError::ProtocolError(error.to_string()))),
+        };
+        let rpc = match tool_rpc_for_current_owner(self, tool_name) {
+            Ok(rpc) => rpc,
+            Err(error) => return Ok(Err(ToolRpcError::ProtocolError(error.to_string()))),
+        };
+        Ok(Ok(self.table().push(rpc)?))
     }
 
     async fn drop(&mut self, rep: Resource<ToolRpcEntry>) -> anyhow::Result<()> {
@@ -6259,6 +6299,65 @@ mod tests {
             resolve_tool_command(&constrained, &[], &input),
             Err(SerializableToolError::ConstraintViolation(_))
         ));
+    }
+
+    #[test]
+    fn command_resolution_omits_optional_values_and_renders_supplied_values() {
+        let (mut registered, _) = registered_tool();
+        let body = registered.definition.commands.nodes[0]
+            .body
+            .as_mut()
+            .unwrap();
+        body.positionals.fixed[0].required = false;
+        body.options.push(OptionSpec {
+            long: "mode".to_string(),
+            short: None,
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            value_name: None,
+            shape: OptionShape::Scalar(SchemaType::string()),
+            default: None,
+            required: false,
+            env_var: None,
+        });
+        let graph = registered
+            .definition
+            .canonical_input_record_schema(0)
+            .unwrap();
+        for (fields, expected) in [
+            (
+                vec![
+                    SchemaValue::Option { inner: None },
+                    SchemaValue::Option { inner: None },
+                ],
+                Vec::<ToolArgPattern>::new(),
+            ),
+            (
+                vec![
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::String("needle".to_string()))),
+                    },
+                    SchemaValue::Option {
+                        inner: Some(Box::new(SchemaValue::String("fast".to_string()))),
+                    },
+                ],
+                vec![
+                    ToolArgPattern::Positional(ToolValuePattern::Literal(ToolValueLiteral(
+                        "\"needle\"".to_string(),
+                    ))),
+                    ToolArgPattern::LongFlag {
+                        name: ToolIdentifier("mode".to_string()),
+                        value: Some(ToolValuePattern::Literal(ToolValueLiteral(
+                            "\"fast\"".to_string(),
+                        ))),
+                    },
+                ],
+            ),
+        ] {
+            let input = TypedSchemaValue::new(graph.clone(), SchemaValue::Record { fields });
+            let resolved = resolve_tool_command(&registered.definition, &[], &input).unwrap();
+            assert_eq!(resolved.args, expected);
+        }
     }
 
     #[test]

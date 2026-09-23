@@ -771,7 +771,7 @@ describe("Durable Streams", () => {
           expect(Exit.isFailure(exit)).toBe(true)
         }
         const writer = yield* DS.makeJsonWriter(Uint64, options).pipe(Effect.provide(layer({})))
-        yield* writer.append([18446744073709551615n]).pipe(Effect.flip, Effect.provide(layer({})))
+        yield* writer.append([18446744073709551616n]).pipe(Effect.flip, Effect.provide(layer({})))
         expect(yield* writer.hasPending).toBe(false)
         expect(yield* writer.nextSequence).toBe(0n)
       }),
