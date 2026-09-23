@@ -119,11 +119,18 @@ async fn deployed_scala_streams_context() -> TestContext {
     fs::write_str(scala_dir.join("consumer/StreamConsumer.scala"), indoc! {r#"
         package consumer
         import golem.BaseAgent
-        import golem.runtime.annotations.{agentDefinition, agentImplementation}
+        import golem.reflection.{GolemReflectError, ToolClientDefinition}
+        import golem.runtime.annotations.{agentDefinition, agentImplementation, toolDefinition}
         import golem.schema.AgentStream
+        import golem.tool.ToolRpcFailure
         import golem.bridge.client.stream_provider.{StreamProviderClient, Item, Bundle}
         import scala.concurrent.Future
         import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+
+        @toolDefinition(name = "scala-construction-probe")
+        trait ConstructionProbeTool {
+          def ping(): String
+        }
 
         @agentDefinition()
         trait StreamConsumer extends BaseAgent {
@@ -133,6 +140,7 @@ async fn deployed_scala_streams_context() -> TestContext {
           def cancel(): Future[String]
           def recoverable(): Future[String]
           def fatal(): Future[String]
+          def invalidToolTarget(): String
         }
         @agentImplementation()
         final class StreamConsumerImpl(private val name: String) extends StreamConsumer {
@@ -214,6 +222,17 @@ async fn deployed_scala_streams_context() -> TestContext {
             val provider = StreamProviderClient.get(name + "-fatal")
             provider.malformed().flatMap(collect).map(_ => "unexpected-clean-eof")
           }
+          def invalidToolTarget(): String = {
+            val definition = ToolClientDefinition.named("NOT-valid")(
+              (target: String) => ConstructionProbeToolClient(target)
+            )
+            definition.client match {
+              case Left(GolemReflectError.ToolRpc(ToolRpcFailure.ProtocolError(message))) =>
+                "scala-invalid-tool-recovered:" + message
+              case Left(error) => "unexpected-error:" + error.toString
+              case Right(_) => "unexpected-success"
+            }
+          }
         }
     "#}).unwrap();
     // Guest bridge sources belong to the consumer, not the provider's discovery input.
@@ -243,6 +262,17 @@ async fn test_scala_agent_guest_streams_e2e() {
         .await;
     assert!(output.success_or_dump());
     assert!(output.stdout_contains("scala-streams-ok"));
+    let invalid_target = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "StreamConsumer(\"test\")",
+            "invalidToolTarget",
+        ])
+        .await;
+    assert!(invalid_target.success_or_dump());
+    assert!(invalid_target.stdout_contains("scala-invalid-tool-recovered:"));
     for (method, expected) in [("cancel", "scala-cancel-ok"), ("nested", "scala-nested-ok")] {
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(120),
