@@ -181,3 +181,53 @@ func (r ReflectedTool) Bind() (*ReflectedToolClient, error) {
 	}
 	return &ReflectedToolClient{tool: r, rpc: witToolRPC{rpc: created.Ok(), name: r.lookupName}}, nil
 }
+
+// ParseRawAgentID takes an agent identity apart without decoding its
+// constructor into a Go type. Parsing is strict: a malformed identity is
+// reported rather than guessed at.
+func ParseRawAgentID(agentID string) (RawAgentID, error) {
+	res := host.ParseAgentId(agentID)
+	if res.IsErr() {
+		return RawAgentID{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, agentErrorToGo(res.Err()))
+	}
+	t := res.Ok()
+	phantom := None[UUID]()
+	if t.F2.IsSome() {
+		phantom = Some(uuidFromWit(t.F2.Some()))
+	}
+	return RawAgentID{AgentType: t.F0, Constructor: TypedValue{wit: t.F1}, Phantom: phantom}, nil
+}
+
+// BindAgentID binds an existing agent identity. Binding never creates the
+// agent, and makes no claim about its type beyond what the identity says.
+func BindAgentID(agentID string) (*DynamicAgentClient, error) {
+	parsed, err := ParseRawAgentID(agentID)
+	if err != nil {
+		return nil, err
+	}
+	phantom := witTypes.None[types.Uuid]()
+	if id, present := parsed.Phantom.Get(); present {
+		phantom = witTypes.Some(uuidToWit(id))
+	}
+	created := host.WasmRpcCreate(parsed.AgentType, parsed.Constructor.wit.Value, phantom, nil)
+	if created.Tag() == witTypes.ResultErr {
+		return nil, rpcErrorToGo(parsed.AgentType, "<bind>", created.Err())
+	}
+	return &DynamicAgentClient{
+		agentID: agentID,
+		parsed:  parsed,
+		rpc:     witRPC{rpc: created.Ok(), target: parsed.AgentType},
+	}, nil
+}
+
+// BindTool binds a tool by name without retaining its metadata.
+func BindTool(toolName string) (*DynamicToolClient, error) {
+	created := toolHost.ToolRpcCreate(toolName)
+	if created.Tag() == witTypes.ResultErr {
+		return nil, fmt.Errorf("golem: tool %s: %s", toolName, toolRPCErrorMessage(created.Err()))
+	}
+	return &DynamicToolClient{
+		toolName: toolName,
+		rpc:      witToolRPC{rpc: created.Ok(), name: toolName},
+	}, nil
+}

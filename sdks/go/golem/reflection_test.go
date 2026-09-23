@@ -471,3 +471,136 @@ func TestReflectedToolClientValidatesBeforeSending(t *testing.T) {
 		t.Error("the call was sent despite failing validation")
 	}
 }
+
+// TestDynamicAgentClientInvokesWithPackedValues — a dynamic caller already
+// holds schema-native values and keeps no snapshot, so the client neither packs
+// nor validates for it.
+func TestDynamicAgentClientInvokesWithPackedValues(t *testing.T) {
+	r := snapshotOf(t)
+	m, _ := r.Method("greet")
+	input, err := m.PackJSON(map[string]any{"greeting": "hi", "times": 1})
+	if err != nil {
+		t.Fatalf("PackJSON: %v", err)
+	}
+	out, _ := m.Output()
+	result, err := out.PackJSON("hi")
+	if err != nil {
+		t.Fatalf("packing the result: %v", err)
+	}
+
+	rpc := &fakeRPC{tree: result, has: true}
+	client := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
+
+	got, err := client.InvokeDynamic("greet", input)
+	if err != nil {
+		t.Fatalf("InvokeDynamic: %v", err)
+	}
+	if rpc.gotMethod != "greet" {
+		t.Errorf("invoked %q", rpc.gotMethod)
+	}
+	if got.IsNone() {
+		t.Fatal("the result was dropped")
+	}
+	value, err := out.UnpackJSON(got.Unwrap())
+	if err != nil || value != "hi" {
+		t.Errorf("result %v (%v)", value, err)
+	}
+}
+
+// TestDynamicAgentClientInvokeJSON — the caller may also hand over a schema of
+// its own choosing rather than packing by hand.
+func TestDynamicAgentClientInvokeJSON(t *testing.T) {
+	r := snapshotOf(t)
+	m, _ := r.Method("greet")
+	out, _ := m.Output()
+	result, _ := out.PackJSON("hi")
+
+	rpc := &fakeRPC{tree: result, has: true}
+	client := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
+
+	got, err := client.InvokeJSON("greet", r.Schema(), m.Parameters(),
+		map[string]any{"greeting": "hi", "times": 1})
+	if err != nil {
+		t.Fatalf("InvokeJSON: %v", err)
+	}
+	if got.IsNone() {
+		t.Fatal("the result was dropped")
+	}
+}
+
+// TestInvokeUsesTheCallersOwnTypes — a caller-defined client owns its
+// compile-time types and only borrows the identity.
+func TestInvokeUsesTheCallersOwnTypes(t *testing.T) {
+	r := snapshotOf(t)
+	m, _ := r.Method("greet")
+	out, _ := m.Output()
+	result, _ := out.PackJSON("hi hi")
+
+	rpc := &fakeRPC{tree: result, has: true}
+	client := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
+
+	got, err := Invoke[GreetIn, string](client, "greet", GreetIn{Greeting: "hi", Times: 2})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if got != "hi hi" {
+		t.Errorf("result %q, want hi hi", got)
+	}
+}
+
+// TestInvokeChecksOutputCardinality — the caller's declared Out is the only
+// contract here, so a mismatch has to be reported rather than zero-valued.
+func TestInvokeChecksOutputCardinality(t *testing.T) {
+	client := &DynamicAgentClient{agentID: "greeter-1", rpc: &fakeRPC{has: false}}
+	if _, err := Invoke[GreetIn, string](client, "greet", GreetIn{}); err == nil ||
+		!strings.Contains(err.Error(), "returned nothing") {
+		t.Errorf("error is %v", err)
+	}
+
+	r := snapshotOf(t)
+	m, _ := r.Method("greet")
+	out, _ := m.Output()
+	result, _ := out.PackJSON("hi")
+	client = &DynamicAgentClient{agentID: "greeter-1", rpc: &fakeRPC{tree: result, has: true}}
+	if _, err := Invoke[GreetIn, Unit](client, "greet", GreetIn{}); err == nil ||
+		!strings.Contains(err.Error(), "golem.Unit") {
+		t.Errorf("error is %v", err)
+	}
+}
+
+func TestDynamicToolClientInvokes(t *testing.T) {
+	r := toolSnapshotOf(t)
+	add, _ := r.Command([]string{"index", "add"})
+	input, err := add.PackJSON(map[string]any{"path": "/tmp/a", "force": false, "retries": 1})
+	if err != nil {
+		t.Fatalf("PackJSON: %v", err)
+	}
+	result, _ := EncodeTypedValue("/tmp/a")
+
+	rpc := &fakeToolRPC{out: result.wit, has: true}
+	client := &DynamicToolClient{toolName: "files", rpc: rpc}
+
+	got, err := client.InvokeDynamic([]string{"index", "add"}, TypedValue{wit: input})
+	if err != nil {
+		t.Fatalf("InvokeDynamic: %v", err)
+	}
+	if strings.Join(rpc.gotPath, " ") != "index add" {
+		t.Errorf("invoked %v", rpc.gotPath)
+	}
+	value, err := got.Unwrap().JSON()
+	if err != nil || value != "/tmp/a" {
+		t.Errorf("result %v (%v)", value, err)
+	}
+}
+
+func TestBindingOffTarget(t *testing.T) {
+	if _, err := BindAgentID("anything"); err == nil {
+		t.Error("binding an agent id succeeded off-target")
+	}
+	if _, err := BindTool("files"); err == nil {
+		t.Error("binding a tool succeeded off-target")
+	}
+	if _, err := ParseRawAgentID("anything"); err == nil {
+		t.Error("parsing an agent id succeeded off-target")
+	}
+}

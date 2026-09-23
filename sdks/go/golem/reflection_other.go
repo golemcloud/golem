@@ -44,3 +44,15 @@ func DiscoverTool(string) (ReflectedTool, bool) { return ReflectedTool{}, false 
 func (r ReflectedTool) Bind() (*ReflectedToolClient, error) {
 	return nil, fmt.Errorf("golem: tool discovery is only available inside a component")
 }
+
+func ParseRawAgentID(string) (RawAgentID, error) {
+	return RawAgentID{}, fmt.Errorf("golem: parsing an agent id is only available inside a component")
+}
+
+func BindAgentID(string) (*DynamicAgentClient, error) {
+	return nil, fmt.Errorf("golem: binding an agent id is only available inside a component")
+}
+
+func BindTool(string) (*DynamicToolClient, error) {
+	return nil, fmt.Errorf("golem: binding a tool is only available inside a component")
+}
