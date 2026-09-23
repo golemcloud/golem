@@ -7,6 +7,87 @@ use golem_schema::schema::wit::{
 use golem_schema_derive::{FromWire, IntoWire, WireSchema};
 use test_r::test;
 
+#[test]
+fn rich_values_and_nominal_ids_use_direct_wire_shapes() {
+    let uuid = uuid::Uuid::from_u64_pair(0x1234, 0x9876);
+    let tree = encode(&uuid).unwrap();
+    let wire::SchemaValueNode::RecordValue(fields) = &tree.value_nodes[tree.root as usize] else {
+        panic!("UUID record")
+    };
+    assert!(matches!(
+        tree.value_nodes[fields[0] as usize],
+        wire::SchemaValueNode::U64Value(0x1234)
+    ));
+    assert!(matches!(
+        tree.value_nodes[fields[1] as usize],
+        wire::SchemaValueNode::U64Value(0x9876)
+    ));
+    assert_eq!(decode::<uuid::Uuid>(tree).unwrap(), uuid);
+    let promise = golem_schema::PromiseId::new(
+        golem_schema::AgentId::new(golem_schema::ComponentId::new(uuid), "Counter(abc)".into()),
+        83,
+    );
+    assert_eq!(
+        decode::<golem_schema::PromiseId>(encode(&promise).unwrap()).unwrap(),
+        promise
+    );
+    let mut actual =
+        golem_schema::schema::wit::decode_graph(&schema::<golem_schema::PromiseId>()).unwrap();
+    let mut expected =
+        golem_schema::schema::try_into_schema_graph::<golem_schema::PromiseId>().unwrap();
+    actual.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    expected.defs.sort_by(|a, b| a.id.cmp(&b.id));
+    assert_eq!(actual, expected);
+    let date = chrono::DateTime::from_timestamp(-19, 123456789).unwrap();
+    assert_eq!(
+        decode::<chrono::DateTime<chrono::Utc>>(encode(&date).unwrap()).unwrap(),
+        date
+    );
+    let duration = std::time::Duration::from_nanos(123456789);
+    assert_eq!(
+        decode::<std::time::Duration>(encode(&duration).unwrap()).unwrap(),
+        duration
+    );
+    assert_eq!(
+        decode::<std::time::Duration>(encode(&std::time::Duration::MAX).unwrap()).unwrap(),
+        std::time::Duration::from_nanos(i64::MAX as u64)
+    );
+    assert!(
+        decode::<std::time::Duration>(wire::SchemaValueTree {
+            root: 0,
+            value_nodes: vec![wire::SchemaValueNode::DurationValue(
+                wire::DurationValuePayload { nanoseconds: -1 }
+            )]
+        })
+        .is_err()
+    );
+    assert!(
+        decode::<chrono::DateTime<chrono::Utc>>(wire::SchemaValueTree {
+            root: 0,
+            value_nodes: vec![wire::SchemaValueNode::DatetimeValue(wire::Datetime {
+                seconds: i64::MAX,
+                nanoseconds: 0
+            })]
+        })
+        .is_err()
+    );
+}
+
+#[cfg(feature = "url")]
+#[test]
+fn direct_urls_parse_url_nodes_but_not_strings() {
+    let url = url::Url::parse("https://example.com/a?b=3").unwrap();
+    assert_eq!(decode::<url::Url>(encode(&url).unwrap()).unwrap(), url);
+    assert!(decode::<url::Url>(encode("https://example.com/").unwrap()).is_err());
+    assert!(
+        decode::<url::Url>(wire::SchemaValueTree {
+            root: 0,
+            value_nodes: vec![wire::SchemaValueNode::UrlValue("not a url".into())]
+        })
+        .is_err()
+    );
+}
+
 #[cfg(feature = "bytes")]
 #[test]
 fn bytes_use_binary_nodes_not_byte_lists() {

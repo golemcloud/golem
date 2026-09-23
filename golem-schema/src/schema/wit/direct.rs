@@ -124,6 +124,128 @@ wire_schema_scalar! {
     f32 => wire::SchemaTypeBody::F32Type(None), f64 => wire::SchemaTypeBody::F64Type(None),
     char => wire::SchemaTypeBody::CharType, String => wire::SchemaTypeBody::StringType,
     str => wire::SchemaTypeBody::StringType,
+    chrono::DateTime<chrono::Utc> => wire::SchemaTypeBody::DatetimeType,
+    std::time::Duration => wire::SchemaTypeBody::DurationType,
+}
+
+impl IntoWire for chrono::DateTime<chrono::Utc> {
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        Ok(
+            writer.push(wire::SchemaValueNode::DatetimeValue(wire::Datetime {
+                seconds: self.timestamp(),
+                nanoseconds: self.timestamp_subsec_nanos(),
+            })),
+        )
+    }
+}
+
+impl FromWire for chrono::DateTime<chrono::Utc> {
+    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
+        let wire::SchemaValueNode::DatetimeValue(value) = reader.take(index)? else {
+            return Err(WireError::Shape("datetime"));
+        };
+        super::datetime_from_wire(&value).ok_or(WireError::Shape("valid datetime"))
+    }
+}
+
+impl IntoWire for std::time::Duration {
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        Ok(writer.push(wire::SchemaValueNode::DurationValue(
+            wire::DurationValuePayload {
+                nanoseconds: self.as_nanos().min(i64::MAX as u128) as i64,
+            },
+        )))
+    }
+}
+
+impl FromWire for std::time::Duration {
+    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
+        let wire::SchemaValueNode::DurationValue(value) = reader.take(index)? else {
+            return Err(WireError::Shape("duration"));
+        };
+        let nanos = u64::try_from(value.nanoseconds)
+            .map_err(|_| WireError::Shape("nonnegative duration"))?;
+        Ok(Self::from_nanos(nanos))
+    }
+}
+
+#[cfg(feature = "url")]
+impl WireSchema for url::Url {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        builder.push(wire::SchemaTypeBody::UrlType(wire::UrlRestrictions {
+            allowed_schemes: None,
+            allowed_hosts: None,
+        }))
+    }
+}
+
+#[cfg(feature = "url")]
+impl IntoWire for url::Url {
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        Ok(writer.push(wire::SchemaValueNode::UrlValue(self.to_string())))
+    }
+}
+
+#[cfg(feature = "url")]
+impl FromWire for url::Url {
+    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
+        let wire::SchemaValueNode::UrlValue(value) = reader.take(index)? else {
+            return Err(WireError::Shape("url"));
+        };
+        Self::parse(&value).map_err(|_| WireError::Shape("valid url"))
+    }
+}
+
+impl WireSchema for uuid::Uuid {
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        let (definition, fresh) = builder.reserve("uuid.Uuid".into(), Some("uuid".into()));
+        if fresh {
+            let high = u64::append_schema(builder);
+            let low = u64::append_schema(builder);
+            let body = builder.push(wire::SchemaTypeBody::RecordType(vec![
+                wire::NamedFieldType {
+                    name: "high-bits".into(),
+                    body: high,
+                    metadata: empty_metadata(),
+                },
+                wire::NamedFieldType {
+                    name: "low-bits".into(),
+                    body: low,
+                    metadata: empty_metadata(),
+                },
+            ]));
+            builder.commit(definition, body);
+        }
+        builder.reference(definition)
+    }
+
+    fn wire_type_id() -> String {
+        "uuid.Uuid".into()
+    }
+}
+
+impl IntoWire for uuid::Uuid {
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        let (high, low) = self.as_u64_pair();
+        let high = high.write_wire(writer)?;
+        let low = low.write_wire(writer)?;
+        Ok(writer.push(wire::SchemaValueNode::RecordValue(vec![high, low])))
+    }
+}
+
+impl FromWire for uuid::Uuid {
+    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
+        let wire::SchemaValueNode::RecordValue(fields) = reader.take(index)? else {
+            return Err(WireError::Shape("uuid record"));
+        };
+        let [high, low] = fields.as_slice() else {
+            return Err(WireError::Shape("two uuid fields"));
+        };
+        Ok(Self::from_u64_pair(
+            u64::read_wire(reader, *high)?,
+            u64::read_wire(reader, *low)?,
+        ))
+    }
 }
 
 impl<U: QuantityUnit> WireSchema for Quantity<U> {
