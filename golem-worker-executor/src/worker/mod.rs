@@ -2758,7 +2758,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 producer
                     .reconcile_attachments_configured(
                         Timestamp::now_utc().to_millis(),
-                        u64::try_from(config.renewal_interval.as_millis()).unwrap_or(u64::MAX),
                         config.reconciliation_batch_size,
                         &DbDirectStreamAttachmentConsumerProbe::new(
                             self.worker_service(),
@@ -6897,7 +6896,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         producer
             .reconcile_attachments_configured(
                 Timestamp::now_utc().to_millis(),
-                u64::try_from(config.renewal_interval.as_millis()).unwrap_or(u64::MAX),
                 config.reconciliation_batch_size,
                 &probe,
             )
@@ -7260,7 +7258,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ),
             StreamAttachmentControlOperation::Activate { .. }
             | StreamAttachmentControlOperation::Detach { .. }
-            | StreamAttachmentControlOperation::Renew { .. }
             | StreamAttachmentControlOperation::Cancel { .. } => {
                 consumer_status == ConsumerAttachmentStatus::Active
             }
@@ -7290,10 +7287,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             StreamAttachmentControlOperation::Detach { key } => {
                 producer.detach_attachment(&key).await.map(|_| false)
             }
-            StreamAttachmentControlOperation::Renew { key, .. } => producer
-                .renew_attachment(key, producer_now_millis)
-                .await
-                .map(|outcome| outcome.replayed),
             StreamAttachmentControlOperation::Cancel {
                 key,
                 role,
@@ -12650,7 +12643,6 @@ pub(crate) fn stream_session_record_key(
         )),
         StreamSessionRecord::AttachmentPrepared(record) => Some(record.key.session_key.clone()),
         StreamSessionRecord::AttachmentActivated(record) => Some(record.key.session_key.clone()),
-        StreamSessionRecord::AttachmentRenewed(record) => Some(record.key.session_key.clone()),
         StreamSessionRecord::AttachmentFinalized(record) => Some(record.key.session_key.clone()),
         StreamSessionRecord::CascadeOutbox(record) => Some(record.key.session_key.clone()),
         StreamSessionRecord::SourceUnavailable(record) => Some(record.session_key.qualify(

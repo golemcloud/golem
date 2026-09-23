@@ -1639,7 +1639,6 @@ async fn reconcile(
     producer
         .reconcile_attachments_configured(
             now_millis,
-            golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RENEWAL_TARGET_MILLIS,
             golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RECONCILIATION_BATCH_SIZE,
             probe,
         )
@@ -2059,38 +2058,51 @@ async fn attachment_lifecycle_is_idempotent_fenced_and_rebuildable() {
             .replayed
     );
     assert_eq!(oplog.committed_length(), after_activate);
+    assert_eq!(
+        live.attachment_view(&key)
+            .await
+            .unwrap()
+            .lease_expires_at_millis,
+        None
+    );
     assert!(
         live.read_attached_segment(&key, &handle, 121, None, None)
             .await
             .unwrap()
             .is_empty()
     );
+    assert!(
+        live.read_attached_segment(&key, &handle, u64::MAX, None, None,)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(oplog.committed_length(), after_activate);
+    live.write_items(
+        None,
+        handle.stream_id,
+        0,
+        StreamItemsPayload::PackedU8(vec![13, 29]),
+    )
+    .await
+    .unwrap();
+    let before_read = oplog.committed_length();
+    drop(live);
+    let live = producer(oplog.clone(), &identity, None).await;
+    let events = live
+        .read_attached_segment(&key, &handle, u64::MAX, None, None)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 2);
     assert_eq!(
-        live.read_attached_segment(
-            &key,
-            &handle,
-            120 + STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
-            None,
-            None,
-        )
-        .await,
-        Err(StreamStoreError::LeaseExpired)
+        events[0].payload,
+        CommittedProducerStreamEventPayload::PackedU8(13)
     );
-    assert!(
-        !live
-            .renew_attachment(key.clone(), 130)
-            .await
-            .unwrap()
-            .replayed
+    assert_eq!(
+        events[1].payload,
+        CommittedProducerStreamEventPayload::PackedU8(29)
     );
-    let after_renew = oplog.committed_length();
-    assert!(
-        live.renew_attachment(key.clone(), 130)
-            .await
-            .unwrap()
-            .replayed
-    );
-    assert_eq!(oplog.committed_length(), after_renew);
+    assert_eq!(oplog.committed_length(), before_read);
     assert!(
         !live
             .finalize_attachment(
@@ -2338,7 +2350,6 @@ async fn attachment_prepare_advances_epochs_from_every_remote_recovery_state() {
         for result in [
             live.prepare_attachment(old.clone(), 112).await.map(|_| ()),
             live.activate_attachment(old.clone(), 112).await.map(|_| ()),
-            live.renew_attachment(old.clone(), 112).await.map(|_| ()),
             live.finalize_attachment(
                 old.clone(),
                 StreamAttachmentFinalizationReason::ConsumerFinalized,
@@ -2625,7 +2636,7 @@ async fn producer_rejects_handles_with_altered_non_identity_metadata_before_atta
 }
 
 #[test]
-async fn deletion_is_fail_closed_for_prepared_active_and_expired_references() {
+async fn deletion_is_fail_closed_for_prepared_and_quiet_active_references() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog, &identity, None).await;
@@ -2642,16 +2653,11 @@ async fn deletion_is_fail_closed_for_prepared_active_and_expired_references() {
             if dependents == std::slice::from_ref(&key)
     ));
     live.activate_attachment(key.clone(), 110).await.unwrap();
-    assert_eq!(
-        live.read_attached_segment(
-            &key,
-            &first,
-            110 + STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
-            None,
-            None,
-        )
-        .await,
-        Err(StreamStoreError::LeaseExpired)
+    assert!(
+        live.read_attached_segment(&key, &first, u64::MAX, None, None,)
+            .await
+            .unwrap()
+            .is_empty()
     );
     assert!(matches!(
         live.commit_deletion_barrier(1_000, true).await,
@@ -2778,7 +2784,7 @@ async fn deleting_producer_restarts_without_renewing_before_cascade_retry() {
     };
     assert_eq!(
         restarted
-            .reconcile_attachments_configured(1_000, 1, 256, &probe)
+            .reconcile_attachments_configured(1_000, 256, &probe)
             .await
             .unwrap(),
         0

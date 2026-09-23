@@ -828,17 +828,6 @@ pub struct StreamAttachmentActivatedRecord {
     pub format_version: u8,
     pub key: StreamAttachmentKey,
     pub activated_at_millis: u64,
-    pub lease_expires_at_millis: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
-#[cfg_attr(feature = "full", desert(evolution()))]
-pub struct StreamAttachmentRenewedRecord {
-    pub format_version: u8,
-    pub key: StreamAttachmentKey,
-    pub renewed_at_millis: u64,
-    pub lease_expires_at_millis: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
@@ -923,10 +912,6 @@ pub enum StreamAttachmentControlOperation {
     Detach {
         key: StreamAttachmentKey,
     },
-    Renew {
-        key: StreamAttachmentKey,
-        now_millis: u64,
-    },
     Cancel {
         key: StreamAttachmentKey,
         role: StreamCancelRole,
@@ -952,7 +937,6 @@ impl StreamAttachmentControlOperation {
             Self::Prepare { key, .. }
             | Self::Activate { key, .. }
             | Self::Detach { key }
-            | Self::Renew { key, .. }
             | Self::Cancel { key, .. }
             | Self::Finalize { key, .. }
             | Self::SourceUnavailable { key, .. } => key,
@@ -1378,7 +1362,6 @@ pub enum StreamSessionRecord {
     Mapping(StreamSessionMappingUpdateRecord),
     AttachmentPrepared(StreamAttachmentPreparedRecord),
     AttachmentActivated(StreamAttachmentActivatedRecord),
-    AttachmentRenewed(StreamAttachmentRenewedRecord),
     AttachmentFinalized(StreamAttachmentFinalizedRecord),
     ProducerDeleting(StreamProducerDeletingRecord),
     CascadeOutbox(StreamCascadeOutboxRecord),
@@ -1437,7 +1420,6 @@ impl StreamSessionRecord {
             Self::Mapping(record) => record.format_version,
             Self::AttachmentPrepared(record) => record.format_version,
             Self::AttachmentActivated(record) => record.format_version,
-            Self::AttachmentRenewed(record) => record.format_version,
             Self::AttachmentFinalized(record) => record.format_version,
             Self::ProducerDeleting(record) => record.format_version,
             Self::CascadeOutbox(record) => record.format_version,
@@ -1548,14 +1530,7 @@ impl StreamSessionRecord {
                 record.key.is_well_formed()
                     && record.lease_expires_at_millis > record.prepared_at_millis
             }
-            Self::AttachmentActivated(record) => {
-                record.key.is_well_formed()
-                    && record.lease_expires_at_millis > record.activated_at_millis
-            }
-            Self::AttachmentRenewed(record) => {
-                record.key.is_well_formed()
-                    && record.lease_expires_at_millis > record.renewed_at_millis
-            }
+            Self::AttachmentActivated(record) => record.key.is_well_formed(),
             Self::AttachmentFinalized(record) => record.key.is_well_formed(),
             Self::ProducerDeleting(record) => !record.producer_fingerprint.0.is_nil(),
             Self::CascadeOutbox(record) => record.key.is_well_formed(),

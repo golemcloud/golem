@@ -371,7 +371,7 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         &self,
         attachment: &StreamAttachmentKey,
         handle: &DurableStreamHandle,
-        now_millis: u64,
+        _now_millis: u64,
         after: Option<StreamOffset>,
         through: Option<StreamOffset>,
     ) -> Result<Vec<CommittedProducerStreamEvent>, StreamStoreError> {
@@ -400,15 +400,11 @@ impl AttachedStreamSegmentSource for DurableStreamStore {
         if indexed_attachment.key != *attachment {
             return Err(StreamStoreError::AttachmentConflict);
         }
-        match indexed_attachment.state {
-            IndexedStreamAttachmentState::Active {
-                lease_expires_at_millis,
-                ..
-            } if now_millis < lease_expires_at_millis => {}
-            IndexedStreamAttachmentState::Active { .. } => {
-                return Err(StreamStoreError::LeaseExpired);
-            }
-            _ => return Err(StreamStoreError::InvalidAttachmentState),
+        if !matches!(
+            indexed_attachment.state,
+            IndexedStreamAttachmentState::Active { .. }
+        ) {
+            return Err(StreamStoreError::InvalidAttachmentState);
         }
         drop(index);
         self.read_segment(handle, after, through).await
