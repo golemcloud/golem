@@ -206,7 +206,7 @@ test "async tool commands use async ownership-aware invokers" {
   assert_true(generated.contains("AsyncTool::run(value)"))
   assert_true(generated.contains("@tool.reject_wire_invocation"))
   assert_true(generated.contains("@tool.reject_undecoded_invocation"))
-  assert_true(generated.contains("@tool.reject_decoded_invocation"))
+  assert_true(generated.contains("@schema.FromWire::read_wire"))
 }
 
 ///|
@@ -229,7 +229,7 @@ test "generated invokers claim stdout only after fallible input decoding" {
   let before_stdout = generated
     .split("Some(__golem_output) => __golem_output")
     .collect()[0]
-  assert_true(before_stdout.contains("@tool.decode_canonical_field"))
+  assert_true(before_stdout.contains("@schema.FromWire::read_wire"))
 }
 
 ///|
@@ -247,7 +247,9 @@ test "generated missing attachment failures release decoded invocation inputs" {
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("streams.mbt", source)])),
   )
-  let helper_calls = generated.split("@tool.reject_decoded_invocation").length()
+  let helper_calls = generated
+    .split("@tool.reject_undecoded_invocation")
+    .length()
   assert_true(helper_calls >= 3)
   assert_true(generated.contains("\"required stdin stream is missing\""))
   assert_true(generated.contains("\"required stdout stream is missing\""))
@@ -270,7 +272,7 @@ test "generated invokers reject unexpected stdout attachments" {
     .replace_all(old="\n", new="")
   assert_true(
     compact.contains(
-      "if__golem_stdoutisSome(_){return@tool.reject_decoded_invocation(__golem_decoded,__golem_stdin,",
+      "if__golem_stdoutisSome(_){__golem_reader.abort()return@tool.reject_undecoded_invocation(__golem_stdin,",
     ),
   )
   let accepts_stdout =
@@ -303,7 +305,7 @@ test "reexported tool Principal is injected as invocation context" {
 }
 
 ///|
-test "generated invoker passes diagnostic context to canonical decoders" {
+test "generated invoker passes diagnostic context to direct wire decoders" {
   let source =
     #|#derive.tool
     #|struct Echo {}
@@ -311,9 +313,9 @@ test "generated invoker passes diagnostic context to canonical decoders" {
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("echo.mbt", source)])),
   )
-  assert_true(generated.contains("@tool.decode_canonical_input("))
-  assert_true(generated.contains("\"tool echo invocation\""))
-  assert_true(generated.contains("@tool.decode_canonical_field("))
+  assert_true(generated.contains("@schema.WireReader::new("))
+  assert_true(generated.contains("@schema.wire_record("))
+  assert_true(generated.contains("@schema.FromWire::read_wire("))
   assert_true(generated.contains("\"tool echo command run\""))
 }
 
@@ -372,7 +374,7 @@ test "options are optional by default" {
 }
 
 ///|
-test "subtree invoker uses the child tool wire name" {
+test "subtree invoker specializes the child under its parent" {
   let source =
     #|#derive.tool
     #|struct Parent {}
@@ -384,7 +386,9 @@ test "subtree invoker uses the child tool wire name" {
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("subtree.mbt", source)])),
   )
-  assert_true(generated.contains("@tool.invoke_registered_subtool"))
+  assert_true(
+    generated.contains("return __golem_tool_invoke_Parent_subtree_0("),
+  )
   assert_true(generated.contains("\"wire-child\""))
   assert_true(
     generated.contains(
@@ -481,15 +485,9 @@ test "invoker decodes a reverse-alias global through the inherited canonical nam
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("alias.mbt", source)])),
   )
-  assert_true(generated.contains("let count :String = try"))
-  assert_true(
-    generated.contains(
-      (
-        #|          "format",
-        #|          "tool root command run",
-      ),
-    ),
-  )
+  assert_true(generated.contains("let count"))
+  assert_true(generated.contains("@schema.FromWire::read_wire"))
+  assert_true(generated.contains("failed decoding `format`: "))
 }
 
 ///|
@@ -1387,6 +1385,97 @@ test "constraints resolve authored aliases but not short forms" {
     ),
   )
   assert_true(generated.contains("@tool.RefDef::ValueIs"))
+}
+
+///|
+test "direct dispatch orders global options before flags and deduplicates inherited aliases" {
+  let source =
+    #|#derive.tool
+    #|struct Root {}
+    #|#derive.arg("verbose", scope="global", kind="flag")
+    #|#derive.arg("tenant", scope="global", alias="profile")
+    #|pub fn Root::root(verbose : Bool, tenant : String) -> Unit { () }
+    #|#derive.arg("verbose", scope="global", kind="flag")
+    #|#derive.arg("profile", scope="global")
+    #|pub fn Root::run(verbose : Bool, profile : String, input : Int) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+      @lib.generate_tool_registration(
+        @lib.parse_tools([("ordering.mbt", source)]),
+      ),
+    )
+    .replace_all(old=" ", new="")
+    .replace_all(old="\n", new="")
+  assert_true(
+    generated.contains(
+      "letverbose:Bool=try{@schema.FromWire::read_wire(__golem_reader,__golem_fields[1])",
+    ),
+  )
+  assert_true(
+    generated.contains(
+      "letprofile:String=try{@schema.FromWire::read_wire(__golem_reader,__golem_fields[0])",
+    ),
+  )
+  assert_true(
+    generated.contains(
+      "letinput:Int=try{@schema.FromWire::read_wire(__golem_reader,__golem_fields[2])",
+    ),
+  )
+  assert_true(
+    generated.contains(
+      "@schema.wire_record(__golem_reader,__golem_input.value.root,3,",
+    ),
+  )
+}
+
+///|
+test "direct subtree input includes ancestor globals and releases unused fields" {
+  let source =
+    #|#derive.tool
+    #|struct Parent {}
+    #|#derive.arg("tenant", scope="global")
+    #|pub fn Parent::parent(tenant : String) -> Unit { () }
+    #|#derive.command(subtree="Child")
+    #|#derive.arg("verbose", scope="global", kind="flag")
+    #|pub fn Parent::child(verbose : Bool) -> Unit { () }
+    #|#derive.tool
+    #|struct Child {}
+    #|pub fn Child::run(value : Int) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+      @lib.generate_tool_registration(
+        @lib.parse_tools([("subtree-layout.mbt", source)]),
+      ),
+    )
+    .replace_all(old=" ", new="")
+    .replace_all(old="\n", new="")
+  assert_true(
+    generated.contains("asyncfn__golem_tool_invoke_Parent_subtree_1("),
+  )
+  assert_true(
+    generated.contains(
+      "letvalue:Int=try{@schema.FromWire::read_wire(__golem_reader,__golem_fields[2])",
+    ),
+  )
+  assert_true(generated.contains("@schema.release_wire(__golem_unused_0)"))
+  assert_true(generated.contains("@schema.release_wire(__golem_unused_1)"))
+}
+
+///|
+test "direct text refinement reads wire text rather than a string model" {
+  let source =
+    #|#derive.tool
+    #|struct Text {}
+    #|#derive.arg("value", regex="[a-z]+")
+    #|pub fn Text::text(value : String) -> String { value }
+    #|#derive.arg("items", scope="option", regex="[a-z]+")
+    #|pub fn Text::many(items : Array[String]) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("text.mbt", source)])),
+  )
+  assert_true(
+    generated.contains("@types.SchemaValueNode::TextValue(value) => value.text"),
+  )
+  assert_true(generated.contains("@types.SchemaValueNode::ListValue(children)"))
+  assert_false(generated.contains("canonical_value_for_sdk"))
 }
 
 ///|

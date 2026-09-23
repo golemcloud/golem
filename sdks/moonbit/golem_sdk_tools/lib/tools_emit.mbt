@@ -1930,6 +1930,87 @@ fn subtree_dispatch_names(
 }
 
 ///|
+fn direct_input_args(
+  args : Array[ProjectedToolArg],
+  inherited : Array[ProjectedToolArg],
+) -> Array[ProjectedToolArg] {
+  let inherited_names = projected_identity_names(inherited)
+  let own = without_captured_args(args, inherited_names)
+  let fields = inherited.copy()
+  for arg in own {
+    if arg.placement is GlobalOption {
+      fields.push(arg)
+    }
+  }
+  for arg in own {
+    if arg.placement is GlobalFlag {
+      fields.push(arg)
+    }
+  }
+  for arg in own {
+    if arg.placement is Positional {
+      fields.push(arg)
+    }
+  }
+  for arg in own {
+    if arg.placement is Tail {
+      fields.push(arg)
+    }
+  }
+  for arg in own {
+    if arg.placement is Option {
+      fields.push(arg)
+    }
+  }
+  for arg in own {
+    if arg.placement is Flag {
+      fields.push(arg)
+    }
+  }
+  fields
+}
+
+///|
+fn direct_field_index(
+  arg : ProjectedToolArg,
+  fields : Array[ProjectedToolArg],
+) -> Int {
+  let identities = projected_arg_identity_names(arg)
+  for index, field in fields {
+    if projected_arg_identity_names(field).any(name => identities.contains(name)) {
+      return index
+    }
+  }
+  abort("projected tool argument is absent from its direct wire record")
+}
+
+///|
+fn direct_input_expr(type_ : ParamType, index : String, text : Bool) -> String {
+  if !text {
+    return "@schema.FromWire::read_wire(__golem_reader, " + index + ")"
+  }
+  match type_ {
+    Simple("String") =>
+      "match @schema.wire_node(__golem_reader, " +
+      index +
+      ") { @types.SchemaValueNode::TextValue(value) => value.text; _ => raise @schema.WireError::Invalid(\"expected text value\") }"
+    Optional(inner) =>
+      "match @schema.wire_node(__golem_reader, " +
+      index +
+      ") { @types.SchemaValueNode::OptionValue(None) => None; @types.SchemaValueNode::OptionValue(Some(__golem_child)) => Some(" +
+      direct_input_expr(inner, "__golem_child", true) +
+      "); _ => raise @schema.WireError::Invalid(\"expected option value\") }"
+    List(inner) =>
+      "match @schema.wire_node(__golem_reader, " +
+      index +
+      ") { @types.SchemaValueNode::ListValue(children) => children.map(__golem_child => { " +
+      direct_input_expr(inner, "__golem_child", true) +
+      " }); _ => raise @schema.WireError::Invalid(\"expected list value\") }"
+    _ => "@schema.FromWire::read_wire(__golem_reader, " + index + ")"
+  }
+}
+
+///|
 fn emit_invoker(
   buf : StringBuilder,
   tool : ToolInfo,
@@ -1938,39 +2019,62 @@ fn emit_invoker(
   leaves : Array[Int],
   symbol_scope : String,
 ) -> Unit raise ToolEmitError {
-  let name = "__golem_tool_invoke_" + tool.source_name
-  let context = "tool " + tool.name + " invocation"
+  ignore(symbol_scope)
+  emit_context_invoker(
+    buf,
+    tool,
+    tools,
+    plans,
+    leaves,
+    "__golem_tool_invoke_" + tool.source_name,
+    [],
+  )
+}
+
+///|
+fn emit_context_invoker(
+  buf : StringBuilder,
+  tool : ToolInfo,
+  tools : Array[ToolInfo],
+  plans : Array[Array[ProjectedToolArg]],
+  leaves : Array[Int],
+  name : String,
+  ancestor_globals : Array[ProjectedToolArg],
+) -> Unit raise ToolEmitError {
+  let own_globals = tool.root_command
+    .map(index => {
+      plans[index]
+      .filter(arg => arg.placement is GlobalOption)
+      .concat(plans[index].filter(arg => arg.placement is GlobalFlag))
+    })
+    .unwrap_or([])
+  let root_globals = ancestor_globals.concat(
+    without_captured_args(
+      own_globals,
+      projected_identity_names(ancestor_globals),
+    ),
+  )
   buf.write_string(
     "///|\n#warnings(\"-alert_wit_bindgen\")\nasync fn " +
     name +
-    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @tool.ProviderStdout?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @types.ToolError] {\n  let __golem_def = " +
-    descriptor_name(tool, symbol_scope) +
-    "()\n  let __golem_index = match __golem_def.command_index_by_path(__golem_command_path) {\n    Some(__golem_index) => __golem_index\n    None => return @tool.reject_wire_invocation(__golem_input, __golem_stdin, @types.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n  let __golem_decoded = @tool.decode_canonical_input(__golem_def, __golem_index, __golem_input, \"" +
-    escape_string_lit(context) +
-    "\") catch { __golem_error => return @tool.reject_undecoded_invocation(__golem_stdin, __golem_error) }\n",
+    "(__golem_command_path : Array[String], __golem_input : @types.TypedSchemaValue, __golem_stdin : @asyncCore.Stream[Byte]?, __golem_stdout : @tool.ProviderStdout?, __golem_principal : @tool.Principal) -> Result[@toolCommon.InvocationResult, @types.ToolError] {\n",
   )
-  for command in tool.commands {
+  for index, command in tool.commands {
     if command.subtree is Some(target) {
       let child = resolve_subtree_tool(tools, target)
       let names = subtree_dispatch_names(command, child)
       buf.write_string(
         "  if __golem_command_path.length() > 0 && " +
         emit_strings(names) +
-        ".contains(__golem_command_path[0]) {\n    return @tool.invoke_registered_subtool(\"" +
-        escape_string_lit(child.name) +
-        "\", __golem_command_path[1:].to_owned(), __golem_decoded, __golem_stdin, __golem_stdout, __golem_principal)\n  }\n",
+        ".contains(__golem_command_path[0]) {\n    return " +
+        name +
+        "_subtree_" +
+        index.to_string() +
+        "(__golem_command_path[1:].to_owned(), __golem_input, __golem_stdin, __golem_stdout, __golem_principal)\n  }\n",
       )
     }
   }
-  buf.write_string("  match __golem_index {\n")
   let commands : Array[(Int, Int)] = []
-  let root_globals = tool.root_command
-    .map(index => {
-      plans[index].filter(arg => {
-        arg.placement is GlobalOption || arg.placement is GlobalFlag
-      })
-    })
-    .unwrap_or([])
   if tool.root_command is Some(root) {
     commands.push((0, root))
   }
@@ -1981,52 +2085,143 @@ fn emit_invoker(
     let command = tool.commands[pair.1]
     let args = plans[pair.1]
     let inherited = if Some(pair.1) == tool.root_command {
-      []
+      ancestor_globals
     } else {
       root_globals
     }
     let command_context = "tool " + tool.name + " command " + command.name
-    buf.write_string("    " + pair.0.to_string() + " => {\n")
+    let path_condition = if Some(pair.1) == tool.root_command {
+      "__golem_command_path.length() == 0"
+    } else {
+      "__golem_command_path.length() == 1 && " +
+      emit_strings([command.name].concat(command.aliases)) +
+      ".contains(__golem_command_path[0])"
+    }
+    let fields = direct_input_args(args, inherited)
+    let required_attachments = args.filter(arg => {
+      arg.placement is Hidden(InputStream) ||
+      arg.placement is Hidden(OutputStream)
+    })
+    let preflight = StringBuilder()
+    for arg in required_attachments {
+      let (variable, description) = if arg.placement is Hidden(InputStream) {
+        ("__golem_stdin", "stdin")
+      } else {
+        ("__golem_stdout", "stdout")
+      }
+      preflight.write_string(
+        "    if " +
+        variable +
+        " is None { return @tool.reject_wire_invocation(__golem_input, __golem_stdin, @types.ToolError::InvalidInput(\"required " +
+        description +
+        " stream is missing\")) }\n",
+      )
+    }
+    buf.write_string(
+      "  if " +
+      path_condition +
+      " {\n" +
+      preflight.to_string() +
+      "    let __golem_reader = @schema.WireReader::new(__golem_input.value)\n    let __golem_fields = @schema.wire_record(__golem_reader, __golem_input.value.root, " +
+      fields.length().to_string() +
+      ", \"" +
+      escape_string_lit(command_context) +
+      "\") catch { __golem_error => {\n      __golem_reader.abort()\n      return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"" +
+      escape_string_lit(command_context) +
+      ": \" + repr(__golem_error)))\n    } }\n",
+    )
     if input_stream_source(command) is None {
       buf.write_string(
-        "      if __golem_stdin is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"command does not accept a stdin stream\"))\n      }\n",
+        "    if __golem_stdin is Some(_) {\n      __golem_reader.abort()\n      return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"command does not accept a stdin stream\"))\n    }\n",
       )
     }
     if output_stream_source(command) is None {
       buf.write_string(
-        "      if __golem_stdout is Some(_) {\n        return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"command does not accept a stdout stream\"))\n      }\n",
+        "    if __golem_stdout is Some(_) {\n      __golem_reader.abort()\n      return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"command does not accept a stdout stream\"))\n    }\n",
       )
     }
+    let used_fields : Array[Int] = []
     for arg in args {
       match arg.placement {
         Hidden(_) => ()
-        _ =>
+        _ => {
+          let field_index = direct_field_index(arg, fields)
+          used_fields.push(field_index)
+          let text = fields[field_index].info
+            .map(info => {
+              info.regex is Some(_) ||
+              info.min_length is Some(_) ||
+              info.max_length is Some(_)
+            })
+            .unwrap_or(false)
           buf.write_string(
-            "      let " +
+            "    let " +
             arg.source +
             " : " +
             emit_type(arg.type_.unwrap()) +
-            " = @tool.decode_canonical_field(__golem_decoded, \"" +
-            escape_string_lit(inherited_canonical_name(arg, inherited)) +
-            "\", \"" +
+            " = (" +
+            direct_input_expr(
+              arg.type_.unwrap(),
+              "__golem_fields[" + field_index.to_string() + "]",
+              text,
+            ) +
+            ") catch { __golem_error => {\n      __golem_reader.abort()\n      return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"" +
             escape_string_lit(command_context) +
-            "\") catch { __golem_error => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, __golem_error) }\n",
+            ": failed decoding `" +
+            escape_string_lit(inherited_canonical_name(arg, inherited)) +
+            "`: \" + repr(__golem_error)))\n    } }\n",
           )
+        }
       }
+    }
+    let unused_fields : Array[String] = []
+    for index, field in fields {
+      if !used_fields.contains(index) {
+        let variable = "__golem_unused_" + index.to_string()
+        unused_fields.push(variable)
+        let text = field.info
+          .map(info => {
+            info.regex is Some(_) ||
+            info.min_length is Some(_) ||
+            info.max_length is Some(_)
+          })
+          .unwrap_or(false)
+        buf.write_string(
+          "    let " +
+          variable +
+          " : " +
+          emit_type(field.type_.unwrap()) +
+          " = (" +
+          direct_input_expr(
+            field.type_.unwrap(),
+            "__golem_fields[" + index.to_string() + "]",
+            text,
+          ) +
+          ") catch { error => { __golem_reader.abort(); return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(repr(error))) } }\n",
+        )
+      }
+    }
+    buf.write_string(
+      "    __golem_reader.finish() catch { __golem_error => {\n      return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"" +
+      escape_string_lit(command_context) +
+      ": \" + repr(__golem_error)))\n    } }\n",
+    )
+    for variable in unused_fields {
+      buf.write_string("    @schema.release_wire(" + variable + ")\n")
     }
     for arg in args {
       match arg.placement {
         Hidden(InputStream) =>
           buf.write_string(
-            "      let " +
+            "    let " +
             arg.source +
-            " = match __golem_stdin {\n        Some(__golem_stream) => __golem_stream\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"required stdin stream is missing\"))\n      }\n",
+            " = match __golem_stdin {\n      Some(__golem_stream) => __golem_stream\n      None => return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"required stdin stream is missing\"))\n    }\n",
           )
         Hidden(OutputStream) =>
           buf.write_string(
-            "      let " +
+            "    let " +
             arg.source +
-            " = match __golem_stdout {\n        Some(__golem_output) => __golem_output\n        None => return @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidInput(\"required stdout stream is missing\"))\n      }\n",
+            " = match __golem_stdout {\n      Some(__golem_output) => __golem_output\n      None => return @tool.reject_undecoded_invocation(__golem_stdin, @types.ToolError::InvalidInput(\"required stdout stream is missing\"))\n    }\n",
           )
         _ => ()
       }
@@ -2049,12 +2244,44 @@ fn emit_invoker(
       }) +
       ")"
     buf.write_string(
-      "      " + emit_success_call(command, invocation) + "\n    }\n",
+      "    return { " + emit_success_call(command, invocation) + " }\n  }\n",
     )
   }
   buf.write_string(
-    "    _ => @tool.reject_decoded_invocation(__golem_decoded, __golem_stdin, @types.ToolError::InvalidCommandPath(__golem_command_path))\n  }\n}\n\n",
+    "  @tool.reject_wire_invocation(__golem_input, __golem_stdin, @types.ToolError::InvalidCommandPath(__golem_command_path))\n}\n\n",
   )
+  for index, command in tool.commands {
+    if command.subtree is Some(target) {
+      let child = resolve_subtree_tool(tools, target)
+      let child_plans = child.commands.map(command => {
+        project_command(command, command.subtree is Some(_))
+      })
+      let child_leaves : Array[Int] = []
+      for i, child_command in child.commands {
+        if Some(i) != child.root_command && child_command.subtree is None {
+          child_leaves.push(i)
+        }
+      }
+      let graft_globals = plans[index]
+        .filter(arg => arg.placement is GlobalOption)
+        .concat(plans[index].filter(arg => arg.placement is GlobalFlag))
+      let inherited = root_globals.concat(
+        without_captured_args(
+          graft_globals,
+          projected_identity_names(root_globals),
+        ),
+      )
+      emit_context_invoker(
+        buf,
+        child,
+        tools,
+        child_plans,
+        child_leaves,
+        name + "_subtree_" + index.to_string(),
+        inherited,
+      )
+    }
+  }
 }
 
 ///|
