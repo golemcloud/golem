@@ -14,21 +14,31 @@
 
 use super::agents::AgentStorage;
 use super::report::{Outcome, PhaseResult, StepRecord, StepStatus};
+use super::requests::MeasuredBlobStorage;
 use super::trees::{Content, FILES_TINY, SQLITE_TINY, TreeShape, TreeSpec, tree_hash};
 use super::{
-    BASE, CPU_DEFAULT, CPU_ZSTD_OFF, DEFAULTS, HISTORY, PRUNE, PRUNE_FAST_REPACK, Phase, PhaseKind,
-    PlanEntry, RESTORE_THREADS_PHASES, Repository, SAVE, SAVE_THREADS_2, SQLITE_FIXED_64K,
-    SQLITE_RABIN, STORAGE_CALL_DEADLINE, Scenario, Selection, WARM_SAVE, concurrent_restore,
+    BASE, CPU_DEFAULT, CPU_OPTIONS_PHASES, CPU_ZSTD_OFF, Compression, DEFAULTS, HISTORY, PRUNE,
+    PRUNE_FAST_REPACK, Phase, PhaseContext, PhaseKind, PlanEntry, RESTORE_THREADS_PHASES,
+    Repository, RepositorySettings, SAVE, SAVE_THREADS_2, SQLITE_FIXED_64K, SQLITE_RABIN,
+    STORAGE_CALL_DEADLINE, SaveSettings, Scenario, Selection, WARM_SAVE, concurrent_restore,
     concurrent_save, is_key_segment, mixed_phase, plan, prune_phase, repository_key,
     repository_scope, result_path, run_phase, save_phase, save_threads_phase, snapshot_name,
     with_defaults, with_settings,
 };
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures::stream::BoxStream;
+use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+use golem_service_base::storage::blob::{
+    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob, PutIfAbsent,
+};
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
-use std::path::Path;
+use std::num::{NonZeroI32, NonZeroUsize};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::test;
 
 /// The phases of the scenario `restore-threads` on a tiny tree.
@@ -58,7 +68,19 @@ async fn run_tiny(
     phase: &str,
     storage: &Arc<InMemoryBlobStorage>,
 ) -> (PhaseResult, tempfile::TempDir) {
+    run_tiny_with(scenario, phase, storage.clone(), |_| {}).await
+}
+
+/// Runs the phase of the scenario on its first tree over the storage, in a new work directory
+/// that `prepare` gets before the phase runs, and gives the result and the work directory.
+async fn run_tiny_with(
+    scenario: &'static Scenario,
+    phase: &str,
+    storage: Arc<dyn BlobStorage>,
+    prepare: impl FnOnce(&Path),
+) -> (PhaseResult, tempfile::TempDir) {
     let work = tempfile::tempdir().unwrap();
+    prepare(work.path());
     let selection = Selection {
         scenario,
         tree: &scenario.trees[0],
@@ -73,12 +95,35 @@ async fn run_tiny(
         "no-limit",
         selection,
         work.path(),
-        storage.clone(),
+        storage,
         json!({}),
     )
     .await;
     written.unwrap();
     (result, work)
+}
+
+/// Gives the files, the directories and the bytes of the tree facts of the result.
+fn tree_counts(result: &PhaseResult) -> (Option<u64>, Option<u64>, Option<u64>) {
+    (
+        result.tree_facts.files,
+        result.tree_facts.directories,
+        result.tree_facts.bytes,
+    )
+}
+
+/// The files, the directories and the bytes of a new `FILES_TINY` tree.
+const FILES_TINY_COUNTS: (Option<u64>, Option<u64>, Option<u64>) =
+    (Some(100), Some(10), Some(1024 * 1024));
+
+/// Gives the name of each step of the result that did not run.
+fn skipped_steps(result: &PhaseResult) -> Vec<&'static str> {
+    result
+        .steps
+        .iter()
+        .filter(|step| step.status == StepStatus::Skipped)
+        .map(|step| step.name)
+        .collect()
 }
 
 /// Gives the name of each step of the result and whether it succeeded.
@@ -854,6 +899,8 @@ async fn a_capture_phase_reads_every_file_with_ctime_and_the_changed_files_with_
             counts("warm_save_full_read"),
             counts("warm_save_size_mtime"),
             step(&result, "warm_save_size_mtime").parameters["change_detection"].clone(),
+            tree_counts(&result),
+            result.tree_facts.change.as_ref() == Some(&step(&result, "small_change").details),
         ),
         (
             Outcome::Ok,
@@ -872,6 +919,8 @@ async fn a_capture_phase_reads_every_file_with_ctime_and_the_changed_files_with_
             (json!(1), json!(100), json!(0)),
             (json!(1), json!(10), json!(90)),
             json!("size-mtime"),
+            FILES_TINY_COUNTS,
+            true,
         )
     );
 }
@@ -900,6 +949,9 @@ async fn the_prune_phases_give_back_the_data_of_the_forgotten_snapshots_of_the_h
                     .is_some_and(|bytes| bytes > 0),
                 detail(&result, "open", "/snapshots"),
                 detail(&result, "hash_tree", "/matches"),
+                tree_counts(&result),
+                result.tree_facts.hash.as_deref().map(|hash| json!(hash))
+                    == Some(detail(&result, "hash_tree", "/hash")),
             )
         }
     }))
@@ -937,6 +989,9 @@ async fn the_prune_phases_give_back_the_data_of_the_forgotten_snapshots_of_the_h
             true,
             json!(2),
             json!(true),
+            // The history adds one file of 10,486 bytes in each of its 11 rounds.
+            (Some(111), Some(10), Some(1024 * 1024 + 11 * 10_486)),
+            true,
         )
     };
 
@@ -946,6 +1001,7 @@ async fn the_prune_phases_give_back_the_data_of_the_forgotten_snapshots_of_the_h
             saves,
             opens,
             detail(&history, "forget", "/snapshots_forgotten"),
+            tree_counts(&history),
             prunes,
         ),
         (
@@ -957,6 +1013,7 @@ async fn the_prune_phases_give_back_the_data_of_the_forgotten_snapshots_of_the_h
                 (json!(12), json!(12)),
             ],
             json!(10),
+            FILES_TINY_COUNTS,
             vec![prune(false), prune(true)],
         )
     );
@@ -986,6 +1043,12 @@ async fn fixed_chunks_save_less_after_a_clustered_change_and_restore_the_databas
             detail(&fixed, "clustered_change", "/rows_updated"),
             restore.outcome.clone(),
             detail(&restore, "hash_tree", "/matches"),
+            (fixed.tree_facts.files, fixed.tree_facts.directories),
+            fixed
+                .tree_facts
+                .bytes
+                .is_some_and(|bytes| bytes >= 4 * 1024 * 1024),
+            fixed.tree_facts.change.as_ref() == Some(&step(&fixed, "scattered_change").details),
         ),
         (
             Outcome::Ok,
@@ -1004,6 +1067,9 @@ async fn fixed_chunks_save_less_after_a_clustered_change_and_restore_the_databas
             json!(100),
             Outcome::Ok,
             json!(true),
+            (Some(1), Some(0)),
+            true,
+            true,
         )
     );
 }
@@ -1146,6 +1212,420 @@ async fn a_cpu_options_phase_makes_its_repository_with_its_compression() {
             true,
             true,
             json!("off"),
+        )
+    );
+}
+
+/// A blob storage that passes each call to an in-memory storage, and fails each write of a
+/// snapshot file below `prefix` after the first `allowed` of them.
+#[derive(Debug)]
+struct FailingSnapshotWrites {
+    inner: Arc<InMemoryBlobStorage>,
+    prefix: PathBuf,
+    allowed: usize,
+    seen: AtomicUsize,
+}
+
+impl FailingSnapshotWrites {
+    /// Gives a storage over `inner` that fails the writes of snapshot files of the agent after the
+    /// first `allowed` of them.
+    fn new(inner: Arc<InMemoryBlobStorage>, agent: &str, allowed: usize) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            prefix: Path::new("agents").join(agent).join("snapshots"),
+            allowed,
+            seen: AtomicUsize::new(0),
+        })
+    }
+
+    /// Tells whether the write of the path fails.
+    fn fails(&self, path: &Path) -> bool {
+        path.starts_with(&self.prefix) && self.seen.fetch_add(1, Ordering::SeqCst) >= self.allowed
+    }
+}
+
+#[async_trait]
+impl BlobStorage for FailingSnapshotWrites {
+    async fn get_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        self.inner
+            .get_raw(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<Bytes>>>> {
+        self.inner
+            .get_stream(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_raw_slice(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        start: u64,
+        end: u64,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        self.inner
+            .get_raw_slice(target_label, op_label, namespace, path, start, end)
+            .await
+    }
+
+    async fn get_metadata(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> anyhow::Result<Option<BlobMetadata>> {
+        self.inner
+            .get_metadata(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn put_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.fails(path), "the write of {} fails", path.display());
+        self.inner
+            .put_raw(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_raw_if_absent(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> anyhow::Result<PutIfAbsent> {
+        self.inner
+            .put_raw_if_absent(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ErasedReplayableStream<Item = anyhow::Result<Vec<u8>>, Error = anyhow::Error>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .put_stream(target_label, op_label, namespace, path, stream)
+            .await
+    }
+
+    async fn delete(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .delete(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn create_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .create_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        self.inner
+            .list_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> anyhow::Result<Box<[ListedBlob]>> {
+        self.inner
+            .list_blobs_below(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> anyhow::Result<bool> {
+        self.inner
+            .delete_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn exists(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> anyhow::Result<ExistsResult> {
+        self.inner
+            .exists(target_label, op_label, namespace, path)
+            .await
+    }
+}
+
+/// The steps of the two forms of a capture phase, in the order in which they run.
+const FORM_STEPS: [&str; 4] = [
+    "capture_full_read",
+    "warm_save_full_read",
+    "capture_size_mtime",
+    "warm_save_size_mtime",
+];
+
+#[test]
+async fn a_failed_capture_or_warm_save_of_a_form_skips_the_steps_after_it() {
+    // Form 0 saves into the repository of agent 0, after its cold save. Form 1 saves into the
+    // repository of agent 1, after the copy of the cold save, which the default `copy` of the
+    // storage writes. So in both repositories the warm save writes the second snapshot file. A
+    // capture fails when its directory exists before it.
+    let capture_fails = async |capture: &'static str| {
+        let (result, _pod) = run_tiny_with(
+            &CAPTURE_TINY,
+            "capture",
+            Arc::new(InMemoryBlobStorage::new()),
+            |work| std::fs::create_dir(work.join(capture)).unwrap(),
+        )
+        .await;
+        (result.outcome.clone(), skipped_steps(&result))
+    };
+    let save_fails = async |agent: &str, allowed| {
+        let storage =
+            FailingSnapshotWrites::new(Arc::new(InMemoryBlobStorage::new()), agent, allowed);
+        let (result, _pod) = run_tiny_with(&CAPTURE_TINY, "capture", storage, |_| {}).await;
+        (result.outcome.clone(), skipped_steps(&result))
+    };
+    let failed = |step: &str| Outcome::Failed {
+        reason: format!("the step {step} failed").into(),
+    };
+
+    let outcomes = [
+        capture_fails(FORM_STEPS[0]).await,
+        save_fails("0", 1).await,
+        capture_fails(FORM_STEPS[2]).await,
+        save_fails("1", 1).await,
+    ];
+
+    assert_eq!(
+        outcomes,
+        [
+            (failed(FORM_STEPS[0]), FORM_STEPS[1..].to_vec()),
+            (failed(FORM_STEPS[1]), FORM_STEPS[2..].to_vec()),
+            (failed(FORM_STEPS[2]), FORM_STEPS[3..].to_vec()),
+            (failed(FORM_STEPS[3]), Vec::new()),
+        ]
+    );
+}
+
+/// Gives the namespace of the repositories of the agents of a phase of `MIXED_TINY`.
+fn mixed_tiny_namespace() -> BlobStorageNamespace {
+    repository_scope(MIXED_TINY.name, "no-limit", FILES_TINY.name).0
+}
+
+#[test]
+async fn a_mixed_phase_whose_restores_fail_fails_at_the_mixed_step_with_the_error_of_a_restore() {
+    // The repository of agent 1 has a config that no key opens, so the copy of the first
+    // repository leaves it out, and its restore fails. The saves go to other agents and succeed.
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let (save, _save_pod) = run_tiny(&MIXED_TINY, "save", &storage).await;
+    storage
+        .put_raw(
+            "test",
+            "test",
+            mixed_tiny_namespace(),
+            Path::new("agents/1/config"),
+            b"not a config",
+        )
+        .await
+        .unwrap();
+
+    let (mixed, _pod) = run_tiny(&MIXED_TINY, "mixed-s2-r2", &storage).await;
+    let details = &step(&mixed, "mixed").details;
+
+    assert_eq!(
+        (
+            save.outcome,
+            mixed.outcome.clone(),
+            step(&mixed, "mixed").status != StepStatus::Ok,
+            details["first_error"].is_string(),
+            [&details["saves"]["failed"], &details["restores"]["failed"]].map(Value::clone),
+            skipped_steps(&mixed),
+            tree_counts(&mixed),
+        ),
+        (
+            Outcome::Ok,
+            Outcome::Failed {
+                reason: "the step mixed failed".into()
+            },
+            true,
+            true,
+            [json!(0), json!(1)],
+            vec!["hash_trees"],
+            FILES_TINY_COUNTS,
+        )
+    );
+}
+
+#[test]
+async fn the_restores_of_a_mixed_phase_read_the_copies_and_not_the_first_repository() {
+    // The copies exist before the phase, so the phase copies nothing, and the first repository
+    // loses its snapshot files. A restore that reads the first repository finds no snapshot.
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let (save, _save_pod) = run_tiny(&MIXED_TINY, "save", &storage).await;
+    super::agents::copy_first_agent(storage.as_ref(), &mixed_tiny_namespace(), 5)
+        .await
+        .unwrap();
+    storage
+        .delete_dir(
+            "test",
+            "test",
+            mixed_tiny_namespace(),
+            Path::new("agents/0/snapshots"),
+        )
+        .await
+        .unwrap();
+
+    let (mixed, _pod) = run_tiny(&MIXED_TINY, "mixed-s2-r2", &storage).await;
+
+    assert_eq!(
+        (
+            save.outcome,
+            mixed.outcome.clone(),
+            detail(&mixed, "copy_scopes", "/agents_copied"),
+            detail(&mixed, "hash_trees", "/matches"),
+        ),
+        (Outcome::Ok, Outcome::Ok, json!(0), json!(4))
+    );
+}
+
+#[test]
+fn each_cpu_options_variant_changes_only_its_own_setting_of_the_defaults() {
+    let defaults = RepositorySettings::DEFAULT;
+    let variants = CPU_OPTIONS_PHASES
+        .iter()
+        .map(|phase| {
+            (
+                phase.name,
+                phase.variant.settings.map(|settings| settings.repository),
+                phase.variant.settings.map(|settings| settings.save),
+            )
+        })
+        .collect::<Vec<_>>();
+    let level = |level| Compression::Level(NonZeroI32::new(level).unwrap());
+
+    assert_eq!(
+        variants,
+        [
+            ("save-default", defaults),
+            (
+                "save-verify-off",
+                RepositorySettings {
+                    extra_verify: false,
+                    ..defaults
+                }
+            ),
+            (
+                "save-zstd-off",
+                RepositorySettings {
+                    compression: Compression::Off,
+                    ..defaults
+                }
+            ),
+            (
+                "save-zstd-1",
+                RepositorySettings {
+                    compression: level(1),
+                    ..defaults
+                }
+            ),
+            (
+                "save-zstd-9",
+                RepositorySettings {
+                    compression: level(9),
+                    ..defaults
+                }
+            ),
+        ]
+        .map(|(name, repository)| (name, Some(repository), Some(SaveSettings::DEFAULT)))
+        .to_vec()
+    );
+}
+
+#[test]
+fn a_save_threads_phase_saves_with_its_threads() {
+    let scenario = super::scenario("save-threads").unwrap();
+    let context = |phase: &str| PhaseContext {
+        run_id: "run-1".into(),
+        cpu_setting: "no-limit".into(),
+        selection: Selection::find("save-threads", "files-1g", phase).unwrap(),
+        work_dir: Path::new("/nowhere").into(),
+        storage: Arc::new(MeasuredBlobStorage::new(Arc::new(
+            InMemoryBlobStorage::new(),
+        ))),
+    };
+
+    assert_eq!(
+        (
+            scenario.phases.len(),
+            ["save-x4-t1", "save-x4-t2", "save-x4-t4", "save-x4-tdefault"]
+                .map(|phase| context(phase).save_settings()),
+        ),
+        (
+            4,
+            [
+                NonZeroUsize::new(1),
+                NonZeroUsize::new(2),
+                NonZeroUsize::new(4),
+                None
+            ]
+            .map(|threads| SaveSettings {
+                threads,
+                ..SaveSettings::DEFAULT
+            }),
         )
     );
 }

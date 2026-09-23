@@ -771,9 +771,10 @@ fn walk<T>(
 #[cfg(test)]
 mod tests {
     use super::{
-        COMPRESSIBLE_BLOCK, Content, DATABASE, FILES_TINY, Layout, MIB, SQLITE_TINY, Times,
-        TreeCounts, TreeShape, TreeSpec, change, change_clustered, change_round, connect, content,
-        copy_tree, file_path, file_size, generate, limit_layout, tree_hash, walk,
+        COMPRESSIBLE_1G, COMPRESSIBLE_BLOCK, Content, DATABASE, FILES_1G, FILES_128M, FILES_TINY,
+        Layout, MIB, MODULES_128M, SQLITE_TINY, Times, TreeCounts, TreeShape, TreeSpec, change,
+        change_clustered, change_round, connect, content, copy_tree, file_path, file_size,
+        generate, limit_layout, tree_hash, walk,
     };
     use pretty_assertions::assert_eq;
     use sqlx::Connection;
@@ -1128,6 +1129,7 @@ mod tests {
                 let after_second = tree_hash(root).unwrap();
                 (
                     first["files_rewritten"].as_u64(),
+                    first["bytes"].as_u64(),
                     after_first.0 != after_second.0,
                     after_first.1.files,
                     after_second.1.files,
@@ -1144,7 +1146,26 @@ mod tests {
                 objects.join("d001/f00123").exists(),
             ),
             (
-                vec![(Some(10), true, 101, 102), (Some(10), true, 125, 125)],
+                // FILES_TINY: the files 0, 10, ..., 70 have 10,486 bytes and the files 80 and 90
+                // have 10,485, and the added file has the 10,486 bytes of the file 0.
+                // OBJECTS_TINY: the files 0, 12, ..., 72 have 8,389 bytes, the files 84, 96 and
+                // 108 have 8,388, and the added file has the 8,388 bytes of the file 124.
+                vec![
+                    (
+                        Some(10),
+                        Some(8 * 10_486 + 2 * 10_485 + 10_486),
+                        true,
+                        101,
+                        102
+                    ),
+                    (
+                        Some(10),
+                        Some(7 * 8_389 + 3 * 8_388 + 8_388),
+                        true,
+                        125,
+                        125
+                    ),
+                ],
                 true,
                 true,
                 false,
@@ -1212,7 +1233,7 @@ mod tests {
     }
 
     #[test]
-    async fn a_clustered_change_updates_consecutive_rows_of_a_database_only() {
+    async fn a_scattered_and_a_clustered_change_update_the_rows_of_their_pattern() {
         let work = tempfile::tempdir().unwrap();
         let root = work.path().join("tree");
         let files = work.path().join("files");
@@ -1228,29 +1249,67 @@ mod tests {
             connection.close().await.unwrap();
             rows
         };
+        let updated = |before: &[(i64, Vec<u8>)], after: &[(i64, Vec<u8>)]| {
+            before
+                .iter()
+                .zip(after)
+                .filter(|(old, new)| old.1 != new.1)
+                .map(|(old, _)| old.0)
+                .collect::<Vec<_>>()
+        };
         let before = payloads(&root).await;
+        let last = before.last().unwrap().0;
 
-        let changed = change_clustered(&SQLITE_TINY, &root).await.unwrap();
-        let after = payloads(&root).await;
+        let scattered = change(&SQLITE_TINY, &root).await.unwrap();
+        let after_scattered = payloads(&root).await;
+        let clustered = change_clustered(&SQLITE_TINY, &root).await.unwrap();
+        let after_clustered = payloads(&root).await;
         let refused = change_clustered(&FILES_TINY, &files).await;
-        let updated = before
-            .iter()
-            .zip(&after)
-            .filter(|(old, new)| old.1 != new.1)
-            .map(|(old, _)| old.0)
-            .collect::<Vec<_>>();
 
         assert_eq!(
             (
-                changed["rows_updated"].as_u64(),
-                updated.len(),
-                updated
-                    .last()
-                    .zip(updated.first())
-                    .map(|(last, first)| last - first),
+                scattered["rows_updated"].as_u64(),
+                updated(&before, &after_scattered),
+                clustered["rows_updated"].as_u64(),
+                updated(&after_scattered, &after_clustered),
                 refused.is_err()
             ),
-            (Some(100), 100, Some(99), true)
+            (
+                Some(100),
+                (0..100)
+                    .map(|row| 1 + row * (last / 100))
+                    .collect::<Vec<_>>(),
+                Some(100),
+                (last / 2..last / 2 + 100).collect::<Vec<_>>(),
+                true
+            )
+        );
+    }
+
+    #[test]
+    fn the_later_trees_have_the_files_and_bytes_of_the_trees_that_they_follow() {
+        let (modules_files, modules_bytes) = match MODULES_128M.shape {
+            TreeShape::Modules { files, bytes } => (files, bytes),
+            _ => (0, 0),
+        };
+        let (files_files, files_bytes) = match FILES_128M.shape {
+            TreeShape::Files { files, bytes, .. } => (files, bytes),
+            _ => (1, 1),
+        };
+
+        assert_eq!(
+            (
+                (modules_files, modules_bytes),
+                COMPRESSIBLE_1G.shape,
+                COMPRESSIBLE_1G.content,
+                FILES_1G.content,
+            ),
+            (
+                (files_files, files_bytes),
+                FILES_1G.shape,
+                Content::Compressible,
+                Content::Incompressible,
+            )
         );
     }
 }
