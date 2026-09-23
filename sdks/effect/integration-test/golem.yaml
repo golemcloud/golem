@@ -203,7 +203,7 @@ agents:
 
 # Secret defaults applied automatically to the local environment at
 # deploy time. Production deployments would use
-# `golem secret create apiKey --secret-type String --secret-value ...`
+# `golem secret create apiKey --type String --value ...`
 # instead.
 resourceDefaults:
   local:

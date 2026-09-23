@@ -165,16 +165,23 @@ string values passed through the shell include the TypeScript string literal quo
 
 ```shell
 # Create secret values in the current environment
-golem secret create apiKey --secret-type string --secret-value '"sk-abc123"'
-golem secret create database.password --secret-type string --secret-value '"s3cret"'
+golem secret create apiKey --type string --value '"sk-abc123"'
+golem secret create database.password --type string --value '"s3cret"'
 
-# List, update, and delete
+# Without a value option the value is prompted for (hidden input); or pipe it in
+printenv DB_PASSWORD | golem secret create database.password --type string --value-stdin
+
+# Create, or update the value if the secret already exists
+golem secret create apiKey --type string --value '"sk-abc123"' --update-existing
+
+# List, update, clear, and delete (delete asks for confirmation; --yes skips it)
 golem secret list
-golem secret update-value apiKey --secret-value '"new-value"'
+golem secret update apiKey --value '"new-value"'
+golem secret update apiKey --unset
 golem secret delete apiKey
 ```
 
-For `update-value` and `delete`, `--id <uuid>` can be used instead of the positional path.
+For `update` and `delete`, `--id <uuid>` can be used instead of the positional path.
 
 ## Defaults in `golem.yaml`
 
