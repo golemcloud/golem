@@ -616,6 +616,28 @@ fn json_integer(
 }
 
 ///|
+fn json_int64_string(value : Json) -> Int64 raise ReflectError {
+  let text = json_string(value)
+  guard re"^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$".execute(text) is Some(_) else {
+    raise Json("expected a canonical signed integer string")
+  }
+  @string.parse_int64(text.view(), base=10) catch {
+    _ => raise Json("signed integer is outside the s64 range")
+  }
+}
+
+///|
+fn json_uint64_string(value : Json) -> UInt64 raise ReflectError {
+  let text = json_string(value)
+  guard re"^(?:0|[1-9][0-9]*)$".execute(text) is Some(_) else {
+    raise Json("expected a canonical unsigned integer string")
+  }
+  @string.parse_uint64(text.view(), base=10) catch {
+    _ => raise Json("unsigned integer is outside the u64 range")
+  }
+}
+
+///|
 fn required_field(
   fields : Map[String, Json],
   name : String,
@@ -760,24 +782,16 @@ fn SchemaRef::unpack(
     | (@model.SchemaTypeBody::S16(_), @model.SchemaValue::S16(value))
     | (@model.SchemaTypeBody::S32(_), @model.SchemaValue::S32(value)) =>
       Json::number(value.to_double())
-    (@model.SchemaTypeBody::S64(_), @model.SchemaValue::S64(value)) => {
-      guard value >= -9007199254740991L && value <= 9007199254740991L else {
-        raise Json("64-bit integer is outside the safe JSON range")
-      }
-      Json::number(value.to_double())
-    }
+    (@model.SchemaTypeBody::S64(_), @model.SchemaValue::S64(value)) =>
+      Json::string(value.to_string())
     (@model.SchemaTypeBody::U8(_), @model.SchemaValue::U8(value)) =>
       Json::number(value.to_int().to_double())
     (@model.SchemaTypeBody::U16(_), @model.SchemaValue::U16(value)) =>
       Json::number(value.reinterpret_as_int().to_double())
     (@model.SchemaTypeBody::U32(_), @model.SchemaValue::U32(value)) =>
       Json::number(value.to_double())
-    (@model.SchemaTypeBody::U64(_), @model.SchemaValue::U64(value)) => {
-      guard value <= 9007199254740991UL else {
-        raise Json("64-bit integer is outside the safe JSON range")
-      }
-      Json::number(value.to_double())
-    }
+    (@model.SchemaTypeBody::U64(_), @model.SchemaValue::U64(value)) =>
+      Json::string(value.to_string())
     (@model.SchemaTypeBody::F32(_), @model.SchemaValue::F32(value)) => {
       guard !value.is_nan() && !value.is_inf() else {
         raise Json("expected a finite JSON number")
@@ -938,21 +952,16 @@ fn SchemaRef::unpack(
       }
       Json::object(fields)
     }
-    (@model.SchemaTypeBody::Quantity(_), @model.SchemaValue::Quantity(value)) => {
-      guard value.mantissa >= -9007199254740991L &&
-        value.mantissa <= 9007199254740991L else {
-        raise Json("quantity mantissa is outside the safe JSON range")
-      }
+    (@model.SchemaTypeBody::Quantity(_), @model.SchemaValue::Quantity(value)) =>
       Json::object({
-        "mantissa": Json::number(value.mantissa.to_double()),
+        "mantissa": Json::string(value.mantissa.to_string()),
         "scale": Json::number(value.scale.to_double()),
         "unit": Json::string(value.unit),
       })
-    }
     (@model.SchemaTypeBody::Datetime, @model.SchemaValue::Datetime(value)) =>
       Json::string(datetime_to_json(value))
     (@model.SchemaTypeBody::Duration, @model.SchemaValue::Duration(value)) =>
-      Json::string(duration_to_json(value))
+      Json::object({ "nanoseconds": Json::string(value.to_string()) })
     (@model.SchemaTypeBody::Secret(_), @model.SchemaValue::Secret(_))
     | (@model.SchemaTypeBody::QuotaToken(_), @model.SchemaValue::QuotaToken(_))
     | (
@@ -984,14 +993,11 @@ fn SchemaRef::pack(
     S8(_) => S8(json_integer(json, -128.0, 127.0).to_int())
     S16(_) => S16(json_integer(json, -32768.0, 32767.0).to_int())
     S32(_) => S32(json_integer(json, -2147483648.0, 2147483647.0).to_int())
-    S64(_) =>
-      S64(
-        json_integer(json, -9007199254740991.0, 9007199254740991.0).to_int64(),
-      )
+    S64(_) => S64(json_int64_string(json))
     U8(_) => U8(json_integer(json, 0.0, 255.0).to_uint().to_byte())
     U16(_) => U16(json_integer(json, 0.0, 65535.0).to_uint())
     U32(_) => U32(json_integer(json, 0.0, 4294967295.0).to_uint())
-    U64(_) => U64(json_integer(json, 0.0, 9007199254740991.0).to_uint64())
+    U64(_) => U64(json_uint64_string(json))
     F32(_) => {
       let value = json_number(json)
       guard !value.is_nan() && !value.is_inf() else {
@@ -1027,7 +1033,15 @@ fn SchemaRef::pack(
         }
       }
       let values = expected.map(field => {
-        self.pack(self.resolve(field.body), required_field(fields, field.name))
+        let resolved = self.resolve(field.body)
+        match fields.get(field.name) {
+          Some(value) => self.pack(resolved, value)
+          None =>
+            match resolved.body {
+              Option(_) => @model.SchemaValue::Option(None)
+              _ => raise Json("missing field '" + field.name + "'")
+            }
+        }
       })
       Record(values)
     }
@@ -1197,11 +1211,7 @@ fn SchemaRef::pack(
         raise Json("quantity JSON requires mantissa, scale, and unit")
       }
       Quantity({
-        mantissa: json_integer(
-          required_field(fields, "mantissa"),
-          -9007199254740991.0,
-          9007199254740991.0,
-        ).to_int64(),
+        mantissa: json_int64_string(required_field(fields, "mantissa")),
         scale: json_integer(
           required_field(fields, "scale"),
           -2147483648.0,
@@ -1211,7 +1221,13 @@ fn SchemaRef::pack(
       })
     }
     Datetime => Datetime(datetime_from_json(json_string(json)))
-    Duration => Duration(duration_from_json(json))
+    Duration => {
+      let fields = json_object(json)
+      guard fields.length() == 1 else {
+        raise Json("duration JSON requires only nanoseconds")
+      }
+      Duration(json_int64_string(required_field(fields, "nanoseconds")))
+    }
     Secret(_) | QuotaToken(_) | PermissionCard(_) =>
       raise Json("capability values cannot be constructed from JSON")
     Future(_) | Stream(_) =>

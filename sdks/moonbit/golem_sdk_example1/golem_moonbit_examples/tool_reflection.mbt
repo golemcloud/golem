@@ -3,6 +3,25 @@
 struct MoonBitReflectionTest {}
 
 ///|
+#warnings("-struct_never_constructed")
+struct ReflectionMeters {}
+
+///|
+impl @schema.QuantityUnit for ReflectionMeters with fn type_id() {
+  "golem.examples.ReflectionMeters"
+}
+
+///|
+impl @schema.QuantityUnit for ReflectionMeters with fn base_unit() {
+  "m"
+}
+
+///|
+impl @schema.QuantityUnit for ReflectionMeters with fn allowed_suffixes() {
+  []
+}
+
+///|
 #derive.golem_schema
 pub(all) struct AuditLogConstructor {
   name : String
@@ -35,6 +54,29 @@ pub fn MoonBitReflectionTest::echo(label : String) -> String {
 #derive.arg("maybe", scope="option")
 pub fn MoonBitReflectionTest::optional(maybe : String?) -> String {
   maybe.unwrap_or("omitted")
+}
+
+///|
+#derive.arg("maybe", scope="option")
+pub fn MoonBitReflectionTest::canonical_values(
+  signed : Int64,
+  unsigned : UInt64,
+  duration : @schema.Duration,
+  quantity : @schema.Quantity[ReflectionMeters],
+  maybe : String?,
+) -> String {
+  let quantity = quantity.value()
+  if signed == -9223372036854775807L - 1L &&
+    unsigned == 18446744073709551615UL &&
+    duration == @schema.Duration::new(9223372036854775807L) &&
+    quantity.mantissa == -9223372036854775807L - 1L &&
+    quantity.scale == -9 &&
+    quantity.unit == "m" &&
+    maybe is None {
+    "moonbit-canonical-ok"
+  } else {
+    "moonbit-canonical-mismatch"
+  }
 }
 
 ///|
@@ -254,9 +296,8 @@ pub async fn MoonBitToolReflectionCaller::optional_round_trip(
   let command = tool.command(["optional"]) catch {
     error => return "command:\{Repr(error)}"
   }
-  let omitted_json = command.invoke_json(
-    Json::object({ "maybe": Json::null() }),
-  )
+  let omitted_json = command.invoke_json(Json::object({}))
+  let null_json = command.invoke_json(Json::object({ "maybe": Json::null() }))
   let supplied_json = command.invoke_json(
     Json::object({ "maybe": Json::string("supplied") }),
   )
@@ -299,7 +340,39 @@ pub async fn MoonBitToolReflectionCaller::optional_round_trip(
     Ok(value) => value
     Err(_) => return "generated-supplied-error"
   }
-  "\{text_json(omitted_json)}|\{text_json(supplied_json)}|\{text_native(omitted_native)}|\{text_native(supplied_native)}|\{generated_omitted}|\{generated_supplied}"
+  "\{text_json(omitted_json)}|\{text_json(null_json)}|\{text_json(supplied_json)}|\{text_native(omitted_native)}|\{text_native(supplied_native)}|\{generated_omitted}|\{generated_supplied}"
+}
+
+///|
+pub async fn MoonBitToolReflectionCaller::canonical_round_trip(
+  self : Self,
+) -> String {
+  ignore(self)
+  let tool = @reflection.get_tool_type("moonbit-reflection-test") catch {
+    error => return "discovery:\{Repr(error)}"
+  }
+  let command = tool.command(["canonical-values"]) catch {
+    error => return "command:\{Repr(error)}"
+  }
+  let result = command.invoke_json(
+    Json::object({
+      "signed": Json::string("-9223372036854775808"),
+      "unsigned": Json::string("18446744073709551615"),
+      "duration": Json::object({
+        "nanoseconds": Json::string("9223372036854775807"),
+      }),
+      "quantity": Json::object({
+        "mantissa": Json::string("-9223372036854775808"),
+        "scale": Json::number(-9.0),
+        "unit": Json::string("m"),
+      }),
+    }),
+  )
+  match result {
+    Ok(Some(Json::String(text))) => text
+    Ok(_) => "canonical-error:unexpected"
+    Err(error) => "canonical-error:\{reflected_tool_error(error)}"
+  }
 }
 
 ///|

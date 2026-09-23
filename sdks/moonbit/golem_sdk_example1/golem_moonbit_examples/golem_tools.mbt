@@ -4406,7 +4406,7 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
           aliases: [],
           doc: { summary: "", description: "", examples: [] },
           globals: { options: [], flags: [] },
-          subcommands: [1, 2],
+          subcommands: [1, 2, 3],
           body: None,
         },
         {
@@ -4474,6 +4474,117 @@ fn __golem_tool_def_raw_MoonBitReflectionTest() -> @tool.ToolDef {
           body: Some(
             {
               positionals: { fixed: [], tail: None },
+              options: [
+                {
+                  long: "maybe",
+                  short: None,
+                  aliases: [],
+                  doc: { summary: "", description: "", examples: [] },
+                  value_name: None,
+                  shape: @tool.OptionShapeDef::Scalar(
+                    @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                    ),
+                  ),
+                  default: None,
+                  required: false,
+                  env_var: None,
+                },
+              ],
+              flags: [],
+              constraints: [],
+              stdin: None,
+              stdout: None,
+              result: Some(
+                {
+                  type_: @schema.into_schema_graph(
+                    (@schema.TypeTag::{  } : @schema.TypeTag[String]),
+                  ),
+                  doc: { summary: "", description: "", examples: [] },
+                  formatters: [
+                    {
+                      name: "default",
+                      doc: { summary: "", description: "", examples: [] },
+                    },
+                  ],
+                  default_formatter: "default",
+                },
+              ),
+              errors: [],
+              annotations: Some(
+                {
+                  read_only: false,
+                  destructive: true,
+                  idempotent: false,
+                  open_world: true,
+                },
+              ),
+            },
+          ),
+        },
+        {
+          name: "canonical-values",
+          aliases: [],
+          doc: { summary: "", description: "", examples: [] },
+          globals: { options: [], flags: [] },
+          subcommands: [],
+          body: Some(
+            {
+              positionals: {
+                fixed: [
+                  {
+                    name: "signed",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[Int64]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "unsigned",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (@schema.TypeTag::{  } : @schema.TypeTag[UInt64]),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "duration",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (
+                        @schema.TypeTag::{  }
+                        : @schema.TypeTag[@schema.Duration]
+                      ),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                  {
+                    name: "quantity",
+                    doc: { summary: "", description: "", examples: [] },
+                    value_name: None,
+                    type_: @schema.into_schema_graph(
+                      (
+                        @schema.TypeTag::{  }
+                        : @schema.TypeTag[@schema.Quantity[ReflectionMeters]]
+                      ),
+                    ),
+                    default: None,
+                    required: true,
+                    accepts_stdio: false,
+                  },
+                ],
+                tail: None,
+              },
               options: [
                 {
                   long: "maybe",
@@ -4703,6 +4814,119 @@ async fn __golem_tool_invoke_MoonBitReflectionTest(
         }
       }
       let __golem_value = MoonBitReflectionTest::optional(maybe)
+      Ok(
+        try {
+          @tool.invocation_result_value(__golem_value)
+        } catch{
+          @asyncCore.Cancelled::Cancelled as error => raise  error
+          @types.ToolError::InvalidResult(message) => {
+            return Err(@types.ToolError::InvalidResult(message))
+          }
+          error => raise  error
+        },
+      )
+    }
+    3 => {
+      if __golem_stdin is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stdin stream",
+          ),
+        )
+      }
+      if __golem_stdout is Some(_) {
+        return @tool.reject_decoded_invocation(
+          __golem_decoded,
+          __golem_stdin,
+          @types.ToolError::InvalidInput(
+            "command does not accept a stdout stream",
+          ),
+        )
+      }
+      let signed :Int64 = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "signed",
+          "tool moonbit-reflection-test command canonical-values",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let unsigned :UInt64 = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "unsigned",
+          "tool moonbit-reflection-test command canonical-values",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let duration :@schema.Duration = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "duration",
+          "tool moonbit-reflection-test command canonical-values",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let quantity :@schema.Quantity[ReflectionMeters] = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "quantity",
+          "tool moonbit-reflection-test command canonical-values",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let maybe :String? = try {
+        @tool.decode_canonical_field(
+          __golem_decoded,
+          "maybe",
+          "tool moonbit-reflection-test command canonical-values",
+        )
+      } catch{
+        __golem_error => {
+          return @tool.reject_decoded_invocation(
+            __golem_decoded,
+            __golem_stdin,
+            __golem_error,
+          )
+        }
+      }
+      let __golem_value = MoonBitReflectionTest::canonical_values(
+        signed,
+        unsigned,
+        duration,
+        quantity,
+        maybe,
+      )
       Ok(
         try {
           @tool.invocation_result_value(__golem_value)
