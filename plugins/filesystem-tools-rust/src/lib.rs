@@ -1,8 +1,10 @@
-use golem_rust::{FromSchema, IntoSchema, ToolError, tool_definition, tool_implementation};
+use golem_rust::{
+    FromSchema, IntoSchema, IntoWire, ToolError, WireSchema, tool_definition, tool_implementation,
+};
 use std::fs;
 use std::path::{Component, Path};
 
-#[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema, IntoWire, WireSchema)]
 pub struct ReadFileResult {
     pub content: String,
     pub start_line: Option<u64>,
@@ -12,19 +14,19 @@ pub struct ReadFileResult {
     pub truncated_after: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema, IntoWire, WireSchema)]
 pub enum WriteDisposition {
     Created,
     Replaced,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema, IntoWire, WireSchema)]
 pub struct WriteFileResult {
     pub disposition: WriteDisposition,
     pub bytes_written: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, IntoSchema, FromSchema, IntoWire, WireSchema)]
 pub struct EditFileResult {
     pub replacements: u64,
     pub bytes_before: u64,

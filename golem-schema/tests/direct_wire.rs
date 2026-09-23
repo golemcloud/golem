@@ -7,6 +7,32 @@ use golem_schema::schema::wit::{
 use golem_schema_derive::{FromWire, IntoWire, WireSchema};
 use test_r::test;
 
+#[cfg(feature = "bytes")]
+#[test]
+fn bytes_use_binary_nodes_not_byte_lists() {
+    let value = bytes::Bytes::from_static(&[0, 129, 255]);
+    let encoded = encode(&value).unwrap();
+    assert_eq!(encoded.value_nodes.len(), 1);
+    match &encoded.value_nodes[encoded.root as usize] {
+        wire::SchemaValueNode::BinaryValue(payload) => {
+            assert_eq!(payload.bytes, [0, 129, 255]);
+            assert_eq!(payload.mime_type, None);
+        }
+        _ => panic!("expected binary node"),
+    }
+    assert_eq!(decode::<bytes::Bytes>(encoded).unwrap(), value);
+    let graph = schema::<bytes::Bytes>();
+    assert!(matches!(
+        graph.type_nodes[graph.root as usize].body,
+        wire::SchemaTypeBody::BinaryType(_)
+    ));
+    assert!(decode::<bytes::Bytes>(encode(&vec![0u8, 129, 255]).unwrap()).is_err());
+    assert_eq!(
+        decode::<bytes::Bytes>(encode(&bytes::Bytes::new()).unwrap()).unwrap(),
+        bytes::Bytes::new()
+    );
+}
+
 // Deliberately no IntoSchema/FromSchema implementations: a hidden model adapter
 // cannot satisfy these tests.
 #[derive(Debug, PartialEq, FromWire, IntoWire, WireSchema)]

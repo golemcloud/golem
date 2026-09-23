@@ -9,9 +9,9 @@ use golem_rust::golem_agentic::golem::tool::host::{
     self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue,
-    TypedSchemaValue, agent_definition, agent_implementation, decode_typed_schema_value_owned,
-    read_only,
+    FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaGraph, SchemaType,
+    SchemaValue, TypedSchemaValue, agent_definition, agent_implementation,
+    decode_typed_schema_value_owned, read_only,
 };
 use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
@@ -105,7 +105,7 @@ struct RawEditFileResult {
     bytes_after: u64,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire)]
 struct TypedInputItem {
     ordinal: u32,
     caller_extra: u64,
@@ -128,7 +128,7 @@ pub struct TypedOutputEvidence {
     pub ordinal: u32,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire)]
 pub struct TypedInputEvidence {
     pub label: String,
     pub ordinal: u32,
@@ -392,7 +392,7 @@ async fn invoke_filesystem_tool<T: FromSchema>(
         .unwrap_or_else(|error| panic!("convert filesystem tool '{name}' result: {error}"))
 }
 
-fn gated_typed_input<T: IntoSchema + FromSchema + 'static>(items: [T; 3]) -> AgentStream<T> {
+fn gated_typed_input<T: IntoWire + FromWire + 'static>(items: [T; 3]) -> AgentStream<T> {
     let (mut writer, input) = AgentStream::new();
     spawn_local(async move {
         let [first, second, third] = items;

@@ -5,8 +5,8 @@ use golem_rust::tool::{
     ToolInvokeError, UnderlyingTool,
 };
 use golem_rust::{
-    FromSchema, IntoSchema, TypedSchemaValue, tool_definition, tool_middleware,
-    universal_tool_middleware,
+    FromSchema, FromWire, IntoSchema, IntoWire, TypedSchemaValue, WireSchema, tool_definition,
+    tool_middleware, universal_tool_middleware,
 };
 use std::convert::Infallible;
 
@@ -18,7 +18,7 @@ pub trait MiddlewareProbe {
 mod expected_typed_output {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Item {
         pub ordinal: u32,
         pub label: String,
@@ -34,7 +34,7 @@ mod expected_typed_output {
 mod presented_typed_output {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Item {
         pub label: String,
         pub ordinal: u32,
@@ -85,14 +85,14 @@ impl
 mod expected_typed_input {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Item {
         pub ordinal: u32,
         pub caller_extra: u64,
         pub label: String,
     }
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Evidence {
         pub label: String,
         pub ordinal: u32,

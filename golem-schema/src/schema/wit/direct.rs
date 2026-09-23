@@ -906,3 +906,40 @@ impl WireSchema for SchemaValueStream {
         builder.push(wire::SchemaTypeBody::StreamType(None))
     }
 }
+
+#[cfg(feature = "bytes")]
+impl WireSchema for bytes::Bytes {
+    fn wire_type_id() -> String {
+        "bytes.Bytes".to_string()
+    }
+
+    fn append_schema(builder: &mut WireSchemaBuilder) -> wire::TypeNodeIndex {
+        builder.push(wire::SchemaTypeBody::BinaryType(wire::BinaryRestrictions {
+            mime_types: None,
+            min_bytes: None,
+            max_bytes: None,
+        }))
+    }
+}
+
+#[cfg(feature = "bytes")]
+impl IntoWire for bytes::Bytes {
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
+        Ok(writer.push(wire::SchemaValueNode::BinaryValue(
+            wire::BinaryValuePayload {
+                bytes: self.to_vec(),
+                mime_type: None,
+            },
+        )))
+    }
+}
+
+#[cfg(feature = "bytes")]
+impl FromWire for bytes::Bytes {
+    fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
+        match reader.take(index)? {
+            wire::SchemaValueNode::BinaryValue(payload) => Ok(Self::from(payload.bytes)),
+            _ => Err(WireError::Shape("binary")),
+        }
+    }
+}

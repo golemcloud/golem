@@ -1145,7 +1145,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=9c6dce16db01eeb83f44360f27c0c502d3da4462#9c6dce16db01eeb83f44360f27c0c502d3da4462"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
 dependencies = [
  "bitflags",
  "futures",
@@ -1165,7 +1165,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-core"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=9c6dce16db01eeb83f44360f27c0c502d3da4462#9c6dce16db01eeb83f44360f27c0c502d3da4462"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
@@ -1198,7 +1198,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=9c6dce16db01eeb83f44360f27c0c502d3da4462#9c6dce16db01eeb83f44360f27c0c502d3da4462"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
 dependencies = [
  "anyhow",
  "heck 0.5.0",
@@ -1227,7 +1227,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust-macro"
 version = "0.59.0"
-source = "git+https://github.com/golemcloud/wit-bindgen?rev=9c6dce16db01eeb83f44360f27c0c502d3da4462#9c6dce16db01eeb83f44360f27c0c502d3da4462"
+source = "git+https://github.com/golemcloud/wit-bindgen?rev=ca628b5d78c346f8b51973931d45c0ce08c784dd#ca628b5d78c346f8b51973931d45c0ce08c784dd"
 dependencies = [
  "anyhow",
  "macro-string",

@@ -6,8 +6,8 @@ use golem_rust::bindings::wasi::config::store as wasi_config;
 use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, get};
 use golem_rust::retry::{NamedPolicy, Policy, set_named_policy};
 use golem_rust::{
-    FromSchema, IntoSchema, PromiseId, SchemaValue, Uuid, agent_definition, agent_implementation,
-    encode_schema_value, mark_atomic_operation, oplog_commit,
+    FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, Uuid, agent_definition,
+    agent_implementation, encode_schema_value, mark_atomic_operation, oplog_commit,
 };
 use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -246,7 +246,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     }
 }
 
-fn agent_stream<T: IntoSchema + FromSchema + 'static>(values: Vec<T>) -> AgentStream<T> {
+fn agent_stream<T: IntoWire + FromWire + 'static>(values: Vec<T>) -> AgentStream<T> {
     let (mut writer, stream) = AgentStream::new();
     spawn_local(async move {
         let _ = writer.write_all(values).await;
@@ -278,7 +278,7 @@ pub struct NestedStreamInput {
     pub values: Option<AgentStream<u32>>,
 }
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire)]
 pub struct NestedStreamItem {
     pub label: String,
     pub values: AgentStream<u32>,

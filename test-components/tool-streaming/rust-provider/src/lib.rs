@@ -4,7 +4,8 @@ use golem_rust::agentic::{
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, ToolError, tool_definition, tool_implementation,
+    FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, ToolError, WireSchema,
+    tool_definition, tool_implementation,
 };
 use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
@@ -84,7 +85,7 @@ async fn announce_middleware_probe_effect(value: &str) {
     assert_eq!(response.get_status_code(), 204);
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct TypedOutputItem {
     pub ordinal: u32,
     pub label: String,
@@ -136,13 +137,13 @@ impl TypedOutputStream for TypedOutputStreamImpl {
     }
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct TypedInputItem {
     pub label: String,
     pub ordinal: u32,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct TypedInputEvidence {
     pub label: String,
     pub ordinal: u32,
@@ -182,7 +183,7 @@ impl TypedInputStream for TypedInputStreamImpl {
     }
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 pub struct StreamSummary {
     pub chunks_read: u32,
     pub bytes_read: u64,

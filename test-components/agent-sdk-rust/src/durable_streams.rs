@@ -1,6 +1,6 @@
 use golem_rust::agentic::{AgentStream, spawn_local};
 use golem_rust::schema::{FromSchema, IntoSchema};
-use golem_rust::{agent_definition, agent_implementation, endpoint};
+use golem_rust::{FromWire, IntoWire, agent_definition, agent_implementation, endpoint};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static INPUT_ITEMS: AtomicU64 = AtomicU64::new(0);
@@ -17,7 +17,7 @@ pub struct EchoOutput {
     pub output: AgentStream<String>,
 }
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire)]
 pub struct FramedRecord {
     pub name: String,
     pub number: u32,
@@ -234,7 +234,7 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
     }
 }
 
-fn stream_with_delay<T: IntoSchema + FromSchema + 'static>(
+fn stream_with_delay<T: IntoWire + FromWire + 'static>(
     values: impl IntoIterator<Item = T>,
     delay_ms: u64,
 ) -> AgentStream<T> {
@@ -258,8 +258,8 @@ fn stream_with_delay<T: IntoSchema + FromSchema + 'static>(
 
 fn copy_stream<T, U>(mut input: AgentStream<T>, map: impl Fn(T) -> U + 'static) -> AgentStream<U>
 where
-    T: IntoSchema + FromSchema + 'static,
-    U: IntoSchema + FromSchema + 'static,
+    T: 'static,
+    U: IntoWire + FromWire + 'static,
 {
     let (mut writer, output) = AgentStream::new();
     spawn_local(async move {
