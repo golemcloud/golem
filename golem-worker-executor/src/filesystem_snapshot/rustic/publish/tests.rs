@@ -42,9 +42,10 @@ fn staged() -> StagedSnapshot {
 }
 
 /// Gives the snapshot files of a new namespace over a storage whose script for the publish is
-/// `publish`, and the in-memory storage below it.
+/// `publish` and for the delete is `retract`, and the in-memory storage below it.
 fn files(
     publish: Script,
+    retract: Script,
     deadline: Duration,
 ) -> (
     SnapshotFiles,
@@ -52,12 +53,10 @@ fn files(
     Arc<InMemoryBlobStorage>,
 ) {
     let inner = Arc::new(InMemoryBlobStorage::new());
-    let storage = ScriptedBlobStorage::new(inner.clone(), move |op_label, _| {
-        if op_label == "publish" {
-            publish
-        } else {
-            Script::Pass
-        }
+    let storage = ScriptedBlobStorage::new(inner.clone(), move |op_label, _| match op_label {
+        "publish" => publish,
+        "retract" => retract,
+        _ => Script::Pass,
     });
     (
         SnapshotFiles {
@@ -87,7 +86,7 @@ async fn stored(files: &SnapshotFiles, inner: &InMemoryBlobStorage) -> Option<Ve
 
 #[test]
 async fn a_publish_writes_the_staged_file() {
-    let (files, _, inner) = files(Script::Pass, Duration::from_secs(2));
+    let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
 
     let published = publish(&files, &staged(), &TaskTracker::new()).await;
 
@@ -99,7 +98,7 @@ async fn a_publish_writes_the_staged_file() {
 
 #[test]
 async fn a_publish_of_a_file_that_is_there_succeeds_and_keeps_the_file() {
-    let (files, _, inner) = files(Script::Pass, Duration::from_secs(2));
+    let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
     let tracker = TaskTracker::new();
 
     let first = publish(&files, &staged(), &tracker).await;
@@ -113,7 +112,8 @@ async fn a_publish_of_a_file_that_is_there_succeeds_and_keeps_the_file() {
 
 #[test]
 async fn a_publish_whose_answer_is_lost_deletes_the_file_and_gives_the_error() {
-    let (files, storage, inner) = files(Script::LoseTheAnswer, Duration::from_secs(2));
+    let (files, storage, inner) =
+        files(Script::LoseTheAnswer, Script::Pass, Duration::from_secs(2));
 
     let published = publish(&files, &staged(), &TaskTracker::new()).await;
 
@@ -136,7 +136,11 @@ async fn a_publish_whose_answer_is_lost_deletes_the_file_and_gives_the_error() {
 
 #[test]
 async fn a_publish_that_reaches_the_deadline_deletes_the_file_that_the_storage_wrote() {
-    let (files, _, inner) = files(Script::NeverAnswer, Duration::from_millis(100));
+    let (files, _, inner) = files(
+        Script::NeverAnswer,
+        Script::Pass,
+        Duration::from_millis(100),
+    );
 
     let published = publish(&files, &staged(), &TaskTracker::new()).await;
 
@@ -153,11 +157,18 @@ async fn a_publish_that_reaches_the_deadline_deletes_the_file_that_the_storage_w
 
 #[test]
 async fn a_publish_that_the_caller_drops_deletes_the_file_in_a_task_of_the_tracker() {
-    let (files, _, inner) = files(Script::NeverAnswer, Duration::from_secs(60));
+    // The delete waits for the gate, so the test reads the file that the dropped write left
+    // before the task of the tracker deletes it.
+    let (files, storage, inner) = files(
+        Script::NeverAnswer,
+        Script::WaitForGate,
+        Duration::from_secs(60),
+    );
     let tracker = TaskTracker::new();
 
     let dropped = publish(&files, &staged(), &tracker).now_or_never();
     let written_before_the_drop = stored(&files, &inner).await;
+    storage.open_gate();
     tracker.close();
     let waited = tokio::time::timeout(LIMIT, tracker.wait()).await;
 
@@ -174,7 +185,7 @@ async fn a_publish_that_the_caller_drops_deletes_the_file_in_a_task_of_the_track
 
 #[test]
 async fn a_publish_that_returns_keeps_the_file_when_the_tasks_of_the_tracker_end() {
-    let (files, _, inner) = files(Script::Pass, Duration::from_secs(2));
+    let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
     let tracker = TaskTracker::new();
 
     let published = publish(&files, &staged(), &tracker).await;
@@ -193,7 +204,7 @@ async fn a_publish_that_returns_keeps_the_file_when_the_tasks_of_the_tracker_end
 
 #[test]
 async fn a_retract_of_a_path_without_a_file_succeeds() {
-    let (files, _, _) = files(Script::Pass, Duration::from_secs(2));
+    let (files, _, _) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
 
     assert!(retract(&files, Path::new(SNAPSHOT_PATH)).await.is_ok());
 }

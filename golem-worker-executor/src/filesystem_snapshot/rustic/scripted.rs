@@ -28,6 +28,7 @@ use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
+use tokio_util::sync::CancellationToken;
 
 /// What the storage does with one call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +41,8 @@ pub(super) enum Script {
     LoseTheAnswer,
     /// Passes the call, and then never answers.
     NeverAnswer,
+    /// Waits until the test opens the gate of the storage, and then passes the call.
+    WaitForGate,
 }
 
 /// A rule that gives the script of a call from its operation label and its path.
@@ -51,6 +54,7 @@ pub(super) struct ScriptedBlobStorage {
     inner: Arc<InMemoryBlobStorage>,
     rule: Rule,
     calls: Mutex<Vec<(&'static str, Box<Path>)>>,
+    gate: CancellationToken,
 }
 
 impl ScriptedBlobStorage {
@@ -62,7 +66,13 @@ impl ScriptedBlobStorage {
             inner,
             rule: Box::new(rule),
             calls: Mutex::new(Vec::new()),
+            gate: CancellationToken::new(),
         })
+    }
+
+    /// Lets each call that waits for the gate, and each later such call, go on.
+    pub(super) fn open_gate(&self) {
+        self.gate.cancel();
     }
 
     /// Gives the operation label and the path of each call, in the order of the calls.
@@ -95,6 +105,10 @@ impl ScriptedBlobStorage {
             Script::NeverAnswer => {
                 call.await?;
                 std::future::pending().await
+            }
+            Script::WaitForGate => {
+                self.gate.cancelled().await;
+                call.await
             }
         }
     }
