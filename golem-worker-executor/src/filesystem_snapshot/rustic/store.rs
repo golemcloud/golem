@@ -26,8 +26,9 @@ use super::prune::{PruneLedger, prune_due, read_ledger, write_ledger};
 use super::publish::{SnapshotFiles, SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
 use super::{
-    ChangeDetection, PruneSettings, RepackLimits, RepositoryKey, RepositorySettings, SaveSettings,
-    backup_options, open_existing, open_or_create, prune, restore_snapshot, run_blocking,
+    ChangeDetection, PruneReport, PruneSettings, RepackLimits, RepositoryKey, RepositorySettings,
+    SaveSettings, backup_options, open_existing, open_or_create, prune, restore_snapshot,
+    run_blocking,
 };
 use crate::filesystem_snapshot::{
     FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope, SnapshotStoreError,
@@ -265,9 +266,7 @@ impl RusticSnapshotStore {
                 prune(backend, &key, &settings)
             })
             .await?;
-        let marked_packs = report.is_some_and(|report| {
-            report.packs_unused + report.packs_repacked + report.marked_packs_kept > 0
-        });
+        let marked_packs = report.as_ref().is_some_and(leaves_marked_packs);
         write_ledger(
             &*self.storage,
             &scope.0,
@@ -627,12 +626,12 @@ fn lookup(found: ScopeSnapshots, name: &SnapshotName) -> Lookup {
 /// parses. Of the files with one name, only the one that [`lookup`] takes stays.
 fn listed(found: ScopeSnapshots) -> Vec<(SnapshotName, SnapshotInfo)> {
     let mut snapshots = found.readable;
-    snapshots.sort_by_key(|snapshot| {
-        (
-            snapshot.label.clone(),
-            snapshot.time.timestamp(),
-            snapshot.id,
-        )
+    snapshots.sort_by(|left, right| {
+        (&left.label, left.time.timestamp(), left.id).cmp(&(
+            &right.label,
+            right.time.timestamp(),
+            right.id,
+        ))
     });
     snapshots.dedup_by(|later, first| later.label == first.label);
     snapshots
@@ -654,6 +653,15 @@ fn snapshot_info(snapshot: &SnapshotFile) -> Option<SnapshotInfo> {
         files: content.files,
         bytes: content.bytes,
     })
+}
+
+/// Tells whether a later prune removes packs that this prune leaves marked.
+///
+/// A prune marks each pack that holds only unused blobs, and each pack that it repacks. A pack that
+/// an earlier prune marked and whose time to stay is not over stays marked. A pack that no index
+/// lists is also marked, but the report does not count it. A later due prune removes that pack.
+fn leaves_marked_packs(report: &PruneReport) -> bool {
+    report.packs_unused > 0 || report.packs_repacked > 0 || report.marked_packs_kept > 0
 }
 
 /// Gives the packed bytes that the save of the snapshot added to the repository.

@@ -43,6 +43,9 @@ pub(super) enum Script {
     NeverAnswer,
     /// Waits until the test opens the gate of the storage, and then passes the call.
     WaitForGate,
+    /// Gives no blob to a read of a whole blob, as a delete after a listing does. Each other call
+    /// passes.
+    Vanish,
 }
 
 /// A rule that gives the script of a call from its operation label and its path.
@@ -85,16 +88,20 @@ impl ScriptedBlobStorage {
             .collect()
     }
 
+    fn record(&self, op_label: &'static str, path: &Path) {
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((op_label, path.into()));
+    }
+
     async fn answer<T>(
         &self,
         op_label: &'static str,
         path: &Path,
         call: impl Future<Output = anyhow::Result<T>>,
     ) -> anyhow::Result<T> {
-        self.calls
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push((op_label, path.into()));
+        self.record(op_label, path);
         match (self.rule)(op_label, path) {
             Script::Pass => call.await,
             Script::Refuse => Err(anyhow::anyhow!("the storage refused the call")),
@@ -110,6 +117,7 @@ impl ScriptedBlobStorage {
                 self.gate.cancelled().await;
                 call.await
             }
+            Script::Vanish => call.await,
         }
     }
 }
@@ -129,6 +137,10 @@ impl BlobStorage for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> anyhow::Result<Option<Vec<u8>>> {
+        if (self.rule)(op_label, path) == Script::Vanish {
+            self.record(op_label, path);
+            return Ok(None);
+        }
         self.answer(
             op_label,
             path,
