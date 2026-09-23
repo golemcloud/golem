@@ -17,8 +17,16 @@
 package golem.config
 
 import golem.schema.{FromSchema, IntoSchema}
+import golem.schema.wire.{ConcreteCodec, WitSchemaGraph}
 
 trait ConfigFieldLoader {
   def loadLocal[A](path: List[String])(implicit into: IntoSchema[A], from: FromSchema[A]): A
   def loadSecret[A](path: List[String])(implicit into: IntoSchema[A], from: FromSchema[A]): Secret[A]
+  def loadLocalWire[A](path: List[String], graph: WitSchemaGraph, codec: ConcreteCodec[A]): A
+  def loadSecretWire[A](
+    path: List[String],
+    graph: WitSchemaGraph,
+    handleGraph: WitSchemaGraph,
+    codec: ConcreteCodec[A]
+  ): Secret[A]
 }

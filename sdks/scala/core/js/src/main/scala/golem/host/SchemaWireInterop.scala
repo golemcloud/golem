@@ -82,6 +82,23 @@ object SchemaWireInterop {
   def valueTreeToJsAsync(v: WitSchemaValueTree): Future[JsSchemaValueTree] =
     prepareValueTreeToJsAsync(v).map(_.commit())
 
+  /**
+   * Owns generated output streams, including those not reached if lowering
+   * fails.
+   */
+  def ownedValueTreeToJsAsync(v: WitSchemaValueTree): Future[JsSchemaValueTree] = {
+    val transaction = new AgentStreamOutputTransaction
+    v.valueNodes.foreach {
+      case WitSchemaValueNode.StreamValue(handle) => handle.withHandle(transaction.register)
+      case _                                      => ()
+    }
+    val result = Try(valueTreeToJsAsync(v)).fold(Future.failed, identity)
+    result.transformWith {
+      case Success(value) => transaction.closeUncommitted().map(_ => value)
+      case Failure(error) => transaction.rollback().flatMap(_ => Future.failed(error))
+    }
+  }
+
   private def prepareValueTreeToJsAsync(v: WitSchemaValueTree): Future[PreparedValueTree] = {
     preflightValueTree(v)
     val transferred = mutable.ListBuffer.empty[PreparedStream]
@@ -121,7 +138,7 @@ object SchemaWireInterop {
 
   def typedToJsAsync(t: WitTypedSchemaValue): Future[JsTypedSchemaValue] = {
     val graph = graphToJs(t.graph)
-    valueTreeToJsAsync(t.value).map(value => JsTypedSchemaValue(graph, value))
+    ownedValueTreeToJsAsync(t.value).map(value => JsTypedSchemaValue(graph, value))
   }
 
   def typedFromJs(j: JsTypedSchemaValue): WitTypedSchemaValue = {

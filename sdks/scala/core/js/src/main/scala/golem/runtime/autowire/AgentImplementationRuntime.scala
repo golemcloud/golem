@@ -22,11 +22,56 @@ import golem.runtime.{
   AgentImplementationType,
   AsyncImplementationMethod,
   SnapshotRestoreContext,
-  SyncImplementationMethod
+  SyncImplementationMethod,
+  WireAgentImplementationType,
+  WireAgentMetadata
 }
 import golem.FutureInterop
 
 private[autowire] object AgentImplementationRuntime {
+  def registerWire[Trait, Ctor](
+    typeName: String,
+    mode: AgentMode,
+    implType: WireAgentImplementationType[Trait, Ctor]
+  ): AgentDefinition[Trait] = {
+    val effectiveBuild: (Ctor, Principal) => Trait = implType.configBuilder match {
+      case Some(builder) if !implType.configInjectedViaConstructor =>
+        (ctor: Ctor, principal: Principal) => {
+          ConfigHolder.set(ConfigLoader.loadConfig(builder))
+          implType.buildInstance(ctor, principal)
+        }
+      case _ => implType.buildInstance
+    }
+    val definition = new AgentDefinition[Trait](
+      typeName = typeName,
+      descriptor = implType.metadata,
+      constructor = AgentConstructor.wire(implType.metadata, implType.ctorCodec)(effectiveBuild),
+      bindings = implType.methods.map(MethodBinding.wire(implType.metadata, _)),
+      mode = mode,
+      snapshotHandlers = implType.snapshotHandlers,
+      restoreInstance = implType.snapshotHandlers.map {
+        handlers => (bytes, agentId, identityInput, phantomId, principal) =>
+          FutureInterop.toPromise(SchemaPayload.withWireInput(identityInput) { value =>
+            val identity = implType.ctorCodec.decode(value)
+            val fields   = identity match {
+              case ()                => Vector.empty
+              case values: Vector[?] => values.asInstanceOf[Vector[Any]]
+              case value             => Vector(value)
+            }
+            val freshConfig = implType.configBuilder.map(builder => ConfigLoader.createLazyConfig(builder))
+            val context     = SnapshotRestoreContext(fields, agentId, phantomId, principal, freshConfig)
+            handlers
+              .load(bytes, context)
+              .map(instance => RestoredInstance(instance, freshConfig))(
+                scala.concurrent.ExecutionContext.parasitic
+              )
+          })
+      }
+    )
+    AgentRegistry.register(definition)
+    definition
+  }
+
   def register[Trait, Ctor](
     typeName: String,
     mode: AgentMode,
@@ -54,7 +99,7 @@ private[autowire] object AgentImplementationRuntime {
 
     val definition = new AgentDefinition[Trait](
       typeName = typeName,
-      metadata = implType.metadata,
+      descriptor = WireAgentMetadata.fromModel(implType.metadata),
       constructor = constructor,
       bindings = bindings,
       mode = mode,

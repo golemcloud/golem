@@ -18,8 +18,9 @@ package golem.runtime.autowire
 
 import golem.Principal
 import golem.FutureInterop
+import golem.host.SchemaWireInterop
 import golem.host.js.schema.{JsAgentError, JsSchemaValueTree}
-import golem.runtime.{InputRecordCodec, MethodMetadata, OutputCodec}
+import golem.runtime.{InputRecordCodec, MethodMetadata, OutputCodec, WireAgentMetadata, WireImplementationMethod}
 
 import scala.concurrent.Future
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
@@ -36,12 +37,33 @@ import scala.scalajs.js
  * encodes `Some(tree)`. The guest export bridges this to / from `js.undefined`.
  */
 trait MethodBinding[Instance] {
+  def name: String
   def metadata: MethodMetadata
 
   def invoke(instance: Instance, input: JsSchemaValueTree, principal: Principal): js.Promise[Option[JsSchemaValueTree]]
 }
 
 object MethodBinding {
+  def wire[Instance](
+    descriptor: WireAgentMetadata,
+    method: WireImplementationMethod[Instance]
+  ): MethodBinding[Instance] =
+    new MethodBinding[Instance] {
+      def name: String             = method.name
+      def metadata: MethodMetadata = descriptor.reflectedMethod(descriptor.methods.find(_.name == name).get)
+      def invoke(
+        instance: Instance,
+        input: JsSchemaValueTree,
+        principal: Principal
+      ): js.Promise[Option[JsSchemaValueTree]] =
+        FutureInterop.toPromise(SchemaPayload.withWireInput(input) { value =>
+          method.invoke(instance, value, principal).flatMap {
+            case None        => Future.successful(None)
+            case Some(value) => SchemaWireInterop.ownedValueTreeToJsAsync(value).map(Some(_))
+          }
+        })
+    }
+
   def sync[Instance, In, Out](
     methodMetadata: MethodMetadata,
     inputCodec: InputRecordCodec[In],
@@ -57,6 +79,7 @@ object MethodBinding {
     outputCodec: OutputCodec[Out]
   )(handler: (Instance, In, Principal) => Future[Out]): MethodBinding[Instance] =
     new MethodBinding[Instance] {
+      override val name: String             = methodMetadata.name
       override val metadata: MethodMetadata = methodMetadata
 
       override def invoke(

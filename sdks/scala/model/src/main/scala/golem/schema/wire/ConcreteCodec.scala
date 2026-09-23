@@ -286,6 +286,21 @@ object ConcreteCodec {
     WitSchemaValueNode.DurationValue(WitDurationValuePayload(value.toNanos))
   ) { case WitSchemaValueNode.DurationValue(value) => java.time.Duration.ofNanos(value.nanoseconds) }
 
+  def record(fields: Vector[(String, ConcreteCodec[Any])]): ConcreteCodec[Vector[Any]] =
+    new ConcreteCodec[Vector[Any]] {
+      def write(value: Vector[Any], out: WireValues): Int = {
+        if (value.size != fields.size) throw SchemaEncodeError(s"expected ${fields.size} record fields")
+        out.add(WitSchemaValueNode.RecordValue(fields.indices.map(i => fields(i)._2.write(value(i), out)).toVector))
+      }
+      def read(in: WireValuesReader, index: Int): Vector[Any] = in.at(index) {
+        case WitSchemaValueNode.RecordValue(values) if values.size == fields.size =>
+          fields.indices.map(i => fields(i)._2.read(in, values(i))).toVector
+      }
+      def describe(out: WireTypes): Int = out.add(WitSchemaTypeBody.RecordType(fields.map { case (name, codec) =>
+        WitNamedFieldType(name, codec.describe(out), MetadataEnvelope.empty)
+      }))
+    }
+
   def option[A](element: ConcreteCodec[A]): ConcreteCodec[Option[A]] = new ConcreteCodec[Option[A]] {
     def write(value: Option[A], out: WireValues): Int =
       out.add(WitSchemaValueNode.OptionValue(value.map(element.write(_, out))))

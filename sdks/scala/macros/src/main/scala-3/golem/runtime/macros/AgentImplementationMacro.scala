@@ -29,9 +29,12 @@ import golem.runtime.{
   SnapshotHandlers,
   SnapshotPayload,
   Snapshotting,
-  SyncImplementationMethod
+  SyncImplementationMethod,
+  WireAgentImplementationType,
+  WireImplementationMethod
 }
 import golem.schema.{FromSchema, IntoSchema}
+import golem.schema.wire.ConcreteCodec
 import scala.quoted.*
 
 object AgentImplementationMacro {
@@ -48,11 +51,14 @@ object AgentImplementationMacro {
     ${ implementationTypeWithCtorImpl[Trait, Ctor]('build) }
 
   inline def implementationTypeFromClass[Trait, Impl <: Trait]: golem.runtime.AgentImplementationType[Trait, ?] =
-    ${ implementationTypeFromClassImpl[Trait, Impl] }
+    ${ implementationTypeFromClassImpl[Trait, Impl, AgentImplementationType[Trait, ?]](false) }
 
-  private def implementationTypeFromClassImpl[Trait: Type, Impl: Type](using
+  inline def wireImplementationTypeFromClass[Trait, Impl <: Trait]: WireAgentImplementationType[Trait, ?] =
+    ${ implementationTypeFromClassImpl[Trait, Impl, WireAgentImplementationType[Trait, ?]](true) }
+
+  private def implementationTypeFromClassImpl[Trait: Type, Impl: Type, Result: Type](wire: Boolean)(using
     Quotes
-  ): Expr[AgentImplementationType[Trait, ?]] = {
+  ): Expr[Result] = {
     import quotes.reflect.*
 
     val traitRepr   = TypeRepr.of[Trait]
@@ -183,7 +189,7 @@ object AgentImplementationMacro {
       case MethodParamAccess.MultiArgs => TypeRepr.of[Vector[Any]]
     }
 
-    ctorTypeRepr.asType match {
+    val result: Expr[Any] = ctorTypeRepr.asType match {
       case '[ctor] =>
         val metadataExpr  = '{ AgentDefinitionMacro.generate[Trait] }
         val methodSymbols = traitSymbol.methodMembers.collect {
@@ -193,9 +199,9 @@ object AgentImplementationMacro {
               ) && method.isDefDef =>
             method
         }
-        val methodsExpr = buildImplementationMethodsExpr[Trait](methodSymbols, metadataExpr)
+        lazy val methodsExpr = buildImplementationMethodsExpr[Trait](methodSymbols, metadataExpr)
 
-        val ctorCodecExpr =
+        lazy val ctorCodecExpr =
           inputCodecExpr[ctor](ctorAccess, s"constructor of ${traitSymbol.fullName}", idParams)
 
         val configParam = configParams.headOption
@@ -227,7 +233,7 @@ object AgentImplementationMacro {
                   )
                 configInner.asType match {
                   case '[t] =>
-                    Expr.summon[ConfigBuilder[t]] match {
+                    (if (wire) Some(wireConfigBuilder[t]) else Expr.summon[ConfigBuilder[t]]) match {
                       case Some(builderExpr) =>
                         '{ Some($builderExpr: ConfigBuilder[_]) }
                       case None =>
@@ -244,7 +250,7 @@ object AgentImplementationMacro {
             }
 
           case None =>
-            detectConfigBuilder[Trait]
+            detectConfigBuilder[Trait](wire)
         }
 
         val hasPrincipalParam = principalParams.nonEmpty
@@ -288,7 +294,7 @@ object AgentImplementationMacro {
             val configInner = cp.configInnerType.get
             configInner.asType match {
               case '[configT] =>
-                val builderExpr = Expr.summon[ConfigBuilder[configT]].get
+                val builderExpr = if (wire) wireConfigBuilder[configT] else Expr.summon[ConfigBuilder[configT]].get
                 val lambdaType  =
                   MethodType(List("input", "principal"))(
                     _ => List(ctorTypeRepr, TypeRepr.of[golem.Principal]),
@@ -460,20 +466,35 @@ object AgentImplementationMacro {
           }
         }
 
-        '{
-          val metadata = $metadataExpr
-          AgentImplementationType[Trait, ctor](
-            metadata = metadata,
-            ctorCodec = $ctorCodecExpr,
+        lazy val wireCtor    = wireInputCodecExpr[ctor](ctorAccess, idParams)
+        lazy val wireMethods = wireImplementationMethodsExpr[Trait](methodSymbols)
+        if (wire) '{
+          WireAgentImplementationType[Trait, ctor](
+            metadata = AgentDefinitionMacro.generateWire[Trait],
+            ctorCodec = $wireCtor,
             buildInstance = (input: ctor, principal: golem.Principal) => $buildInstanceExpr(input, principal),
-            methods = $methodsExpr,
+            methods = $wireMethods,
             configBuilder = $configBuilderExpr,
             configInjectedViaConstructor = ${ Expr(configParam.isDefined) },
-            principalInjectedViaConstructor = ${ Expr(hasPrincipalParam) },
             snapshotHandlers = $snapshotHandlersExpr
           )
         }
+        else
+          '{
+            val metadata = $metadataExpr
+            AgentImplementationType[Trait, ctor](
+              metadata = metadata,
+              ctorCodec = $ctorCodecExpr,
+              buildInstance = (input: ctor, principal: golem.Principal) => $buildInstanceExpr(input, principal),
+              methods = $methodsExpr,
+              configBuilder = $configBuilderExpr,
+              configInjectedViaConstructor = ${ Expr(configParam.isDefined) },
+              principalInjectedViaConstructor = ${ Expr(hasPrincipalParam) },
+              snapshotHandlers = $snapshotHandlersExpr
+            )
+          }
     }
+    result.asExprOf[Result]
   }
 
   private def implementationTypeImpl[Trait: Type](
@@ -495,7 +516,7 @@ object AgentImplementationMacro {
     val metadataExpr = '{ AgentDefinitionMacro.generate[Trait] }
     val methodsExpr  = buildImplementationMethodsExpr[Trait](methodSymbols, metadataExpr)
 
-    val configBuilderExpr = detectConfigBuilder[Trait]
+    val configBuilderExpr = detectConfigBuilder[Trait]()
 
     '{
       val metadata = $metadataExpr
@@ -557,7 +578,7 @@ object AgentImplementationMacro {
 
     val buildTyped = buildExpr.asExprOf[Ctor => Trait]
 
-    val configBuilderExpr = detectConfigBuilder[Trait]
+    val configBuilderExpr = detectConfigBuilder[Trait]()
 
     '{
       val metadata = $metadataExpr
@@ -747,7 +768,50 @@ object AgentImplementationMacro {
     }
   }
 
-  private def detectConfigBuilder[Trait: Type](using Quotes): Expr[Option[ConfigBuilder[_]]] = {
+  private def wireConfigBuilder[A: Type](using Quotes): Expr[ConfigBuilder[A]] = {
+    import quotes.reflect.*
+    val core                                                                                           = new ToolMacroCore
+    val compiled                                                                                       = new CompiledWireMetadata[core.type](core)
+    def load[T: Type](path: Expr[List[String]], loader: Expr[golem.config.ConfigFieldLoader]): Expr[T] = {
+      val tpe = TypeRepr.of[T].dealias
+      Type.of[T] match {
+        case '[golem.config.Secret[a]] =>
+          val graph  = compiled.graph(core.q.reflect.TypeRepr.of[a])
+          val inner  = compiled.literal(golem.schema.wire.SchemaWire.schemaGraphToWit(graph))
+          val handle = compiled.literal(
+            golem.schema.wire.SchemaWire.schemaGraphToWit(
+              graph.copy(
+                root =
+                  golem.schema.SchemaType(golem.schema.SchemaTypeBody.SecretType(golem.schema.SecretSpec(graph.root)))
+              )
+            )
+          )
+          '{ $loader.loadSecretWire[a]($path, $inner, $handle, ConcreteCodec.derived[a]) }.asExprOf[T]
+        case _ if tpe.typeSymbol.caseFields.nonEmpty && !(tpe <:< TypeRepr.of[Tuple]) =>
+          val mirror = Expr
+            .summon[scala.deriving.Mirror.ProductOf[T]]
+            .getOrElse(report.errorAndAbort(s"Configuration ${tpe.show} must be a concrete product"))
+          val fields = Expr.ofList(tpe.typeSymbol.caseFields.map { field =>
+            tpe.memberType(field).asType match {
+              case '[f] => '{ ${ load[f]('{ $path :+ ${ Expr(field.name) } }, loader) }.asInstanceOf[Any] }
+            }
+          })
+          '{ $mirror.fromProduct(Tuple.fromArray($fields.toArray)) }
+        case _ =>
+          val graph = compiled.literal(
+            golem.schema.wire.SchemaWire.schemaGraphToWit(compiled.graph(core.q.reflect.TypeRepr.of[T]))
+          )
+          '{ $loader.loadLocalWire[T]($path, $graph, ConcreteCodec.derived[T]) }
+      }
+    }
+    '{
+      new ConfigBuilder[A] {
+        def build(path: List[String], loader: golem.config.ConfigFieldLoader): A = ${ load[A]('path, 'loader) }
+      }
+    }
+  }
+
+  private def detectConfigBuilder[Trait: Type](wire: Boolean = false)(using Quotes): Expr[Option[ConfigBuilder[_]]] = {
     import quotes.reflect.*
 
     val traitRepr        = TypeRepr.of[Trait]
@@ -766,7 +830,7 @@ object AgentImplementationMacro {
         case Some(configType) =>
           configType.asType match {
             case '[t] =>
-              Expr.summon[ConfigBuilder[t]] match {
+              (if (wire) Some(wireConfigBuilder[t]) else Expr.summon[ConfigBuilder[t]]) match {
                 case Some(builderExpr) =>
                   '{ Some($builderExpr: ConfigBuilder[_]) }
                 case None =>
@@ -779,6 +843,60 @@ object AgentImplementationMacro {
         case None => '{ None }
       }
     }
+  }
+
+  private def wireInputCodecExpr[In: Type](using
+    Quotes
+  )(
+    access: MethodParamAccess,
+    params: List[(String, quotes.reflect.TypeRepr)]
+  ): Expr[ConcreteCodec[In]] = {
+    val fields = Expr.ofList(params.map { case (name, tpe) =>
+      tpe.asType match {
+        case '[a] => '{ (${ Expr(name) }, ConcreteCodec.derived[a].asInstanceOf[ConcreteCodec[Any]]) }
+      }
+    })
+    val record = '{ ConcreteCodec.record($fields.toVector) }
+    access match {
+      case MethodParamAccess.NoArgs    => '{ $record.xmap[In](_ => ().asInstanceOf[In], _ => Vector.empty) }
+      case MethodParamAccess.SingleArg => '{ $record.xmap[In](_.head.asInstanceOf[In], value => Vector(value)) }
+      case MethodParamAccess.MultiArgs => record.asExprOf[ConcreteCodec[In]]
+    }
+  }
+
+  private def wireImplementationMethodsExpr[Trait: Type](using
+    Quotes
+  )(
+    methods: List[quotes.reflect.Symbol]
+  ): Expr[List[WireImplementationMethod[Trait]]] = {
+    import quotes.reflect.*
+    Expr.ofList(methods.map { method =>
+      val all             = extractParameters(method)
+      val params          = all.filterNot(_._2.dealias.typeSymbol.fullName == "golem.Principal")
+      val (access, input) = params match {
+        case Nil             => MethodParamAccess.NoArgs    -> TypeRepr.of[Unit]
+        case (_, tpe) :: Nil => MethodParamAccess.SingleArg -> tpe
+        case _               => MethodParamAccess.MultiArgs -> TypeRepr.of[Vector[Any]]
+      }
+      val (async, out, returned) = methodReturnInfo(method)
+      (input.asType, out.asType) match {
+        case ('[in], '[out]) =>
+          val output: Expr[Option[ConcreteCodec[out]]] =
+            if (TypeRepr.of[out] =:= TypeRepr.of[Unit]) '{ None } else '{ Some(ConcreteCodec.derived[out]) }
+          val handler: Expr[(Trait, in, golem.Principal) => scala.concurrent.Future[out]] =
+            if (!async) {
+              val call = handlerLambda[Trait, in, out](method, access, params, all)
+              '{ (instance, input, principal) => scala.concurrent.Future.successful($call(instance, input, principal)) }
+            } else
+              returned.asType match {
+                case '[r] =>
+                  handlerLambda[Trait, in, r](method, access, params, all)
+                    .asExprOf[(Trait, in, golem.Principal) => scala.concurrent.Future[out]]
+              }
+          val inputCodec = wireInputCodecExpr[in](access, params)
+          '{ WireImplementationMethod[Trait, in, out](${ Expr(method.name) }, $inputCodec, $output)($handler) }
+      }
+    })
   }
 
   private def buildImplementationMethodsExpr[Trait: Type](using

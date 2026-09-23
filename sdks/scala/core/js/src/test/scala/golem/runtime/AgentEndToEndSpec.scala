@@ -22,13 +22,16 @@ import golem.runtime.Sum
 import golem.{BaseAgent, Principal}
 import golem.runtime.annotations.{DurabilityMode, agentDefinition, agentImplementation}
 import golem.FutureInterop
-import golem.host.js.schema.JsSchemaValueTree
+import golem.host.js.schema.{JsSchemaValueTree, JsSchemaValueNode}
+import golem.host.SchemaWireInterop
+import golem.schema.wire.{ConcreteCodec, WitSchemaValueNode}
 import golem.schema.{FromSchema, IntoSchema}
 import zio._
 import zio.test._
 import zio.blocks.schema.Schema
 
 import scala.concurrent.Future
+import scala.scalajs.js
 
 /**
  * Drives the wired agent bindings through the `golem:agent@2.0.0` boundary: the
@@ -47,6 +50,21 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
 
   final case class Outer(name: String, inner: DeepNested)
   object Outer { implicit val schema: Schema[Outer] = Schema.derived }
+
+  final case class WirePayload(label: String, values: List[Option[Int]])
+
+  @agentDefinition("wire-only-agent")
+  trait WireOnlyAgent extends BaseAgent {
+    class Id(seed: Int)
+    def adjust(payload: WirePayload): Either[String, WirePayload]
+  }
+
+  final class WireOnlyImpl(seed: Int) extends WireOnlyAgent {
+    def adjust(payload: WirePayload): Either[String, WirePayload] =
+      Right(payload.copy(label = payload.label + "!", values = payload.values.map(_.map(_ + seed))))
+  }
+
+  private lazy val wireDefn = AgentImplementation.registerClass[WireOnlyAgent, WireOnlyImpl]
 
   // ---------------------------------------------------------------------------
   // Agent with many method signatures for roundtrip testing
@@ -130,6 +148,47 @@ object AgentEndToEndSpec extends ZIOSpecDefault {
   // ---------------------------------------------------------------------------
 
   def spec = suite("AgentEndToEndSpec")(
+    test("generated registration and invocation need no owned schema instances") {
+      val constructor =
+        JsSchemaValueTree(js.Array(JsSchemaValueNode.s32Value(9), JsSchemaValueNode.recordValue(js.Array(0))), 1)
+      val payload =
+        ConcreteCodec.derived[WirePayload].encodeValue(WirePayload("asymmetric", List(Some(-2), None, Some(7))))
+      val input = payload.copy(
+        valueNodes = payload.valueNodes :+ WitSchemaValueNode.RecordValue(Vector(payload.root)),
+        root = payload.valueNodes.size
+      )
+      ZIO.fromFuture { implicit ec =>
+        for {
+          instance <- FutureInterop.fromPromise(wireDefn.initialize(constructor, testPrincipal))
+          result   <- FutureInterop.fromPromise(
+                      wireDefn.invoke(instance, "adjust", SchemaWireInterop.valueTreeToJs(input), testPrincipal)
+                    )
+        } yield {
+          val output  = SchemaWireInterop.valueTreeFromJs(result.get)
+          val decoded = ConcreteCodec.derived[Either[String, WirePayload]].decode(output)
+          assertTrue(
+            decoded == Right(WirePayload("asymmetric!", List(Some(7), None, Some(16)))),
+            wireDefn.agentType.methods.length == 1
+          )
+        }
+      }
+    },
+    test("generated invocation rejects missing fields and invalid indices before user code") {
+      val missing = JsSchemaValueTree(js.Array(JsSchemaValueNode.recordValue(js.Array())), 0)
+      val invalid = JsSchemaValueTree(js.Array(JsSchemaValueNode.recordValue(js.Array(99))), 0)
+      ZIO.fromFuture { implicit ec =>
+        Future
+          .sequence(List(missing, invalid).map { input =>
+            FutureInterop
+              .fromPromise(wireDefn.invoke(new WireOnlyImpl(9), "adjust", input, testPrincipal))
+              .map(_ => false)
+              .recover { case js.JavaScriptException(error) =>
+                error.asInstanceOf[js.Dynamic].tag.asInstanceOf[String] == "invalid-input"
+              }
+          })
+          .map(values => assertTrue(values == List(true, true)))
+      }
+    },
     test("echo string roundtrips through binding") {
       roundtrip[String, String]("echo", "world", "hello world")
     },

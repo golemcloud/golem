@@ -16,7 +16,7 @@
 
 package golem.runtime.macros
 
-import golem.config.{AgentConfigDeclaration, ConfigSchema}
+import golem.config.{AgentConfigDeclaration, AgentConfigSource, ConfigSchema, Secret}
 import golem.runtime.annotations.{description, prompt, readOnly}
 import golem.runtime.{
   AgentMetadata,
@@ -29,7 +29,8 @@ import golem.runtime.{
   ParameterMetadata,
   ReadOnlyConfig,
   Snapshotting,
-  SnapshottingConfig
+  SnapshottingConfig,
+  WireAgentMetadata
 }
 import golem.schema.{IntoSchema, SchemaGraph}
 import golem.runtime.http.{
@@ -50,7 +51,112 @@ object AgentDefinitionMacro {
     "\nHint: IntoSchema is derived from zio.blocks.schema.Schema.\n" +
       "Define or import an implicit Schema[T] for your type.\n" +
       "Use `final case class T(...) derives zio.blocks.schema.Schema` (or `given Schema[T] = Schema.derived`).\n"
-  inline def generate[T]: AgentMetadata = ${ impl[T] }
+  inline def generate[T]: AgentMetadata         = ${ impl[T] }
+  inline def generateWire[T]: WireAgentMetadata = ${ wireImpl[T] }
+
+  private def wireImpl[T: Type](using Quotes): Expr[WireAgentMetadata] = {
+    import quotes.reflect.*
+    val core      = new ToolMacroCore
+    val compiled  = new CompiledWireMetadata[core.type](core)
+    val traitType = TypeRepr.of[T]
+    val sym       = traitType.typeSymbol
+    if (!sym.flags.is(Flags.Trait)) report.errorAndAbort(s"@agent target must be a trait, found: ${sym.fullName}")
+    if (!sym.annotations.exists(_.tpe.typeSymbol.fullName == "golem.runtime.annotations.agentDefinition"))
+      report.errorAndAbort(s"Missing @agentDefinition(...) on agent trait: ${sym.fullName}")
+    val name             = agentDefinitionTypeName(sym).getOrElse(sym.name)
+    val descriptionValue = annotationString(sym, TypeRepr.of[description]).orElse(docstringText(sym))
+    val mode             = agentDefinitionMode(sym).map(_.valueOrAbort)
+    val mount            = extractHttpMount(sym, name)
+
+    def graph(tpe: TypeRepr): SchemaGraph = tpe.asType match {
+      case '[a] => compiled.graph(core.q.reflect.TypeRepr.of[a])
+    }
+    def params(method: Symbol): List[(String, TypeRepr)] = method.paramSymss.flatten.filter(_.isTerm).map { p =>
+      p.name -> p.tree.asInstanceOf[ValDef].tpt.tpe
+    }
+    def isPrincipal(tpe: TypeRepr): Boolean                    = tpe.dealias.typeSymbol.fullName == "golem.Principal"
+    def input(values: List[(String, TypeRepr)]): InputMetadata = InputMetadata(values.collect {
+      case (name, tpe) if !isPrincipal(tpe) => ParameterMetadata(name, FieldSource.UserSupplied, graph(tpe))
+    })
+    val idClass = sym.declarations
+      .find(c => c.isClassDef && c.annotations.exists(_.tpe.typeSymbol.fullName == "golem.runtime.annotations.id"))
+      .orElse(sym.declarations.find(c => c.isClassDef && c.name == "Id"))
+      .getOrElse(
+        report.errorAndAbort(
+          s"Agent trait ${sym.name} must define a `class Id(...)` to declare its constructor parameters."
+        )
+      )
+    val identity    = params(idClass.primaryConstructor)
+    val constructor = ConstructorMetadata(
+      None,
+      docstringText(idClass).getOrElse(descriptionValue.getOrElse(name)),
+      None,
+      input(identity)
+    )
+    val methods = sym.methodMembers.collect {
+      case method if method.flags.is(Flags.Deferred) && method.isDefDef =>
+        val arguments      = params(method)
+        val principalNames = arguments.collect { case (name, tpe) if isPrincipal(tpe) => name }.toSet
+        val headers        = extractHeaderVars(method)
+        validateEndpoints(method, name, mount.isDefined, arguments.map(_._1).toSet, principalNames, headers)
+        val readonly = extractReadOnly(method, principalNames.nonEmpty)
+        if (mode.contains("ephemeral") && readonly.nonEmpty)
+          report.errorAndAbort(s"Agent '$name' is ephemeral but method '${method.name}' is marked with @readOnly.")
+        val out = unwrapAsyncType(method.tree.asInstanceOf[DefDef].returnTpt.tpe)
+        MethodMetadata(
+          method.name,
+          annotationString(method, TypeRepr.of[description]).orElse(docstringText(method)),
+          annotationString(method, TypeRepr.of[prompt]),
+          None,
+          input(arguments),
+          if (out =:= TypeRepr.of[Unit]) OutputMetadata.Unit else OutputMetadata.Single(graph(out)),
+          extractEndpoints(method, headers),
+          readonly
+        )
+    }
+    def config(tpe: TypeRepr, path: List[String]): List[AgentConfigDeclaration] = tpe.dealias.asType match {
+      case '[Secret[a]] =>
+        val inner = graph(TypeRepr.of[a])
+        List(
+          AgentConfigDeclaration(
+            AgentConfigSource.Secret,
+            path,
+            inner.copy(root =
+              golem.schema.SchemaType(golem.schema.SchemaTypeBody.SecretType(golem.schema.SecretSpec(inner.root)))
+            )
+          )
+        )
+      case _ if tpe.typeSymbol.caseFields.nonEmpty && !(tpe <:< TypeRepr.of[Tuple]) =>
+        tpe.typeSymbol.caseFields.flatMap(f => config(tpe.memberType(f), path :+ f.name))
+      case _ => List(AgentConfigDeclaration(AgentConfigSource.Local, path, graph(tpe)))
+    }
+    val configTypes = traitType.baseClasses.filter(_.fullName == "golem.config.AgentConfig").flatMap { base =>
+      traitType.baseType(base).typeArgs
+    }
+    if (configTypes.size > 1) report.errorAndAbort("Agent trait may extend at most one AgentConfig[T]")
+    val snapshotting = Snapshotting
+      .parse(extractAgentDefinitionStringArg(sym, "snapshotting", 7).getOrElse("disabled"))
+      .fold(error => report.errorAndAbort(error), value => value)
+    val metadata = AgentMetadata(
+      name,
+      descriptionValue,
+      mode,
+      methods,
+      constructor,
+      mount,
+      configTypes.flatMap(tpe => config(tpe, Nil)),
+      snapshotting
+    )
+    mount.foreach { m =>
+      HttpValidation
+        .validateMountVarsAreNotPrincipal(name, m, identity.collect { case (n, tpe) if isPrincipal(tpe) => n }.toSet)
+        .left
+        .foreach(error => report.errorAndAbort(error))
+    }
+    try HttpValidation.validateHttpMountFromMetadata(metadata)
+    catch { case error: IllegalArgumentException => report.errorAndAbort(error.getMessage) }
+    compiled.literal(WireAgentMetadata.fromModel(metadata))
+  }
 
   private def impl[T: Type](using Quotes): Expr[AgentMetadata] = {
     import quotes.reflect.*
@@ -85,7 +191,7 @@ object AgentDefinitionMacro {
     val traitMode = agentDefinitionMode(typeSymbol)
 
     // --- HTTP mount extraction from @agentDefinition ---
-    val httpMountExpr: Expr[Option[HttpMountDetails]] = extractHttpMount(typeSymbol, agentTypeName)
+    val httpMountExpr: Expr[Option[HttpMountDetails]] = literal(extractHttpMount(typeSymbol, agentTypeName))
     val hasMount                                      = extractAgentDefinitionStringArg(typeSymbol, "mount", positionalIndex = 2).exists(_.nonEmpty)
     val isEphemeral                                   = agentDefinitionModeString(typeSymbol).contains("ephemeral")
 
@@ -269,7 +375,7 @@ object AgentDefinitionMacro {
     // --- HTTP endpoint extraction ---
     val headerVars       = extractHeaderVars(method)
     val endpointDetails  = extractEndpoints(method, headerVars)
-    val endpointListExpr = Expr.ofList(endpointDetails)
+    val endpointListExpr = literal(endpointDetails)
 
     // --- Compile-time validation ---
     val principalFullName   = "golem.Principal"
@@ -286,7 +392,7 @@ object AgentDefinitionMacro {
     validateEndpoints(method, agentName, hasMount, methodParamNames, principalParamNames, headerVars)
 
     // --- Read-only extraction ---
-    val readOnlyExpr = extractReadOnly(method, principalParamNames.nonEmpty)
+    val readOnlyExpr = literal(extractReadOnly(method, principalParamNames.nonEmpty))
 
     '{
       MethodMetadata(
@@ -306,13 +412,12 @@ object AgentDefinitionMacro {
 
   /**
    * Extract the optional `@readOnly(cache = ...)` annotation from a method and
-   * build an `Expr[Option[ReadOnlyConfig]]`. `usesPrincipal` is derived from
-   * whether the method has a Principal parameter (it is *not*
-   * user-configurable).
+   * build its metadata. `usesPrincipal` is derived from whether the method has
+   * a Principal parameter (it is *not* user-configurable).
    */
   private def extractReadOnly(using
     Quotes
-  )(method: quotes.reflect.Symbol, usesPrincipal: Boolean): Expr[Option[ReadOnlyConfig]] = {
+  )(method: quotes.reflect.Symbol, usesPrincipal: Boolean): Option[ReadOnlyConfig] = {
     import quotes.reflect.*
 
     val readOnlyAnnotations = method.annotations.collect {
@@ -321,7 +426,7 @@ object AgentDefinitionMacro {
         ap -> args
     }
 
-    if (readOnlyAnnotations.isEmpty) '{ None }
+    if (readOnlyAnnotations.isEmpty) None
     else {
       val (_, args) = readOnlyAnnotations.head
 
@@ -331,19 +436,13 @@ object AgentDefinitionMacro {
         case Literal(StringConstant(v))                    => v
       }.getOrElse("until-write")
 
-      val policyExpr: Expr[CachePolicy] = CachePolicy.parse(cacheStr) match {
+      val policy = CachePolicy.parse(cacheStr) match {
         case Left(err) =>
           report.errorAndAbort(s"@readOnly on method '${method.name}': $err")
-        case Right(CachePolicy.NoCache)    => '{ CachePolicy.NoCache }
-        case Right(CachePolicy.UntilWrite) => '{ CachePolicy.UntilWrite }
-        case Right(CachePolicy.Ttl(nanos)) =>
-          val n = Expr(nanos)
-          '{ CachePolicy.Ttl($n) }
+        case Right(value) => value
       }
 
-      val usesPrincipalExpr = Expr(usesPrincipal)
-
-      '{ Some(ReadOnlyConfig($policyExpr, $usesPrincipalExpr)) }
+      Some(ReadOnlyConfig(policy, usesPrincipal))
     }
   }
 
@@ -697,17 +796,16 @@ object AgentDefinitionMacro {
   }
 
   /**
-   * Build an Expr[Option[HttpMountDetails]] from the @agentDefinition
-   * annotation.
+   * Build the mount metadata from the @agentDefinition annotation.
    */
   private def extractHttpMount(using
     Quotes
-  )(symbol: quotes.reflect.Symbol, agentName: String): Expr[Option[HttpMountDetails]] = {
+  )(symbol: quotes.reflect.Symbol, agentName: String): Option[HttpMountDetails] = {
     import quotes.reflect.*
 
     val mountPath = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
     mountPath match {
-      case None     => '{ None }
+      case None     => None
       case Some(mp) =>
         val pathSegments = HttpRouteParser.parsePathOnly(mp, "mount") match {
           case Left(err)       => report.errorAndAbort(s"Invalid mount path in @agentDefinition for '$agentName': $err")
@@ -728,12 +826,6 @@ object AgentDefinitionMacro {
         val phantomAgent = extractAgentDefinitionBoolArg(symbol, "phantomAgent", positionalIndex = 5).getOrElse(false)
         val corsPatterns = extractAgentDefinitionCorsArg(symbol, positionalIndex = 4)
 
-        val pathExpr    = pathSegmentsExpr(pathSegments)
-        val webhookExpr = pathSegmentsExpr(webhookSuffix)
-        val authExpr    = Expr(authRequired)
-        val phantomExpr = Expr(phantomAgent)
-        val corsExpr    = Expr.ofList(corsPatterns.map(Expr(_)))
-
         val mount = HttpMountDetails(
           pathPrefix = pathSegments,
           authRequired = authRequired,
@@ -746,31 +838,13 @@ object AgentDefinitionMacro {
           case Right(()) => ()
         }
 
-        '{
-          Some(
-            HttpMountDetails(
-              pathPrefix = $pathExpr,
-              authRequired = $authExpr,
-              phantomAgent = $phantomExpr,
-              corsAllowedPatterns = $corsExpr,
-              webhookSuffix = $webhookExpr
-            )
-          )
-        }
+        Some(mount)
     }
   }
 
-  /**
-   * Convert a compile-time List[PathSegment] into an Expr[List[PathSegment]].
-   */
-  private def pathSegmentsExpr(using Quotes)(segments: List[PathSegment]): Expr[List[PathSegment]] = {
-    val exprs = segments.map {
-      case PathSegment.Literal(v)               => '{ PathSegment.Literal(${ Expr(v) }) }
-      case PathSegment.PathVariable(v)          => '{ PathSegment.PathVariable(${ Expr(v) }) }
-      case PathSegment.RemainingPathVariable(v) => '{ PathSegment.RemainingPathVariable(${ Expr(v) }) }
-      case PathSegment.SystemVariable(v)        => '{ PathSegment.SystemVariable(${ Expr(v) }) }
-    }
-    Expr.ofList(exprs)
+  private def literal[A: Type](value: A)(using Quotes): Expr[A] = {
+    val core = new ToolMacroCore
+    new CompiledWireMetadata[core.type](core).literal(value)
   }
 
   /** Extract @header annotations from method parameters. */
@@ -799,17 +873,12 @@ object AgentDefinitionMacro {
   }
 
   /**
-   * Extract @endpoint annotations from a method and build
-   * Expr[HttpEndpointDetails] for each.
+   * Extract @endpoint annotations from a method and build metadata for each.
    */
   private def extractEndpoints(using
     Quotes
-  )(method: quotes.reflect.Symbol, headerVars: List[HeaderVariable]): List[Expr[HttpEndpointDetails]] = {
+  )(method: quotes.reflect.Symbol, headerVars: List[HeaderVariable]): List[HttpEndpointDetails] = {
     import quotes.reflect.*
-
-    val headerVarsExpr = Expr.ofList(headerVars.map { hv =>
-      '{ HeaderVariable(${ Expr(hv.headerName) }, ${ Expr(hv.variableName) }) }
-    })
 
     method.annotations.collect {
       case Apply(Select(New(tpt), _), args)
@@ -858,41 +927,7 @@ object AgentDefinitionMacro {
           case Right(p)  => p
         }
 
-        val pathExpr  = pathSegmentsExpr(parsed.pathSegments)
-        val queryExpr = Expr.ofList(parsed.queryVars.map { qv =>
-          '{ QueryVariable(${ Expr(qv.queryParamName) }, ${ Expr(qv.variableName) }) }
-        })
-        val httpMethodExpr = httpMethod match {
-          case HttpMethod.Get       => '{ HttpMethod.Get }
-          case HttpMethod.Post      => '{ HttpMethod.Post }
-          case HttpMethod.Put       => '{ HttpMethod.Put }
-          case HttpMethod.Delete    => '{ HttpMethod.Delete }
-          case HttpMethod.Patch     => '{ HttpMethod.Patch }
-          case HttpMethod.Head      => '{ HttpMethod.Head }
-          case HttpMethod.Options   => '{ HttpMethod.Options }
-          case HttpMethod.Connect   => '{ HttpMethod.Connect }
-          case HttpMethod.Trace     => '{ HttpMethod.Trace }
-          case HttpMethod.Custom(m) => '{ HttpMethod.Custom(${ Expr(m) }) }
-        }
-        val authExpr = authOverride match {
-          case None    => '{ None: Option[Boolean] }
-          case Some(v) => '{ Some(${ Expr(v) }): Option[Boolean] }
-        }
-        val corsExpr = corsOverride match {
-          case None    => '{ None: Option[List[String]] }
-          case Some(v) => '{ Some(${ Expr.ofList(v.map(Expr(_))) }): Option[List[String]] }
-        }
-
-        '{
-          HttpEndpointDetails(
-            httpMethod = $httpMethodExpr,
-            pathSuffix = $pathExpr,
-            headerVars = $headerVarsExpr,
-            queryVars = $queryExpr,
-            authOverride = $authExpr,
-            corsOverride = $corsExpr
-          )
-        }
+        HttpEndpointDetails(httpMethod, parsed.pathSegments, headerVars, parsed.queryVars, authOverride, corsOverride)
     }
   }
 

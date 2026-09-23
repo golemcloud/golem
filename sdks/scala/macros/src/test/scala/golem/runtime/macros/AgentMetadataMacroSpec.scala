@@ -113,6 +113,15 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
 
   override def spec: Spec[TestEnvironment, Any] =
     suite("AgentMetadataMacroSpec")(
+      test("compiler-emitted wire metadata equals dynamic metadata encoding") {
+        val compiled = AgentDefinitionMacro.generateWire[EchoAgent]
+        val dynamic  = golem.runtime.WireAgentMetadata.fromModel(echoMetadata)
+        assertTrue(
+          compiled == dynamic,
+          AgentDefinitionMacro
+            .generateWire[EphemeralAgent] == golem.runtime.WireAgentMetadata.fromModel(ephemeralMetadata)
+        )
+      },
       test("EchoAgent metadata exposes all method names") {
         val names = echoMetadata.methods.map(_.name).sorted
         assertTrue(

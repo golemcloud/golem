@@ -18,11 +18,19 @@ package golem.runtime.guest
 
 import golem.host.{SchemaWireInterop, ToolWireInterop}
 import golem.host.js.{JsSnapshot, PrincipalConverter}
-import golem.host.js.schema.{JsAgentError, JsSchemaValueTree, JsTypedSchemaValue}
+import golem.host.js.schema.{
+  JsAgentError,
+  JsMetadataEnvelope,
+  JsSchemaGraph,
+  JsSchemaTypeBody,
+  JsSchemaTypeNode,
+  JsSchemaValueNode,
+  JsSchemaValueTree,
+  JsTypedSchemaValue
+}
 import golem.host.js.tool.{JsInvocationResult, JsTool}
 import golem.config.ConfigHolder
 import golem.runtime.autowire.AgentRegistry
-import golem.runtime.rpc.SchemaRpcCodec
 import golem.runtime.rpc.host.AgentHostApi
 import golem.runtime.tool.{JsToolInputStream, JsToolOutputStream, ToolRegistry}
 import golem.schema.AgentStreamOwnership
@@ -67,7 +75,21 @@ object Guest {
     JsAgentError.invalidAgentId(message)
 
   private def customError(message: String): JsAgentError =
-    JsAgentError.customError(SchemaRpcCodec.encodeTyped[String](message))
+    JsAgentError.customError(
+      JsTypedSchemaValue(
+        JsSchemaGraph(
+          js.Array(
+            JsSchemaTypeNode(
+              JsSchemaTypeBody.stringType,
+              JsMetadataEnvelope(js.undefined, js.Array(), js.Array(), js.undefined, js.undefined)
+            )
+          ),
+          js.Array(),
+          0
+        ),
+        JsSchemaValueTree(js.Array(JsSchemaValueNode.stringValue(message)), 0)
+      )
+    )
 
   private def asAgentError(err: Any, fallbackTag: String): JsAgentError =
     if (err == null) customError("null")
