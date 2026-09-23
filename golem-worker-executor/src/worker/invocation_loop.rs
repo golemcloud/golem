@@ -476,6 +476,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         filesystem: &agent.filesystem,
                         invocations_since_snapshot: 0,
                         idle_snapshot_task: None,
+                        filesystem_turn_used: false,
                         permit_state: &mut self.permit_state,
                         idle_since_millis: self.idle_since_millis.clone(),
                         resume_replay_pending: self.resume_replay_pending.clone(),
@@ -1469,6 +1470,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     filesystem: &'a ResidentFilesystem,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
+    filesystem_turn_used: bool,
     /// Mutable reference to the concurrent-agent permit held by the outer
     /// `InvocationLoop`. Set to `None` when entering idle (releasing the
     /// permit back to the semaphore pool) and re-acquired on wake.
@@ -1486,6 +1488,52 @@ enum SelectedWork {
     Resident(QueuedWorkerInvocation),
     ApplyPendingUpdate,
     Idle(Arc<AgentStatusRecord>),
+}
+
+impl SelectedWork {
+    fn next(
+        queue: &mut VecDeque<QueuedWorkerInvocation>,
+        status: Arc<AgentStatusRecord>,
+        constructor_key: Option<&IdempotencyKey>,
+        filesystem_turn_used: &mut bool,
+    ) -> Self {
+        let filesystem_request = matches!(
+            queue.front(),
+            Some(
+                QueuedWorkerInvocation::ReadFile { .. }
+                    | QueuedWorkerInvocation::GetFileSystemNode { .. }
+            )
+        );
+        // Creation reserves the constructor before ordinary invocation admission. A started
+        // constructor completes during replay instead of remaining in the pending queue.
+        let needs_initialization = filesystem_request
+            && constructor_key.is_some_and(|key| {
+                status
+                    .pending_invocations
+                    .first()
+                    .is_some_and(|pending| pending.has_idempotency_key(key))
+            });
+        let pending_work =
+            !status.pending_updates.is_empty() || !status.pending_invocations.is_empty();
+        let yield_filesystem_turn = filesystem_request && *filesystem_turn_used && pending_work;
+        if !needs_initialization
+            && !yield_filesystem_turn
+            && let Some(invocation) = queue.pop_front()
+        {
+            if filesystem_request {
+                *filesystem_turn_used = true;
+            }
+            return Self::Resident(invocation);
+        }
+        *filesystem_turn_used = false;
+        if !status.pending_updates.is_empty() {
+            return Self::ApplyPendingUpdate;
+        }
+        if let Some(pending) = status.pending_invocations.first() {
+            return Self::Durable(pending.clone());
+        }
+        Self::Idle(status)
+    }
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
@@ -1688,9 +1736,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
     }
 
-    /// Filesystem commands require initialization, but otherwise observe current state at an
-    /// invocation boundary before pending work. Selecting a durable reference does not consume it.
-    async fn select_next_work(&self) -> SelectedWork {
+    /// Filesystem commands alternate with pending work at invocation boundaries after
+    /// initialization. Selecting a durable reference does not consume it.
+    async fn select_next_work(&mut self) -> SelectedWork {
         let status = self.parent.get_non_detached_last_known_status().await;
         let mut queue = self.active.write().await;
         queue.retain(|invocation| !invocation.is_abandoned());
@@ -1707,29 +1755,17 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
         }
 
-        // Creation reserves the constructor key before ordinary invocation admission. A pending
-        // constructor is therefore first; a started constructor completes during replay instead.
-        let needs_initialization = self.parent.parsed_agent_id.is_some()
-            && matches!(
-                queue.front(),
-                Some(
-                    QueuedWorkerInvocation::ReadFile { .. }
-                        | QueuedWorkerInvocation::GetFileSystemNode { .. }
-                )
-            )
-            && status.pending_invocations.first().is_some_and(|pending| {
-                pending.has_idempotency_key(&self.parent.initialization_idempotency_key())
-            });
-        if !needs_initialization && let Some(invocation) = queue.pop_front() {
-            return SelectedWork::Resident(invocation);
-        }
-        if !status.pending_updates.is_empty() {
-            return SelectedWork::ApplyPendingUpdate;
-        }
-        if let Some(pending) = status.pending_invocations.first() {
-            return SelectedWork::Durable(pending.clone());
-        }
-        SelectedWork::Idle(status)
+        let constructor_key = self
+            .parent
+            .parsed_agent_id
+            .as_ref()
+            .map(|_| self.parent.initialization_idempotency_key());
+        SelectedWork::next(
+            &mut queue,
+            status,
+            constructor_key.as_ref(),
+            &mut self.filesystem_turn_used,
+        )
     }
 
     /// Checks — before publishing `waiting_for_command = true`, which makes the
@@ -3378,6 +3414,120 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use test_r::{test, timeout};
+
+    #[test]
+    fn filesystem_turns_allow_pending_invocations_and_updates_to_progress() {
+        use super::{
+            AgentStatusRecord, CanonicalFilePath, FileByteSelection, IdempotencyKey,
+            PendingInvocationRef, QueuedWorkerInvocation, SelectedWork,
+        };
+        use golem_common::model::component::ComponentRevision;
+        use golem_common::model::{PendingUpdateKind, PendingUpdateRef};
+
+        for update in [false, true] {
+            let pending = PendingInvocationRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(4),
+                idempotency_key: Some(IdempotencyKey::new("method".into())),
+                manual_update_target_revision: None,
+            };
+            let mut status = AgentStatusRecord {
+                pending_invocations: vec![pending],
+                ..Default::default()
+            };
+            if update {
+                status.pending_updates.push_back(PendingUpdateRef {
+                    timestamp: Timestamp::now_utc(),
+                    oplog_index: OplogIndex::from_u64(5),
+                    target_revision: ComponentRevision::INITIAL,
+                    kind: PendingUpdateKind::Automatic,
+                });
+            }
+            let status = Arc::new(status);
+            let mut queue = VecDeque::new();
+            let mut receivers = Vec::new();
+            let mut turn_used = false;
+            for turn in 0..20 {
+                // Keep the resident queue nonempty, including while ordinary work is selected.
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                receivers.push(receiver);
+                queue.push_back(QueuedWorkerInvocation::ReadFile {
+                    path: CanonicalFilePath::from_abs_str("/file").unwrap(),
+                    selection: FileByteSelection::Full,
+                    sender,
+                });
+                let selected = SelectedWork::next(&mut queue, status.clone(), None, &mut turn_used);
+                if turn % 2 == 0 {
+                    assert!(matches!(
+                        selected,
+                        SelectedWork::Resident(QueuedWorkerInvocation::ReadFile { .. })
+                    ));
+                } else if update {
+                    assert!(matches!(selected, SelectedWork::ApplyPendingUpdate));
+                } else {
+                    assert!(
+                        matches!(selected, SelectedWork::Durable(pending) if pending.oplog_index == OplogIndex::from_u64(4))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filesystem_turns_preserve_initialization_and_control_priority() {
+        use super::{
+            AgentStatusRecord, CanonicalFilePath, IdempotencyKey, PendingInvocationRef,
+            QueuedWorkerInvocation, SelectedWork,
+        };
+        let constructor = IdempotencyKey::new("init-agent".into());
+        let status = Arc::new(AgentStatusRecord {
+            pending_invocations: vec![PendingInvocationRef {
+                timestamp: Timestamp::now_utc(),
+                oplog_index: OplogIndex::from_u64(2),
+                idempotency_key: Some(constructor.clone()),
+                manual_update_target_revision: None,
+            }],
+            ..Default::default()
+        });
+        let (sender, _receiver) = futures::channel::oneshot::channel();
+        let mut queue = VecDeque::from([QueuedWorkerInvocation::GetFileSystemNode {
+            path: CanonicalFilePath::from_abs_str("/").unwrap(),
+            sender,
+        }]);
+        let mut turn_used = false;
+        assert!(matches!(
+            SelectedWork::next(
+                &mut queue,
+                status.clone(),
+                Some(&constructor),
+                &mut turn_used
+            ),
+            SelectedWork::Durable(_)
+        ));
+        assert_eq!(queue.len(), 1);
+        // Once initialized, listings also consume the filesystem turn.
+        assert!(matches!(
+            SelectedWork::next(&mut queue, status.clone(), None, &mut turn_used),
+            SelectedWork::Resident(_)
+        ));
+        assert!(turn_used);
+        queue.push_front(QueuedWorkerInvocation::SaveSnapshot);
+        assert!(matches!(
+            SelectedWork::next(&mut queue, status, None, &mut turn_used),
+            SelectedWork::Resident(QueuedWorkerInvocation::SaveSnapshot)
+        ));
+        assert!(turn_used);
+        assert!(matches!(
+            SelectedWork::next(
+                &mut queue,
+                Arc::new(AgentStatusRecord::default()),
+                None,
+                &mut turn_used
+            ),
+            SelectedWork::Idle(_)
+        ));
+        assert!(!turn_used);
+    }
 
     #[test]
     fn queued_inspections_survive_guest_suspend_but_not_quota_or_terminal_stops() {

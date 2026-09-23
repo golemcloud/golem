@@ -281,9 +281,10 @@ impl RouteResolver {
         let finalized_routes: Vec<_> = finalized_routes.into_iter().map(Arc::new).collect();
         let openapi_inputs = finalized_routes.iter().find_map(|route| {
             if let RichRouteBehaviour::OpenApiSpec(behavior) = &route.behavior {
+                let public_origin = behavior.scheme.origin(domain);
                 Some(Arc::new(OpenApiInputs {
-                    key: OpenApiKey::fresh(),
-                    public_origin: behavior.scheme.origin(domain),
+                    key: OpenApiKey::from_inputs(&public_origin, &finalized_routes),
+                    public_origin,
                     routes: finalized_routes.clone(),
                 }))
             } else {
@@ -663,6 +664,70 @@ pub(super) mod tests {
             assert_eq!(inputs.routes.len(), 2);
             assert!(Arc::ptr_eq(&inputs.routes[1], &api.mounts[0]));
         }
+    }
+
+    #[test]
+    async fn openapi_key_changes_with_document_inputs() {
+        use golem_service_base::custom_api::SessionFromHeaderRouteSecurity;
+
+        async fn key(compiled: CompiledRoutes, domain: &str) -> OpenApiKey {
+            RouteResolver::fetch_and_build_domain_api(
+                Arc::new(RoutesLookup(std::sync::Mutex::new(Some(compiled)))),
+                &Domain(domain.into()),
+            )
+            .await
+            .unwrap()
+            .openapi_inputs
+            .unwrap()
+            .key
+            .clone()
+        }
+
+        fn routes() -> CompiledRoutes {
+            let mut routes = crate::custom_api::openapi::test_support::provider_routes(1);
+            routes.push(test_route(2, "/call", Some("GET"), "call"));
+            CompiledRoutes {
+                account_id: AccountId(uuid::Uuid::nil()),
+                account_email: AccountEmail::new("test@example.com"),
+                environment_id: EnvironmentId(uuid::Uuid::nil()),
+                deployment_revision: DeploymentRevision::INITIAL,
+                security_schemes: HashMap::new(),
+                routes,
+            }
+        }
+
+        let baseline = key(routes(), "example.com").await;
+        assert_eq!(baseline, key(routes(), "example.com").await);
+        assert_ne!(baseline, key(routes(), "other.example.com").await);
+
+        let mut changed_deployment = routes();
+        changed_deployment.deployment_revision = DeploymentRevision::try_from(1_u64).unwrap();
+        assert_ne!(baseline, key(changed_deployment, "example.com").await);
+
+        let mut changed_provider = routes();
+        let RouteBehaviour::HttpRouter(provider) = &mut changed_provider.routes[1].behavior else {
+            unreachable!()
+        };
+        provider
+            .openapi_provider_method
+            .as_mut()
+            .unwrap()
+            .method_name = "describe-v2".into();
+        assert_ne!(baseline, key(changed_provider, "example.com").await);
+
+        let mut changed_call = routes();
+        let RouteBehaviour::CallAgent(call) = &mut changed_call.routes[2].behavior else {
+            unreachable!()
+        };
+        call.method_description = Some("changed description".into());
+        assert_ne!(baseline, key(changed_call, "example.com").await);
+
+        let mut changed_security = routes();
+        changed_security.routes[1].security =
+            RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+                header_name: "x-session".into(),
+            });
+        assert_ne!(baseline, key(changed_security, "example.com").await);
     }
 
     #[async_trait::async_trait]

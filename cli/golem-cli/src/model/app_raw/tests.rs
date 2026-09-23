@@ -910,11 +910,11 @@ fn arb_http_api_deployment_model() -> BoxedStrategy<HttpApiDeployment> {
     )
         .prop_map(
             |(domain, webhook_url, openapi_endpoint, agents, use_http)| HttpApiDeployment {
-                scheme: if use_http {
+                scheme: Some(if use_http {
                     golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http
                 } else {
                     golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https
-                },
+                }),
                 domain: Some(Domain(format!("{domain}.example.com")).into()),
                 subdomain: None,
                 webhook_url,
@@ -1461,9 +1461,9 @@ fn http_api_scheme_schema_and_serde_agree() {
         "local": [{"domain": "localhost:9006", "agents": {}}]
     }}});
     for (value, expected) in [
-        (None, HttpApiDeploymentScheme::Https),
-        (Some("http"), HttpApiDeploymentScheme::Http),
-        (Some("https"), HttpApiDeploymentScheme::Https),
+        (None, None),
+        (Some("http"), Some(HttpApiDeploymentScheme::Http)),
+        (Some("https"), Some(HttpApiDeploymentScheme::Https)),
     ] {
         if let Some(value) = value {
             json["httpApi"]["deployments"]["local"][0]["scheme"] = value.into();

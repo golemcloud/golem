@@ -38,8 +38,10 @@ reads blob storage without activating an agent. Directory listing remains a sepa
 2. Reads and listings enter the existing `QueuedWorkerInvocation` deque. The constructor must
    complete first: creation reserves its idempotency key before ordinary invocation admission,
    so a pending constructor is recognized at the head of the durable queue. After initialization,
-   the loop processes resident commands at invocation boundaries before pending updates or methods. They observe
-   the agent's current filesystem, regardless of how many invocations were queued first; there is
+   the loop alternates filesystem commands with pending updates or methods at invocation boundaries.
+   The first inspection can bypass queued work, but another inspection yields a turn when ordinary
+   work is pending, preventing continuous reads from starving methods or updates. Control commands
+   retain their priority. Inspections observe the current filesystem without draining the backlog; there is
    no cross-queue arrival ordering or oplog-position marker. An active invocation, including its
    streaming production, must finish before inspection runs. Cancelled resident work is pruned at
    enqueue, selection, idle/eviction, restart and cleanup boundaries; durable invocations are never

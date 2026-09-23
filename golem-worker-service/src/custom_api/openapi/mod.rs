@@ -30,19 +30,65 @@ pub use service::{OpenApiDocument, OpenApiError, OpenApiService};
 #[cfg(test)]
 pub(in crate::custom_api) use service::tests as test_support;
 
-use crate::custom_api::RichCompiledRoute;
+use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
 use std::sync::Arc;
-use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct OpenApiKey {
-    snapshot_id: Uuid,
+    fingerprint: [u8; 32],
 }
 
 impl OpenApiKey {
-    pub(crate) fn fresh() -> Self {
+    pub(crate) fn from_inputs(public_origin: &str, routes: &[Arc<RichCompiledRoute>]) -> Self {
+        let mut fingerprint = blake3::Hasher::new();
+        fingerprint.update(public_origin.as_bytes());
+        for route in routes {
+            fingerprint.update(
+                format!(
+                    "\0{:?}\0{}\0{}\0{:?}\0{:?}",
+                    route.environment_id,
+                    route.deployment_revision,
+                    route.route_id,
+                    route.route_match,
+                    route.path,
+                )
+                .as_bytes(),
+            );
+            match &route.behavior {
+                RichRouteBehaviour::CallAgent(call) => {
+                    fingerprint.update(format!("\0call:{call:?}").as_bytes());
+                }
+                RichRouteBehaviour::HttpRouter(provider)
+                    if provider.openapi_provider_method.is_some() =>
+                {
+                    fingerprint.update(format!("\0provider:{provider:?}").as_bytes());
+                }
+                _ => {}
+            }
+            match &route.security {
+                RichRouteSecurity::None => fingerprint.update(b"\0security:none"),
+                RichRouteSecurity::Unavailable => fingerprint.update(b"\0security:unavailable"),
+                RichRouteSecurity::SessionFromHeader(inner) => fingerprint.update(
+                    format!(
+                        "\0security:header:{}",
+                        inner.header_name.to_ascii_lowercase()
+                    )
+                    .as_bytes(),
+                ),
+                RichRouteSecurity::SecurityScheme(inner) => {
+                    let details = &inner.security_scheme;
+                    fingerprint.update(
+                        format!(
+                            "\0security:oidc:{}:{:?}:{:?}",
+                            details.name, details.provider_type, details.scopes
+                        )
+                        .as_bytes(),
+                    )
+                }
+            };
+        }
         Self {
-            snapshot_id: Uuid::new_v4(),
+            fingerprint: fingerprint.finalize().into(),
         }
     }
 }

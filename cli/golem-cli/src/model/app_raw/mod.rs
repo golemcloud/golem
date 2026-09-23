@@ -1161,8 +1161,8 @@ pub struct HttpApiDeployment {
     pub domain: Option<DeploymentDomain>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subdomain: Option<DeploymentSubdomain>,
-    #[serde(default)]
-    pub scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<golem_common::model::http_api_deployment::HttpApiDeploymentScheme>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub webhook_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

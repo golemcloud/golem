@@ -3508,7 +3508,7 @@ mod app_builder {
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::{
         HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation,
-        SecuritySchemeAgentSecurity, TestSessionHeaderAgentSecurity,
+        HttpApiDeploymentScheme, SecuritySchemeAgentSecurity, TestSessionHeaderAgentSecurity,
     };
     use golem_common::model::tool_middleware::ToolMiddlewareName;
     use indexmap::IndexMap;
@@ -3680,6 +3680,36 @@ mod app_builder {
             "HTTP API",
             source,
         )
+    }
+
+    fn resolve_http_api_scheme(
+        validation: &mut ValidationBuilder,
+        scheme: Option<HttpApiDeploymentScheme>,
+        environment_name: &EnvironmentName,
+        environment: Option<&app_raw::Environment>,
+        source: &Path,
+    ) -> Option<HttpApiDeploymentScheme> {
+        if let Some(scheme) = scheme {
+            return Some(scheme);
+        }
+
+        match environment.and_then(|environment| environment.server.as_ref()) {
+            Some(app_raw::Server::Builtin(app_raw::BuiltinServer::Cloud)) => {
+                Some(HttpApiDeploymentScheme::Https)
+            }
+            Some(app_raw::Server::Custom(_)) => {
+                validation.add_error(format!(
+                    "HTTP API deployment in {} for custom server environment {} must define an explicit {}. The scheme is not inferred from the custom server management URL.",
+                    source.display().to_string().log_color_highlight(),
+                    environment_name.0.log_color_highlight(),
+                    "scheme".log_color_highlight(),
+                ));
+                None
+            }
+            Some(app_raw::Server::Builtin(app_raw::BuiltinServer::Local)) | None => {
+                Some(HttpApiDeploymentScheme::Http)
+            }
+        }
     }
 
     fn resolve_mcp_domain(
@@ -4215,6 +4245,15 @@ mod app_builder {
                                 ) else {
                                     continue;
                                 };
+                                let Some(scheme) = resolve_http_api_scheme(
+                                    validation,
+                                    api_deployment.scheme,
+                                    &environment,
+                                    self.environments.get(&environment),
+                                    &app.source,
+                                ) else {
+                                    continue;
+                                };
 
                                 let deployments =
                                     self.http_api_deployments.entry(environment.clone()).or_default();
@@ -4234,7 +4273,7 @@ mod app_builder {
                                 deployments.entry(domain).or_insert(WithSource::new(
                                     app.source.to_path_buf(),
                                     HttpApiDeploymentDeployProperties {
-                                        scheme: api_deployment.scheme,
+                                        scheme,
                                         webhooks_prefix: HttpApiDeploymentCreation::normalize_webhooks_prefix(
                                             api_deployment
                                                 .webhook_url
@@ -5412,6 +5451,7 @@ mod test {
     use golem_common::model::component::ComponentName;
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
+    use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -7613,6 +7653,77 @@ mod test {
     }
 
     #[test]
+    fn http_api_schemes_resolve_from_environment_and_allow_overrides() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+              implicit: {}
+              cloud:
+                server: cloud
+              custom:
+                server:
+                  url: https://management.example.com
+                  workerUrl: https://workers.example.com
+                  auth:
+                    staticToken: token
+
+            httpApi:
+              deployments:
+                local:
+                  - domain: local.example.com
+                  - domain: secure-local.example.com
+                    scheme: https
+                implicit:
+                  - domain: implicit.example.com
+                cloud:
+                  - domain: cloud.example.com
+                  - domain: insecure-cloud.example.com
+                    scheme: http
+                custom:
+                  - domain: custom.example.com
+                    scheme: http
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+        let scheme = |environment: &str, domain: &str| {
+            app.http_api_deployments(&EnvironmentName(environment.to_string()))
+                .unwrap()
+                .get(&Domain(domain.to_string()))
+                .unwrap()
+                .value
+                .scheme
+        };
+
+        assert_eq!(
+            scheme("local", "local.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+        assert_eq!(
+            scheme("implicit", "implicit.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+        assert_eq!(
+            scheme("cloud", "cloud.example.com"),
+            HttpApiDeploymentScheme::Https
+        );
+        assert_eq!(
+            scheme("local", "secure-local.example.com"),
+            HttpApiDeploymentScheme::Https
+        );
+        assert_eq!(
+            scheme("cloud", "insecure-cloud.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+        assert_eq!(
+            scheme("custom", "custom.example.com"),
+            HttpApiDeploymentScheme::Http
+        );
+    }
+
+    #[test]
     fn deployment_domains_keep_full_domains_unchanged() {
         let source = indoc! { r#"
             app: hello-app
@@ -7918,6 +8029,53 @@ mod test {
             "\n{}",
             errors.join("\n\n")
         );
+    }
+
+    #[test]
+    fn http_api_deployment_requires_explicit_scheme_for_custom_server() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              custom:
+                server:
+                  url: https://management.example.com
+                  workerUrl: https://workers.example.com
+                  auth:
+                    staticToken: token
+
+            httpApi:
+              deployments:
+                custom:
+                  - domain: api.example.com
+        "# };
+
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let golem_yaml_path = tmp_dir.path().join("golem.yaml");
+        fs::write(&golem_yaml_path, source).unwrap();
+        let raw_apps = vec![
+            app_raw::ApplicationWithSource::from_yaml_file(&golem_yaml_path)
+                .expect("raw manifest should parse"),
+        ];
+        let (preload, warns, errors) = Application::preload_from_raw_apps(&raw_apps).into_product();
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert!(errors.is_empty(), "\n{}", errors.join("\n\n"));
+        let preload = preload.expect("manifest should preload");
+
+        let (_app, warns, errors) = Application::from_raw_apps(
+            std::env::current_dir().unwrap(),
+            preload.application_name,
+            preload.environments,
+            preload.local_server,
+            selector("custom", &[]),
+            raw_apps,
+        )
+        .into_product();
+
+        assert!(warns.is_empty(), "\n{}", warns.join("\n\n"));
+        assert_eq!(errors.len(), 1, "\n{}", errors.join("\n\n"));
+        assert!(errors[0].contains("must define an explicit"));
+        assert!(errors[0].contains("not inferred from the custom server management URL"));
     }
 
     #[test]

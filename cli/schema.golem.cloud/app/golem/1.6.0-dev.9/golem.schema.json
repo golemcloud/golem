@@ -1082,8 +1082,7 @@
         "scheme": {
           "type": "string",
           "enum": ["http", "https"],
-          "default": "https",
-          "description": "Public scheme advertised in OpenAPI. Does not configure the HTTP listener."
+          "description": "Public scheme advertised in OpenAPI. Does not configure the HTTP listener. Defaults to http for built-in local and implicit local environments, and https for built-in cloud environments. Custom server environments must set this field explicitly; their management URL scheme is not used."
         },
         "domain": {
           "type": "string",
