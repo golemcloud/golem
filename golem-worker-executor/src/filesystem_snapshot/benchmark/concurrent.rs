@@ -373,7 +373,7 @@ async fn copy_trees(roots: &[PathBuf]) -> anyhow::Result<CopyCounts> {
             Some((first, others)) => others
                 .iter()
                 .try_fold(CopyCounts::default(), |counts, root| {
-                    trees::copy_tree(first, root).map(|copied| counts.with(copied))
+                    trees::copy_tree(first, root, trees::Times::Drop).map(|copied| counts.with(copied))
                 })?,
             None => CopyCounts::default(),
         };
