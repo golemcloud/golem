@@ -14,17 +14,18 @@
 
 use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobMissingError, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
-    NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_copy_changes_nothing,
-    normalized_blob_path,
+    BlobMetadata, BlobMissingError, BlobRangeError, BlobStorage, BlobStorageNamespace,
+    ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent, agent_path_segment,
+    blob_copy_changes_nothing, blob_positions, normalized_blob_path,
 };
 use anyhow::{Context, Error, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
+use futures::io::{AsyncReadExt, AsyncSeekExt};
 use futures::stream::BoxStream;
 use golem_common::model::Timestamp;
-use std::io::Write;
+use std::io::{ErrorKind, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::io::AsyncWriteExt;
@@ -187,6 +188,42 @@ impl BlobStorage for FileSystemBlobStorage {
         } else {
             Ok(None)
         }
+    }
+
+    /// Reads only the bytes of the range from the file. The rules of the trait apply. A path
+    /// that has no metadata has no blob, as for `get_raw`. A directory gives an error of the
+    /// kind [`ErrorKind::IsADirectory`], which is the error that `get_raw` gives for it.
+    async fn get_raw_slice(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        start: u64,
+        end: u64,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        if start > end {
+            return Err(BlobRangeError { start, end }.into());
+        }
+        let path = normalized_blob_path(path)?;
+        let full_path = self.path_of(&namespace, &path);
+        self.ensure_path_is_inside_root(&full_path)?;
+
+        if async_fs::metadata(&full_path).await.is_err() {
+            return Ok(None);
+        }
+        let mut file = async_fs::File::open(&full_path).await?;
+        // The length comes from the open file, so a change of the path after the open does not
+        // change it.
+        let metadata = file.metadata().await?;
+        if metadata.is_dir() {
+            return Err(std::io::Error::from(ErrorKind::IsADirectory).into());
+        }
+        let positions = blob_positions(usize::try_from(metadata.len())?, start, end)?;
+        let mut bytes = vec![0; positions.end() - positions.start() + 1];
+        file.seek(SeekFrom::Start(start)).await?;
+        file.read_exact(&mut bytes).await?;
+        Ok(Some(bytes))
     }
 
     async fn get_metadata(
@@ -465,6 +502,12 @@ impl BlobStorage for FileSystemBlobStorage {
         self.ensure_path_is_inside_root(&from_full_path)?;
         self.ensure_path_is_inside_root(&to_full_path)?;
 
+        // As `put_raw` does, the copy makes the directory of the target when it is not there.
+        if let Some(parent) = to_full_path.parent()
+            && async_fs::metadata(parent).await.is_err()
+        {
+            async_fs::create_dir_all(parent).await?;
+        }
         async_fs::copy(&from_full_path, &to_full_path).await?;
         Ok(())
     }
@@ -543,3 +586,6 @@ fn add_files(
         }
     })
 }
+
+#[cfg(test)]
+mod tests;

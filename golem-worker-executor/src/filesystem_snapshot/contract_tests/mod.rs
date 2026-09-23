@@ -37,7 +37,7 @@
 //! }
 //! ```
 
-mod fixture;
+pub(super) mod fixture;
 
 use super::{
     FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope, SnapshotStoreError,

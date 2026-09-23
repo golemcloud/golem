@@ -235,6 +235,7 @@ rsa = "0.9.7"
 
 rust_decimal = "1.39.0"
 rustc-hash = "2.1.1"
+rustic_core = { version = "0.13.0", default-features = false }
 rustix = { version = "1.1.4", features = ["fs"] }
 rustls = { version = "0.23.23", features = ["ring"] }
 rustls-pemfile = "2.2.0"
@@ -342,6 +343,8 @@ wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
+# The head of the branch `golem-rustic_core-v0.13.0` of the fork.
+rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "b4ee9228ccb09f3babddbce24b032a0bb123d7ca" }
 
 [profile.dev]
 panic = "abort"

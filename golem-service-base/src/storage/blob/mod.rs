@@ -24,6 +24,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 pub mod fs;
@@ -789,10 +790,21 @@ pub enum BlobNameError {
 /// the length of the blob is not in the blob. A `start` after `end` is not in the blob. No
 /// range is in an empty blob.
 pub(crate) fn blob_range(blob: &[u8], start: u64, end: u64) -> Result<&[u8], BlobRangeError> {
+    blob_positions(blob.len(), start, end).map(|positions| &blob[positions])
+}
+
+/// Gives the positions of the bytes from `start` to `end` in a blob of `length` bytes. Both
+/// offsets are inclusive, and the rules of [`blob_range`] apply.
+pub(crate) fn blob_positions(
+    length: usize,
+    start: u64,
+    end: u64,
+) -> Result<RangeInclusive<usize>, BlobRangeError> {
     (start <= end)
         .then(|| usize::try_from(start).ok().zip(usize::try_from(end).ok()))
         .flatten()
-        .and_then(|(first, last)| blob.get(first..=last))
+        .filter(|&(_, last)| last < length)
+        .map(|(first, last)| first..=last)
         .ok_or(BlobRangeError { start, end })
 }
 
