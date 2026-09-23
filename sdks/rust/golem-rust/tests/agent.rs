@@ -244,6 +244,91 @@ mod tests {
         PngImage,
     }
 
+    #[test]
+    fn direct_unstructured_codecs_preserve_roles_restrictions_and_values() {
+        use golem_rust::schema::wit::{decode_graph, direct};
+
+        fn check<
+            T: Schema + Clone + golem_rust::FromWire + golem_rust::IntoWire + golem_rust::WireSchema,
+        >(
+            value: T,
+        ) {
+            let expected_schema = T::get_type().get_schema_graph().unwrap();
+            assert_eq!(
+                decode_graph(&direct::schema::<T>()).unwrap(),
+                expected_schema
+            );
+            let expected = value.clone().to_schema_value().unwrap();
+            let decoded = direct::decode::<T>(direct::encode(&value).unwrap()).unwrap();
+            assert_eq!(decoded.to_schema_value().unwrap(), expected);
+        }
+
+        check(UnstructuredText::from_inline("Grüße", MyLang::German));
+        check(UnstructuredText::from_inline_any("unrestricted"));
+        check(UnstructuredText::<MyLang>::Url(
+            "https://example.com/text".to_string(),
+        ));
+        check(UnstructuredBinary::from_inline(
+            vec![0, 255, 19],
+            MyMimeType::PngImage,
+        ));
+        check(UnstructuredBinary::<MyMimeType>::from_url(
+            "https://example.com/image",
+        ));
+        check(UnstructuredBinary::from_inline(
+            vec![3, 7],
+            "application/test".to_string(),
+        ));
+    }
+
+    #[test]
+    fn direct_unstructured_codecs_reject_wrong_payloads_and_restrictions() {
+        use golem_rust::schema::wit::{direct, wire};
+
+        let text =
+            UnstructuredText::from_inline("bonjour", golem_rust::agentic::AnyLanguage::new("fr"));
+        assert!(
+            direct::decode::<UnstructuredText<MyLang>>(direct::encode(&text).unwrap()).is_err()
+        );
+        let binary = UnstructuredBinary::from_inline(vec![5], "application/json".to_string());
+        assert!(
+            direct::decode::<UnstructuredBinary<MyMimeType>>(direct::encode(&binary).unwrap())
+                .is_err()
+        );
+
+        for case in [0, 2] {
+            let tree = || wire::SchemaValueTree {
+                value_nodes: vec![
+                    wire::SchemaValueNode::UrlValue("https://example.com".to_string()),
+                    wire::SchemaValueNode::VariantValue(wire::VariantValuePayload {
+                        case,
+                        payload: Some(0),
+                    }),
+                ],
+                root: 1,
+            };
+            assert!(direct::decode::<UnstructuredText<MyLang>>(tree()).is_err());
+            assert!(direct::decode::<UnstructuredBinary<MyMimeType>>(tree()).is_err());
+        }
+        let without_mime = wire::SchemaValueTree {
+            value_nodes: vec![
+                wire::SchemaValueNode::BinaryValue(wire::BinaryValuePayload {
+                    bytes: vec![41],
+                    mime_type: None,
+                }),
+                wire::SchemaValueNode::VariantValue(wire::VariantValuePayload {
+                    case: 0,
+                    payload: Some(0),
+                }),
+            ],
+            root: 1,
+        };
+        assert!(
+            matches!(direct::decode::<UnstructuredBinary<MyMimeType>>(without_mime).unwrap(),
+            UnstructuredBinary::Inline { data, mime_type: MyMimeType::PlainText } if data == [41])
+        );
+    }
+
     #[agent_implementation]
     impl Echo for EchoImpl {
         fn new(id: UserId, llm_config: Config) -> Self {
