@@ -1,18 +1,105 @@
 use futures_concurrency::prelude::*;
-use golem_rust::agentic::{AgentStream, spawn_local};
+use golem_rust::agentic::{AgentStream, Secret, spawn_local};
+use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::tool::{
     InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
     ToolInvokeError, UnderlyingTool,
 };
 use golem_rust::{
-    FromSchema, IntoSchema, TypedSchemaValue, tool_definition, tool_middleware,
-    universal_tool_middleware,
+    FromSchema, IntoSchema, IntoTypedSchemaValue, TypedSchemaValue, decode_schema_value,
+    encode_schema_graph, tool_definition, tool_middleware, universal_tool_middleware,
 };
 use std::convert::Infallible;
 
 #[tool_definition(version = "1.0.0")]
 pub trait MiddlewareProbe {
     async fn apply(&self, value: String) -> String;
+}
+
+#[derive(IntoSchema, FromSchema)]
+pub struct SecretPolicyObservation {
+    pub label: String,
+    pub config_resolved: bool,
+    pub configured_secret_revealed: bool,
+    pub input_secret_revealed: bool,
+}
+
+#[derive(IntoSchema, FromSchema)]
+pub struct SecretPolicyEvidence {
+    pub middleware: Vec<SecretPolicyObservation>,
+    pub leaf_revealed: bool,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait SecretPolicyProbe {
+    async fn inspect(&self, value: GuestSecretHandle) -> SecretPolicyEvidence;
+}
+
+#[derive(IntoSchema, FromSchema)]
+struct SecretPolicyParameters {
+    label: String,
+}
+
+struct SecretPolicyAudit {
+    parameters: SecretPolicyParameters,
+}
+
+impl SecretPolicyAudit {
+    fn new(parameters: SecretPolicyParameters) -> Self {
+        Self { parameters }
+    }
+}
+
+fn reveal_string(value: &GuestSecretHandle) -> Result<String, String> {
+    let graph =
+        golem_rust::schema::try_into_schema_graph::<String>().map_err(|error| error.to_string())?;
+    let expected = encode_schema_graph(&graph).map_err(|error| error.to_string())?;
+    let value = value
+        .with_handle(|handle| {
+            golem_rust::bindings::golem::secrets::reveal::reveal(handle, &expected)
+        })
+        .ok_or_else(|| "secret handle was transferred".to_string())?
+        .map_err(|error| format!("{error:?}"))?;
+    let value = decode_schema_value(value).map_err(|error| error.to_string())?;
+    String::from_value(&value).map_err(|error| error.to_string())
+}
+
+#[tool_middleware(
+    name = "streaming-secret-policy-audit",
+    constructor = SecretPolicyAudit::new,
+    parameters = SecretPolicyParameters
+)]
+impl SecretPolicyProbeMiddleware for SecretPolicyAudit {
+    async fn inspect(
+        &self,
+        underlying: &SecretPolicyProbeUnderlying,
+        value: GuestSecretHandle,
+    ) -> Result<SecretPolicyEvidence, ToolInvokeError<Infallible>> {
+        if self.parameters.label == "restricted"
+            && std::env::var("MIDDLEWARE_PROMISE_CHECKPOINT_PORT").is_ok()
+        {
+            wait_at_middleware_promise_checkpoint("secret-policy-before-access").await;
+        }
+        let configured = Secret::<String>::new(vec!["tool_secret".to_string()]).handle();
+        let config_resolved = configured.is_ok();
+        let configured_secret_revealed = configured
+            .as_ref()
+            .is_ok_and(|configured| reveal_string(configured).is_ok());
+        let input_secret_revealed = reveal_string(&value).is_ok();
+        let mut evidence = underlying.inspect(value).await?;
+        if self.parameters.label == "restricted"
+            && std::env::var("MIDDLEWARE_PROMISE_CHECKPOINT_PORT").is_ok()
+        {
+            wait_at_middleware_promise_checkpoint("secret-policy-after-forward").await;
+        }
+        evidence.middleware.push(SecretPolicyObservation {
+            label: self.parameters.label.clone(),
+            config_resolved,
+            configured_secret_revealed,
+            input_secret_revealed,
+        });
+        Ok(evidence)
+    }
 }
 
 mod expected_typed_output {
@@ -151,6 +238,56 @@ async fn universal_pass_through(
     underlying
         .invoke_forwarding_stdout(command_path, input, stdin, stdout)
         .await
+}
+
+#[universal_tool_middleware(name = "streaming-universal-secret-policy-audit")]
+async fn universal_secret_policy_audit(
+    tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    if tool_name != "secret-policy-probe" {
+        return underlying
+            .invoke_forwarding_stdout(command_path, input, stdin, stdout)
+            .await;
+    }
+
+    let configured = Secret::<String>::new(vec!["tool_secret".to_string()]).handle();
+    let config_resolved = configured.is_ok();
+    let configured_secret_revealed = configured
+        .as_ref()
+        .is_ok_and(|configured| reveal_string(configured).is_ok());
+    let input_secret_revealed = match input.value() {
+        golem_rust::SchemaValue::Record { fields } => fields.first().is_some_and(|value| {
+            matches!(value, golem_rust::SchemaValue::Secret(handle) if reveal_string(handle).is_ok())
+        }),
+        _ => false,
+    };
+    let mut result = underlying
+        .invoke_forwarding_stdout(command_path, input, stdin, stdout)
+        .await?;
+    let value = result.result.take().ok_or_else(|| {
+        ToolInvokeError::InvalidResult("secret policy probe returned no value".to_string())
+    })?;
+    let mut evidence = SecretPolicyEvidence::from_value(value.value())
+        .map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))?;
+    evidence.middleware.push(SecretPolicyObservation {
+        label: "universal".to_string(),
+        config_resolved,
+        configured_secret_revealed,
+        input_secret_revealed,
+    });
+    result.result = Some(
+        evidence
+            .into_typed_schema_value()
+            .map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))?,
+    );
+    Ok(result)
 }
 
 macro_rules! streaming_middleware {

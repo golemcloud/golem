@@ -245,6 +245,15 @@ pub fn get_tool_activation_from_deployment(
                     .ok()
                     .and_then(|name| deployment.registered_tool_middlewares.get(&name))
                         == Some(&occurrence.middleware)
+                    && occurrence
+                        .secret_keys_readable
+                        .is_subset_of(&binding.secret_keys_readable)
+                    && occurrence
+                        .secret_keys_revealable
+                        .is_subset_of(&binding.secret_keys_revealable)
+                    && occurrence
+                        .secret_keys_revealable
+                        .is_subset_of(&occurrence.secret_keys_readable)
             });
         if !chain_consistent {
             return Err(ToolDiscoveryError::InconsistentSnapshot {
