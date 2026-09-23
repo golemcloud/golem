@@ -130,6 +130,34 @@ fn canonical_inputs_restore_exact_json_property_names() {
         .body
         .as_ref()
         .unwrap();
+    let extras = body
+        .options
+        .iter()
+        .find(|option| option.long == schema::EXTRAS)
+        .unwrap();
+    assert!(!extras.required);
+    assert!(extras.default.is_none());
+    assert!(matches!(
+        extras.shape,
+        OptionShape::RepeatableMap(RepeatableMapShape {
+            repetition: Repetition::Repeated,
+            duplicate_key_policy: DuplicateKeyPolicy::Reject,
+            ..
+        })
+    ));
+    let empty_extras = from_untrusted_json_value(
+        &model.record_schema,
+        &model.record_schema.root,
+        &json!({
+            "user-id":"customer-4","count":7,"settings":null,
+            "additional-properties":[]
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        projected.arguments(&empty_extras).unwrap(),
+        json!({"User_ID":"customer-4","count":7})
+    );
     assert_eq!(
         body.annotations,
         Some(CommandAnnotations {
@@ -189,7 +217,7 @@ fn structured_values_and_stdout_share_one_stable_result_schema() {
         assert_eq!(response.stdout, stdout);
         validate_value(&tool.definition.schema, result_type, &response.value).unwrap();
         let json = to_json_value(&tool.definition.schema, result_type, &response.value).unwrap();
-        assert_eq!(json["structured"]["answer"], -42);
+        assert_eq!(json["structured"]["answer"], "-42");
         assert_eq!(tool.definition, original_definition);
     }
     for invalid in [
@@ -507,19 +535,25 @@ fn root_object_unions_remain_typed_in_arguments_and_results() {
     )
     .unwrap();
     let model = tool.definition.canonical_input_model(0).unwrap();
-    for value in [
-        json!({"kind":"count","amount":-17}),
-        json!({"kind":"label","text":"value"}),
+    for (canonical, upstream) in [
+        (
+            json!({"kind":"count","amount":"-17"}),
+            json!({"kind":"count","amount":-17}),
+        ),
+        (
+            json!({"kind":"label","text":"value"}),
+            json!({"kind":"label","text":"value"}),
+        ),
     ] {
         let input = from_untrusted_json_value(
             &model.record_schema,
             &model.record_schema.root,
-            &json!({"arguments":value}),
+            &json!({"arguments":canonical}),
         )
         .unwrap();
-        assert_eq!(tool.arguments(&input).unwrap(), value);
+        assert_eq!(tool.arguments(&input).unwrap(), upstream);
         let output = tool
-            .response(&json!({"content":[],"structuredContent":value}))
+            .response(&json!({"content":[],"structuredContent":upstream}))
             .unwrap();
         let result = &tool.definition.commands.nodes[0]
             .body
@@ -532,7 +566,7 @@ fn root_object_unions_remain_typed_in_arguments_and_results() {
         validate_value(&tool.definition.schema, result, &output.value).unwrap();
         assert_eq!(
             to_json_value(&tool.definition.schema, result, &output.value).unwrap()["structured"],
-            value
+            canonical
         );
     }
     assert!(

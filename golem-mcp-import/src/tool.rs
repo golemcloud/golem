@@ -128,6 +128,15 @@ impl ProjectedTool {
                         .iter()
                         .find(|f| f.schema_name == field.name)
                         .is_some_and(|f| f.required);
+                let shape = if field.name == schema::EXTRAS {
+                    OptionShape::RepeatableMap(RepeatableMapShape {
+                        repetition: Repetition::Repeated,
+                        map_type: field.body.clone(),
+                        duplicate_key_policy: DuplicateKeyPolicy::Reject,
+                    })
+                } else {
+                    OptionShape::Scalar(field.body.clone())
+                };
                 Ok(OptionSpec {
                     long,
                     short: None,
@@ -137,7 +146,7 @@ impl ProjectedTool {
                         ..Default::default()
                     },
                     value_name: None,
-                    shape: OptionShape::Scalar(field.body.clone()),
+                    shape,
                     default: None,
                     required,
                     env_var: None,
