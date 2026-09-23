@@ -16,9 +16,11 @@ package golem
 
 import (
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
+	mwExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_tool_middleware_guest"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
+	underlying "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_underlying"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -38,10 +40,35 @@ import (
 type toolRegistry struct {
 	order  []string
 	byName map[string]*toolEntry
+	// Middleware is registered alongside tools: a component may export both.
+	middlewareOrder   []string
+	middlewaresByName map[string]*middlewareEntry
 }
 
 func newToolRegistry() *toolRegistry {
-	return &toolRegistry{byName: map[string]*toolEntry{}}
+	return &toolRegistry{
+		byName:            map[string]*toolEntry{},
+		middlewaresByName: map[string]*middlewareEntry{},
+	}
+}
+
+// discoverMiddlewares derives every registered middleware's metadata.
+func (r *toolRegistry) discoverMiddlewares(d *definitions) ([]toolCommon.ToolMiddleware, bool) {
+	out := make([]toolCommon.ToolMiddleware, 0, len(r.middlewareOrder))
+	ok := true
+	for _, name := range r.middlewareOrder {
+		m, built := d.buildToolMiddleware(r.middlewaresByName[name])
+		if !built {
+			ok = false
+		}
+		out = append(out, m)
+	}
+	return out, ok
+}
+
+func (r *toolRegistry) getMiddleware(name string) (*middlewareEntry, bool) {
+	e, ok := r.middlewaresByName[name]
+	return e, ok
 }
 
 // toolDefs is the process-wide tool registry, mirroring defs for agents.
@@ -102,6 +129,51 @@ func init() {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
 		}
 		return defs.invokeCommand(e, commandPath, input, newToolStdin(stdin), newToolStdout(stdout))
+	}
+
+	mwExports.Exports.DiscoverToolMiddlewares = func() witTypes.Result[[]toolCommon.ToolMiddleware, types.ToolError] {
+		found, ok := toolDefs.discoverMiddlewares(defs)
+		if !ok {
+			return witTypes.Err[[]toolCommon.ToolMiddleware](toolDefinitionError(defs))
+		}
+		return witTypes.Ok[[]toolCommon.ToolMiddleware, types.ToolError](found)
+	}
+
+	mwExports.Exports.GetToolMiddleware = func(name string) witTypes.Result[toolCommon.ToolMiddleware, types.ToolError] {
+		e, ok := toolDefs.getMiddleware(name)
+		if !ok {
+			return witTypes.Err[toolCommon.ToolMiddleware](types.MakeToolErrorInvalidToolName(name))
+		}
+		m, built := defs.buildToolMiddleware(e)
+		if !built {
+			return witTypes.Err[toolCommon.ToolMiddleware](toolDefinitionError(defs))
+		}
+		return witTypes.Ok[toolCommon.ToolMiddleware, types.ToolError](m)
+	}
+
+	mwExports.Exports.InvokeToolMiddleware = func(
+		middlewareName string,
+		toolName string,
+		toolMetadata toolCommon.Tool,
+		parameters types.TypedSchemaValue,
+		commandPath []string,
+		input types.TypedSchemaValue,
+		stdin mwExports.Stdin,
+		stdout mwExports.Stdout,
+		_ common.Principal,
+		wrapped *underlying.UnderlyingTool,
+	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+		return defs.invokeMiddleware(&middlewareCall{
+			middleware:  middlewareName,
+			toolName:    toolName,
+			tool:        toolMetadata,
+			parameters:  TypedValue{wit: parameters},
+			commandPath: commandPath,
+			input:       TypedValue{wit: input},
+			stdin:       newNextStdin(stdin),
+			stdout:      newToolStdout(toolExports.Stdout(stdout)),
+			next:        newNextLayer(wrapped),
+		})
 	}
 }
 
