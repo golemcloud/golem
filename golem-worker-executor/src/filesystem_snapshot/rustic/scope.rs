@@ -32,11 +32,9 @@ const CONFIG_PATH: &str = "config";
 
 /// The directories of a repository in the order of a listing. A save writes them in the reverse
 /// order, so each snapshot file in a listing has its index files and packs in the later listings.
+/// A copy writes them in the reverse order too, so a snapshot file in the target always has its
+/// data.
 const LISTING_ORDER: [&str; 4] = ["snapshots", "index", "keys", "data"];
-
-/// The directories of a repository in the order of the writes of a copy: packs, index files, keys,
-/// then snapshot files. So a snapshot file in the target always has its data.
-const COPY_ORDER: [&str; 4] = ["data", "index", "keys", "snapshots"];
 
 /// Copies the repository of the namespace `from` into the empty namespace `to`.
 ///
@@ -75,18 +73,13 @@ pub(super) async fn copy_scope(
                 ),
             )
             .await
-            .map(|blobs| (directory, blobs))
         })
         .try_collect::<Vec<_>>()
         .await?;
-    let paths = COPY_ORDER
+    let paths = listed
         .iter()
-        .flat_map(|directory| {
-            listed
-                .iter()
-                .filter(move |(listed_directory, _)| listed_directory == directory)
-                .flat_map(|(_, blobs)| blobs.iter().map(|blob| blob.path.clone()))
-        })
+        .rev()
+        .flat_map(|blobs| blobs.iter().map(|blob| blob.path.clone()))
         .collect::<Box<[_]>>();
     stream::iter(paths.iter().map(Ok))
         .try_for_each(|path| copy_blob(storage, from, to, path, deadline))

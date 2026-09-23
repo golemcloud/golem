@@ -117,7 +117,7 @@ async fn a_copy_gives_the_target_each_blob_of_the_repository_and_not_the_ledger(
 }
 
 #[test]
-async fn a_copy_writes_the_packs_the_index_files_the_keys_the_snapshot_files_and_then_the_config() {
+async fn a_copy_writes_the_packs_the_keys_the_index_files_the_snapshot_files_and_then_the_config() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
     let (from, to) = (new_namespace(), new_namespace());
@@ -134,8 +134,8 @@ async fn a_copy_writes_the_packs_the_index_files_the_keys_the_snapshot_files_and
             .collect::<Vec<_>>(),
         vec![
             "data/ab/abab",
-            "index/cdcd",
             "keys/efef",
+            "index/cdcd",
             "snapshots/0101",
             "config"
         ]
@@ -205,7 +205,10 @@ async fn a_copy_that_fails_gives_the_error_and_the_target_has_no_config() {
                 .map(|(path, _)| path)
                 .collect::<Vec<_>>()
         ),
-        (true, vec!["data/ab/abab".to_string()])
+        (
+            true,
+            vec!["data/ab/abab".to_string(), "keys/efef".to_string()]
+        )
     );
 }
 
