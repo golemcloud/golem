@@ -34,6 +34,17 @@ pub mod workerctx;
 pub mod span_test_support;
 
 #[cfg(test)]
+use span_test_support::Tracing;
+#[cfg(test)]
+use test_r::test_dep;
+
+#[cfg(test)]
+#[test_dep(scope = PerWorker)]
+fn tracing() -> Tracing {
+    Tracing::init()
+}
+
+#[cfg(test)]
 test_r::enable!();
 
 use self::durable_host::{DurableWorkerCtx, DurableWorkerCtxView};

@@ -37,7 +37,7 @@ impl LiveBodies {
     }
 
     async fn wait_for(&self, expected: usize) {
-        tokio::time::timeout(CLEANUP_TIMEOUT, async {
+        let result = tokio::time::timeout(CLEANUP_TIMEOUT, async {
             loop {
                 let changed = self.changed.notified();
                 tokio::pin!(changed);
@@ -48,8 +48,10 @@ impl LiveBodies {
                 changed.await;
             }
         })
-        .await
-        .unwrap_or_else(|_| panic!("body count did not become {expected}; was {}", self.count()));
+        .await;
+        if result.is_err() && self.count() != expected {
+            panic!("body count did not become {expected}; was {}", self.count());
+        }
     }
 }
 
