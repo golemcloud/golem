@@ -50,6 +50,25 @@ mod parse;
 use proc_macro::TokenStream;
 use syn::{DeriveInput, parse_macro_input};
 
+/// Converts a guest value directly to canonical wire nodes, including affine
+/// resource preflight. Does not construct or validate a schema model.
+#[proc_macro_derive(IntoWire, attributes(schema))]
+pub fn derive_into_wire(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    codegen::wire::expand(&input, true)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Decodes canonical wire nodes directly into a concrete guest type.
+#[proc_macro_derive(FromWire, attributes(schema))]
+pub fn derive_from_wire(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    codegen::wire::expand(&input, false)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 #[proc_macro_derive(IntoSchema, attributes(schema))]
 pub fn derive_into_schema(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

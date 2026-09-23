@@ -18,6 +18,11 @@ harness = false
 required-features = ["guest"]
 
 [[test]]
+name = "direct_wire"
+harness = false
+required-features = ["guest"]
+
+[[test]]
 name = "feature_matrix"
 harness = false
 
