@@ -33,6 +33,7 @@ export default {
   "golem-add-transactions-rust": "Saga-Pattern Transactions (Rust)",
   "golem-schedule-agent-rust": "Scheduling a Future Agent Invocation",
   "golem-schedule-future-call-rust": "Scheduling a Future Agent Invocation (Rust)",
+  "golem-streaming-agent-rust": "Streaming Agent Methods in Rust",
   "golem-trigger-agent-rust": "Triggering a Fire-and-Forget Agent Invocation",
   "golem-add-ignite-rust": "Using Apache Ignite from a Rust Agent",
   "golem-add-mysql-rust": "Using MySQL from a Rust Agent",
