@@ -509,6 +509,7 @@ mod tests {
     };
     use crate::model::account::{AccountEmail, AccountId};
     use crate::model::agent::AgentTypeName;
+    use crate::model::agent_secret::CanonicalAgentSecretPath;
     use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
     use crate::model::deployment::DeploymentRevision;
     use crate::model::diff::{Hash, Hashable};
@@ -649,6 +650,8 @@ mod tests {
                     version: Some("1.0.0".to_string()),
                     parameters: NormalizedJsonValue::new(serde_json::json!({})),
                     account: None,
+                    secret_keys_readable: None,
+                    secret_keys_revealable: None,
                     filesystem_access: ToolFilesystemAccess::Denied,
                 },
             ],
@@ -708,6 +711,8 @@ mod tests {
                 version: None,
                 parameters: NormalizedJsonValue::new(serde_json::json!({})),
                 account: None,
+                secret_keys_readable: None,
+                secret_keys_revealable: None,
                 filesystem_access,
             };
         let hash = |filesystem_access| {
@@ -723,6 +728,34 @@ mod tests {
             hash(ToolFilesystemAccess::Allowed),
             hash(ToolFilesystemAccess::Denied)
         );
+    }
+
+    #[test]
+    fn changing_one_duplicate_middleware_secret_selector_changes_deployment_hash() {
+        let installation = || crate::model::tool_middleware::ToolMiddlewareInstallation {
+            name: "audit".try_into().unwrap(),
+            version: Some("1.0.0".to_string()),
+            parameters: NormalizedJsonValue::new(serde_json::json!({})),
+            account: None,
+            secret_keys_readable: None,
+            secret_keys_revealable: None,
+            filesystem_access: ToolFilesystemAccess::Denied,
+        };
+        let original = Deployment {
+            universal_tool_middlewares: vec![installation(), installation()],
+            ..Deployment::default()
+        };
+        let mut changed = original.clone();
+        changed.universal_tool_middlewares[0].secret_keys_readable =
+            Some(SecretKeyScope::Keys(BTreeSet::from([
+                CanonicalAgentSecretPath(vec!["token".to_string()]),
+            ])));
+
+        assert_eq!(
+            changed.universal_tool_middlewares[1], original.universal_tool_middlewares[1],
+            "same-named occurrences must retain independent selector state"
+        );
+        assert_ne!(original.hash().unwrap(), changed.hash().unwrap());
     }
 
     fn registered_tool(

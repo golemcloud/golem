@@ -26371,6 +26371,10 @@ components:
           $ref: '#/components/schemas/NormalizedJsonValue'
         account:
           type: string
+        secretKeysReadable:
+          $ref: '#/components/schemas/SecretKeyScope'
+        secretKeysRevealable:
+          $ref: '#/components/schemas/SecretKeyScope'
         filesystemAccess:
           default: unset
           allOf:

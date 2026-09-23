@@ -6261,14 +6261,35 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
             }
         };
-        let installation =
-            |name: &str, sequence: i64, filesystem_access| ToolMiddlewareInstallation {
+        let installation = |name: &str, sequence: i64, filesystem_access| {
+            let concrete = |key: &str| {
+                SecretKeyScope::Keys(BTreeSet::from([CanonicalAgentSecretPath(vec![
+                    key.to_string(),
+                ])]))
+            };
+            let (secret_keys_readable, secret_keys_revealable) = match sequence {
+                1 => (None, None),
+                2 => (
+                    Some(SecretKeyScope::All),
+                    Some(SecretKeyScope::Keys(BTreeSet::new())),
+                ),
+                3 => (
+                    Some(SecretKeyScope::Keys(BTreeSet::new())),
+                    Some(concrete("environment-revealable")),
+                ),
+                4 => (Some(concrete("agent-readable")), Some(SecretKeyScope::All)),
+                _ => unreachable!(),
+            };
+            ToolMiddlewareInstallation {
                 name: ToolMiddlewareName::try_from(name).unwrap(),
                 version: Some("1.0.0".to_string()),
                 parameters: NormalizedJsonValue::new(serde_json::json!({ "sequence": sequence })),
                 account: Some(AccountEmail::new(owner_account_email.clone())),
+                secret_keys_readable,
+                secret_keys_revealable,
                 filesystem_access,
-            };
+            }
+        };
         let (
             registered_tool_middlewares,
             tool_middleware_chains,

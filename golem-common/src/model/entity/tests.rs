@@ -289,6 +289,112 @@ fn entity_invocation_plan_roundtrip_and_descendant_reference_do_not_repeat_plan(
 }
 
 #[test]
+fn entity_invocation_plan_validates_each_middleware_policy_against_recorded_leaf() {
+    use crate::model::agent_secret::CanonicalAgentSecretPath;
+    use std::collections::BTreeSet;
+
+    let scope = |keys: &[&str]| {
+        SecretKeyScope::Keys(BTreeSet::from_iter(
+            keys.iter()
+                .map(|key| CanonicalAgentSecretPath(vec![(*key).to_string()])),
+        ))
+    };
+    let set_middleware_scopes =
+        |mut activation: EntityActivation, readable: SecretKeyScope, revealable: SecretKeyScope| {
+            let EntityActivationPolicy::ToolMiddleware {
+                secret_keys_readable,
+                secret_keys_revealable,
+                ..
+            } = &mut activation.policy
+            else {
+                unreachable!()
+            };
+            *secret_keys_readable = readable;
+            *secret_keys_revealable = revealable;
+            activation
+        };
+    let set_leaf_scopes =
+        |mut activation: EntityActivation, readable: SecretKeyScope, revealable: SecretKeyScope| {
+            let EntityActivationPolicy::Tool { binding, .. } = &mut activation.policy else {
+                unreachable!()
+            };
+            binding.secret_keys_readable = readable;
+            binding.secret_keys_revealable = revealable;
+            activation
+        };
+    let plan = |middlewares: Vec<EntityActivation>, leaf: EntityActivation| {
+        let mut layers = middlewares
+            .into_iter()
+            .map(|activation| EntityInvocationPlanLayer::Middleware {
+                activation,
+                parameters: TypedSchemaValue::new(
+                    crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::tuple(
+                        Vec::new(),
+                    )),
+                    crate::schema::SchemaValue::Tuple {
+                        elements: Vec::new(),
+                    },
+                ),
+                expected_definition: None,
+                presented_definition: None,
+                next_effective_definition: tool_definition(),
+                compatibility: None,
+            })
+            .collect::<Vec<_>>();
+        layers.push(EntityInvocationPlanLayer::Tool { activation: leaf });
+        EntityInvocationPlan::new(layers)
+    };
+
+    let leaf = set_leaf_scopes(activation(), scope(&["a", "b"]), scope(&["a"]));
+    assert!(
+        plan(
+            vec![
+                set_middleware_scopes(middleware_activation(), scope(&["a"]), scope(&["a"])),
+                set_middleware_scopes(middleware_activation(), scope(&["b"]), scope(&[])),
+            ],
+            leaf.clone(),
+        )
+        .is_ok()
+    );
+    assert!(
+        plan(
+            vec![set_middleware_scopes(
+                middleware_activation(),
+                scope(&["outside"]),
+                scope(&[]),
+            )],
+            leaf.clone(),
+        )
+        .is_err(),
+        "middleware readable scope must not exceed the recorded leaf"
+    );
+    assert!(
+        plan(
+            vec![set_middleware_scopes(
+                middleware_activation(),
+                scope(&["a"]),
+                scope(&["b"]),
+            )],
+            leaf.clone(),
+        )
+        .is_err(),
+        "middleware revealable scope must not exceed the recorded leaf"
+    );
+    assert!(
+        plan(
+            vec![set_middleware_scopes(
+                middleware_activation(),
+                scope(&[]),
+                scope(&["a"]),
+            )],
+            leaf,
+        )
+        .is_err(),
+        "middleware revealable scope must remain within its readable scope"
+    );
+}
+
+#[test]
 fn entity_invocation_plan_rejects_middleware_activation_in_tool_layer() {
     let result = EntityInvocationPlan::new(vec![EntityInvocationPlanLayer::Tool {
         activation: middleware_activation(),
