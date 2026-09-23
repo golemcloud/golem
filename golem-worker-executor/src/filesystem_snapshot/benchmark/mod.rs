@@ -533,6 +533,8 @@ fn phase_name(phase: super::rustic::OperationPhase) -> &'static str {
         OperationPhase::Backup => "backup",
         OperationPhase::RestorePlan => "restore_plan",
         OperationPhase::Restore => "restore",
+        OperationPhase::PrunePlan => "prune_plan",
+        OperationPhase::Prune => "prune",
     }
 }
 

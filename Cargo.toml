@@ -84,6 +84,7 @@ bit-vec = { version = "0.6.3", features = ["serde"] }
 bitflags = "2.6.0"
 blake3 = { version = "1.8.2", features = ["rayon"] }
 bytes = "1.10.1"
+bytesize = "2.7.0"
 camino = "1.1.10"
 cap-fs-ext = "3.4.5" # keep in sync with wasmtime
 cap-std = "3.4.5" # keep in sync with wasmtime

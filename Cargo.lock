@@ -4600,6 +4600,7 @@ dependencies = [
  "bit-vec 0.6.3",
  "blake3",
  "bytes",
+ "bytesize",
  "cap-fs-ext",
  "cap-std",
  "cap-time-ext",

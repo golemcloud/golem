@@ -56,6 +56,7 @@ bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+bytesize = { workspace = true }
 cap-fs-ext = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime

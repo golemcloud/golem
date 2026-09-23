@@ -29,16 +29,19 @@ use super::{SnapshotName, SnapshotScope};
 use crate::sandbox_filesystem::{NativeOperation, NativeStorageProfile, execute_native};
 use anyhow::Context;
 use backend::BlobBackend;
+use bytesize::ByteSize;
 use golem_common::model::Timestamp;
 use golem_service_base::storage::blob::BlobStorage;
-use rustic_core::repofile::{MasterKey, SnapshotFile};
+use rustic_core::jiff::Span;
+use rustic_core::repofile::{Chunker, ConfigFile, MasterKey, SnapshotFile};
 use rustic_core::{
-    BackupOptions, ConfigOptions, Credentials, KeyOptions, LocalDestination, LsOptions, Open,
-    OpenStatus, ParentOptions, PathList, Repository as RusticRepository, RepositoryBackends,
-    RepositoryOptions, RestoreOptions, RusticResult, SnapshotGroupCriterion, SnapshotOptions,
+    BackupOptions, ConfigOptions, Credentials, KeyOptions, LimitOption, LocalDestination,
+    LsOptions, Open, OpenStatus, ParentOptions, PathList, PruneOptions, PruneStats,
+    Repository as RusticRepository, RepositoryBackends, RepositoryOptions, RestoreOptions,
+    RusticResult, SnapshotGroupCriterion, SnapshotOptions,
 };
 use std::fmt::{Debug, Formatter};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -101,6 +104,10 @@ pub(super) enum OperationPhase {
     RestorePlan,
     /// Writes the tree into the directory.
     Restore,
+    /// Finds the packs that a prune deletes or repacks.
+    PrunePlan,
+    /// Repacks, marks and deletes the packs of the plan of a prune.
+    Prune,
 }
 
 /// The time that one part of an operation took.
@@ -148,6 +155,161 @@ pub(super) struct RestoreReport {
     pub(super) phases: Box<[PhaseTime]>,
 }
 
+/// How a repository cuts files into chunks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Chunking {
+    /// Content-defined chunks of about 1 MiB, the default of rustic.
+    #[default]
+    Rabin,
+    /// Chunks of the fixed size in bytes. Only the last chunk of a file can be smaller.
+    Fixed(NonZeroU32),
+}
+
+/// How a repository compresses the data that it keeps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Compression {
+    /// The default level of zstd.
+    #[default]
+    Default,
+    /// No compression.
+    Off,
+    /// The zstd level. The level 0 is the default level of zstd.
+    Level(i32),
+}
+
+/// The settings that a repository gets when a save makes it. A repository that exists keeps its
+/// own settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RepositorySettings {
+    pub(super) chunking: Chunking,
+    pub(super) compression: Compression,
+    /// Whether a save decompresses and decrypts each pack again before it writes the pack.
+    pub(super) extra_verify: bool,
+}
+
+impl RepositorySettings {
+    /// The settings of rustic: Rabin chunks, the default zstd level, and the extra verification.
+    pub(super) const DEFAULT: Self = Self {
+        chunking: Chunking::Rabin,
+        compression: Compression::Default,
+        extra_verify: true,
+    };
+}
+
+impl Default for RepositorySettings {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// How a save finds the files that did not change since its parent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum ChangeDetection {
+    /// A file is unchanged when its type, size, modification time and change time equal those in
+    /// the parent. This is the default of rustic. A copy of a tree gives each file a new change
+    /// time, so a save of a copy reads every file.
+    #[default]
+    Ctime,
+    /// A file is unchanged when its type, size and modification time equal those in the parent.
+    /// A save does not see a change that keeps the size and gives the file its old modification
+    /// time again.
+    SizeMtime,
+}
+
+/// The settings of one save.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct SaveSettings {
+    /// The number of threads of each parallel stage of the save. `None` is the number of CPUs
+    /// that the process can use.
+    pub(super) threads: Option<NonZeroUsize>,
+    pub(super) detection: ChangeDetection,
+}
+
+impl SaveSettings {
+    /// The settings of rustic: the number of CPUs, and the change detection of rustic.
+    pub(super) const DEFAULT: Self = Self {
+        threads: None,
+        detection: ChangeDetection::Ctime,
+    };
+}
+
+/// Which packs a prune repacks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum RepackLimits {
+    /// The limits of rustic: up to 5% unused data stays after the prune, and a prune repacks at
+    /// most 10% of the repository.
+    #[default]
+    Rustic,
+    /// No unused data stays, and a prune repacks without a limit. Each pack that holds a blob
+    /// that no snapshot uses is repacked or deleted.
+    Unlimited,
+}
+
+/// The settings of one prune.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PruneSettings {
+    /// Whether a repack copies the blobs as they are. Without it, a repack decrypts,
+    /// decompresses, compresses and encrypts each blob that it keeps.
+    pub(super) fast_repack: bool,
+    /// How long a pack stays after a prune marks it for deletion. A later prune deletes a marked
+    /// pack when this time is over.
+    pub(super) keep_delete: Duration,
+    pub(super) repack: RepackLimits,
+}
+
+impl Default for PruneSettings {
+    /// The settings of rustic: no fast repack, 23 hours before a marked pack goes, and the
+    /// limits of rustic.
+    fn default() -> Self {
+        Self {
+            fast_repack: false,
+            keep_delete: Duration::from_secs(23 * 3600),
+            repack: RepackLimits::default(),
+        }
+    }
+}
+
+/// What a prune did: the plan of the prune, in bytes and packs.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct PruneReport {
+    pub(super) packs_used: u64,
+    pub(super) packs_partly_used: u64,
+    pub(super) packs_unused: u64,
+    pub(super) packs_repacked: u64,
+    pub(super) packs_kept: u64,
+    /// The packs that the prune deletes, among the packs that an earlier prune marked.
+    pub(super) marked_packs_deleted: u64,
+    /// The bytes of the marked packs that the prune deletes.
+    pub(super) marked_bytes_deleted: u64,
+    /// The packs that an earlier prune marked and that stay marked.
+    pub(super) marked_packs_kept: u64,
+    /// The bytes of the blobs that snapshots use.
+    pub(super) bytes_used: u64,
+    /// The bytes of the blobs that no snapshot uses.
+    pub(super) bytes_unused: u64,
+    /// The bytes of the unused blobs in the packs that the prune removes.
+    pub(super) bytes_removed: u64,
+    /// The bytes of the blobs that the repack copies.
+    pub(super) bytes_repacked: u64,
+    /// The bytes of the unused blobs that the repack leaves out.
+    pub(super) bytes_repack_removed: u64,
+    pub(super) index_files: u64,
+    pub(super) index_files_rebuilt: u64,
+    pub(super) phases: Box<[PhaseTime]>,
+}
+
+/// What an inspection of a repository found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct InspectReport {
+    /// The number of snapshots of the repository.
+    pub(super) snapshots: u64,
+    /// Whether a snapshot has the name.
+    pub(super) found: bool,
+    /// The settings of the repository, as its config file gives them.
+    pub(super) settings: RepositorySettings,
+    pub(super) phases: Box<[PhaseTime]>,
+}
+
 /// The rustic repository of one scope in blob storage.
 ///
 /// Each operation opens the repository again, with the master key and without the rustic cache.
@@ -159,6 +321,7 @@ pub(super) struct Repository {
     scope: SnapshotScope,
     key: RepositoryKey,
     deadline: Duration,
+    settings: RepositorySettings,
 }
 
 impl Repository {
@@ -175,24 +338,44 @@ impl Repository {
             scope,
             key,
             deadline,
+            settings: RepositorySettings::default(),
         }
     }
 
-    /// Saves the directory tree `tree` as a snapshot with the name.
-    ///
-    /// A save in a scope without a repository makes the repository first. The newest snapshot of
-    /// the scope is the parent of the save, so the save reads only the files whose metadata
-    /// changed since that snapshot. The snapshot keeps the paths relative to `tree`.
+    /// Gives the repository with the settings that a save uses when it makes the repository.
+    pub(super) fn with_settings(self, settings: RepositorySettings) -> Self {
+        Self { settings, ..self }
+    }
+
+    /// Saves the directory tree `tree` as a snapshot with the name, with the default settings of
+    /// a save.
     pub(super) async fn save(
         &self,
         name: &SnapshotName,
         tree: &Path,
     ) -> anyhow::Result<SaveReport> {
+        self.save_with(name, tree, SaveSettings::default()).await
+    }
+
+    /// Saves the directory tree `tree` as a snapshot with the name.
+    ///
+    /// A save in a scope without a repository makes the repository first, with the settings of
+    /// this value. The newest snapshot of the scope is the parent of the save, so the save reads
+    /// only the files that `settings` finds changed since that snapshot. The snapshot keeps the
+    /// paths relative to `tree`.
+    pub(super) async fn save_with(
+        &self,
+        name: &SnapshotName,
+        tree: &Path,
+        settings: SaveSettings,
+    ) -> anyhow::Result<SaveReport> {
         let backend = self.backend()?;
         let key = self.key.clone();
+        let repository_settings = self.settings;
         let name = name.clone();
         let tree: Box<Path> = tree.into();
-        run_blocking(move || save(backend, &key, &name, &tree)).await
+        run_blocking(move || save(backend, &key, &repository_settings, &settings, &name, &tree))
+            .await
     }
 
     /// Restores the newest snapshot with the name into the empty directory `into`.
@@ -224,6 +407,30 @@ impl Repository {
         run_blocking(move || forget(backend, &key, &name)).await
     }
 
+    /// Prunes the repository: deletes the packs that an earlier prune marked and whose time to
+    /// stay is over, marks the packs that no snapshot uses, and repacks the packs that hold both
+    /// used and unused blobs. The result is `None` when the scope has no repository.
+    pub(super) async fn prune(
+        &self,
+        settings: PruneSettings,
+    ) -> anyhow::Result<Option<PruneReport>> {
+        let backend = self.backend()?;
+        let key = self.key.clone();
+        run_blocking(move || prune(backend, &key, &settings)).await
+    }
+
+    /// Opens the repository, finds the snapshots with the name, and loads the index, as a
+    /// restore does before it reads data. The result is `None` when the scope has no repository.
+    pub(super) async fn inspect(
+        &self,
+        name: &SnapshotName,
+    ) -> anyhow::Result<Option<InspectReport>> {
+        let backend = self.backend()?;
+        let key = self.key.clone();
+        let name = name.clone();
+        run_blocking(move || inspect(backend, &key, &name)).await
+    }
+
     /// Gives a backend over the namespace of the scope, which waits on the current runtime for at
     /// most the deadline.
     fn backend(&self) -> anyhow::Result<Arc<BlobBackend>> {
@@ -253,11 +460,13 @@ async fn run_blocking<R: Send + 'static>(
 fn save(
     backend: Arc<BlobBackend>,
     key: &RepositoryKey,
+    repository_settings: &RepositorySettings,
+    settings: &SaveSettings,
     name: &SnapshotName,
     tree: &Path,
 ) -> anyhow::Result<SaveReport> {
     let started = Instant::now();
-    let (repository, opening) = open_or_create(backend, key)?;
+    let (repository, opening) = open_or_create(backend, key, repository_settings)?;
     let open = PhaseTime {
         phase: opening,
         wall: started.elapsed(),
@@ -265,7 +474,7 @@ fn save(
     let (repository, index) = timed(OperationPhase::IndexLoad, || repository.to_indexed_ids())?;
     let (snapshot, backup) = timed(OperationPhase::Backup, || {
         repository.backup(
-            &backup_options(),
+            &backup_options(settings),
             &PathList::from_iter(Some(tree.to_path_buf())),
             snapshot_options(name).to_snapshot()?,
         )
@@ -319,6 +528,56 @@ fn restore(
     }))
 }
 
+fn prune(
+    backend: Arc<BlobBackend>,
+    key: &RepositoryKey,
+    settings: &PruneSettings,
+) -> anyhow::Result<Option<PruneReport>> {
+    let (repository, open) = timed(OperationPhase::Open, || open_existing(backend, key))?;
+    let Some(repository) = repository else {
+        return Ok(None);
+    };
+    let options = prune_options(settings)?;
+    let (plan, planning) = timed(OperationPhase::PrunePlan, || {
+        repository.prune_plan(&options)
+    })?;
+    let report = prune_report(&plan.stats);
+    let ((), pruning) = timed(OperationPhase::Prune, || repository.prune(&options, plan))?;
+    Ok(Some(PruneReport {
+        phases: Box::new([open, planning, pruning]),
+        ..report
+    }))
+}
+
+fn inspect(
+    backend: Arc<BlobBackend>,
+    key: &RepositoryKey,
+    name: &SnapshotName,
+) -> anyhow::Result<Option<InspectReport>> {
+    let (repository, open) = timed(OperationPhase::Open, || open_existing(backend, key))?;
+    let Some(repository) = repository else {
+        return Ok(None);
+    };
+    let ((snapshots, found), lookup) = timed(OperationPhase::Lookup, || {
+        repository.get_all_snapshots().map(|snapshots| {
+            (
+                snapshots.len(),
+                snapshots
+                    .iter()
+                    .any(|snapshot| snapshot.label == name.as_str()),
+            )
+        })
+    })?;
+    let settings = repository_settings(repository.config());
+    let (_, index) = timed(OperationPhase::IndexLoad, || repository.to_indexed())?;
+    Ok(Some(InspectReport {
+        snapshots: u64::try_from(snapshots)?,
+        found,
+        settings,
+        phases: Box::new([open, lookup, index]),
+    }))
+}
+
 fn forget(
     backend: Arc<BlobBackend>,
     key: &RepositoryKey,
@@ -339,6 +598,7 @@ fn forget(
 fn open_or_create(
     backend: Arc<BlobBackend>,
     key: &RepositoryKey,
+    settings: &RepositorySettings,
 ) -> RusticResult<(RusticRepository<OpenStatus>, OperationPhase)> {
     let repository = unopened(backend)?;
     let credentials = Credentials::Masterkey(key.master_key());
@@ -350,7 +610,7 @@ fn open_or_create(
             .init(
                 &credentials,
                 &KeyOptions::default(),
-                &ConfigOptions::default(),
+                &config_options(settings),
             )
             .map(|repository| (repository, OperationPhase::Create)),
     }
@@ -382,14 +642,97 @@ fn repository_options() -> RepositoryOptions {
     RepositoryOptions::default().no_cache(true)
 }
 
-/// The options of each save.
+/// The options of a repository that a save makes.
+///
+/// A setting that equals the default of rustic stays unset, so the config file of a repository
+/// with the default settings is the config file that rustic writes without options.
+fn config_options(settings: &RepositorySettings) -> ConfigOptions {
+    let options = match settings.chunking {
+        Chunking::Rabin => ConfigOptions::default(),
+        Chunking::Fixed(size) => ConfigOptions::default()
+            .set_chunker(Chunker::FixedSize)
+            .set_chunk_size(ByteSize::b(u64::from(size.get()))),
+    };
+    let options = match settings.compression {
+        Compression::Default => options,
+        Compression::Off => options.set_compression(0),
+        Compression::Level(level) => options.set_compression(level),
+    };
+    if settings.extra_verify {
+        options
+    } else {
+        options.set_extra_verify(false)
+    }
+}
+
+/// Gives the settings of a repository from its config file.
+fn repository_settings(config: &ConfigFile) -> RepositorySettings {
+    RepositorySettings {
+        chunking: match config.chunker() {
+            Chunker::Rabin => Chunking::Rabin,
+            Chunker::FixedSize => u32::try_from(config.chunk_size())
+                .ok()
+                .and_then(NonZeroU32::new)
+                .map_or(Chunking::Rabin, Chunking::Fixed),
+        },
+        compression: match config.compression {
+            None => Compression::Default,
+            Some(0) => Compression::Off,
+            Some(level) => Compression::Level(level),
+        },
+        extra_verify: config.extra_verify(),
+    }
+}
+
+/// The options of a save.
 ///
 /// A snapshot keeps the paths relative to the saved tree. The parent of a save is the newest
 /// snapshot of the repository, because the group of the parent has no criterion.
-fn backup_options() -> BackupOptions {
+fn backup_options(settings: &SaveSettings) -> BackupOptions {
     BackupOptions::default()
         .as_path(PathBuf::from("/"))
-        .parent_opts(ParentOptions::default().group_by(SnapshotGroupCriterion::new()))
+        .parent_opts(
+            ParentOptions::default()
+                .group_by(SnapshotGroupCriterion::new())
+                .ignore_ctime(settings.detection == ChangeDetection::SizeMtime),
+        )
+        .threads(settings.threads)
+}
+
+/// The options of a prune.
+fn prune_options(settings: &PruneSettings) -> anyhow::Result<PruneOptions> {
+    let options = PruneOptions::default()
+        .fast_repack(settings.fast_repack)
+        .keep_delete(Span::try_from(settings.keep_delete)?);
+    Ok(match settings.repack {
+        RepackLimits::Rustic => options,
+        RepackLimits::Unlimited => options
+            .max_unused(LimitOption::Percentage(0))
+            .max_repack(LimitOption::Unlimited),
+    })
+}
+
+/// Gives the numbers of the plan of a prune, without phase times.
+fn prune_report(stats: &PruneStats) -> PruneReport {
+    let blobs = stats.size_sum();
+    PruneReport {
+        packs_used: stats.packs.used,
+        packs_partly_used: stats.packs.partly_used,
+        packs_unused: stats.packs.unused,
+        packs_repacked: stats.packs.repack,
+        packs_kept: stats.packs.keep,
+        marked_packs_deleted: stats.packs_to_delete.remove,
+        marked_bytes_deleted: stats.size_to_delete.remove,
+        marked_packs_kept: stats.packs_to_delete.keep,
+        bytes_used: blobs.used,
+        bytes_unused: blobs.unused,
+        bytes_removed: blobs.remove,
+        bytes_repacked: blobs.repack,
+        bytes_repack_removed: blobs.repackrm,
+        index_files: stats.index_files,
+        index_files_rebuilt: stats.index_files_rebuild,
+        phases: Box::default(),
+    }
 }
 
 /// The options of the snapshot of a save: the name is the label.
