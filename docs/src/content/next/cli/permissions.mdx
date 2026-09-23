@@ -47,11 +47,11 @@ Permissions can be shared with other accounts using **permission shares**, manag
 
 ```shell copy
 golem account permission-share new target@example.com staging-access \
-  --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
-  --lower-positive 'component(my-account/my-app/staging) @ target@example.com : view : *'
+  --lower-positive 'environment(owner@example.com/my-app/staging) @ target@example.com : view : *' \
+  --lower-positive 'component(owner@example.com/my-app/staging/*) @ target@example.com : view : *'
 ```
 
-Each grant has the form `<class>(<owner>) @ <recipient> : <verb> : <resource>`, for example the first grant above allows `target@example.com` to **view** the `staging` environment of the `my-app` application owned by `my-account`. Grants passed with `--lower-positive` add permissions, while grants passed with `--lower-negative` exclude permissions from the share. Both flags can be specified multiple times.
+Each grant has the form `<class>(<owner>) @ <recipient> : <verb> : <resource>`. The owner identifies the shared entities by the owning account's email, for example `<account-email>/<app>/<env>` for an environment and `<account-email>/<app>/<env>/<component>` for a component (`*` matches any). The recipient must be the target account of the share. For example, the first grant above allows `target@example.com` to **view** the `staging` environment of the `my-app` application owned by `owner@example.com`, and the second one to view all of its components. Grants passed with `--lower-positive` add permissions, while grants passed with `--lower-negative` exclude permissions from the share. Both flags can be specified multiple times.
 
 Existing permission shares can be listed, inspected, updated and deleted:
 

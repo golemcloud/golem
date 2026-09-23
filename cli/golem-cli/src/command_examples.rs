@@ -703,27 +703,28 @@ pub const ACCOUNT_PERMISSION_SHARE_GET_BY_NAME: &str = "Examples:
 
 pub const ACCOUNT_PERMISSION_SHARE_NEW: &str = "Examples:
   # Share permissions with another account
-  golem-cli account permission-share new target@example.com staging-access \
-    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
-    --lower-positive 'component(my-account/my-app/staging) @ target@example.com : view : *'
+  # (owners are <account-email>/<app>/<env>[/<component>], the recipient is the target account)
+  golem-cli account permission-share new target@example.com staging-access \\
+    --lower-positive 'environment(owner@example.com/my-app/staging) @ target@example.com : view : *' \\
+    --lower-positive 'component(owner@example.com/my-app/staging/*) @ target@example.com : view : *'
 
   # Add a lower negative grant by repeating the flag
-  golem-cli account permission-share new target@example.com staging-access \
-    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
-    --lower-negative 'component(my-account/my-app/staging) @ target@example.com : delete : *'
+  golem-cli account permission-share new target@example.com staging-access \\
+    --lower-positive 'environment(owner@example.com/my-app/staging) @ target@example.com : view : *' \\
+    --lower-negative 'component(owner@example.com/my-app/staging/*) @ target@example.com : delete : *'
 
   # Create the share for an explicitly selected owner
   golem-cli account permission-share new target@example.com staging-access --account owner@example.com";
 
 pub const ACCOUNT_PERMISSION_SHARE_UPDATE: &str = "Examples:
   # Replace lower permission grants on an existing share
-  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \
-    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging'
+  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \\
+    --lower-positive 'environment(owner@example.com/my-app/staging) @ target@example.com : view : *'
 
   # Rename while replacing grants
-  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \
-    --name staging-access-v2 \
-    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging'";
+  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \\
+    --name staging-access-v2 \\
+    --lower-positive 'environment(owner@example.com/my-app/staging) @ target@example.com : view : *'";
 
 pub const ACCOUNT_PERMISSION_SHARE_DELETE: &str = "Examples:
   # Delete a permission share by ID
@@ -976,3 +977,33 @@ pub const TOOL_RELEASE_DE_PUBLISH: &str = "Examples:
 pub const TOOL_RELEASE_RESTORE: &str = "Examples:
   # Make a de-published release available again
   golem-cli tool release restore 00000000-0000-0000-0000-000000000001";
+
+#[cfg(test)]
+mod tests {
+    use super::{ACCOUNT_PERMISSION_SHARE_NEW, ACCOUNT_PERMISSION_SHARE_UPDATE};
+    use golem_common::model::card::parse_permission_grant;
+    use test_r::test;
+
+    #[test]
+    fn permission_share_example_grants_parse() {
+        for examples in [
+            ACCOUNT_PERMISSION_SHARE_NEW,
+            ACCOUNT_PERMISSION_SHARE_UPDATE,
+        ] {
+            let grants = examples
+                .lines()
+                .filter_map(|line| {
+                    let line = line.trim();
+                    line.strip_prefix("--lower-positive ")
+                        .or_else(|| line.strip_prefix("--lower-negative "))
+                })
+                .map(|grant| grant.trim_end_matches(['\\', ' ']).trim_matches('\''))
+                .collect::<Vec<_>>();
+            assert!(!grants.is_empty());
+            for grant in grants {
+                parse_permission_grant(grant)
+                    .unwrap_or_else(|err| panic!("example grant {grant:?} does not parse: {err}"));
+            }
+        }
+    }
+}
