@@ -14,11 +14,14 @@
 
 use super::agents::AgentStorage;
 use super::report::{Outcome, PhaseResult, StepRecord, StepStatus};
-use super::trees::{FILES_TINY, tree_hash};
+use super::trees::{Content, FILES_TINY, SQLITE_TINY, TreeShape, TreeSpec, tree_hash};
 use super::{
-    PlanEntry, RESTORE_THREADS_PHASES, Repository, SAVE, STORAGE_CALL_DEADLINE, Scenario,
-    Selection, WARM_SAVE, concurrent_restore, concurrent_save, is_key_segment, plan,
-    repository_key, repository_scope, result_path, run_phase, snapshot_name,
+    BASE, CPU_DEFAULT, CPU_ZSTD_OFF, DEFAULTS, HISTORY, PRUNE, PRUNE_FAST_REPACK, Phase, PhaseKind,
+    PlanEntry, RESTORE_THREADS_PHASES, Repository, SAVE, SAVE_THREADS_2, SQLITE_FIXED_64K,
+    SQLITE_RABIN, STORAGE_CALL_DEADLINE, Scenario, Selection, WARM_SAVE, concurrent_restore,
+    concurrent_save, is_key_segment, mixed_phase, plan, prune_phase, repository_key,
+    repository_scope, result_path, run_phase, save_phase, save_threads_phase, snapshot_name,
+    with_defaults, with_settings,
 };
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
@@ -596,6 +599,553 @@ async fn the_agents_of_a_concurrent_save_each_save_their_tree_into_their_own_rep
             (json!(2), 200),
             json!(3),
             vec![(2, true); 3],
+        )
+    );
+}
+
+/// A tiny tree whose content compresses.
+const COMPRESSIBLE_TINY: TreeSpec = TreeSpec {
+    name: "compressible-tiny",
+    shape: TreeShape::Files {
+        files: 100,
+        directories: 10,
+        bytes: 1024 * 1024,
+    },
+    content: Content::Compressible,
+};
+
+static CAPTURE_TINY: Scenario = Scenario {
+    name: "capture-tiny",
+    trees: &[FILES_TINY],
+    phases: &[with_defaults("capture", PhaseKind::Capture)],
+    memory_limited_phases: &[],
+};
+
+static PRUNE_TINY: Scenario = Scenario {
+    name: "prune-tiny",
+    trees: &[FILES_TINY],
+    phases: &[
+        HISTORY,
+        prune_phase("prune", &PRUNE, false),
+        prune_phase("prune-fast-repack", &PRUNE_FAST_REPACK, true),
+    ],
+    memory_limited_phases: &[],
+};
+
+static SQLITE_CHANGES_TINY: Scenario = Scenario {
+    name: "sqlite-changes-tiny",
+    trees: &[SQLITE_TINY],
+    phases: &[
+        Phase {
+            name: "save-rabin",
+            kind: PhaseKind::SqliteChanges,
+            variant: &SQLITE_RABIN,
+        },
+        Phase {
+            name: "save-fixed-64k",
+            kind: PhaseKind::SqliteChanges,
+            variant: &SQLITE_FIXED_64K,
+        },
+        Phase {
+            name: "restore-fixed-64k",
+            kind: PhaseKind::Restore {
+                reader_threads: None,
+            },
+            variant: &SQLITE_FIXED_64K,
+        },
+    ],
+    memory_limited_phases: &[],
+};
+
+static MIXED_TINY: Scenario = Scenario {
+    name: "mixed-tiny",
+    trees: &[FILES_TINY],
+    phases: &[
+        with_defaults("save", PhaseKind::Save),
+        mixed_phase("mixed-s2-r2", &SAVE_THREADS_2, 2),
+        save_threads_phase("save-x4-t2", &SAVE_THREADS_2),
+    ],
+    memory_limited_phases: &[],
+};
+
+static SCOPES_TINY: Scenario = Scenario {
+    name: "scopes-tiny",
+    trees: &[FILES_TINY],
+    phases: &[
+        with_defaults("save", PhaseKind::Save),
+        with_defaults("scopes", PhaseKind::Scopes),
+    ],
+    memory_limited_phases: &[],
+};
+
+static CPU_OPTIONS_TINY: Scenario = Scenario {
+    name: "cpu-options-tiny",
+    trees: &[COMPRESSIBLE_TINY],
+    phases: &[
+        save_phase("save-default", &CPU_DEFAULT),
+        save_phase("save-zstd-off", &CPU_ZSTD_OFF),
+    ],
+    memory_limited_phases: &[],
+};
+
+/// Gives the value at the JSON pointer of the details of the step.
+fn detail(result: &PhaseResult, step_name: &str, pointer: &str) -> Value {
+    step(result, step_name)
+        .details
+        .pointer(pointer)
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[test]
+fn the_plan_gives_the_phases_of_each_later_scenario() {
+    let entry = |scenario, tree, phases: &[&'static str]| PlanEntry {
+        scenario,
+        tree,
+        phases: phases.into(),
+        memory_limited_phases: Box::new([]),
+    };
+    let base_trees = [
+        "files-128m",
+        "files-1g",
+        "sqlite-1g",
+        "objects-128m",
+        "objects-1g",
+    ];
+    let history_trees = ["files-1g", "sqlite-1g", "objects-1g"];
+    let each = |scenario, trees: &[&'static str], phases: &[&'static str]| {
+        trees
+            .iter()
+            .map(|tree| entry(scenario, *tree, phases))
+            .collect::<Vec<_>>()
+    };
+    let names = [
+        "capture",
+        "prune",
+        "save-threads",
+        "mixed",
+        "repository-open",
+        "sqlite-changes",
+        "tree-shape",
+        "cpu-options",
+        "scopes",
+    ]
+    .map(str::to_string);
+
+    assert_eq!(
+        plan(&names).map(Vec::from),
+        Ok([
+            each("capture", &base_trees, &["capture"]),
+            each(
+                "prune",
+                &history_trees,
+                &["history", "prune", "prune-fast-repack"]
+            ),
+            each(
+                "save-threads",
+                &["files-1g", "sqlite-1g"],
+                &["save-x4-t1", "save-x4-t2", "save-x4-t4", "save-x4-tdefault"]
+            ),
+            each(
+                "mixed",
+                &["files-1g"],
+                &[
+                    "save",
+                    "mixed-s2-r2",
+                    "mixed-s2-r4",
+                    "mixed-s4-r2",
+                    "mixed-s4-r4"
+                ]
+            ),
+            each("repository-open", &history_trees, &["history", "prune"]),
+            each(
+                "sqlite-changes",
+                &["sqlite-1g"],
+                &[
+                    "save-rabin",
+                    "restore-rabin",
+                    "save-fixed-64k",
+                    "restore-fixed-64k"
+                ]
+            ),
+            each(
+                "tree-shape",
+                &["files-128m", "modules-128m"],
+                &["save", "restore"]
+            ),
+            each(
+                "cpu-options",
+                &["compressible-1g"],
+                &[
+                    "save-default",
+                    "save-verify-off",
+                    "save-zstd-off",
+                    "save-zstd-1",
+                    "save-zstd-9"
+                ]
+            ),
+            each("scopes", &base_trees, &["save", "scopes"]),
+        ]
+        .concat())
+    );
+}
+
+#[test]
+fn a_later_phase_records_its_settings_and_an_earlier_phase_records_none() {
+    let record = || StepRecord::skipped("save").with_parameters(json!({ "agents": 4 }));
+    let own =
+        StepRecord::skipped("save").with_parameters(json!({ "change_detection": "size-mtime" }));
+
+    assert_eq!(
+        (
+            with_settings(record(), &BASE).parameters,
+            with_settings(record(), &SAVE_THREADS_2).parameters,
+            with_settings(own, &DEFAULTS).parameters["change_detection"].clone(),
+            with_settings(record(), &SQLITE_FIXED_64K).parameters["chunker"].clone(),
+            with_settings(record(), &CPU_ZSTD_OFF).parameters["compression"].clone(),
+        ),
+        (
+            json!({ "agents": 4 }),
+            json!({
+                "agents": 4,
+                "save_threads": 2,
+                "change_detection": "ctime",
+                "chunker": "rabin",
+                "compression": "default",
+                "extra_verify": true,
+            }),
+            json!("size-mtime"),
+            json!("fixed-65536"),
+            json!("off"),
+        )
+    );
+}
+
+#[test]
+async fn a_capture_phase_reads_every_file_with_ctime_and_the_changed_files_with_size_and_mtime() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+
+    let (result, _pod) = run_tiny(&CAPTURE_TINY, "capture", &storage).await;
+    let counts = |name: &str| {
+        (
+            detail(&result, name, "/files_new"),
+            detail(&result, name, "/files_changed"),
+            detail(&result, name, "/files_unmodified"),
+        )
+    };
+    let captured = |name: &str| {
+        detail(&result, name, "/files_reflinked")
+            .as_u64()
+            .unwrap_or_default()
+            + detail(&result, name, "/files_copied")
+                .as_u64()
+                .unwrap_or_default()
+    };
+
+    assert_eq!(
+        (
+            result.outcome.clone(),
+            step_states(&result),
+            [
+                captured("capture"),
+                captured("capture_full_read"),
+                captured("capture_size_mtime")
+            ],
+            counts("warm_save_full_read"),
+            counts("warm_save_size_mtime"),
+            step(&result, "warm_save_size_mtime").parameters["change_detection"].clone(),
+        ),
+        (
+            Outcome::Ok,
+            vec![
+                ("generate_tree", true),
+                ("capture", true),
+                ("cold_save", true),
+                ("copy_scopes", true),
+                ("small_change", true),
+                ("capture_full_read", true),
+                ("warm_save_full_read", true),
+                ("capture_size_mtime", true),
+                ("warm_save_size_mtime", true),
+            ],
+            [100, 101, 101],
+            (json!(1), json!(100), json!(0)),
+            (json!(1), json!(10), json!(90)),
+            json!("size-mtime"),
+        )
+    );
+}
+
+#[test]
+async fn the_prune_phases_give_back_the_data_of_the_forgotten_snapshots_of_the_history() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let (history, _history_pod) = run_tiny(&PRUNE_TINY, "history", &storage).await;
+
+    let prunes = futures::future::join_all(["prune", "prune-fast-repack"].map(|phase| {
+        let storage = storage.clone();
+        async move {
+            let (result, _pod) = run_tiny(&PRUNE_TINY, phase, &storage).await;
+            (
+                result.outcome.clone(),
+                step_states(&result),
+                step(&result, "prune_mark").parameters["fast_repack"].clone(),
+                detail(&result, "prune_mark", "/packs_repacked")
+                    .as_u64()
+                    .is_some_and(|packs| packs > 0),
+                detail(&result, "prune_delete", "/marked_packs_deleted")
+                    .as_u64()
+                    .is_some_and(|packs| packs > 0),
+                detail(&result, "prune_delete", "/repository/bytes_given_back")
+                    .as_u64()
+                    .is_some_and(|bytes| bytes > 0),
+                detail(&result, "open", "/snapshots"),
+                detail(&result, "hash_tree", "/matches"),
+            )
+        }
+    }))
+    .await;
+    let opens = history
+        .steps
+        .iter()
+        .filter(|step| step.name == "open")
+        .map(|step| {
+            (
+                step.parameters["saves"].clone(),
+                step.details["snapshots"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let saves = history
+        .steps
+        .iter()
+        .filter(|step| step.name == "save")
+        .count();
+    let prune = |fast_repack| {
+        (
+            Outcome::Ok,
+            vec![
+                ("copy_scopes", true),
+                ("prune_mark", true),
+                ("prune_delete", true),
+                ("open", true),
+                ("cold_restore", true),
+                ("hash_tree", true),
+            ],
+            json!(fast_repack),
+            true,
+            true,
+            true,
+            json!(2),
+            json!(true),
+        )
+    };
+
+    assert_eq!(
+        (
+            history.outcome.clone(),
+            saves,
+            opens,
+            detail(&history, "forget", "/snapshots_forgotten"),
+            prunes,
+        ),
+        (
+            Outcome::Ok,
+            11,
+            vec![
+                (json!(1), json!(1)),
+                (json!(11), json!(11)),
+                (json!(12), json!(12)),
+            ],
+            json!(10),
+            vec![prune(false), prune(true)],
+        )
+    );
+}
+
+#[test]
+async fn fixed_chunks_save_less_after_a_clustered_change_and_restore_the_database() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+
+    let (rabin, _rabin_pod) = run_tiny(&SQLITE_CHANGES_TINY, "save-rabin", &storage).await;
+    let (fixed, _fixed_pod) = run_tiny(&SQLITE_CHANGES_TINY, "save-fixed-64k", &storage).await;
+    let (restore, _restore_pod) =
+        run_tiny(&SQLITE_CHANGES_TINY, "restore-fixed-64k", &storage).await;
+    let added = |result: &PhaseResult, name: &str| {
+        detail(result, name, "/data_added")
+            .as_u64()
+            .unwrap_or_default()
+    };
+
+    assert_eq!(
+        (
+            rabin.outcome.clone(),
+            fixed.outcome.clone(),
+            step_states(&fixed),
+            added(&fixed, "warm_save_clustered") < added(&rabin, "warm_save_clustered"),
+            step(&fixed, "cold_save").parameters["chunker"].clone(),
+            detail(&fixed, "clustered_change", "/rows_updated"),
+            restore.outcome.clone(),
+            detail(&restore, "hash_tree", "/matches"),
+        ),
+        (
+            Outcome::Ok,
+            Outcome::Ok,
+            vec![
+                ("generate_tree", true),
+                ("cold_save", true),
+                ("clustered_change", true),
+                ("warm_save_clustered", true),
+                ("scattered_change", true),
+                ("warm_save_scattered", true),
+                ("hash_tree", true),
+            ],
+            true,
+            json!("fixed-65536"),
+            json!(100),
+            Outcome::Ok,
+            json!(true),
+        )
+    );
+}
+
+#[test]
+async fn a_mixed_phase_saves_and_restores_at_the_same_time_with_its_thread_counts() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let (save, _save_pod) = run_tiny(&MIXED_TINY, "save", &storage).await;
+
+    let (mixed, _mixed_pod) = run_tiny(&MIXED_TINY, "mixed-s2-r2", &storage).await;
+    let (threads, _threads_pod) = run_tiny(&MIXED_TINY, "save-x4-t2", &storage).await;
+    let configs = futures::future::join_all(
+        [
+            "agents/1",
+            "agents/4",
+            "agents/5",
+            "agents/mixed-s2-r2-3",
+            "agents/save-x4-t2-3",
+        ]
+        .map(|agent| {
+            let storage = storage.clone();
+            async move {
+                storage
+                    .get_metadata(
+                        "test",
+                        "test",
+                        repository_scope(MIXED_TINY.name, "no-limit", FILES_TINY.name).0,
+                        &Path::new(agent).join("config"),
+                    )
+                    .await
+                    .unwrap()
+                    .is_some()
+            }
+        }),
+    )
+    .await;
+    let step_mixed = step(&mixed, "mixed");
+
+    assert_eq!(
+        (
+            save.outcome,
+            mixed.outcome.clone(),
+            step_states(&mixed),
+            [
+                &step_mixed.parameters["saves"],
+                &step_mixed.parameters["restores"],
+                &step_mixed.parameters["save_threads"],
+                &step_mixed.parameters["reader_threads"],
+            ]
+            .map(Value::clone),
+            [
+                &step_mixed.details["saves"]["agents"],
+                &step_mixed.details["saves"]["failed"],
+                &step_mixed.details["restores"]["agents"],
+                &step_mixed.details["restores"]["failed"],
+            ]
+            .map(Value::clone),
+            detail(&mixed, "hash_trees", "/matches"),
+            threads.outcome.clone(),
+            step(&threads, "concurrent_cold_save").parameters["save_threads"].clone(),
+            configs,
+        ),
+        (
+            Outcome::Ok,
+            Outcome::Ok,
+            vec![
+                ("copy_scopes", true),
+                ("generate_tree", true),
+                ("copy_trees", true),
+                ("mixed", true),
+                ("hash_trees", true),
+            ],
+            [json!(4), json!(4), json!(2), json!(2)],
+            [json!(4), json!(0), json!(4), json!(0)],
+            json!(4),
+            Outcome::Ok,
+            json!(2),
+            vec![true, true, false, true, true],
+        )
+    );
+}
+
+#[test]
+async fn a_scopes_phase_copies_the_repository_whole_and_deletes_the_copy_whole() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let (save, _save_pod) = run_tiny(&SCOPES_TINY, "save", &storage).await;
+
+    let (scopes, _pod) = run_tiny(&SCOPES_TINY, "scopes", &storage).await;
+
+    assert_eq!(
+        (
+            save.outcome,
+            scopes.outcome.clone(),
+            step_states(&scopes),
+            detail(&scopes, "copy_scope", "/same_as_source"),
+            detail(&scopes, "copy_scope", "/blobs_copied")
+                .as_u64()
+                .is_some_and(|blobs| blobs > 0),
+            detail(&scopes, "delete_scope", "/blobs_left"),
+        ),
+        (
+            Outcome::Ok,
+            Outcome::Ok,
+            vec![("copy_scope", true), ("delete_scope", true)],
+            json!(true),
+            true,
+            json!(0),
+        )
+    );
+}
+
+#[test]
+async fn a_cpu_options_phase_makes_its_repository_with_its_compression() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+
+    let (default, _default_pod) = run_tiny(&CPU_OPTIONS_TINY, "save-default", &storage).await;
+    let (off, _off_pod) = run_tiny(&CPU_OPTIONS_TINY, "save-zstd-off", &storage).await;
+    let packed = |result: &PhaseResult| {
+        (
+            detail(result, "cold_save", "/data_added").as_u64(),
+            detail(result, "cold_save", "/data_added_packed").as_u64(),
+        )
+    };
+    let (default_added, default_packed) = packed(&default);
+    let (off_added, off_packed) = packed(&off);
+
+    assert_eq!(
+        (
+            default.outcome.clone(),
+            off.outcome.clone(),
+            default.tree_facts.content,
+            default_packed < default_added.map(|added| added * 3 / 4),
+            off_packed >= off_added,
+            step(&off, "cold_save").parameters["compression"].clone(),
+        ),
+        (
+            Outcome::Ok,
+            Outcome::Ok,
+            Some("compressible"),
+            true,
+            true,
+            json!("off"),
         )
     );
 }

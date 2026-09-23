@@ -339,3 +339,122 @@ async fn copy_blob(
         )
         .await
 }
+
+/// The directories of a repository in the order in which a copy of the repository lists and
+/// copies them: the reverse of the order in which a save writes them. A snapshot that the copy has
+/// thus has its index and its packs too. The config goes last.
+const COPY_ORDER: [&str; 3] = ["snapshots", "index", "data"];
+
+/// Gives each blob of the repository of the agent, with the path relative to the repository, in
+/// the order of the paths.
+pub(super) async fn agent_blobs(
+    storage: &dyn BlobStorage,
+    namespace: &BlobStorageNamespace,
+    agent: &str,
+) -> anyhow::Result<Box<[ListedBlob]>> {
+    let root = agent_root(agent);
+    let mut blobs = storage
+        .list_blobs_below(TARGET_LABEL, "list_agent", namespace.clone(), &root)
+        .await?
+        .iter()
+        .map(|blob| {
+            Ok(ListedBlob {
+                path: blob.path.strip_prefix(&root)?.into(),
+                size: blob.size,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    blobs.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(blobs.into_boxed_slice())
+}
+
+/// Gives the sum of the sizes of the blobs.
+pub(super) fn total_bytes(blobs: &[ListedBlob]) -> u64 {
+    blobs.iter().map(|blob| blob.size).sum()
+}
+
+/// Copies the repository of the agent `from` to the agent `to` on the server, as the copy of a
+/// scope does it, and gives the numbers of the copied blobs and bytes.
+///
+/// The copy lists the snapshot files, the index files and the packs, in this order, and then
+/// copies them in the same order, each group after the one before it. The config goes last, so an
+/// agent with a config has each blob of the copy.
+pub(super) async fn copy_agent(
+    storage: &dyn BlobStorage,
+    namespace: &BlobStorageNamespace,
+    from: &str,
+    to: &str,
+) -> anyhow::Result<Value> {
+    let source = &agent_root(from);
+    let groups = futures::stream::iter(COPY_ORDER)
+        .then(|directory| async move {
+            storage
+                .list_blobs_below(
+                    TARGET_LABEL,
+                    "list_agent",
+                    namespace.clone(),
+                    &source.join(directory),
+                )
+                .await
+        })
+        .try_collect::<Vec<_>>()
+        .await?;
+    let config = storage
+        .get_metadata(
+            TARGET_LABEL,
+            "find_agent",
+            namespace.clone(),
+            &source.join(CONFIG),
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("the repository of the agent {from} has no {CONFIG}"))?;
+    let groups = groups
+        .into_iter()
+        .chain(std::iter::once(Box::from([ListedBlob {
+            path: source.join(CONFIG).into_boxed_path(),
+            size: config.size,
+        }])))
+        .collect::<Box<[_]>>();
+    let target = &agent_root(to);
+    futures::stream::iter(groups.iter())
+        .map(Ok)
+        .try_for_each(|group| async move {
+            futures::stream::iter(group.iter())
+                .map(|blob| async move {
+                    let relative = blob.path.strip_prefix(source)?;
+                    storage
+                        .copy(
+                            TARGET_LABEL,
+                            "copy_agent",
+                            namespace.clone(),
+                            &blob.path,
+                            &target.join(relative),
+                        )
+                        .await
+                })
+                .buffer_unordered(COPY_CONCURRENCY)
+                .try_collect::<()>()
+                .await
+        })
+        .await?;
+    Ok(json!({
+        "blobs_copied": groups.iter().map(|group| group.len()).sum::<usize>(),
+        "bytes_copied": groups.iter().map(|group| total_bytes(group)).sum::<u64>(),
+    }))
+}
+
+/// Deletes the repository of the agent, and tells whether it had one.
+pub(super) async fn delete_agent(
+    storage: &dyn BlobStorage,
+    namespace: &BlobStorageNamespace,
+    agent: &str,
+) -> anyhow::Result<bool> {
+    storage
+        .delete_dir(
+            TARGET_LABEL,
+            "delete_agent",
+            namespace.clone(),
+            &agent_root(agent),
+        )
+        .await
+}
