@@ -108,6 +108,10 @@ describe("capability-sensitive component exports", () => {
       expect(modules.includes("internal/tool/runtime.js")).toBe(tools)
       expect(modules.includes("internal/tool/registry.js")).toBe(tools)
       expect(modules.includes("internal/tool/middleware.js")).toBe(middleware)
+      expect(modules.includes("Reflection.js")).toBe(false)
+      expect(modules.includes("DynamicClient.js")).toBe(false)
+      expect(modules.includes("SchemaRef.js")).toBe(false)
+      expect(modules.some((id) => id.startsWith("internal/reflection/"))).toBe(false)
       if (!agents)
         expect(modules.some((id) => /^(Sqlite|Postgres|Mysql|Ignite)\//.test(id))).toBe(false)
       expect(runtime.golemAgent200Guest.discoverAgentTypes().map((a: any) => a.typeName)).toEqual(
