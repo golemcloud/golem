@@ -1202,6 +1202,29 @@ pub enum StreamReaderForwardDestination {
     },
 }
 
+impl StreamReaderForwardDestination {
+    pub fn session_key(
+        &self,
+        owner_environment_id: EnvironmentId,
+        owner: &AgentId,
+        owner_fingerprint: AgentFingerprint,
+    ) -> StreamSessionKey {
+        match self {
+            Self::SessionBinding { session_key, .. } => {
+                session_key.qualify(owner_environment_id, owner, owner_fingerprint)
+            }
+            Self::InvocationInput { invocation, .. } => invocation.clone(),
+        }
+    }
+
+    pub fn transport_stream_id(&self) -> u64 {
+        match self {
+            Self::SessionBinding { binding, .. } => binding.transport_stream_id,
+            Self::InvocationInput { mapping, .. } => mapping.transport_stream_id,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]

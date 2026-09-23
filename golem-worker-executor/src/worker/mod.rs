@@ -12718,6 +12718,29 @@ pub(crate) fn stream_session_record_key(
     }
 }
 
+/// Control projections affected by a record; attribution remains on its primary source session.
+pub(crate) fn stream_session_record_keys(
+    record: &StreamSessionRecord,
+    owner_environment_id: golem_common::base_model::environment::EnvironmentId,
+    owner: &AgentId,
+    owner_fingerprint: AgentFingerprint,
+) -> Vec<StreamSessionKey> {
+    let mut keys: Vec<_> =
+        stream_session_record_key(record, owner_environment_id, owner, owner_fingerprint)
+            .into_iter()
+            .collect();
+    if let StreamSessionRecord::ReaderForwardIntent(record) = record {
+        let destination =
+            record
+                .destination
+                .session_key(owner_environment_id, owner, owner_fingerprint);
+        if !keys.contains(&destination) {
+            keys.push(destination);
+        }
+    }
+    keys
+}
+
 pub(crate) fn stream_session_record_reference(
     record: &StreamSessionRecord,
     reader_id: LocalStreamReaderId,

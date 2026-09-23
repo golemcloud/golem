@@ -1302,6 +1302,10 @@ impl StreamSession {
         // validation so another output pump cannot observe coverage before the mappings exist.
         let mut covered = self.recovered_mappings_through.lock().await;
         let metadata = self.current_control_metadata().await?;
+        self.next_transport_stream_id.fetch_max(
+            metadata.next_reserved_transport_stream_id()?,
+            Ordering::AcqRel,
+        );
         let RecoveredMappings {
             covered_through: horizon,
             mappings,
@@ -1625,6 +1629,7 @@ impl StreamSession {
         handle: DurableStreamHandle,
         role: SessionStreamRole,
     ) -> Result<StreamSessionMappingRecord, String> {
+        self.recover_session_mappings().await?;
         if let Some(mapping) =
             self.mapping_for_reference(&StreamRecordReference::Foreign(handle.clone()), role)
         {

@@ -10178,6 +10178,109 @@ async fn schema_mismatch_does_not_consume_forwarded_stream() {
 }
 
 #[test]
+async fn recovered_forward_reservation_does_not_publish_or_reallocate_its_slot() {
+    use golem_common::base_model::durable_stream::{
+        StreamReaderForwardDestination, StreamReaderForwardIntentRecord,
+    };
+    let owner = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        owner.environment_id,
+        owner.agent_id.clone(),
+        owner.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let mut handles = Vec::new();
+    for field in [0, 1] {
+        handles.push(
+            producer
+                .register(
+                    None,
+                    registration(
+                        &owner,
+                        StreamRegistrationCoordinate::Root {
+                            invocation_id: owner.invocation.clone(),
+                            root_kind: StreamRootKind::MethodInput,
+                            recursive_value_path: vec![StreamValuePathStep::TupleElement(field)],
+                        },
+                        StreamSourceKind::AgentHostedInput,
+                    ),
+                )
+                .await
+                .unwrap()
+                .value,
+        );
+    }
+    let reader = persist_mapping(
+        &producer,
+        StreamRegistrationInvocation::Local(owner.invocation.idempotency_key.clone()),
+        &StreamSessionMappingRecord {
+            transport_stream_id: 0,
+            handle: handles[0].clone(),
+            role: SessionStreamRole::Input,
+        },
+    )
+    .await;
+    let destination =
+        StreamRegistrationInvocation::Local(IdempotencyKey::new("reserved-destination".into()));
+    let mapping = StreamSessionMappingRecord {
+        transport_stream_id: 47,
+        handle: handles[0].clone(),
+        role: SessionStreamRole::Output,
+    };
+    producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::ReaderForwardIntent(StreamReaderForwardIntentRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: StreamRegistrationInvocation::Local(owner.invocation.idempotency_key),
+                reader_id: reader,
+                destination: StreamReaderForwardDestination::SessionBinding {
+                    session_key: destination.clone(),
+                    binding: StreamBindingRecord::foreign(&mapping),
+                },
+            }),
+        )
+        .await
+        .unwrap();
+    drop(producer);
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        owner.environment_id,
+        owner.agent_id,
+        owner.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let streams = StreamSession::new(producer.clone(), oplog, destination.clone(), []);
+    assert!(streams.materialized_mappings().is_empty());
+    let unrelated = streams
+        .ensure_nested_mapping(None, handles[1].clone(), SessionStreamRole::Output)
+        .await
+        .unwrap();
+    assert_eq!(unrelated.transport_stream_id, 48);
+    assert!(streams.mapping(47).is_none());
+    producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: destination,
+                mapping: StreamBindingRecord::foreign(&mapping),
+            }),
+        )
+        .await
+        .unwrap();
+    streams.recover_session_mappings().await.unwrap();
+    assert_eq!(streams.mapping(47), Some(mapping));
+    assert_eq!(streams.mapping(48), Some(unrelated));
+}
+
+#[test]
 async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registration() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());

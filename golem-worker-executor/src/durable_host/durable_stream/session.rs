@@ -264,15 +264,16 @@ impl DurableStreamStore {
     ) -> Result<(), StreamStoreError> {
         self.append_session_records_owned(context, entity_parent_start_index, vec![record])
             .await
+            .map(|_| ())
     }
 
-    /// Serializes and commits an ordered batch of session mutations.
+    /// Serializes and commits an ordered batch of session mutations, returning assigned indices.
     pub(crate) async fn append_session_records_owned(
         &self,
         context: &StreamWriteContext,
         entity_parent_start_index: Option<OplogIndex>,
         records: Vec<StreamSessionRecord>,
-    ) -> Result<(), StreamStoreError> {
+    ) -> Result<Vec<OplogIndex>, StreamStoreError> {
         if records.iter().any(|record| !record.has_supported_format()) {
             return Err(StreamStoreError::CorruptHistory(
                 "unsupported or malformed durable Stream Session record".to_string(),
@@ -360,7 +361,7 @@ impl DurableStreamStore {
         *index = staged;
         drop(index);
         self.notify_session_records_changed(Some(context));
-        Ok(())
+        Ok(entries.into_iter().map(|(index, _)| index).collect())
     }
 
     /// Returns the process-local serialization lock for a durable session identity.
