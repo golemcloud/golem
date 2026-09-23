@@ -4719,6 +4719,14 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                                 json!({"enabled": true}),
                             ),
                             account: None,
+                            secret_keys_readable: Some(
+                                crate::model::app_raw::ManifestSecretKeyScope::Keys(vec![
+                                    "credentials.audit".to_string(),
+                                ]),
+                            ),
+                            secret_keys_revealable: Some(
+                                crate::model::app_raw::ManifestSecretKeyScope::All("*".to_string()),
+                            ),
                             filesystem_access: Default::default(),
                         },
                     ),

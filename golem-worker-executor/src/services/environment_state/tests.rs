@@ -220,6 +220,45 @@ fn accepted_tool_activation_snapshot_round_trip_preserves_binding_identity() {
     assert_eq!(decoded.binding().deployment_revision, expected_revision);
     assert_eq!(decoded.binding().metadata_digest, expected_metadata_digest);
     assert_eq!(decoded.middleware_chain().unwrap().occurrences.len(), 1);
+
+    let invalid_policy_is_rejected = |deployment: &ToolDeploymentState| {
+        assert!(matches!(
+            get_tool_activation_from_deployment(Some(deployment), &agent_owner(&agent), &tool_name),
+            Err(ToolDiscoveryError::InconsistentSnapshot { .. })
+        ));
+    };
+
+    let mut excessive_readable = deployment.clone();
+    let binding = excessive_readable
+        .tool_bindings
+        .get_mut(&agent_owner(&agent))
+        .unwrap()
+        .get_mut(&tool_name)
+        .unwrap();
+    binding.secret_keys_readable = SecretKeyScope::Keys(Default::default());
+    binding.secret_keys_revealable = SecretKeyScope::Keys(Default::default());
+    invalid_policy_is_rejected(&excessive_readable);
+
+    let mut excessive_revealable = deployment.clone();
+    excessive_revealable
+        .tool_bindings
+        .get_mut(&agent_owner(&agent))
+        .unwrap()
+        .get_mut(&tool_name)
+        .unwrap()
+        .secret_keys_revealable = SecretKeyScope::Keys(Default::default());
+    invalid_policy_is_rejected(&excessive_revealable);
+
+    let mut revealable_outside_readable = deployment;
+    revealable_outside_readable
+        .tool_middleware_chains
+        .get_mut(&agent_owner(&agent))
+        .unwrap()
+        .get_mut(&tool_name)
+        .unwrap()
+        .occurrences[0]
+        .secret_keys_readable = SecretKeyScope::Keys(Default::default());
+    invalid_policy_is_rejected(&revealable_outside_readable);
 }
 
 #[test]

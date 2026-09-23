@@ -172,6 +172,20 @@ struct ScalaOutputEvidence {
     result: String,
 }
 
+#[derive(Debug, PartialEq, Eq, FromSchema)]
+struct SecretPolicyObservation {
+    label: String,
+    config_resolved: bool,
+    configured_secret_revealed: bool,
+    input_secret_revealed: bool,
+}
+
+#[derive(Debug, PartialEq, Eq, FromSchema)]
+struct SecretPolicyEvidence {
+    middleware: Vec<SecretPolicyObservation>,
+    leaf_revealed: bool,
+}
+
 fn deployment_state(
     owner_account_id: AccountId,
     provider_component_id: golem_common::model::component::ComponentId,
@@ -395,6 +409,18 @@ fn parameterized_middleware_parameters(definition: &ToolMiddleware) -> TypedSche
                     ],
                 },
             ],
+        },
+    )
+}
+
+fn secret_policy_middleware_parameters(
+    definition: &ToolMiddleware,
+    label: &str,
+) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        definition.parameter_schema.clone(),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String(label.to_string())],
         },
     )
 }

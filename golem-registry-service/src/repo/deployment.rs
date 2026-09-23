@@ -1013,7 +1013,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_bindings (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, merge_mode, has_installations) VALUES ($1, $2, $3, $4, $5, $6, $7)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(mode).bind(installations.is_some())).await?;
                         for (index, installation) in installations.into_iter().flatten().enumerate() {
                             let filesystem_access = match installation.filesystem_access { golem_common::model::tool::ToolFilesystemAccess::Unset => "unset", golem_common::model::tool::ToolFilesystemAccess::Allowed => "allowed", golem_common::model::tool::ToolFilesystemAccess::Denied => "denied" };
-                            tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_installations (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, installation_index, middleware_name, middleware_version, parameters, account_email, filesystem_access) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(index as i64).bind(installation.name.to_string()).bind(&installation.version).bind(Blob::new(installation.parameters.clone())).bind(installation.account.as_ref().map(ToString::to_string)).bind(filesystem_access)).await?;
+                            tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_installations (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, installation_index, middleware_name, middleware_version, parameters, account_email, secret_keys_readable, secret_keys_revealable, filesystem_access) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(index as i64).bind(installation.name.to_string()).bind(&installation.version).bind(Blob::new(installation.parameters.clone())).bind(installation.account.as_ref().map(ToString::to_string)).bind(installation.secret_keys_readable.clone().map(Blob::new)).bind(installation.secret_keys_revealable.clone().map(Blob::new)).bind(filesystem_access)).await?;
                         }
                     }
 
@@ -2131,7 +2131,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .bind(environment_id).bind(revision_id),
         ).await?;
         let installations: Vec<DeploymentToolMiddlewareInstallationRecord> = api.fetch_all_as(
-            sqlx::query_as("SELECT scope, agent_type_name, tool_name, middleware_name, middleware_version, parameters, account_email, filesystem_access FROM deployment_tool_middleware_installations WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY scope, agent_type_name, tool_name, installation_index")
+            sqlx::query_as("SELECT scope, agent_type_name, tool_name, middleware_name, middleware_version, parameters, account_email, secret_keys_readable, secret_keys_revealable, filesystem_access FROM deployment_tool_middleware_installations WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY scope, agent_type_name, tool_name, installation_index")
                 .bind(environment_id).bind(revision_id),
         ).await?;
         let mut grouped: std::collections::BTreeMap<(String, String, String), Vec<_>> =
