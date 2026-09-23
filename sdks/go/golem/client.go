@@ -73,9 +73,16 @@ func WithPhantomID(id UUID) ClientOpt {
 // constructor parameters — they are derived from the same Go types — so caller
 // and callee agree by construction rather than by convention.
 func (a *AgentDefinition[Id, Cfg]) Get(id Id, opts ...ClientOpt) Client[Id] {
-	e := defs.agents[a.name]
+	return getClient[Id](defs, a.name, id, opts)
+}
+
+// getClient builds a client for an agent registered under name. It is shared by
+// the local ([AgentDefinition.Get]) and remote ([Remote.Get]) paths, which
+// differ only in how the target was declared, never in how it is called.
+func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) Client[Id] {
+	e := d.agents[name]
 	if e == nil {
-		panic(fmt.Errorf("golem: Get: unknown agent %s", a.name))
+		panic(fmt.Errorf("golem: Get: unknown agent %s", name))
 	}
 
 	var o clientOpts
@@ -89,17 +96,17 @@ func (a *AgentDefinition[Id, Cfg]) Get(id Id, opts ...ClientOpt) Client[Id] {
 
 	// Encode and validate any config overrides against the target's declarations
 	// before touching the host, so a mistyped or undeclared key is a clear error.
-	agentConfig, err := buildAgentConfig(defs, e, o.configs)
+	agentConfig, err := buildAgentConfig(d, e, o.configs)
 	if err != nil {
-		panic(fmt.Errorf("golem: Get %s: %w", a.name, err))
+		panic(fmt.Errorf("golem: Get %s: %w", name, err))
 	}
 
 	// Resolve the id up front: it is wanted for error messages, and a failure
 	// here means the constructor parameters are wrong — better to surface that
 	// now than as an opaque not-found on the first call.
-	resolved := host.MakeAgentId(a.name, ctor, o.phantomID)
+	resolved := host.MakeAgentId(name, ctor, o.phantomID)
 	if resolved.IsErr() {
-		panic(fmt.Errorf("golem: Get %s: %w", a.name, agentErrorToGo(resolved.Err())))
+		panic(fmt.Errorf("golem: Get %s: %w", name, agentErrorToGo(resolved.Err())))
 	}
 
 	phantomID := None[UUID]()
@@ -107,11 +114,18 @@ func (a *AgentDefinition[Id, Cfg]) Get(id Id, opts ...ClientOpt) Client[Id] {
 		phantomID = Some(uuidFromWit(o.phantomID.Some()))
 	}
 	return Client[Id]{
-		rpc:       host.MakeWasmRpc(a.name, ctor, o.phantomID, agentConfig),
-		agentType: a.name,
+		rpc:       host.MakeWasmRpc(name, ctor, o.phantomID, agentConfig),
+		agentType: name,
 		agentID:   resolved.Ok(),
 		phantomID: phantomID,
 	}
+}
+
+// newPhantomClient allocates a fresh phantom instance and returns a client for
+// it, shared by the local and remote paths.
+func newPhantomClient[Id any](d *definitions, name string, id Id) Client[Id] {
+	phantom := uuidFromWit(apiHost.GenerateIdempotencyKey())
+	return getClient[Id](d, name, id, []ClientOpt{WithPhantomID(phantom)})
 }
 
 // NewPhantom allocates a fresh phantom instance of the target agent and returns
@@ -122,8 +136,7 @@ func (a *AgentDefinition[Id, Cfg]) Get(id Id, opts ...ClientOpt) Client[Id] {
 // Ephemeral agents have no durable identity, so this is the only way to obtain
 // a client for one.
 func (a *AgentDefinition[Id, Cfg]) NewPhantom(id Id) Client[Id] {
-	phantom := uuidFromWit(apiHost.GenerateIdempotencyKey())
-	return a.Get(id, WithPhantomID(phantom))
+	return newPhantomClient[Id](defs, a.name, id)
 }
 
 // AgentErrorKind classifies an [AgentError].

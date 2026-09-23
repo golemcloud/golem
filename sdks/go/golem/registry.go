@@ -43,7 +43,11 @@ type methodEntry struct {
 }
 
 type agentEntry struct {
-	name     string
+	name string
+	// remote marks a call target this component does not implement, declared
+	// with DeclareRemoteAgent. A remote entry is never published by discover()
+	// and never claims an Id type.
+	remote   bool
 	desc     string
 	mode     common.AgentMode
 	mount    *Mount         // HTTP mount, if any
@@ -144,8 +148,14 @@ func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinitio
 		d.recordErr("", "", "DefineAgent requires a non-empty Spec.Name (Id type %s)", idType)
 		return &AgentDefinition[Id, Cfg]{name: spec.Name}
 	}
-	if _, dup := d.agents[spec.Name]; dup {
-		d.recordErr(spec.Name, "", "agent type already defined")
+	if existing, dup := d.agents[spec.Name]; dup {
+		if existing.remote {
+			// Package-level var init order across packages is unspecified, so this
+			// clash can surface from either side; both say the same thing.
+			d.recordErr(spec.Name, "", "%s is declared as a remote agent by this component; call it with its own definition rather than DeclareRemoteAgent", spec.Name)
+		} else {
+			d.recordErr(spec.Name, "", "agent type already defined")
+		}
 		return &AgentDefinition[Id, Cfg]{name: spec.Name}
 	}
 	if idType.Kind() != reflect.Struct {
