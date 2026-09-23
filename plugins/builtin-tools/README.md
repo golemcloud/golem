@@ -15,9 +15,6 @@ for write and edit), allowing both to be provisioned in the same built-in enviro
 implementation is selected, its three tools will take the final unsuffixed names and the other
 candidate will be removed.
 
-See [the implementation comparison](filesystem-tools-comparison.md) for release artifact sizes,
-performance measurements, and size-reduction options.
-
 ## Adding a component-implemented built-in tool
 
 1. Add a standalone tool component source and build it through its Golem application manifest. Do
