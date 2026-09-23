@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -920,4 +921,155 @@ func pathOrRoot(path string) string {
 		return "value"
 	}
 	return path
+}
+
+// Parameter is one field of a named parameter list: its wire name and the type
+// node in the graph that its value is read against.
+type Parameter struct {
+	Name string
+	Node int32
+}
+
+// PackParameters builds the value tree an invocation carries: a record whose
+// fields are the parameters in declaration order, each packed against its own
+// type node. The caller supplies the arguments by name, which is how a
+// reflective client works without knowing the target's language types.
+//
+// A missing argument is an error, and so is one the parameter list does not
+// declare, so a caller learns about a typo here rather than at the target.
+func (r Ref) PackParameters(params []Parameter, args map[string]any) (types.SchemaValueTree, error) {
+	var issues []Issue
+	for name := range args {
+		if !hasParameter(params, name) {
+			issues = append(issues, Issue{Path: name, Message: "unexpected argument"})
+		}
+	}
+
+	p := &packer{ref: r}
+	idxs := make([]int32, 0, len(params))
+	for _, param := range params {
+		value, given := args[param.Name]
+		if !given {
+			issues = append(issues, Issue{Path: param.Name, Message: "missing argument"})
+			continue
+		}
+		idx, err := p.build(param.Node, value, param.Name)
+		if err != nil {
+			var ve *ValidationError
+			if errors.As(err, &ve) {
+				issues = append(issues, ve.Issues...)
+				continue
+			}
+			issues = append(issues, Issue{Path: param.Name, Message: err.Error()})
+			continue
+		}
+		idxs = append(idxs, idx)
+	}
+	if len(issues) > 0 {
+		return types.SchemaValueTree{}, &ValidationError{Issues: issues}
+	}
+
+	root := p.push(types.MakeSchemaValueNodeRecordValue(idxs))
+	tree := types.SchemaValueTree{ValueNodes: p.nodes, Root: root}
+	// Each parameter is validated against its own node, since the record is an
+	// invocation envelope rather than a type in the graph.
+	for i, param := range params {
+		if err := r.WithRoot(param.Node).Validate(types.SchemaValueTree{
+			ValueNodes: tree.ValueNodes, Root: idxs[i],
+		}); err != nil {
+			return types.SchemaValueTree{}, err
+		}
+	}
+	return tree, nil
+}
+
+// UnpackParameters is the inverse of [Ref.PackParameters], reading an
+// invocation's parameter record back into named arguments.
+func (r Ref) UnpackParameters(params []Parameter, tree types.SchemaValueTree) (map[string]any, error) {
+	root, err := nodeAt(tree, tree.Root)
+	if err != nil {
+		return nil, err
+	}
+	if root.Tag() != types.SchemaValueNodeRecordValue {
+		return nil, fmt.Errorf("golem: expected a record at the root of the parameter list")
+	}
+	idxs := root.RecordValue()
+	if len(idxs) != len(params) {
+		return nil, fmt.Errorf("golem: parameter list has %d value(s), want %d", len(idxs), len(params))
+	}
+	out := make(map[string]any, len(params))
+	for i, param := range params {
+		value, err := r.WithRoot(param.Node).UnpackJSON(types.SchemaValueTree{
+			ValueNodes: tree.ValueNodes, Root: idxs[i],
+		})
+		if err != nil {
+			return nil, fmt.Errorf("golem: parameter %q: %w", param.Name, err)
+		}
+		out[param.Name] = value
+	}
+	return out, nil
+}
+
+// ParametersJSONSchema renders a parameter list as a JSON Schema object, which
+// is the shape a model or a form is given to fill in.
+func (r Ref) ParametersJSONSchema(params []Parameter, includeDraftMarker bool) (any, error) {
+	props := obj{}
+	required := make([]string, 0, len(params))
+	for _, param := range params {
+		rendered, err := r.renderSchema(param.Node)
+		if err != nil {
+			return nil, err
+		}
+		props[param.Name] = rendered
+		optional, err := r.resolvesToOption(param.Node)
+		if err != nil {
+			return nil, err
+		}
+		if !optional {
+			required = append(required, param.Name)
+		}
+	}
+	out := obj{
+		"type":                 "object",
+		"properties":           props,
+		"required":             requiredList(required),
+		"additionalProperties": false,
+	}
+	if includeDraftMarker {
+		out["$schema"] = jsonSchemaDraft
+	}
+	if len(r.graph.Defs) > 0 {
+		defs := obj{}
+		for _, def := range r.graph.Defs {
+			rendered, err := r.renderSchema(def.Body)
+			if err != nil {
+				return nil, err
+			}
+			if _, has := rendered["title"]; !has && def.Name.IsSome() {
+				rendered["title"] = def.Name.Some()
+			}
+			defs[def.Id] = rendered
+		}
+		out["$defs"] = defs
+	}
+	return out, nil
+}
+
+func hasParameter(params []Parameter, name string) bool {
+	for _, p := range params {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// nodeAt reads a value node, reporting an out-of-range index rather than
+// panicking.
+func nodeAt(tree types.SchemaValueTree, idx int32) (types.SchemaValueNode, error) {
+	if idx < 0 || int(idx) >= len(tree.ValueNodes) {
+		return types.SchemaValueNode{}, fmt.Errorf(
+			"golem: value node index %d out of range (%d nodes)", idx, len(tree.ValueNodes))
+	}
+	return tree.ValueNodes[idx], nil
 }
