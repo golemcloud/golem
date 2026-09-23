@@ -391,6 +391,9 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -441,6 +444,9 @@ impl BlobStorage for S3BlobStorage {
         path: &Path,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
@@ -492,6 +498,9 @@ impl BlobStorage for S3BlobStorage {
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
+        if blob_path_is_root(path) {
+            return Ok(None);
+        }
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
         let key_str = blob_path_to_string(&key)?;
