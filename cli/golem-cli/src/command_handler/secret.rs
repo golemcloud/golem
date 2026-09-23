@@ -378,6 +378,14 @@ impl SecretCommandHandler {
     ) -> anyhow::Result<()> {
         let current = self.resolve_secret(path, id).await?;
 
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_delete_secret(&current.path.to_string())?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
         let clients = self.ctx.golem_clients().await?;
 
         let result = clients

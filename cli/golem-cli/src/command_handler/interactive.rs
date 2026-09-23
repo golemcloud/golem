@@ -374,6 +374,17 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_delete_secret(&self, path: &str) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            format!(
+                "Are you sure you want to delete secret {}? Agents using it will fail to read it.",
+                path.log_color_highlight()
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_revoke_card(&self, card_id: CardId) -> anyhow::Result<bool> {
         self.confirm(
             false,

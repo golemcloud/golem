@@ -817,9 +817,12 @@ pub const SECRET_UPDATE: &str = "Examples:
   golem-cli secret update apiKey --unset";
 
 pub const SECRET_DELETE: &str = "Examples:
-  # Delete a secret by path or by ID
+  # Delete a secret by path or by ID (asks for confirmation)
   golem-cli secret delete apiKey
-  golem-cli secret delete --id sec-12345";
+  golem-cli secret delete --id sec-12345
+
+  # Delete without confirmation
+  golem-cli secret delete apiKey --yes";
 
 pub const SECRET_LIST: &str = "Examples:
   # List secrets in the current environment
