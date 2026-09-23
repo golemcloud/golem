@@ -156,7 +156,8 @@ async fn append_worker(
                 "test".to_string(),
             ),
         )])
-        .await;
+        .await
+        .unwrap();
 }
 
 async fn drain(
