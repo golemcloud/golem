@@ -47,7 +47,9 @@ use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+use golem_service_base::storage::blob::{
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace,
+};
 use std::cmp::{max, min};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -434,9 +436,8 @@ impl PrimaryOplogService {
             let md5_hash = md5::compute(&data).to_vec();
 
             blob_storage
+                .with("oplog", "upload_payload")
                 .put_raw(
-                    "oplog",
-                    "upload_payload",
                     BlobStorageNamespace::OplogPayload {
                         environment_id: owned_agent_id.environment_id(),
                         agent_id: owned_agent_id.agent_id(),
@@ -465,9 +466,8 @@ impl PrimaryOplogService {
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
         blob_storage
+                    .with("oplog", "download_payload")
                     .get_raw(
-                        "oplog",
-                        "download_payload",
                         BlobStorageNamespace::OplogPayload {
                             environment_id: owned_agent_id.environment_id(),
                             agent_id: owned_agent_id.agent_id(),
@@ -1621,9 +1621,8 @@ impl PrimaryOplogState {
 
             let upload = async move {
                 blob_storage
+                    .with("oplog", "upload_payload")
                     .put_raw(
-                        "oplog",
-                        "upload_payload",
                         BlobStorageNamespace::OplogPayload {
                             environment_id,
                             agent_id,
