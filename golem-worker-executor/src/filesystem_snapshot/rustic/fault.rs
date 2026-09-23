@@ -104,18 +104,15 @@ pub(super) enum Operation {
     Restore,
     /// Reads or changes only the repository.
     Repository,
+    /// Removes the data that no snapshot uses.
+    Prune,
 }
 
-/// Gives the error of the store for an operation that failed with the error.
-///
-/// - A failed blob storage call gives `Storage`. It is retryable unless a name error of the blob
-///   storage caused it, because a name error is the same for each new try.
-/// - An I/O error gives `Source` in a save and `Destination` in a restore, with the kind of that
-///   I/O error.
-/// - Each other error gives `Storage` that is not retryable in a save, and `Corrupt` in the other
-///   operations, because the repository gave data that rustic refused.
+/// A failed storage call gives `Storage`, retryable unless a name error caused it. An I/O error
+/// gives `Source` in a save and `Destination` in a restore. Each other error gives `Storage` that
+/// is not retryable in a save or a prune, and `Corrupt` in a restore or a read of the repository.
 pub(super) fn classify(operation: Operation, error: anyhow::Error) -> SnapshotStoreError {
-    let from_storage = chain(error.as_ref()).any(|error| error.is::<BlobCallFailed>());
+    let from_storage = is_storage_failure(error.as_ref());
     let io_kind = chain(error.as_ref())
         .find_map(|error| error.downcast_ref::<std::io::Error>())
         .map(std::io::Error::kind);
@@ -131,7 +128,7 @@ pub(super) fn classify(operation: Operation, error: anyhow::Error) -> SnapshotSt
         (false, Some(kind), Operation::Restore) => {
             SnapshotStoreError::Destination(std::io::Error::new(kind, error_text(&error)))
         }
-        (false, _, Operation::Save) => SnapshotStoreError::Storage {
+        (false, _, Operation::Save | Operation::Prune) => SnapshotStoreError::Storage {
             retryable: false,
             source: error,
         },
@@ -186,7 +183,7 @@ mod tests {
         ))
     }
 
-    fn storage_failure(failure: anyhow::Error) -> anyhow::Error {
+    fn failed_call(failure: anyhow::Error) -> anyhow::Error {
         rustic(BlobCallFailed::new(failure))
     }
 
@@ -208,7 +205,7 @@ mod tests {
             [Operation::Save, Operation::Restore, Operation::Repository].map(|operation| {
                 shape(&classify(
                     operation,
-                    storage_failure(anyhow::anyhow!("the bucket is gone")),
+                    failed_call(anyhow::anyhow!("the bucket is gone")),
                 ))
             });
 
@@ -220,7 +217,7 @@ mod tests {
         let failure = anyhow::Error::new(io::Error::new(io::ErrorKind::StorageFull, "no space"));
 
         assert_eq!(
-            shape(&classify(Operation::Restore, storage_failure(failure))),
+            shape(&classify(Operation::Restore, failed_call(failure))),
             ("Storage", Some(true), None)
         );
     }
@@ -232,7 +229,7 @@ mod tests {
         });
 
         assert_eq!(
-            shape(&classify(Operation::Repository, storage_failure(failure))),
+            shape(&classify(Operation::Repository, failed_call(failure))),
             ("Storage", Some(false), None)
         );
     }
@@ -243,7 +240,7 @@ mod tests {
             [Operation::Save, Operation::Restore, Operation::Repository].map(|operation| {
                 shape(&classify(
                     operation,
-                    storage_failure(anyhow::Error::new(OperationCancelled)),
+                    failed_call(anyhow::Error::new(OperationCancelled)),
                 ))
             });
 
@@ -314,10 +311,79 @@ mod tests {
         );
     }
 
+    /// The error below the rustic error of a restore that cannot set an extended attribute, as
+    /// the fork gives it on ext4 for a user attribute of 6,000 bytes.
+    #[derive(Debug)]
+    struct SettingXattrFailed(io::Error);
+
+    impl std::fmt::Display for SettingXattrFailed {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                formatter,
+                "setting xattr `user.golem-test` on `\"/restore/file.txt\"` with `{:?}`",
+                self.0
+            )
+        }
+    }
+
+    impl std::error::Error for SettingXattrFailed {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[test]
+    fn the_real_chain_of_a_failed_extended_attribute_of_a_restore_gives_destination() {
+        let error = anyhow::Error::new(RusticError::with_source(
+            ErrorKind::InputOutput,
+            "The restore cannot set the extended attributes of `file.txt`.",
+            SettingXattrFailed(io::Error::from_raw_os_error(28)),
+        ));
+
+        assert_eq!(
+            shape(&classify(Operation::Restore, error)),
+            ("Destination", None, Some(io::ErrorKind::StorageFull))
+        );
+    }
+
+    #[test]
+    fn a_prune_error_keeps_the_retryable_flag_of_a_storage_failure_and_is_never_corrupt() {
+        let refused = anyhow::Error::new(RusticError::new(
+            ErrorKind::Internal,
+            "the pack has another size than the index says",
+        ));
+
+        assert_eq!(
+            [
+                shape(&classify(Operation::Prune, refused)),
+                shape(&classify(
+                    Operation::Prune,
+                    rustic(io::Error::new(io::ErrorKind::InvalidData, "bad pack"))
+                )),
+                shape(&classify(
+                    Operation::Prune,
+                    failed_call(anyhow::anyhow!("the bucket is gone"))
+                )),
+                shape(&classify(
+                    Operation::Prune,
+                    failed_call(anyhow::Error::new(BlobNameError::NoName {
+                        path: std::path::PathBuf::new(),
+                    }))
+                )),
+            ],
+            [
+                ("Storage", Some(false), None),
+                ("Storage", Some(false), None),
+                ("Storage", Some(true), None),
+                ("Storage", Some(false), None),
+            ]
+        );
+    }
+
     #[test]
     fn the_config_marker_is_found_in_the_chain() {
-        let exists = storage_failure(anyhow::Error::new(ConfigExists));
-        let other = storage_failure(anyhow::anyhow!("the bucket is gone"));
+        let exists = failed_call(anyhow::Error::new(ConfigExists));
+        let other = failed_call(anyhow::anyhow!("the bucket is gone"));
 
         assert_eq!(
             (
